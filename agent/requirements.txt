@@ -1,0 +1,9 @@
+# Tally Cloud Sync Agent — Python dependencies
+# Python 3.10+ required.
+# configparser, uuid, hashlib, socket, platform and xml are all stdlib.
+
+requests>=2.31.0
+
+# Optional — only needed to build/install the standalone agent:
+# pyinstaller>=6.0.0   # build the one-file TallyCloudSyncAgent.exe (build_exe.py)
+# pywin32>=306         # run the agent as a Windows service / auto-start hooks

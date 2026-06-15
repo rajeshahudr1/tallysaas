@@ -1,0 +1,254 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/products/form.ejs — MASTERS · Add Product.
+ * Route: GET /products/add  ·  activeMenu: 'products'.
+ *
+ * Tally Stock Item. Basic Information carries the full product master
+ * (name/SKU/category/unit/HSN/GST/prices/opening stock); other tabs
+ * are styled placeholders.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   categoryNames  [ … ]  — Category select options
+ *   units          [ … ]  — Unit select options
+ *   gstRates       [ … ]  — GST Rate select options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rec   = (typeof record !== 'undefined' && record) ? record : null;
+var _isEdit = !!_rec;
+function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }   // scalar prefill helper
+
+var _catOptions = (typeof categoryOptions !== 'undefined' && categoryOptions) ? categoryOptions : [];
+var _units    = (typeof units !== 'undefined' && units) ? units : [];
+var _gstRates = (typeof gstRates !== 'undefined' && gstRates) ? gstRates : [];
+
+var formTabs = [
+    { id: 'basic',   label: 'Basic Information', icon: 'fa-id-card',          active: true },
+    { id: 'pricing', label: 'Pricing & Tax',     icon: 'fa-percent'                        },
+    { id: 'stock',   label: 'Stock & Inventory', icon: 'fa-warehouse'                      },
+    { id: 'custom',  label: 'Custom Fields',     icon: 'fa-table-cells'                    },
+];
+var placeholderPanes = formTabs.filter(function (t) { return t.id !== 'basic'; });
+
+function _selOpts(placeholder, list, current) {
+    var hasCur = (current !== '' && current != null);
+    var cur = String(current).replace('%', '').trim();   // GST stored as number (18) vs option "18%"
+    var html = '<option value=""' + (hasCur ? '' : ' selected') + ' disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (v) {
+        var sel = (hasCur && cur === String(v).replace('%', '').trim()) ? ' selected' : '';
+        html += '<option value="' + v + '"' + sel + '>' + v + '</option>';
+    });
+    return html;
+}
+// FK options: value = id (for the Category foreign-key <select>).
+function _fkOpts(placeholder, list, current) {
+    var hasCur = (current !== '' && current != null);
+    var html = '<option value=""' + (hasCur ? '' : ' selected') + ' disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (o) {
+        var sel = (hasCur && String(current) === String(o.id)) ? ' selected' : '';
+        html += '<option value="' + o.id + '"' + sel + '>' + o.name + '</option>';
+    });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/products">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Products' +
+    '</a>' +
+    '<div class="btn-group">' +
+        '<button type="submit" form="product-form" class="btn btn-primary">' +
+            '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Product' +
+        '</button>' +
+        '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
+                'data-bs-toggle="dropdown" aria-expanded="false">' +
+            '<span class="visually-hidden">Toggle save options</span>' +
+        '</button>' +
+        '<ul class="dropdown-menu dropdown-menu-end">' +
+            '<li><button type="submit" form="product-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-floppy-disk me-2 text-muted"></i>Save</button></li>' +
+            '<li><button type="submit" form="product-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-plus me-2 text-muted"></i>Save &amp; Add Another</button></li>' +
+        '</ul>' +
+    '</div>';
+%>
+
+<%- include('../partials/page-head', {
+    title: (_isEdit ? 'Edit' : 'Add') + ' Product',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Products', href: '/products' },
+        { label: (_isEdit ? 'Edit' : 'Add') + ' Product' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="product-form" class="card form-card" method="post" action="<%= _isEdit ? '/products/' + _rec.id : '/products' %>" autocomplete="off" novalidate>
+
+    <%- include('../partials/form-card', { tabs: formTabs }) %>
+
+    <div class="tab-content form-card-body">
+
+        <!-- ════ PANE 1 — Basic Information (active) ════ -->
+        <div class="tab-pane fade show active" id="basic" role="tabpanel" aria-labelledby="basic-tab">
+
+            <div class="form-grid">
+
+                <!-- Row 1: Product Name* · SKU* · Category -->
+                <div class="form-group">
+                    <label class="form-label" for="prd-name">Product Name<span class="req">*</span></label>
+                    <input type="text" class="form-control" id="prd-name" name="name"
+                           value="<%= _v('name') %>"
+                           placeholder="Enter product name" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="prd-sku">SKU / Item Code<span class="req">*</span></label>
+                    <input type="text" class="form-control text-uppercase" id="prd-sku" name="sku"
+                           value="<%= _v('sku') %>"
+                           placeholder="e.g. SKU-STL-012" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="prd-category">Category</label>
+                    <select class="form-select" id="prd-category" name="category_id">
+                        <%- _fkOpts('Select category', _catOptions, _v('category_id')) %>
+                    </select>
+                </div>
+
+                <!-- Row 2: Unit · HSN Code · GST Rate -->
+                <div class="form-group">
+                    <label class="form-label" for="prd-unit">Unit</label>
+                    <select class="form-select" id="prd-unit" name="unit">
+                        <%- _selOpts('Select unit', _units, _v('unit')) %>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="prd-hsn">HSN / SAC Code</label>
+                    <input type="text" class="form-control" id="prd-hsn" name="hsn_code"
+                           value="<%= _v('hsn_code') %>"
+                           placeholder="e.g. 7214" inputmode="numeric" maxlength="8">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="prd-gst">GST Rate</label>
+                    <select class="form-select" id="prd-gst" name="gst_rate">
+                        <%- _selOpts('Select GST rate', _gstRates, _v('gst_rate')) %>
+                    </select>
+                </div>
+
+                <!-- Row 3: Purchase Price (₹) · Sales Price (₹) · Opening Stock -->
+                <div class="form-group">
+                    <label class="form-label" for="prd-purchase">Purchase Price</label>
+                    <div class="input-affix">
+                        <input type="number" class="form-control has-suffix" id="prd-purchase" name="purchase_price"
+                               value="<%= _v('purchase_price') %>"
+                               placeholder="0.00" min="0" step="0.01">
+                        <span class="affix affix--suffix">₹</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="prd-sales">Sales Price</label>
+                    <div class="input-affix">
+                        <input type="number" class="form-control has-suffix" id="prd-sales" name="sales_price"
+                               value="<%= _v('sales_price') %>"
+                               placeholder="0.00" min="0" step="0.01">
+                        <span class="affix affix--suffix">₹</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="prd-opening-stock">Opening Stock</label>
+                    <input type="number" class="form-control" id="prd-opening-stock" name="opening_stock"
+                           value="<%= _v('opening_stock') %>"
+                           placeholder="0" min="0" step="1">
+                </div>
+
+            </div><!-- /.form-grid -->
+
+            <hr class="form-divider">
+
+            <!-- Status · Is-Tally-Stock-Item toggle · Sync mini-card -->
+            <div class="row g-4 align-items-start">
+
+                <div class="col-12 col-md-5">
+                    <label class="form-label d-block">Status<span class="req">*</span></label>
+                    <div class="status-radios">
+                        <label class="status-radio is-active">
+                            <input type="radio" name="status" value="Active" <%= _isEdit ? (String(_v('status')) === 'Active' ? 'checked' : '') : 'checked' %>>
+                            <span>Active</span>
+                        </label>
+                        <label class="status-radio is-inactive">
+                            <input type="radio" name="status" value="Inactive" <%= String(_v('status')) === 'Inactive' ? 'checked' : '' %>>
+                            <span>Inactive</span>
+                        </label>
+                        <label class="status-radio is-blocked">
+                            <input type="radio" name="status" value="Blocked" <%= String(_v('status')) === 'Blocked' ? 'checked' : '' %>>
+                            <span>Blocked</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-3">
+                    <label class="form-label d-block">Is Tally Stock Item</label>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch"
+                               id="prd-tally-item" name="is_tally_item" <%= _isEdit ? (_v('is_tally_item') ? 'checked' : '') : 'checked' %>>
+                        <label class="form-check-label" for="prd-tally-item">Create as stock item</label>
+                    </div>
+                    <div class="form-hint">Syncs this product to Tally as a stock item.</div>
+                </div>
+
+                <div class="col-12 col-md-4">
+                    <div class="sync-mini-card">
+                        <div>
+                            <div class="sync-mini-label">Tally Sync Status</div>
+                            <div class="sync-mini-value">Not Synced</div>
+                        </div>
+                        <button type="button" class="btn-sync-now" id="prd-sync-now">
+                            <i class="fa-solid fa-rotate me-1"></i>Sync Now
+                        </button>
+                    </div>
+                </div>
+
+            </div><!-- /.row -->
+
+            <hr class="form-divider">
+
+            <!-- Description -->
+            <h2 class="form-section-title">Description</h2>
+            <div class="row g-4">
+                <div class="col-12">
+                    <label class="form-label" for="prd-desc">Product Description</label>
+                    <textarea class="form-control" id="prd-desc" name="description"
+                              rows="3" maxlength="300" placeholder="Specifications, grade, brand, packaging…"
+                              data-counter="prd-desc-count"><%= _v('description') %></textarea>
+                    <div class="char-counter"><span id="prd-desc-count">0/300</span></div>
+                </div>
+            </div>
+
+        </div><!-- /#basic -->
+
+        <%
+        placeholderPanes.forEach(function (pane) { %>
+            <div class="tab-pane fade" id="<%= pane.id %>" role="tabpanel" aria-labelledby="<%= pane.id %>-tab">
+                <div class="tab-placeholder">
+                    <div class="tab-placeholder-icon">
+                        <i class="fa-solid <%= pane.icon %>"></i>
+                    </div>
+                    <div class="tab-placeholder-title"><%= pane.label %></div>
+                    <p class="mb-0">This section is coming in the next phase.</p>
+                </div>
+            </div>
+        <% }); %>
+
+    </div><!-- /.tab-content -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/products">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i><%= _isEdit ? 'Update' : 'Save' %> Product
+        </button>
+    </div>
+
+</form>

@@ -1,0 +1,141 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/companies/list.ejs — MASTERS · Companies listing.
+ * Route: GET /companies  ·  activeMenu: 'companies'.
+ *
+ * Same composition pattern as customers/list.ejs — assembles the
+ * reusable partials (page-head, filter-card, table, pagination) from
+ * config objects; owns no bespoke component CSS beyond the shared
+ * 5-column filter helper.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   companyRows     [ company rows ]   — table body (NB: NOT `companies`,
+ *                                        which is the header switcher list)
+ *   companiesTotal  number             — pagination total
+ *   page, perPage   numbers
+ *   financialYears  [ '2024-2025', … ] — Financial Year filter options
+ * ─────────────────────────────────────────────────────────── */
+
+/* Defensive reads — never crash on a missing local. */
+var _rows           = (typeof companyRows !== 'undefined' && companyRows) ? companyRows : [];
+var _total          = (typeof companiesTotal !== 'undefined') ? companiesTotal : _rows.length;
+var _page           = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage        = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _financialYears = (typeof financialYears !== 'undefined' && financialYears) ? financialYears : [];
+
+/* Flat list → FilterCard <option> objects with an "All …" sentinel. */
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields, 5-per-row on ≥lg) ─────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',         label: 'Search',         placeholder: 'Search by name, GST, email...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',         label: 'Status',         options: _opts('All Status', ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'financial_year', label: 'Financial Year', options: _opts('All Years', _financialYears),  colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_from',   label: 'Created From',   value: '2024-01-01',                          colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_to',     label: 'Created To',     value: '2024-12-31',                          colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config (typed columns) ───────────────────────────── */
+var tableColumns = [
+    { key: 'name',           label: 'Company Name',   sortable: true, type: 'text'  },
+    { key: 'gst',            label: 'GST No.',        sortable: true, type: 'text'  },
+    { key: 'pan',            label: 'PAN No.',        sortable: true, type: 'text'  },
+    { key: 'mobile',         label: 'Mobile',         sortable: true, type: 'text'  },
+    { key: 'email',          label: 'Email',          sortable: true, type: 'text'  },
+    { key: 'financial_year', label: 'Financial Year', sortable: true, type: 'badge' },
+    { key: 'status',         label: 'Status',         sortable: true, type: 'status' },
+    { key: 'created_at',     label: 'Created At',     sortable: true, type: 'date'  },
+];
+
+var sortOptions = ['Created At', 'Company Name', 'Status', 'Financial Year'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Companies',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Companies' },
+    ],
+    actions: [
+        { label: 'Export',      icon: 'fa-upload', variant: 'light' },
+        { label: 'Add Company', icon: 'fa-plus',   gradient: true, href: '/companies/add' },
+    ],
+}) %>
+
+<!-- ── Advanced Filters (expanded) ─────────────────────────────── -->
+<form id="company-filters-form" autocomplete="off" method="get" action="/companies">
+    <%- include('../partials/filter-card', {
+        filterId: 'company-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<!-- ── Listing card: toolbar + table + pagination ──────────────── -->
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'companies-table',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit', 'delete'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<%
+/* 5-column filter grid (same minimal helper customers/list uses —
+ * Bootstrap has no native fifths). Degrades 5→3→2→1 across lg/md/sm/xs. */
+%>
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

@@ -1,0 +1,277 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/suppliers/form.ejs — MASTERS · Add Supplier.
+ * Route: GET /suppliers/add  ·  activeMenu: 'suppliers'.
+ *
+ * Same shell as the Add-Customer form, tuned for the payables side
+ * (Sundry Creditor ledger, payment terms). Basic Information is the
+ * built pane; other tabs are styled placeholders.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   locationNames   [ … ]  — Location select options
+ *   supplierGroups  [ … ]  — Supplier Group select options
+ *   paymentTerms    [ … ]  — Payment Terms select options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rec   = (typeof record !== 'undefined' && record) ? record : null;
+var _isEdit = !!_rec;
+function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }   // scalar prefill helper
+
+var _locOptions = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
+var _groups = (typeof supplierGroups !== 'undefined' && supplierGroups) ? supplierGroups : [];
+var _terms  = (typeof paymentTerms !== 'undefined' && paymentTerms) ? paymentTerms : [];
+
+var formTabs = [
+    { id: 'basic',   label: 'Basic Information', icon: 'fa-id-card',          active: true },
+    { id: 'address', label: 'Address',           icon: 'fa-map-location-dot'               },
+    { id: 'gst',     label: 'GST & Tax Details',  icon: 'fa-percent'                        },
+    { id: 'bank',    label: 'Bank Details',      icon: 'fa-building-columns'                },
+    { id: 'custom',  label: 'Custom Fields',     icon: 'fa-table-cells'                    },
+];
+var placeholderPanes = formTabs.filter(function (t) { return t.id !== 'basic'; });
+
+function _selOpts(placeholder, list, current) {
+    var html = '<option value=""' + (_isEdit ? '' : ' selected') + ' disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (v) {
+        var sel = (String(current) === String(v)) ? ' selected' : '';
+        html += '<option value="' + v + '"' + sel + '>' + v + '</option>';
+    });
+    return html;
+}
+// FK options: value = id (for foreign-key <select>s).
+function _fkOpts(placeholder, list, current) {
+    var html = '<option value=""' + (_isEdit ? '' : ' selected') + ' disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (o) {
+        var sel = (String(current) === String(o.id)) ? ' selected' : '';
+        html += '<option value="' + o.id + '"' + sel + '>' + o.name + '</option>';
+    });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/suppliers">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Suppliers' +
+    '</a>' +
+    '<div class="btn-group">' +
+        '<button type="submit" form="supplier-form" class="btn btn-primary">' +
+            '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Supplier' +
+        '</button>' +
+        '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
+                'data-bs-toggle="dropdown" aria-expanded="false">' +
+            '<span class="visually-hidden">Toggle save options</span>' +
+        '</button>' +
+        '<ul class="dropdown-menu dropdown-menu-end">' +
+            '<li><button type="submit" form="supplier-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-floppy-disk me-2 text-muted"></i>Save</button></li>' +
+            '<li><button type="submit" form="supplier-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-plus me-2 text-muted"></i>Save &amp; Add Another</button></li>' +
+        '</ul>' +
+    '</div>';
+%>
+
+<%- include('../partials/page-head', {
+    title: (_isEdit ? 'Edit' : 'Add') + ' Supplier',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Suppliers', href: '/suppliers' },
+        { label: (_isEdit ? 'Edit' : 'Add') + ' Supplier' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="supplier-form" class="card form-card" method="post" action="<%= _isEdit ? '/suppliers/' + _rec.id : '/suppliers' %>" autocomplete="off" novalidate>
+
+    <%- include('../partials/form-card', { tabs: formTabs }) %>
+
+    <div class="tab-content form-card-body">
+
+        <!-- ════ PANE 1 — Basic Information (active) ════ -->
+        <div class="tab-pane fade show active" id="basic" role="tabpanel" aria-labelledby="basic-tab">
+
+            <div class="form-grid">
+
+                <!-- Row 1: Supplier Name* · Mobile* (+91) · Alternate Mobile -->
+                <div class="form-group">
+                    <label class="form-label" for="sup-name">Supplier Name<span class="req">*</span></label>
+                    <input type="text" class="form-control" id="sup-name" name="name"
+                           value="<%= _v('name') %>"
+                           placeholder="Enter supplier name" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sup-mobile">Mobile Number<span class="req">*</span></label>
+                    <div class="input-affix">
+                        <select class="affix affix--prefix" name="mobile_cc" aria-label="Country code">
+                            <option value="+91" selected>🇮🇳 +91</option>
+                            <option value="+1">🇺🇸 +1</option>
+                            <option value="+44">🇬🇧 +44</option>
+                            <option value="+971">🇦🇪 +971</option>
+                        </select>
+                        <input type="tel" class="form-control" id="sup-mobile" name="mobile"
+                               value="<%= _v('mobile') %>"
+                               placeholder="98765 43210" inputmode="numeric" maxlength="10" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sup-alt-mobile">Alternate Mobile</label>
+                    <div class="input-affix">
+                        <select class="affix affix--prefix" name="alternate_mobile_cc" aria-label="Country code">
+                            <option value="+91" selected>🇮🇳 +91</option>
+                            <option value="+1">🇺🇸 +1</option>
+                            <option value="+44">🇬🇧 +44</option>
+                            <option value="+971">🇦🇪 +971</option>
+                        </select>
+                        <input type="tel" class="form-control" id="sup-alt-mobile" name="alternate_mobile"
+                               value="<%= _v('alternate_mobile') %>"
+                               placeholder="Optional" inputmode="numeric" maxlength="10">
+                    </div>
+                </div>
+
+                <!-- Row 2: Supplier Group · Email · Location* -->
+                <div class="form-group">
+                    <label class="form-label" for="sup-group">Supplier Group</label>
+                    <select class="form-select" id="sup-group" name="supplier_group">
+                        <%- _selOpts('Select group', _groups, _v('supplier_group')) %>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sup-email">Email</label>
+                    <div class="input-affix">
+                        <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
+                        <input type="email" class="form-control" id="sup-email" name="email"
+                               value="<%= _v('email') %>"
+                               placeholder="name@company.com">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sup-location">Location<span class="req">*</span></label>
+                    <select class="form-select" id="sup-location" name="location_id" required>
+                        <%- _fkOpts('Select location', _locOptions, _v('location_id')) %>
+                    </select>
+                </div>
+
+                <!-- Row 3: GST Number · Opening Balance (₹) · Payment Terms -->
+                <div class="form-group">
+                    <label class="form-label" for="sup-gst">GST Number</label>
+                    <input type="text" class="form-control text-uppercase" id="sup-gst" name="gst_number"
+                           value="<%= _v('gst_number') %>"
+                           placeholder="24ABCDE1234F1Z5" maxlength="15">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sup-opening">Opening Balance (Payable)</label>
+                    <div class="input-affix">
+                        <input type="number" class="form-control has-suffix" id="sup-opening" name="opening_balance"
+                               value="<%= _v('opening_balance') %>"
+                               placeholder="0" min="0" step="1">
+                        <span class="affix affix--suffix">₹</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sup-terms">Payment Terms</label>
+                    <select class="form-select" id="sup-terms" name="payment_terms">
+                        <%- _selOpts('Select terms', _terms, _v('payment_terms')) %>
+                    </select>
+                </div>
+
+            </div><!-- /.form-grid -->
+
+            <hr class="form-divider">
+
+            <!-- Status radios · Is-Tally-Ledger (Sundry Creditor) · Sync mini-card -->
+            <div class="row g-4 align-items-start">
+
+                <div class="col-12 col-md-5">
+                    <label class="form-label d-block">Status<span class="req">*</span></label>
+                    <div class="status-radios">
+                        <label class="status-radio is-active">
+                            <input type="radio" name="status" value="Active" <%= _isEdit ? (String(_v('status')) === 'Active' ? 'checked' : '') : 'checked' %>>
+                            <span>Active</span>
+                        </label>
+                        <label class="status-radio is-inactive">
+                            <input type="radio" name="status" value="Inactive" <%= _isEdit && String(_v('status')) === 'Inactive' ? 'checked' : '' %>>
+                            <span>Inactive</span>
+                        </label>
+                        <label class="status-radio is-blocked">
+                            <input type="radio" name="status" value="Blocked" <%= _isEdit && String(_v('status')) === 'Blocked' ? 'checked' : '' %>>
+                            <span>Blocked</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-3">
+                    <label class="form-label d-block">Is Tally Ledger</label>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" role="switch"
+                               id="sup-tally-ledger" name="is_tally_ledger"
+                               checked="<%= _isEdit ? (_v('is_tally_ledger') ? 'checked' : '') : 'checked' %>">
+                        <label class="form-check-label" for="sup-tally-ledger">Sundry Creditor</label>
+                    </div>
+                    <div class="form-hint">Creates this supplier under Sundry Creditors in Tally.</div>
+                </div>
+
+                <div class="col-12 col-md-4">
+                    <div class="sync-mini-card">
+                        <div>
+                            <div class="sync-mini-label">Tally Sync Status</div>
+                            <div class="sync-mini-value">Not Synced</div>
+                        </div>
+                        <button type="button" class="btn-sync-now" id="sup-sync-now">
+                            <i class="fa-solid fa-rotate me-1"></i>Sync Now
+                        </button>
+                    </div>
+                </div>
+
+            </div><!-- /.row -->
+
+            <hr class="form-divider">
+
+            <!-- Address + Notes -->
+            <h2 class="form-section-title">Address</h2>
+            <div class="row g-4">
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="sup-address">Address</label>
+                    <textarea class="form-control" id="sup-address" name="address"
+                              rows="4" maxlength="300" placeholder="Building, street, area, city, state, pincode…"
+                              data-counter="sup-address-count"><%= _v('address') %></textarea>
+                    <div class="char-counter"><span id="sup-address-count">0/300</span></div>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="sup-notes">Notes</label>
+                    <textarea class="form-control" id="sup-notes" name="notes"
+                              rows="4" maxlength="300" placeholder="Any notes about this supplier…"
+                              data-counter="sup-notes-count"><%= _v('notes') %></textarea>
+                    <div class="char-counter"><span id="sup-notes-count">0/300</span></div>
+                </div>
+            </div><!-- /.row -->
+
+        </div><!-- /#basic -->
+
+        <%
+        placeholderPanes.forEach(function (pane) { %>
+            <div class="tab-pane fade" id="<%= pane.id %>" role="tabpanel" aria-labelledby="<%= pane.id %>-tab">
+                <div class="tab-placeholder">
+                    <div class="tab-placeholder-icon">
+                        <i class="fa-solid <%= pane.icon %>"></i>
+                    </div>
+                    <div class="tab-placeholder-title"><%= pane.label %></div>
+                    <p class="mb-0">This section is coming in the next phase.</p>
+                </div>
+            </div>
+        <% }); %>
+
+    </div><!-- /.tab-content -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/suppliers">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i><%= _isEdit ? 'Update' : 'Save' %> Supplier
+        </button>
+    </div>
+
+</form>

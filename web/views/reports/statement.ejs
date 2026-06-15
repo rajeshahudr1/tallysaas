@@ -1,0 +1,75 @@
+<%
+/* views/reports/statement.ejs — Tally-style T-format financial statement
+ * (P&L / Balance Sheet). Two side-by-side columns with matching totals.
+ * Locals: title, leftTitle, leftRows[{label,amount}], leftTotal,
+ *         rightTitle, rightRows, rightTotal, note, breadcrumb, summary? */
+var _bc       = (typeof breadcrumb !== 'undefined' && breadcrumb) ? breadcrumb : [];
+var _lTitle   = (typeof leftTitle !== 'undefined') ? leftTitle : '';
+var _rTitle   = (typeof rightTitle !== 'undefined') ? rightTitle : '';
+var _lRows    = (typeof leftRows !== 'undefined' && leftRows) ? leftRows : [];
+var _rRows    = (typeof rightRows !== 'undefined' && rightRows) ? rightRows : [];
+var _lTotal   = (typeof leftTotal !== 'undefined') ? leftTotal : 0;
+var _rTotal   = (typeof rightTotal !== 'undefined') ? rightTotal : 0;
+var _note     = (typeof note !== 'undefined') ? note : '';
+var _summary  = (typeof summary !== 'undefined' && summary) ? summary : [];
+var _coName   = (typeof company !== 'undefined' && company) ? company.name : '';
+function _inr(v) { return '₹' + Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+var _maxRows = Math.max(_lRows.length, _rRows.length);
+%>
+
+<%- include('../partials/page-head', {
+    title: (typeof title !== 'undefined' && title) ? title : 'Statement', breadcrumb: _bc,
+    actions: [{ label: 'Print / PDF', icon: 'fa-print', variant: 'light', id: 'report-print' }],
+}) %>
+
+<% if (_summary.length) { %>
+<section class="stat-grid mb-3">
+    <% _summary.forEach(function (s) { %>
+        <article class="stat-card stat-card--<%= s.tone || 'blue' %>">
+            <div class="stat-card-top"><span class="stat-icon"><i class="fa-solid <%= s.icon || 'fa-scale-balanced' %>"></i></span></div>
+            <div><div class="stat-label"><%= s.label %></div><div class="stat-value"><%= s.value %></div></div>
+        </article>
+    <% }); %>
+</section>
+<% } %>
+
+<div class="card">
+    <div class="report-meta-bar">
+        <span><i class="fa-regular fa-building me-1"></i> <%= _coName %></span>
+        <% if (_note) { %><span class="text-muted"><%= _note %></span><% } %>
+    </div>
+    <div class="table-responsive">
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th style="width:38%"><%= _lTitle %></th>
+                    <th class="num" style="width:12%">Amount</th>
+                    <th style="width:38%"><%= _rTitle %></th>
+                    <th class="num" style="width:12%">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% for (var i = 0; i < _maxRows; i++) { var l = _lRows[i], r = _rRows[i]; %>
+                    <tr>
+                        <td><%= l ? l.label : '' %></td>
+                        <td class="num"><%= l ? _inr(l.amount) : '' %></td>
+                        <td><%= r ? r.label : '' %></td>
+                        <td class="num"><%= r ? _inr(r.amount) : '' %></td>
+                    </tr>
+                <% } %>
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td><strong>Total</strong></td>
+                    <td class="num"><strong><%= _inr(_lTotal) %></strong></td>
+                    <td><strong>Total</strong></td>
+                    <td class="num"><strong><%= _inr(_rTotal) %></strong></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+
+<script>
+    (function () { var b = document.getElementById('report-print'); if (b) b.addEventListener('click', function () { window.print(); }); })();
+</script>

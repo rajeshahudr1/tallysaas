@@ -1,0 +1,230 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/table.ejs — COMPONENT: Table (spec §2.3). Fully data-driven.
+ *
+ * Expected locals:
+ *   tableId     string
+ *   columns     [{ key, label, sortable?, align?:'start'|'end'|'center',
+ *                  type?:'text'|'badge'|'status'|'currency'|'date'|'location'|'locations' }]
+ *                  ('locations' = an ARRAY value → multiple location pills)
+ *   rows        [ plain objects keyed by column.key ]
+ *   selectable? bool   — leading checkbox column + header select-all
+ *   showIndex?  bool   — leading "#" column
+ *   actions?    array subset of ['view','edit','delete'] — trailing actions
+ *
+ * Rendering by column.type:
+ *   text (default)  raw value
+ *   currency        ₹ + Indian grouping, right-aligned
+ *   date            as-is string
+ *   status          pill: Active→green, Inactive→red, Blocked→amber
+ *                   (also maps invoice states: Created→green,
+ *                    Pending/Pending Tally→amber, Failed→red, Synced→green)
+ *   location        soft pill: Ahmedabad=blue, Surat=green, Mumbai=purple
+ *   badge           neutral soft pill
+ * ─────────────────────────────────────────────────────────── */
+var _id         = (typeof tableId !== 'undefined' && tableId) ? tableId : 'table';
+var _columns    = (typeof columns !== 'undefined' && columns) ? columns : [];
+var _rows       = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _selectable = (typeof selectable !== 'undefined') ? !!selectable : false;
+var _showIndex  = (typeof showIndex !== 'undefined') ? !!showIndex : false;
+var _actions    = (typeof actions !== 'undefined' && Array.isArray(actions)) ? actions : [];
+/* basePath (e.g. '/customers') turns the row actions LIVE: View opens a
+ * details popup, Edit links to {basePath}/{id}/edit, Delete opens a custom
+ * confirm popup that POSTs to {basePath}/{id}/delete. Without it the actions
+ * render disabled (the page isn't wired to the API yet). */
+var _base       = (typeof basePath !== 'undefined' && basePath) ? String(basePath).replace(/\/$/, '') : '';
+/* editable = the {basePath}/{id}/edit screen exists. Until an Edit page is
+ * wired the Edit action stays disabled (a dead link → 404 is worse). */
+var _editable   = (typeof editable !== 'undefined') ? !!editable : false;
+/* sortKeys = column keys the backend can sort (only those headers become
+ * clickable, so no header ever looks sortable when it isn't). */
+var _sortKeys  = (typeof sortKeys !== 'undefined' && Array.isArray(sortKeys)) ? sortKeys : [];
+var _q2        = (typeof currentQuery !== 'undefined' && currentQuery) ? currentQuery : {};
+var _path2     = (typeof currentPath  !== 'undefined' && currentPath)  ? currentPath  : '';
+var _curSort   = _q2.sort || '';
+var _curOrder  = (String(_q2.order || '').toLowerCase() === 'asc') ? 'asc' : 'desc';
+function _sortUrl(key) {
+    var nextOrder = (_curSort === key && _curOrder === 'asc') ? 'desc' : 'asc';
+    var merged = Object.assign({}, _q2, { sort: key, order: nextOrder, page: 1 });
+    var parts = [];
+    Object.keys(merged).forEach(function (k) {
+        var v = merged[k];
+        if (v !== undefined && v !== null && v !== '') parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+    });
+    return _path2 + (parts.length ? '?' + parts.join('&') : '');
+}
+
+/* Indian-grouping currency formatter (e.g. 100000 → ₹1,00,000.00). */
+function _inr(value) {
+    var n = Number(value || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+/* Map a status/state string → pill modifier class. */
+function _statusClass(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'active' || s === 'created' || s === 'synced')   return 'pill-status--success';
+    if (s === 'inactive' || s === 'failed')                    return 'pill-status--danger';
+    if (s === 'blocked' || s === 'pending' || s.indexOf('pending') === 0) return 'pill-status--warning';
+    if (s.indexOf('sent') === 0)                               return 'pill-status--info';  // "Sent to Tally"
+    if (s === 'in stock')                                      return 'pill-status--success';
+    if (s === 'low stock')                                     return 'pill-status--warning';
+    if (s === 'out of stock')                                  return 'pill-status--danger';
+    return 'pill-status--muted';
+}
+/* Map a location → soft pill colour class. */
+function _locClass(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'ahmedabad') return 'pill-loc--blue';
+    if (s === 'surat')     return 'pill-loc--green';
+    if (s === 'mumbai')    return 'pill-loc--purple';
+    return 'pill-loc--grey';
+}
+function _alignClass(col) {
+    if (col.align === 'end')    return 'text-end';
+    if (col.align === 'center') return 'text-center';
+    if (col.type === 'currency') return 'text-end';
+    return 'text-start';
+}
+%>
+<div class="table-responsive data-table-wrap">
+    <table class="table data-table align-middle mb-0" id="<%= _id %>">
+        <thead>
+            <tr>
+                <% if (_selectable) { %>
+                    <th class="data-table-check">
+                        <input class="form-check-input" type="checkbox"
+                               data-select-all="<%= _id %>" aria-label="Select all rows">
+                    </th>
+                <% } %>
+                <% if (_showIndex) { %>
+                    <th class="data-table-idx">#</th>
+                <% } %>
+                <% _columns.forEach(function (col) { %>
+                    <% var _isSortable = _sortKeys.indexOf(col.key) > -1; %>
+                    <th class="<%= _alignClass(col) %>">
+                        <% if (_isSortable) { %>
+                            <a class="data-table-th data-table-sortlink" href="<%= _sortUrl(col.key) %>" data-sort-key="<%= col.key %>">
+                                <%= col.label %>
+                                <% if (_curSort === col.key) { %>
+                                    <i class="fa-solid fa-sort-<%= _curOrder === 'asc' ? 'up' : 'down' %> data-table-sort is-active" aria-hidden="true"></i>
+                                <% } else { %>
+                                    <i class="fa-solid fa-sort data-table-sort" aria-hidden="true"></i>
+                                <% } %>
+                            </a>
+                        <% } else { %>
+                            <span class="data-table-th"><%= col.label %></span>
+                        <% } %>
+                    </th>
+                <% }); %>
+                <% if (_actions.length) { %>
+                    <th class="text-end data-table-actions-head">Actions</th>
+                <% } %>
+            </tr>
+        </thead>
+        <tbody>
+            <% if (!_rows.length) { %>
+                <tr>
+                    <td class="data-table-empty text-center text-muted py-5"
+                        colspan="<%= _columns.length + (_selectable?1:0) + (_showIndex?1:0) + (_actions.length?1:0) %>">
+                        <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                        No records found.
+                    </td>
+                </tr>
+            <% } %>
+            <% _rows.forEach(function (row, i) { %>
+                <tr>
+                    <% if (_selectable) { %>
+                        <td class="data-table-check">
+                            <input class="form-check-input" type="checkbox"
+                                   data-row-check="<%= _id %>" aria-label="Select row">
+                        </td>
+                    <% } %>
+                    <% if (_showIndex) { %>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                    <% } %>
+                    <% _columns.forEach(function (col) { %>
+                        <% var val = row[col.key]; %>
+                        <td class="<%= _alignClass(col) %>">
+                            <% if (col.type === 'currency') { %>
+                                <span class="data-table-money"><%= _inr(val) %></span>
+                            <% } else if (col.type === 'status') { %>
+                                <span class="pill-status <%= _statusClass(val) %>"><%= val %></span>
+                            <% } else if (col.type === 'location') { %>
+                                <span class="pill-loc <%= _locClass(val) %>">
+                                    <i class="fa-solid fa-location-dot me-1"></i><%= val %>
+                                </span>
+                            <% } else if (col.type === 'locations') { %>
+                                <% var _tags = Array.isArray(val) ? val : (val ? [val] : []); %>
+                                <% if (!_tags.length) { %><span class="text-muted">—</span><% } %>
+                                <% _tags.forEach(function (tg) { %>
+                                    <span class="pill-loc <%= _locClass(tg) %> me-1 mb-1">
+                                        <i class="fa-solid fa-location-dot me-1"></i><%= tg %>
+                                    </span>
+                                <% }); %>
+                            <% } else if (col.type === 'badge') { %>
+                                <span class="pill-badge"><%= val %></span>
+                            <% } else { %>
+                                <%= (val === 0 || val) ? val : '' %>
+                            <% } %>
+                        </td>
+                    <% }); %>
+                    <% if (_actions.length) { %>
+                        <%
+                        var _idVal = (row.id !== undefined && row.id !== null) ? row.id : '';
+                        var _canLink = (_base && _idVal !== '');
+                        // A human label for the modals = first non-empty column value.
+                        var _label = '';
+                        for (var _ci = 0; _ci < _columns.length; _ci++) {
+                            var _cv = row[_columns[_ci].key];
+                            if (_cv !== undefined && _cv !== null && String(_cv).trim() !== '') { _label = String(_cv); break; }
+                        }
+                        // Details payload (label/value pairs) for the View popup.
+                        var _details = _columns.map(function (c) {
+                            var v = row[c.key];
+                            if (c.type === 'currency') v = _inr(v);
+                            else if (Array.isArray(v)) v = v.join(', ');
+                            return { label: c.label, value: (v === 0 || v) ? String(v) : '—' };
+                        });
+                        %>
+                        <td class="text-end data-table-actions">
+                            <% if (_actions.indexOf('view') > -1) { %>
+                                <button class="action-btn action-btn--view" type="button" title="View" aria-label="View"
+                                        data-row-view data-record="<%= JSON.stringify(_details) %>" data-record-title="<%= _label %>">
+                                    <i class="fa-regular fa-eye"></i>
+                                </button>
+                            <% } %>
+                            <% if (_actions.indexOf('edit') > -1) { %>
+                                <% if (_canLink && _editable) { %>
+                                    <a class="action-btn action-btn--edit" href="<%= _base %>/<%= _idVal %>/edit" title="Edit" aria-label="Edit">
+                                        <i class="fa-solid fa-pen"></i>
+                                    </a>
+                                <% } else { %>
+                                    <button class="action-btn action-btn--edit" type="button" title="Edit (coming soon)" aria-label="Edit" disabled>
+                                        <i class="fa-solid fa-pen"></i>
+                                    </button>
+                                <% } %>
+                            <% } %>
+                            <% if (_actions.indexOf('print') > -1) { %>
+                                <% if (_canLink) { %>
+                                    <a class="action-btn action-btn--view" href="<%= _base %>/<%= _idVal %>/print" target="_blank" title="Invoice PDF / Print" aria-label="Print">
+                                        <i class="fa-solid fa-print"></i>
+                                    </a>
+                                <% } else { %>
+                                    <button class="action-btn action-btn--view" type="button" title="Print" aria-label="Print" disabled>
+                                        <i class="fa-solid fa-print"></i>
+                                    </button>
+                                <% } %>
+                            <% } %>
+                            <% if (_actions.indexOf('delete') > -1) { %>
+                                <button class="action-btn action-btn--delete" type="button" title="Delete" aria-label="Delete"
+                                        <% if (_canLink) { %>data-row-delete data-delete-url="<%= _base %>/<%= _idVal %>" data-delete-label="<%= _label %>"<% } else { %>disabled<% } %>>
+                                    <i class="fa-regular fa-trash-can"></i>
+                                </button>
+                            <% } %>
+                        </td>
+                    <% } %>
+                </tr>
+            <% }); %>
+        </tbody>
+    </table>
+</div>

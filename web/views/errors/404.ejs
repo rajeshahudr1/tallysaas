@@ -1,0 +1,41 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/errors/404.ejs — friendly "page not found" screen.
+ *
+ * Rendered by the 404 handler in index.js for any unmatched route.
+ * Wraps in the normal _layout shell (sidebar + header + bottom-nav)
+ * so the app chrome stays consistent, then shows a centered empty
+ * state with a route back to the dashboard. No charts / page data,
+ * so it never needs a pageScript.
+ *
+ * Expected locals: title, activeMenu, breadcrumb (set by the handler).
+ * ─────────────────────────────────────────────────────────── */
+%>
+<section class="error-state">
+    <div class="error-state-code">404</div>
+    <h1 class="error-state-title">Page not found</h1>
+    <p class="error-state-text">
+        The page you’re looking for doesn’t exist, was moved, or isn’t
+        part of this build yet.
+    </p>
+    <a class="btn btn-primary" href="/">
+        <i class="fa-solid fa-gauge-high me-1"></i> Back to Dashboard
+    </a>
+</section>
+
+<style>
+    /* Small, self-contained empty-state styling (this page only). */
+    .error-state {
+        display: flex; flex-direction: column; align-items: center;
+        justify-content: center; text-align: center;
+        min-height: 60vh; gap: 6px;
+    }
+    .error-state-code {
+        font-size: 96px; font-weight: 700; line-height: 1;
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+        -webkit-background-clip: text; background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+    .error-state-title { font-size: 22px; font-weight: 600; margin: 8px 0 0; color: var(--text); }
+    .error-state-text  { color: var(--text-muted); max-width: 420px; margin: 0 0 18px; }
+</style>

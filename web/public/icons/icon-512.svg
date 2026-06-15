@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- PWA icon (512) — blue cloud on a rounded blue tile (maskable-safe padding). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+    <defs>
+        <linearGradient id="pwa512" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#2563EB"/>
+            <stop offset="1" stop-color="#1D4ED8"/>
+        </linearGradient>
+    </defs>
+    <rect width="512" height="512" rx="108" fill="url(#pwa512)"/>
+    <path d="M352 310a64 64 0 0 0-11.2-127.2 88 88 0 0 0-168 17.6A60 60 0 0 0 176 310h176z"
+          fill="#fff"/>
+    <path d="M224 352a48 48 0 0 0 76 12l12-12M304 310a48 48 0 0 0-76-12l-12 12"
+          stroke="#2563EB" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M312 330v-26h-26M216 330v26h26" stroke="#2563EB" stroke-width="18"
+          stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

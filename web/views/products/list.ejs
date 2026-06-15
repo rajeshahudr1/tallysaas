@@ -1,0 +1,136 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/products/list.ejs — MASTERS · Products listing.
+ * Route: GET /products  ·  activeMenu: 'products'.
+ *
+ * Tally Stock Items. Pure composition of the reusable partials.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   productRows    [ rows ]   — table body
+ *   productsTotal  number     — pagination total (542)
+ *   page, perPage  numbers
+ *   categoryNames  [ … ]      — Category filter options
+ *   gstRates       [ … ]      — GST Rate filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows     = (typeof productRows !== 'undefined' && productRows) ? productRows : [];
+var _total    = (typeof productsTotal !== 'undefined') ? productsTotal : _rows.length;
+var _page     = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage  = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _cats     = (typeof categoryNames !== 'undefined' && categoryNames) ? categoryNames : [];
+var _gstRates = (typeof gstRates !== 'undefined' && gstRates) ? gstRates : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',   label: 'Search',   placeholder: 'Search by name, SKU, HSN...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'category', label: 'Category', options: _opts('All Categories', _cats),    colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'gst_rate', label: 'GST Rate', options: _opts('All Rates', _gstRates),     colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'stock',    label: 'Stock',    options: _opts('All', ['In Stock', 'Low Stock', 'Out of Stock']), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',   label: 'Status',   options: _opts('All Status', ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'name',           label: 'Product Name',  sortable: true, type: 'text' },
+    { key: 'sku',            label: 'SKU',           sortable: true, type: 'badge' },
+    { key: 'category',       label: 'Category',      sortable: true, type: 'text' },
+    { key: 'hsn',            label: 'HSN',           sortable: true, type: 'text' },
+    { key: 'gst_rate',       label: 'GST',           sortable: true, type: 'badge', align: 'center' },
+    { key: 'purchase_price', label: 'Purchase Price', sortable: true, type: 'currency' },
+    { key: 'sales_price',    label: 'Sales Price',   sortable: true, type: 'currency' },
+    { key: 'stock',          label: 'Stock',         sortable: true, type: 'text', align: 'center' },
+    { key: 'status',         label: 'Status',        sortable: true, type: 'status' },
+    { key: 'created_at',     label: 'Created At',    sortable: true, type: 'date' },
+];
+
+var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Stock', 'Status'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Products',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Products' },
+    ],
+    actions: [
+        { label: 'Export',      icon: 'fa-upload', variant: 'light' },
+        { label: 'Add Product', icon: 'fa-plus',   gradient: true, href: '/products/add' },
+    ],
+}) %>
+
+<form id="product-filters-form" autocomplete="off" method="get" action="/products">
+    <%- include('../partials/filter-card', {
+        filterId: 'product-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'products-table',
+        basePath: '/products',
+        editable: true,
+        sortKeys: ['name', 'status', 'created_at'],
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit', 'delete'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

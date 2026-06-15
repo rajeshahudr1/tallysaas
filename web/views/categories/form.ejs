@@ -1,0 +1,109 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/categories/form.ejs — MASTERS · Add Category.
+ * Route: GET /categories/add  ·  activeMenu: 'categories'.
+ *
+ * Categories are a small master, so this is a SIMPLE single-card form
+ * (no tabs) — demonstrating the same component system handles light
+ * forms, not just the tabbed ones. Still uses page-head + the shared
+ * .card/.form-card-body/.form-card-footer + status-radio styling.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   categoryNames  [ … ]  — Parent Category select options
+ * ─────────────────────────────────────────────────────────── */
+
+// Dual-mode (Add / Edit) helpers.
+var _rec   = (typeof record !== 'undefined' && record) ? record : null;
+var _isEdit = !!_rec;
+function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }
+
+// Parent-category FK options ({id,name}); empty value = root category.
+var _parentOptions = (typeof parentOptions !== 'undefined' && parentOptions) ? parentOptions : [];
+
+function _selOpts(placeholder, list) {
+    var html = '<option value=""' + (_isEdit ? '' : ' selected') + '>' + placeholder + '</option>';
+    (list || []).forEach(function (o) {
+        var sel = String(_v('parent_id')) === String(o.id) ? ' selected' : '';
+        html += '<option value="' + o.id + '"' + sel + '>' + o.name + '</option>';
+    });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/categories">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Categories' +
+    '</a>' +
+    '<button type="submit" form="category-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Category' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: (_isEdit ? 'Edit' : 'Add') + ' Category',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Categories', href: '/categories' },
+        { label: (_isEdit ? 'Edit' : 'Add') + ' Category' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="category-form" class="card form-card" method="post" action="<%= _isEdit ? '/categories/' + _rec.id : '/categories' %>" autocomplete="off" novalidate>
+
+    <div class="form-card-body">
+
+        <div class="row g-4">
+
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="cat-name">Category Name<span class="req">*</span></label>
+                <input type="text" class="form-control" id="cat-name" name="name"
+                       value="<%= _v('name') %>"
+                       placeholder="e.g. Steel &amp; Metal" required>
+            </div>
+
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="cat-parent">Parent Category</label>
+                <select class="form-select" id="cat-parent" name="parent_id">
+                    <%- _selOpts('None (root category)', _parentOptions) %>
+                </select>
+                <div class="form-hint">Leave as “None” to create a top-level category.</div>
+            </div>
+
+        </div>
+
+        <hr class="form-divider">
+
+        <div class="row g-4 align-items-start">
+            <div class="col-12 col-md-6">
+                <label class="form-label d-block">Status<span class="req">*</span></label>
+                <div class="status-radios">
+                    <label class="status-radio is-active">
+                        <input type="radio" name="status" value="Active" <%= _isEdit ? (String(_v('status')) === 'Active' ? 'checked' : '') : 'checked' %>>
+                        <span>Active</span>
+                    </label>
+                    <label class="status-radio is-inactive">
+                        <input type="radio" name="status" value="Inactive" <%= _isEdit && String(_v('status')) === 'Inactive' ? 'checked' : '' %>>
+                        <span>Inactive</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="cat-desc">Description</label>
+                <textarea class="form-control" id="cat-desc" name="description"
+                          rows="3" maxlength="300" placeholder="Optional notes about this category…"
+                          data-counter="cat-desc-count"></textarea>
+                <div class="char-counter"><span id="cat-desc-count">0/300</span></div>
+            </div>
+        </div>
+
+    </div><!-- /.form-card-body -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/categories">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i><%= _isEdit ? 'Update' : 'Save' %> Category
+        </button>
+    </div>
+
+</form>

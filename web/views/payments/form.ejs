@@ -1,0 +1,143 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/payments/form.ejs — TRANSACTIONS · Add Payment.
+ * Route: GET /payments/add  ·  activeMenu: 'payments'.
+ *
+ * Simple single-card voucher form (Tally Payment Voucher). Money paid
+ * OUT to a supplier.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   supplierNames  [ … ]  — Supplier (payee) select options
+ *   paymentModes   [ … ]  — Payment Mode select options
+ *   nextPaymentNo  string — read-only payment voucher no.
+ * ─────────────────────────────────────────────────────────── */
+
+var _supOptions = (typeof supplierOptions !== 'undefined' && supplierOptions) ? supplierOptions : [];
+var _modes  = (typeof paymentModes !== 'undefined' && paymentModes) ? paymentModes : [];
+var _payNo  = (typeof nextPaymentNo !== 'undefined' && nextPaymentNo) ? nextPaymentNo : '';
+
+function _selOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (v) { html += '<option value="' + v + '">' + v + '</option>'; });
+    return html;
+}
+// FK options: value = id (Supplier select).
+function _fkOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (o) { html += '<option value="' + o.id + '">' + o.name + '</option>'; });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/payments">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Payments' +
+    '</a>' +
+    '<button type="submit" form="payment-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Add Payment',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Payments', href: '/payments' },
+        { label: 'Add Payment' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="payment-form" class="card form-card" method="post" action="/payments" autocomplete="off" novalidate>
+
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-money-bill-wave me-2 text-primary"></i>Payment Voucher</h2>
+        <span class="pill-status pill-status--warning">Pending Tally</span>
+    </div>
+
+    <div class="form-card-body">
+
+        <div class="form-grid">
+
+            <!-- Row 1: Supplier* · Payment No · Date* -->
+            <div class="form-group">
+                <label class="form-label" for="pay-supplier">Supplier (Pay To)<span class="req">*</span></label>
+                <select class="form-select" id="pay-supplier" name="supplier_id" required>
+                    <%- _fkOpts('Select supplier', _supOptions) %>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="pay-no">Payment No</label>
+                <input type="text" class="form-control" id="pay-no" name="payment_no" value="<%= _payNo %>" readonly>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="pay-date">Payment Date<span class="req">*</span></label>
+                <input type="date" class="form-control" id="pay-date" name="payment_date" value="2024-05-21" required>
+            </div>
+
+            <!-- Row 2: Mode* · Amount* · Reference No -->
+            <div class="form-group">
+                <label class="form-label" for="pay-mode">Payment Mode<span class="req">*</span></label>
+                <select class="form-select" id="pay-mode" name="mode" required>
+                    <%- _selOpts('Select mode', _modes) %>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="pay-amount">Amount<span class="req">*</span></label>
+                <div class="input-affix">
+                    <input type="number" class="form-control has-suffix" id="pay-amount" name="amount"
+                           placeholder="0.00" min="0" step="0.01" required>
+                    <span class="affix affix--suffix">₹</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="pay-ref">Reference No</label>
+                <input type="text" class="form-control" id="pay-ref" name="reference"
+                       placeholder="Cheque / UPI / NEFT ref">
+            </div>
+
+            <!-- Row 3: Bank / Account · (spacer) -->
+            <div class="form-group">
+                <label class="form-label" for="pay-bank">Bank / Account</label>
+                <input type="text" class="form-control" id="pay-bank" name="bank_account"
+                       placeholder="e.g. HDFC Current A/c">
+            </div>
+
+        </div><!-- /.form-grid -->
+
+        <hr class="form-divider">
+
+        <!-- Status · Is-Tally-Voucher · Notes -->
+        <div class="row g-4 align-items-start">
+            <div class="col-12 col-md-4">
+                <label class="form-label d-block">Is Tally Voucher</label>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="pay-tally" name="is_tally_voucher" checked>
+                    <label class="form-check-label" for="pay-tally">Post to Tally as Payment voucher</label>
+                </div>
+                <div class="form-hint">Creates a Payment voucher under the supplier ledger.</div>
+            </div>
+
+            <div class="col-12 col-md-8">
+                <label class="form-label" for="pay-notes">Narration / Notes</label>
+                <textarea class="form-control" id="pay-notes" name="notes" rows="3"
+                          maxlength="300" placeholder="Narration for this payment…"
+                          data-counter="pay-notes-count"></textarea>
+                <div class="char-counter"><span id="pay-notes-count">0/300</span></div>
+            </div>
+        </div>
+
+    </div><!-- /.form-card-body -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/payments">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally
+        </button>
+    </div>
+
+</form>

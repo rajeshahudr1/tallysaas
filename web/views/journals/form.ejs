@@ -1,0 +1,82 @@
+<%
+/* views/journals/form.ejs — TRANSACTIONS · Add Journal Voucher.
+ * Dr one ledger / Cr another. ledgerNames provides a datalist of known
+ * cloud ledgers (customers + suppliers) for convenience. */
+var _ledgers = (typeof ledgerNames !== 'undefined' && ledgerNames) ? ledgerNames : [];
+var headActions =
+    '<a class="btn btn-light" href="/journals"><i class="fa-solid fa-arrow-left me-1"></i>Back</a>' +
+    '<button type="submit" form="journal-form" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save Journal</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Add Journal Voucher',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Journals', href: '/journals' },
+        { label: 'Add Journal' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="journal-form" class="card form-card" method="post" action="/journals" autocomplete="off" novalidate>
+
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-book me-2 text-primary"></i>Journal Voucher</h2>
+        <span class="pill-status pill-status--warning">Pending Tally</span>
+    </div>
+
+    <div class="form-card-body">
+        <div class="form-grid">
+            <div class="form-group">
+                <label class="form-label" for="jv-type">Voucher Type<span class="req">*</span></label>
+                <select class="form-select" id="jv-type" name="vch_type" required>
+                    <option value="Journal" selected>Journal</option>
+                    <option value="Contra">Contra (Cash ⇄ Bank)</option>
+                    <option value="Credit Note">Credit Note (Sales Return)</option>
+                    <option value="Debit Note">Debit Note (Purchase Return)</option>
+                </select>
+                <div class="form-hint">Syncs to Tally as this voucher type.</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="jv-date">Date<span class="req">*</span></label>
+                <input type="date" class="form-control" id="jv-date" name="journal_date" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="jv-dr">Debit Ledger (Dr)<span class="req">*</span></label>
+                <input type="text" class="form-control" id="jv-dr" name="dr_ledger" list="ledger-list" placeholder="e.g. Sharma Electronics" required>
+                <div class="form-hint">Account/party to debit.</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="jv-cr">Credit Ledger (Cr)<span class="req">*</span></label>
+                <input type="text" class="form-control" id="jv-cr" name="cr_ledger" list="ledger-list" placeholder="e.g. Cash" required>
+                <div class="form-hint">Account/party to credit.</div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="jv-amount">Amount<span class="req">*</span></label>
+                <input type="number" class="form-control" id="jv-amount" name="amount" min="0" step="0.01" placeholder="0.00" required>
+            </div>
+        </div>
+
+        <datalist id="ledger-list">
+            <% _ledgers.forEach(function (l) { %><option value="<%= l %>"></option><% }); %>
+            <option value="Cash"></option><option value="Bank"></option>
+            <option value="Discount Allowed"></option><option value="Discount Received"></option>
+            <option value="Round Off"></option>
+        </datalist>
+
+        <hr class="form-divider">
+        <div class="row g-4">
+            <div class="col-12">
+                <label class="form-label" for="jv-narration">Narration</label>
+                <textarea class="form-control" id="jv-narration" name="narration" rows="2" maxlength="300"
+                          placeholder="Being…" data-counter="jv-narration-count"></textarea>
+                <div class="char-counter"><span id="jv-narration-count">0/300</span></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/journals">Cancel</a>
+        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save Journal</button>
+    </div>
+</form>

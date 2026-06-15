@@ -1,0 +1,258 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/sales-persons/form.ejs — MASTERS · Add Sales Person.
+ * Route: GET /sales-persons/add  ·  activeMenu: 'sales'.
+ *
+ * Two fully-built panes:
+ *   • Basic Information — name/code/mobile/email/joining/status.
+ *   • Assigned Locations — the SalesPerson↔Location MAPPING UI: a grid
+ *     of selectable location cards (checkboxes). Selecting many = the
+ *     person can access customers in all those locations.
+ * Other tabs are styled placeholders.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   locationOptions  [ {name,code,city,state,customers}, … ]
+ * ─────────────────────────────────────────────────────────── */
+
+var _locationOptions = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
+
+var _rec   = (typeof record !== 'undefined' && record) ? record : null;
+var _isEdit = !!_rec;
+function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }
+
+var formTabs = [
+    { id: 'basic',     label: 'Basic Information',  icon: 'fa-id-card',        active: true },
+    { id: 'locations', label: 'Assigned Locations', icon: 'fa-location-dot'                 },
+    { id: 'access',    label: 'Login & Access',     icon: 'fa-key'                          },
+    { id: 'custom',    label: 'Custom Fields',      icon: 'fa-table-cells'                  },
+];
+/* Only #access and #custom are placeholders (basic + locations are built). */
+var placeholderPanes = formTabs.filter(function (t) { return t.id === 'access' || t.id === 'custom'; });
+
+var headActions =
+    '<a class="btn btn-light" href="/sales-persons">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Sales Persons' +
+    '</a>' +
+    '<div class="btn-group">' +
+        '<button type="submit" form="sp-form" class="btn btn-primary">' +
+            '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Sales Person' +
+        '</button>' +
+        '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
+                'data-bs-toggle="dropdown" aria-expanded="false">' +
+            '<span class="visually-hidden">Toggle save options</span>' +
+        '</button>' +
+        '<ul class="dropdown-menu dropdown-menu-end">' +
+            '<li><button type="submit" form="sp-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-floppy-disk me-2 text-muted"></i>Save</button></li>' +
+            '<li><button type="submit" form="sp-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-plus me-2 text-muted"></i>Save &amp; Add Another</button></li>' +
+        '</ul>' +
+    '</div>';
+%>
+
+<%- include('../partials/page-head', {
+    title: (_isEdit ? 'Edit' : 'Add') + ' Sales Person',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Sales Persons', href: '/sales-persons' },
+        { label: (_isEdit ? 'Edit' : 'Add') + ' Sales Person' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="sp-form" class="card form-card" method="post" action="<%= _isEdit ? '/sales-persons/' + _rec.id : '/sales-persons' %>" autocomplete="off" novalidate>
+
+    <%- include('../partials/form-card', { tabs: formTabs }) %>
+
+    <div class="tab-content form-card-body">
+
+        <!-- ════ PANE 1 — Basic Information (active) ════ -->
+        <div class="tab-pane fade show active" id="basic" role="tabpanel" aria-labelledby="basic-tab">
+
+            <div class="form-grid">
+
+                <!-- Row 1: Name* · Employee Code · Mobile* (+91) -->
+                <div class="form-group">
+                    <label class="form-label" for="sp-name">Name<span class="req">*</span></label>
+                    <input type="text" class="form-control" id="sp-name" name="name"
+                           value="<%= _v('name') %>" placeholder="Enter full name" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sp-code">Employee Code</label>
+                    <input type="text" class="form-control text-uppercase" id="sp-code" name="employee_code"
+                           value="<%= _v('employee_code') %>" placeholder="e.g. EMP001" maxlength="12">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sp-mobile">Mobile Number<span class="req">*</span></label>
+                    <div class="input-affix">
+                        <select class="affix affix--prefix" name="mobile_cc" aria-label="Country code">
+                            <option value="+91" selected>🇮🇳 +91</option>
+                            <option value="+1">🇺🇸 +1</option>
+                            <option value="+44">🇬🇧 +44</option>
+                            <option value="+971">🇦🇪 +971</option>
+                        </select>
+                        <input type="tel" class="form-control" id="sp-mobile" name="mobile"
+                               value="<%= _v('mobile') %>" placeholder="98765 43210" inputmode="numeric" maxlength="10" required>
+                    </div>
+                </div>
+
+                <!-- Row 2: Email · Joining Date -->
+                <div class="form-group">
+                    <label class="form-label" for="sp-email">Email</label>
+                    <div class="input-affix">
+                        <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
+                        <input type="email" class="form-control" id="sp-email" name="email"
+                               value="<%= _v('email') %>" placeholder="name@company.com">
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sp-joining">Joining Date</label>
+                    <input type="date" class="form-control" id="sp-joining" name="joining_date" value="<%= _v('joining_date') %>">
+                </div>
+
+            </div><!-- /.form-grid -->
+
+            <hr class="form-divider">
+
+            <div class="row g-4 align-items-start">
+                <div class="col-12 col-md-6">
+                    <label class="form-label d-block">Status<span class="req">*</span></label>
+                    <div class="status-radios">
+                        <label class="status-radio is-active">
+                            <input type="radio" name="status" value="Active" <%= _isEdit ? (String(_v('status')) === 'Active' ? 'checked' : '') : 'checked' %>>
+                            <span>Active</span>
+                        </label>
+                        <label class="status-radio is-inactive">
+                            <input type="radio" name="status" value="Inactive" <%= String(_v('status')) === 'Inactive' ? 'checked' : '' %>>
+                            <span>Inactive</span>
+                        </label>
+                        <label class="status-radio is-blocked">
+                            <input type="radio" name="status" value="Blocked" <%= String(_v('status')) === 'Blocked' ? 'checked' : '' %>>
+                            <span>Blocked</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-md-6">
+                    <div class="form-hint mt-4">
+                        <i class="fa-solid fa-circle-info me-1"></i>
+                        Assign which locations this person can access in the
+                        <strong>Assigned Locations</strong> tab.
+                    </div>
+                </div>
+            </div>
+
+        </div><!-- /#basic -->
+
+        <!-- ════ PANE 2 — Assigned Locations (mapping) ════ -->
+        <div class="tab-pane fade" id="locations" role="tabpanel" aria-labelledby="locations-tab">
+
+            <div class="assign-head">
+                <div>
+                    <h2 class="form-section-title mb-1">Assigned Locations</h2>
+                    <p class="form-hint mb-0">Tick every location this sales person should be able to access.
+                        They will only see customers belonging to the selected locations.</p>
+                </div>
+                <label class="same-as-label" for="sp-select-all-locations">
+                    <input class="form-check-input mt-0" type="checkbox" id="sp-select-all-locations"
+                           data-select-all-checks="sp-loc">
+                    Select all
+                </label>
+            </div>
+
+            <div class="assign-grid">
+                <% _locationOptions.forEach(function (loc) { %>
+                    <label class="assign-card">
+                        <input type="checkbox" name="locations[]" value="<%= loc.name %>" data-check-group="sp-loc">
+                        <span class="assign-card-body">
+                            <span class="assign-card-name">
+                                <i class="fa-solid fa-location-dot"></i><%= loc.name %>
+                                <span class="assign-card-code"><%= loc.code %></span>
+                            </span>
+                            <span class="assign-card-meta">
+                                <%= loc.city %>, <%= loc.state %> · <%= loc.customers %> customers
+                            </span>
+                        </span>
+                        <span class="assign-card-check"><i class="fa-solid fa-check"></i></span>
+                    </label>
+                <% }); %>
+                <% if (!_locationOptions.length) { %>
+                    <p class="text-muted mb-0">No locations yet. Create locations first.</p>
+                <% } %>
+            </div>
+
+        </div><!-- /#locations -->
+
+        <%
+        placeholderPanes.forEach(function (pane) { %>
+            <div class="tab-pane fade" id="<%= pane.id %>" role="tabpanel" aria-labelledby="<%= pane.id %>-tab">
+                <div class="tab-placeholder">
+                    <div class="tab-placeholder-icon">
+                        <i class="fa-solid <%= pane.icon %>"></i>
+                    </div>
+                    <div class="tab-placeholder-title"><%= pane.label %></div>
+                    <p class="mb-0">This section is coming in the next phase.</p>
+                </div>
+            </div>
+        <% }); %>
+
+    </div><!-- /.tab-content -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/sales-persons">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i><%= _isEdit ? 'Update' : 'Save' %> Sales Person
+        </button>
+    </div>
+
+</form>
+
+<%
+/* Page-local styling for the Assigned-Locations mapping grid (not a
+ * shared component — specific to this feature). Selected state is
+ * driven by the checkbox via :has(), no JS needed for the visuals. */
+%>
+<style>
+    .assign-head {
+        display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
+    }
+    .assign-grid {
+        display: grid; gap: 12px;
+        grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    }
+    .assign-card {
+        position: relative; display: flex; align-items: center; gap: 12px;
+        border: 1px solid var(--border); border-radius: 12px;
+        padding: 14px 16px; cursor: pointer; background: #fff;
+        transition: border-color .15s, background .15s, box-shadow .15s;
+    }
+    .assign-card:hover { border-color: #C7D2FE; }
+    .assign-card input { position: absolute; opacity: 0; pointer-events: none; }
+    .assign-card-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+    .assign-card-name {
+        display: flex; align-items: center; gap: 8px;
+        font-weight: 600; font-size: 14px; color: var(--text);
+    }
+    .assign-card-name > i { color: var(--primary); }
+    .assign-card-code {
+        font-size: 11px; font-weight: 600; color: var(--text-muted);
+        background: #F3F4F6; border-radius: 999px; padding: 1px 8px;
+    }
+    .assign-card-meta { font-size: 12px; color: var(--text-muted); }
+    .assign-card-check {
+        width: 24px; height: 24px; border-radius: 50%;
+        border: 1.5px solid var(--border); display: grid; place-items: center;
+        color: transparent; font-size: 11px; flex: 0 0 auto; transition: all .15s;
+    }
+    .assign-card:has(input:checked) {
+        border-color: var(--primary);
+        background: rgba(37, 99, 235, .05);
+        box-shadow: 0 0 0 1px var(--primary) inset;
+    }
+    .assign-card:has(input:checked) .assign-card-check {
+        background: var(--primary); border-color: var(--primary); color: #fff;
+    }
+</style>

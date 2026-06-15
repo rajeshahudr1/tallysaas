@@ -1,0 +1,38 @@
+{
+  "name": "tallysaas-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tally Cloud Sync SaaS — Phase 1 UI-only web tier (Express + EJS + Bootstrap 5). Renders screens from mock data; the mock layer will later be swapped for an apiClient that calls the REST API.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "tally",
+    "cloud-sync",
+    "saas",
+    "express",
+    "ejs",
+    "bootstrap",
+    "ui"
+  ],
+  "author": "Tally Cloud Sync",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "compression": "^1.7.4",
+    "dotenv": "^17.4.2",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "express-ejs-layouts": "^2.5.1",
+    "express-session": "^1.19.0",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}

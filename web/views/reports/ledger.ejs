@@ -1,0 +1,88 @@
+<%
+/* views/reports/ledger.ejs — party account statement (Tally ledger style):
+ * opening balance, every voucher with running balance, closing balance.
+ * Locals: party{name,gstin,type}, opening, closing, totals{debit,credit},
+ *         rows[{date,vtype,ref,debit,credit,balance}], breadcrumb, fmtDate. */
+var _p    = (typeof party !== 'undefined' && party) ? party : {};
+var _rows = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _open = (typeof opening !== 'undefined') ? opening : 0;
+var _close= (typeof closing !== 'undefined') ? closing : 0;
+var _tot  = (typeof totals !== 'undefined' && totals) ? totals : { debit: 0, credit: 0 };
+var _bc   = (typeof breadcrumb !== 'undefined' && breadcrumb) ? breadcrumb : [];
+var _fd   = (typeof fmtDate !== 'undefined') ? fmtDate : function (v) { return v; };
+function _inr(v) { return '₹' + Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+%>
+
+<%- include('../partials/page-head', {
+    title: _p.name || 'Ledger', breadcrumb: _bc,
+    actions: [{ label: 'Print / PDF', icon: 'fa-print', variant: 'light', id: 'report-print' }],
+}) %>
+
+<div class="card mb-3">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title">
+            <i class="fa-solid fa-book-open me-2 text-primary"></i><%= _p.name %>
+            <span class="pill-status pill-status--muted ms-2" style="font-size:11px"><%= (_p.type || '') === 'supplier' ? 'Supplier' : 'Customer' %> Ledger</span>
+        </h2>
+        <span class="form-hint mb-0"><% if (_p.gstin) { %>GSTIN: <%= _p.gstin %><% } %></span>
+    </div>
+</div>
+
+<div class="card">
+    <div class="report-meta-bar">
+        <span><i class="fa-regular fa-file-lines me-1"></i> Account Statement</span>
+        <span>Closing Balance: <strong><%= _inr(Math.abs(_close)) %> <%= _close >= 0 ? 'Dr' : 'Cr' %></strong></span>
+    </div>
+    <div class="table-responsive">
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Particulars</th>
+                    <th>Vch No</th>
+                    <th class="num">Debit</th>
+                    <th class="num">Credit</th>
+                    <th class="num">Balance</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td></td>
+                    <td><strong>Opening Balance</strong></td>
+                    <td></td>
+                    <td class="num"></td>
+                    <td class="num"></td>
+                    <td class="num"><strong><%= _inr(Math.abs(_open)) %> <%= _open >= 0 ? 'Dr' : 'Cr' %></strong></td>
+                </tr>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <td><%= _fd(r.date) %></td>
+                        <td><%= r.vtype %></td>
+                        <td><strong><%= r.ref %></strong></td>
+                        <td class="num"><%= r.debit ? _inr(r.debit) : '' %></td>
+                        <td class="num"><%= r.credit ? _inr(r.credit) : '' %></td>
+                        <td class="num"><%= _inr(Math.abs(r.balance)) %> <%= r.balance >= 0 ? 'Dr' : 'Cr' %></td>
+                    </tr>
+                <% }); %>
+                <% if (!_rows.length) { %>
+                    <tr><td colspan="6" class="text-center text-muted py-4">No transactions for this party.</td></tr>
+                <% } %>
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="3"><strong>Total</strong></td>
+                    <td class="num"><strong><%= _inr(_tot.debit) %></strong></td>
+                    <td class="num"><strong><%= _inr(_tot.credit) %></strong></td>
+                    <td class="num"><strong><%= _inr(Math.abs(_close)) %> <%= _close >= 0 ? 'Dr' : 'Cr' %></strong></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+
+<script>
+    (function () {
+        var b = document.getElementById('report-print');
+        if (b) b.addEventListener('click', function () { window.print(); });
+    })();
+</script>

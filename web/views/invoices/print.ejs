@@ -1,0 +1,181 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/invoices/print.ejs — printable Tally-style TAX INVOICE.
+ * Rendered with layout:false (standalone A4 document). The browser's
+ * "Save as PDF" in the print dialog produces the PDF.
+ *
+ * Locals: heading, seller{name,gst,pan,address}, party{name,gst,address},
+ *         invoice{...}, items[{sno,name,hsn,qty,unit,rate,taxable,gst_rate,
+ *         gst_amount,amount}], words, fmtDate.
+ * ─────────────────────────────────────────────────────────── */
+var _inv   = invoice || {};
+var _items = items || [];
+function inr(v) { return Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function qfmt(v) { var n = Number(v || 0); return (n % 1 === 0) ? String(n) : n.toFixed(2); }
+var _cgst = Number(_inv.cgst) || 0, _sgst = Number(_inv.sgst) || 0, _igst = Number(_inv.igst) || 0;
+var _round = Number(_inv.round_off) || 0;
+%><!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Invoice <%= _inv.invoice_no || '' %></title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: "Segoe UI", Arial, sans-serif; color: #111; margin: 0; background: #f3f4f6; font-size: 12.5px; }
+        .toolbar { text-align: center; padding: 12px; }
+        .toolbar button { font: inherit; font-weight: 600; padding: 9px 20px; border: 0; border-radius: 8px;
+            background: #2563EB; color: #fff; cursor: pointer; margin: 0 4px; }
+        .toolbar a { font: inherit; padding: 9px 18px; border: 1px solid #cbd5e1; border-radius: 8px;
+            background: #fff; color: #334155; text-decoration: none; margin: 0 4px; }
+        .sheet { width: 210mm; min-height: 280mm; margin: 0 auto 24px; background: #fff; padding: 12mm;
+            box-shadow: 0 6px 30px rgba(0,0,0,.12); }
+        .inv { border: 1.5px solid #000; }
+        .inv-head { text-align: center; padding: 10px 8px; border-bottom: 1.5px solid #000; }
+        .inv-title { font-size: 13px; font-weight: 700; letter-spacing: 2px; margin-bottom: 4px; }
+        .co-name { font-size: 19px; font-weight: 800; }
+        .co-meta { font-size: 11.5px; color: #222; margin-top: 2px; line-height: 1.45; }
+        .grid2 { display: flex; border-bottom: 1.5px solid #000; }
+        .grid2 > div { flex: 1; padding: 8px 10px; }
+        .grid2 > div:first-child { border-right: 1px solid #000; }
+        .lbl { font-size: 10.5px; color: #555; text-transform: uppercase; letter-spacing: .5px; }
+        .party-name { font-weight: 700; font-size: 14px; margin-top: 2px; }
+        .meta-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; }
+        table.items { width: 100%; border-collapse: collapse; }
+        table.items th, table.items td { border: 1px solid #000; padding: 5px 6px; font-size: 11.5px; }
+        table.items th { background: #f1f5f9; font-weight: 700; text-align: center; }
+        table.items td.r { text-align: right; }
+        table.items td.c { text-align: center; }
+        .filler td { border-left: 1px solid #000; border-right: 1px solid #000; border-top: 0; border-bottom: 0; height: 14px; }
+        .totrow td { font-weight: 700; background: #f8fafc; }
+        .words { border: 1px solid #000; border-top: 0; padding: 7px 10px; font-size: 12px; }
+        .words b { text-transform: uppercase; }
+        .foot { display: flex; border: 1px solid #000; border-top: 0; }
+        .foot > div { flex: 1; padding: 9px 10px; font-size: 11px; }
+        .foot > div:first-child { border-right: 1px solid #000; }
+        .sign { text-align: right; padding-top: 38px; font-weight: 600; }
+        .status-pill { display: inline-block; font-size: 10px; padding: 1px 8px; border-radius: 10px; background: #eef2ff; color: #3730a3; }
+        @media print {
+            body { background: #fff; font-size: 11.5px; }
+            .toolbar { display: none; }
+            .sheet { width: auto; min-height: auto; margin: 0; padding: 0; box-shadow: none; }
+            @page { size: A4; margin: 12mm; }
+        }
+    </style>
+</head>
+<body>
+    <div class="toolbar">
+        <button onclick="window.print()">🖨 Print / Save as PDF</button>
+        <a href="/sales-invoices">Back</a>
+    </div>
+
+    <div class="sheet">
+        <div class="inv">
+
+            <!-- Header -->
+            <div class="inv-head">
+                <div class="inv-title"><%= heading || 'TAX INVOICE' %></div>
+                <div class="co-name"><%= seller.name %></div>
+                <div class="co-meta">
+                    <% if (seller.address) { %><%= seller.address %><br><% } %>
+                    <% if (seller.gst) { %>GSTIN: <strong><%= seller.gst %></strong><% } %>
+                    <% if (seller.pan) { %> &nbsp;|&nbsp; PAN: <strong><%= seller.pan %></strong><% } %>
+                </div>
+            </div>
+
+            <!-- Party + invoice meta -->
+            <div class="grid2">
+                <div>
+                    <div class="lbl"><%= heading && heading.indexOf('PURCHASE') > -1 ? 'Supplier' : 'Bill To' %></div>
+                    <div class="party-name"><%= party.name || '—' %></div>
+                    <% if (party.address) { %><div style="font-size:11.5px;margin-top:3px"><%= party.address %></div><% } %>
+                    <% if (party.gst) { %><div style="font-size:11.5px;margin-top:3px">GSTIN: <strong><%= party.gst %></strong></div><% } %>
+                </div>
+                <div>
+                    <div class="meta-row"><span class="lbl">Invoice No.</span><strong><%= _inv.invoice_no || '' %></strong></div>
+                    <div class="meta-row"><span class="lbl">Date</span><span><%= fmtDate(_inv.invoice_date) %></span></div>
+                    <% if (_inv.due_date) { %><div class="meta-row"><span class="lbl">Due Date</span><span><%= fmtDate(_inv.due_date) %></span></div><% } %>
+                    <% if (_inv.supplier_bill_no) { %><div class="meta-row"><span class="lbl">Supplier Bill</span><span><%= _inv.supplier_bill_no %></span></div><% } %>
+                    <div class="meta-row"><span class="lbl">Status</span><span class="status-pill"><%= (_inv.status || '').replace(/_/g,' ') %></span></div>
+                </div>
+            </div>
+
+            <!-- Items -->
+            <table class="items">
+                <thead>
+                    <tr>
+                        <th style="width:30px">#</th>
+                        <th style="text-align:left">Description of Goods</th>
+                        <th style="width:60px">HSN</th>
+                        <th style="width:55px">Qty</th>
+                        <th style="width:42px">Unit</th>
+                        <th style="width:70px">Rate</th>
+                        <th style="width:80px">Taxable</th>
+                        <th style="width:48px">GST%</th>
+                        <th style="width:78px">GST Amt</th>
+                        <th style="width:88px">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% if (!_items.length) { %>
+                        <tr><td colspan="10" class="c" style="padding:18px;color:#777">No line items.</td></tr>
+                    <% } %>
+                    <% _items.forEach(function (it) { %>
+                        <tr>
+                            <td class="c"><%= it.sno %></td>
+                            <td><%= it.name %></td>
+                            <td class="c"><%= it.hsn %></td>
+                            <td class="r"><%= qfmt(it.qty) %></td>
+                            <td class="c"><%= it.unit %></td>
+                            <td class="r"><%= inr(it.rate) %></td>
+                            <td class="r"><%= inr(it.taxable) %></td>
+                            <td class="c"><%= it.gst_rate %>%</td>
+                            <td class="r"><%= inr(it.gst_amount) %></td>
+                            <td class="r"><%= inr(it.amount) %></td>
+                        </tr>
+                    <% }); %>
+                    <% if (_items.length && _items.length < 8) { for (var f = _items.length; f < 8; f++) { %>
+                        <tr class="filler"><td colspan="10"></td></tr>
+                    <% } } %>
+                </tbody>
+                <tfoot>
+                    <tr class="totrow">
+                        <td colspan="6" class="r">Sub Total (Taxable)</td>
+                        <td class="r"><%= inr(_inv.taxable) %></td>
+                        <td colspan="2"></td>
+                        <td class="r"><%= inr(_inv.taxable) %></td>
+                    </tr>
+                    <% if (_cgst) { %><tr><td colspan="8" class="r">CGST</td><td colspan="2" class="r"><%= inr(_cgst) %></td></tr><% } %>
+                    <% if (_sgst) { %><tr><td colspan="8" class="r">SGST</td><td colspan="2" class="r"><%= inr(_sgst) %></td></tr><% } %>
+                    <% if (_igst) { %><tr><td colspan="8" class="r">IGST</td><td colspan="2" class="r"><%= inr(_igst) %></td></tr><% } %>
+                    <% if (_round) { %><tr><td colspan="8" class="r">Round Off</td><td colspan="2" class="r"><%= inr(_round) %></td></tr><% } %>
+                    <tr class="totrow">
+                        <td colspan="8" class="r" style="font-size:13px">GRAND TOTAL</td>
+                        <td colspan="2" class="r" style="font-size:13px">₹ <%= inr(_inv.total) %></td>
+                    </tr>
+                </tfoot>
+            </table>
+
+            <!-- Amount in words -->
+            <div class="words">Amount Chargeable (in words): <b><%= words %></b></div>
+
+            <!-- Footer: declaration + signature -->
+            <div class="foot">
+                <div>
+                    <div class="lbl">Declaration</div>
+                    <div style="margin-top:3px;color:#333">
+                        <%= _inv.notes || 'We declare that this invoice shows the actual price of the goods described and that all particulars are true and correct.' %>
+                    </div>
+                </div>
+                <div>
+                    <div>For <strong><%= seller.name %></strong></div>
+                    <div class="sign">Authorised Signatory</div>
+                </div>
+            </div>
+
+        </div>
+        <div style="text-align:center;font-size:10px;color:#94a3b8;margin-top:8px">
+            Generated by Tally Cloud Sync &nbsp;·&nbsp; This is a computer-generated invoice.
+        </div>
+    </div>
+</body>
+</html>

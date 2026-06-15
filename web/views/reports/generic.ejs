@@ -1,0 +1,90 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/reports/generic.ejs — reusable Tally-style report (summary
+ * cards + columnar table + optional totals footer + Print/PDF).
+ * Locals: title, breadcrumb, summary[{label,value,icon,tone}],
+ *         columns[{key,label,num?,bold?,pill?}], rows[], totals?{label,<key>:v}
+ * ─────────────────────────────────────────────────────────── */
+var _title   = (typeof title !== 'undefined' && title) ? title : 'Report';
+var _summary = (typeof summary !== 'undefined' && summary) ? summary : [];
+var _columns = (typeof columns !== 'undefined' && columns) ? columns : [];
+var _rows    = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _totals  = (typeof totals !== 'undefined') ? totals : null;
+var _bc      = (typeof breadcrumb !== 'undefined' && breadcrumb) ? breadcrumb : [];
+var _coName  = (typeof company !== 'undefined' && company) ? company.name : '';
+function _inr(v) { return '₹' + Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+%>
+
+<%- include('../partials/page-head', {
+    title: _title, breadcrumb: _bc,
+    actions: [{ label: 'Print / PDF', icon: 'fa-print', variant: 'light', id: 'report-print' }],
+}) %>
+
+<% if (_summary.length) { %>
+<section class="stat-grid mb-3">
+    <% _summary.forEach(function (s) { %>
+        <article class="stat-card stat-card--<%= s.tone || 'blue' %>">
+            <div class="stat-card-top"><span class="stat-icon"><i class="fa-solid <%= s.icon || 'fa-chart-column' %>"></i></span></div>
+            <div>
+                <div class="stat-label"><%= s.label %></div>
+                <div class="stat-value"><%= s.value %></div>
+            </div>
+        </article>
+    <% }); %>
+</section>
+<% } %>
+
+<div class="card">
+    <div class="report-meta-bar">
+        <span><i class="fa-regular fa-building me-1"></i> <%= _coName %></span>
+        <span>Showing <strong><%= _rows.length %></strong> rows</span>
+    </div>
+    <div class="table-responsive">
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <% _columns.forEach(function (c) { %>
+                        <th class="<%= c.num ? 'num' : '' %>"><%= c.label %></th>
+                    <% }); %>
+                </tr>
+            </thead>
+            <tbody>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <% _columns.forEach(function (c) { var v = r[c.key]; %>
+                            <td class="<%= c.num ? 'num' : '' %>">
+                                <% if (c.link && r[c.link]) { %><a href="<%= r[c.link] %>" class="text-primary fw-semibold"><%= v %></a>
+                                <% } else if (c.num) { %><%= _inr(v) %>
+                                <% } else if (c.pill) { %><span class="pill-status pill-status--muted"><%= v %></span>
+                                <% } else if (c.bold) { %><strong><%= (v === 0 || v) ? v : '' %></strong>
+                                <% } else { %><%= (v === 0 || v) ? v : '' %><% } %>
+                            </td>
+                        <% }); %>
+                    </tr>
+                <% }); %>
+                <% if (!_rows.length) { %>
+                    <tr><td colspan="<%= _columns.length %>" class="text-center text-muted py-4">No records for this report.</td></tr>
+                <% } %>
+            </tbody>
+            <% if (_totals) { %>
+            <tfoot>
+                <tr>
+                    <% _columns.forEach(function (c, i) { %>
+                        <td class="<%= c.num ? 'num' : '' %>">
+                            <% if (i === 0) { %><strong><%= _totals.label || 'Total' %></strong>
+                            <% } else if (_totals[c.key] != null) { %><strong><%= c.num ? _inr(_totals[c.key]) : _totals[c.key] %></strong><% } %>
+                        </td>
+                    <% }); %>
+                </tr>
+            </tfoot>
+            <% } %>
+        </table>
+    </div>
+</div>
+
+<script>
+    (function () {
+        var b = document.getElementById('report-print');
+        if (b) b.addEventListener('click', function () { window.print(); });
+    })();
+</script>

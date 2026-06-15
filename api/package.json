@@ -1,0 +1,33 @@
+{
+    "name": "tallysaas-api",
+    "version": "1.0.0",
+    "description": "TallySaaS API tier — Express + PostgreSQL + Knex, JWT auth, single-DB company_id multi-tenancy.",
+    "private": true,
+    "main": "index.js",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "start": "node index.js",
+        "dev": "nodemon index.js",
+        "migrate": "knex migrate:latest",
+        "migrate:rollback": "knex migrate:rollback",
+        "seed": "knex seed:run"
+    },
+    "dependencies": {
+        "argon2": "^0.41",
+        "bcryptjs": "^2.4",
+        "compression": "^1.7",
+        "cors": "^2.8",
+        "dotenv": "^16",
+        "express": "^4.19",
+        "helmet": "^7",
+        "joi": "^17",
+        "jsonwebtoken": "^9",
+        "knex": "^3",
+        "pg": "^8.13"
+    },
+    "devDependencies": {
+        "nodemon": "^3"
+    }
+}

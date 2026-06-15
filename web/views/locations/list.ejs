@@ -1,0 +1,135 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/locations/list.ejs — MASTERS · Locations listing.
+ * Route: GET /locations  ·  activeMenu: 'locations'.
+ *
+ * Same composition pattern as the other listing pages (page-head +
+ * filter-card + table + pagination from config objects). Owns only
+ * the shared 5-column filter helper.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   locationRows    [ location rows ]  — table body
+ *   locationsTotal  number             — pagination total
+ *   page, perPage   numbers
+ *   states          [ 'Gujarat', … ]   — State filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof locationRows !== 'undefined' && locationRows) ? locationRows : [];
+var _total   = (typeof locationsTotal !== 'undefined') ? locationsTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _states  = (typeof states !== 'undefined' && states) ? states : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',       label: 'Search',       placeholder: 'Search by name, code, city...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'state',        label: 'State',        options: _opts('All States', _states),       colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',       label: 'Status',       options: _opts('All Status', ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_from', label: 'Created From', value: '2024-01-01',                         colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_to',   label: 'Created To',   value: '2024-12-31',                         colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'name',       label: 'Location Name', sortable: true, type: 'location' },
+    { key: 'code',       label: 'Code',          sortable: true, type: 'badge' },
+    { key: 'city',       label: 'City',          sortable: true, type: 'text' },
+    { key: 'state',      label: 'State',         sortable: true, type: 'text' },
+    { key: 'mobile',     label: 'Mobile',        sortable: true, type: 'text' },
+    { key: 'manager',    label: 'Manager',       sortable: true, type: 'text' },
+    { key: 'customers',  label: 'Customers',     sortable: true, type: 'text', align: 'center' },
+    { key: 'status',     label: 'Status',        sortable: true, type: 'status' },
+    { key: 'created_at', label: 'Created At',    sortable: true, type: 'date' },
+];
+
+var sortOptions = ['Created At', 'Location Name', 'State', 'Customers', 'Status'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Locations',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Locations' },
+    ],
+    actions: [
+        { label: 'Export',       icon: 'fa-upload', variant: 'light' },
+        { label: 'Add Location', icon: 'fa-plus',   gradient: true, href: '/locations/add' },
+    ],
+}) %>
+
+<form id="location-filters-form" autocomplete="off" method="get" action="/locations">
+    <%- include('../partials/filter-card', {
+        filterId: 'location-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'locations-table',
+        basePath: '/locations',
+        editable: true,
+        sortKeys: ['name', 'status', 'created_at'],
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit', 'delete'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

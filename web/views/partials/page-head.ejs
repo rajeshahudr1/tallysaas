@@ -1,0 +1,65 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/page-head.ejs — helper: page title + breadcrumb + actions
+ * (spec §2 helper). Used by all 3 pages.
+ *
+ * Expected locals:
+ *   title      string
+ *   breadcrumb [{ label, href? }]
+ *   actions?   EITHER a raw HTML string OR an array of
+ *              { label, icon?, variant?, id?, href?, gradient?:bool, caret?:bool }
+ *              variant maps to a Bootstrap btn-* (default 'light').
+ *              gradient:true → the blue→purple gradient primary button.
+ * ─────────────────────────────────────────────────────────── */
+var _title      = (typeof title !== 'undefined' && title) ? title : '';
+var _breadcrumb = (typeof breadcrumb !== 'undefined' && breadcrumb) ? breadcrumb : [];
+var _actions    = (typeof actions !== 'undefined') ? actions : null;
+
+function _btnClass(a) {
+    if (a.gradient) return 'btn btn-gradient';
+    return 'btn btn-' + (a.variant || 'light');
+}
+%>
+<div class="page-head">
+    <div class="page-head-text">
+        <h1 class="page-title"><%= _title %></h1>
+        <% if (_breadcrumb.length) { %>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb page-breadcrumb mb-0">
+                    <% _breadcrumb.forEach(function (crumb, i) { %>
+                        <li class="breadcrumb-item <%= i === _breadcrumb.length - 1 ? 'active' : '' %>"
+                            <%= i === _breadcrumb.length - 1 ? 'aria-current="page"' : '' %>>
+                            <% if (crumb.href && i !== _breadcrumb.length - 1) { %>
+                                <a href="<%= crumb.href %>"><%= crumb.label %></a>
+                            <% } else { %>
+                                <%= crumb.label %>
+                            <% } %>
+                        </li>
+                    <% }); %>
+                </ol>
+            </nav>
+        <% } %>
+    </div>
+
+    <% if (_actions) { %>
+        <div class="page-head-actions">
+            <% if (typeof _actions === 'string') { %>
+                <%- _actions %>
+            <% } else if (Array.isArray(_actions)) { %>
+                <% _actions.forEach(function (a) { %>
+                    <% if (a.href) { %>
+                        <a class="<%= _btnClass(a) %>" href="<%= a.href %>" <%- a.id ? ('id="' + a.id + '"') : '' %>>
+                            <% if (a.icon) { %><i class="fa-solid <%= a.icon %> me-1"></i><% } %><%= a.label %>
+                        </a>
+                    <% } else { %>
+                        <button class="<%= _btnClass(a) %>" type="button" <%- a.id ? ('id="' + a.id + '"') : '' %>
+                                <%= (a.export || a.label === 'Export') ? 'data-export' : '' %>>
+                            <% if (a.icon) { %><i class="fa-solid <%= a.icon %> me-1"></i><% } %><%= a.label %>
+                            <% if (a.caret) { %><i class="fa-solid fa-chevron-down ms-2 page-head-caret"></i><% } %>
+                        </button>
+                    <% } %>
+                <% }); %>
+            <% } %>
+        </div>
+    <% } %>
+</div>

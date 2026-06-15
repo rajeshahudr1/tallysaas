@@ -1,0 +1,159 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/reports/sales-register.ejs — REPORTS · Sales Register.
+ * Route: GET /reports/sales-register  ·  activeMenu: 'reports'.
+ *
+ * A fully-built sample report: filter bar, 4 summary cards, a tax-
+ * breakup table (CGST/SGST) with a totals footer, and Export PDF /
+ * Excel / Print actions (visual in Phase 1).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   rows          [{date,invoice_no,customer,gstin,taxable,cgst,sgst,total,status}]
+ *   summary       [{label,value,icon,tone}]      — 4 cards
+ *   customerNames / locationNames                — filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _summary = (typeof summary !== 'undefined' && summary) ? summary : [];
+var _custs   = (typeof customerNames !== 'undefined' && customerNames) ? customerNames : [];
+var _locs    = (typeof locationNames !== 'undefined' && locationNames) ? locationNames : [];
+
+function _inr(v) {
+    return '₹' + (Number(v) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function _statusPill(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'created') return 'pill-status--success';
+    if (s === 'failed')  return 'pill-status--danger';
+    if (s.indexOf('sent') === 0) return 'pill-status--info';
+    if (s.indexOf('pending') === 0) return 'pill-status--warning';
+    return 'pill-status--muted';
+}
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+// Footer totals over the visible rows.
+var _t = { taxable: 0, cgst: 0, sgst: 0, total: 0 };
+_rows.forEach(function (r) {
+    _t.taxable += Number(r.taxable) || 0;
+    _t.cgst    += Number(r.cgst) || 0;
+    _t.sgst    += Number(r.sgst) || 0;
+    _t.total   += Number(r.total) || 0;
+});
+
+var filterFields = [
+    { type: 'date',   name: 'date_from', label: 'Date From', value: '2024-05-01',                  colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_to',   label: 'Date To',   value: '2024-05-31',                  colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'customer',  label: 'Customer',  options: _opts('All Customers', _custs), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'location',  label: 'Location',  options: _opts('All Locations', _locs),  colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',    label: 'Status',    options: _opts('All Status', ['Created', 'Pending Tally', 'Sent to Tally', 'Failed']), colClass: 'filter-col-fifth' },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Sales Register',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Reports', href: '/reports' },
+        { label: 'Sales Register' },
+    ],
+    actions: [
+        { label: 'PDF',   icon: 'fa-file-pdf',   variant: 'light' },
+        { label: 'Excel', icon: 'fa-file-excel', variant: 'light' },
+        { label: 'Print', icon: 'fa-print',      gradient: true },
+    ],
+}) %>
+
+<!-- ── Filters ───────────────────────────────────────────────── -->
+<form id="report-filters-form" autocomplete="off" method="get" action="/reports/sales-register">
+    <%- include('../partials/filter-card', {
+        filterId: 'report-filters',
+        title: 'Report Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<!-- ── Summary cards ─────────────────────────────────────────── -->
+<section class="stat-grid mb-3">
+    <% _summary.forEach(function (s) { %>
+        <article class="stat-card stat-card--<%= s.tone %>">
+            <div class="stat-card-top">
+                <span class="stat-icon"><i class="fa-solid <%= s.icon %>"></i></span>
+            </div>
+            <div>
+                <div class="stat-label"><%= s.label %></div>
+                <div class="stat-value"><%= s.value %></div>
+            </div>
+        </article>
+    <% }); %>
+</section>
+
+<!-- ── Report table ──────────────────────────────────────────── -->
+<div class="card">
+    <div class="report-meta-bar">
+        <span><i class="fa-regular fa-calendar me-1"></i> 01 May 2024 – 31 May 2024 · <%= _custs.length %> customers</span>
+        <span>Showing <strong><%= _rows.length %></strong> of 248 invoices</span>
+    </div>
+
+    <div class="table-responsive">
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Invoice No</th>
+                    <th>Customer</th>
+                    <th>GSTIN</th>
+                    <th class="num">Taxable</th>
+                    <th class="num">CGST</th>
+                    <th class="num">SGST</th>
+                    <th class="num">Total</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <td><%= r.date %></td>
+                        <td><strong><%= r.invoice_no %></strong></td>
+                        <td><%= r.customer %></td>
+                        <td class="text-muted"><%= r.gstin %></td>
+                        <td class="num"><%= _inr(r.taxable) %></td>
+                        <td class="num"><%= _inr(r.cgst) %></td>
+                        <td class="num"><%= _inr(r.sgst) %></td>
+                        <td class="num"><strong><%= _inr(r.total) %></strong></td>
+                        <td><span class="pill-status <%= _statusPill(r.status) %>"><%= r.status %></span></td>
+                    </tr>
+                <% }); %>
+                <% if (!_rows.length) { %>
+                    <tr><td colspan="9" class="text-center text-muted py-4">No records for this period.</td></tr>
+                <% } %>
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="4">Total (this page)</td>
+                    <td class="num"><%= _inr(_t.taxable) %></td>
+                    <td class="num"><%= _inr(_t.cgst) %></td>
+                    <td class="num"><%= _inr(_t.sgst) %></td>
+                    <td class="num"><%= _inr(_t.total) %></td>
+                    <td></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

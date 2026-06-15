@@ -1,0 +1,160 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/users/form.ejs — SETTINGS · Add User.
+ * Route: GET /users/add  ·  activeMenu: 'users'.
+ *
+ * Single-card form: identity + role + credentials + status. The
+ * "Assigned Location" field is relevant for Sales Manager/Person roles.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   roles          [ … ]  — Role select options (5 roles)
+ *   locationNames  [ … ]  — Assigned Location select options
+ * ─────────────────────────────────────────────────────────── */
+
+var _roleOpts = (typeof roleOptions !== 'undefined' && roleOptions) ? roleOptions : [];
+var _locs     = (typeof locationNames !== 'undefined' && locationNames) ? locationNames : [];
+
+function _selOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (v) { html += '<option value="' + v + '">' + v + '</option>'; });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/users">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Users' +
+    '</a>' +
+    '<button type="submit" form="user-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>Save User' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Add User',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Users', href: '/users' },
+        { label: 'Add User' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="user-form" class="card form-card" method="post" action="/users" autocomplete="off" novalidate>
+
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-user-plus me-2 text-primary"></i>User Details</h2>
+    </div>
+
+    <div class="form-card-body">
+
+        <div class="form-grid">
+
+            <!-- Row 1: Full Name* · Email* · Mobile (+91) -->
+            <div class="form-group">
+                <label class="form-label" for="usr-name">Full Name<span class="req">*</span></label>
+                <input type="text" class="form-control" id="usr-name" name="name" placeholder="Enter full name" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="usr-email">Email<span class="req">*</span></label>
+                <div class="input-affix">
+                    <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
+                    <input type="email" class="form-control" id="usr-email" name="email" placeholder="name@company.com" required>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="usr-mobile">Mobile Number</label>
+                <div class="input-affix">
+                    <select class="affix affix--prefix" name="mobile_cc" aria-label="Country code">
+                        <option value="+91" selected>🇮🇳 +91</option>
+                        <option value="+1">🇺🇸 +1</option>
+                        <option value="+44">🇬🇧 +44</option>
+                        <option value="+971">🇦🇪 +971</option>
+                    </select>
+                    <input type="tel" class="form-control" id="usr-mobile" name="mobile"
+                           placeholder="98765 43210" inputmode="numeric" maxlength="10">
+                </div>
+            </div>
+
+            <!-- Row 2: Role* · Assigned Location · (spacer) -->
+            <div class="form-group">
+                <label class="form-label" for="usr-role">Role<span class="req">*</span></label>
+                <select class="form-select" id="usr-role" name="role_id" required>
+                    <option value="" selected disabled hidden>Select role</option>
+                    <% _roleOpts.forEach(function (r) { %>
+                        <option value="<%= r.id %>"><%= r.name %></option>
+                    <% }); %>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="usr-location">Assigned Location</label>
+                <select class="form-select" id="usr-location" name="location">
+                    <option value="">All / Not applicable</option>
+                    <% _locs.forEach(function (l) { %><option value="<%= l %>"><%= l %></option><% }); %>
+                </select>
+                <div class="form-hint">For Sales Manager / Sales Person roles.</div>
+            </div>
+
+            <div class="form-group"></div>
+
+            <!-- Row 3: Password* · Confirm Password* -->
+            <div class="form-group">
+                <label class="form-label" for="usr-pass">Password<span class="req">*</span></label>
+                <input type="password" class="form-control" id="usr-pass" name="password"
+                       placeholder="Minimum 8 characters" minlength="8" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="usr-pass2">Confirm Password<span class="req">*</span></label>
+                <input type="password" class="form-control" id="usr-pass2" name="password_confirm"
+                       placeholder="Re-enter password" minlength="8" required>
+            </div>
+
+        </div><!-- /.form-grid -->
+
+        <hr class="form-divider">
+
+        <div class="row g-4 align-items-start">
+            <div class="col-12 col-md-5">
+                <label class="form-label d-block">Status<span class="req">*</span></label>
+                <div class="status-radios">
+                    <label class="status-radio is-active">
+                        <input type="radio" name="status" value="Active" checked>
+                        <span>Active</span>
+                    </label>
+                    <label class="status-radio is-inactive">
+                        <input type="radio" name="status" value="Inactive">
+                        <span>Inactive</span>
+                    </label>
+                    <label class="status-radio is-blocked">
+                        <input type="radio" name="status" value="Blocked">
+                        <span>Blocked</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-7">
+                <label class="form-label d-block">Options</label>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="usr-invite" name="send_invite" checked>
+                    <label class="form-check-label" for="usr-invite">Send login invite email</label>
+                </div>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="usr-force" name="force_reset" checked>
+                    <label class="form-check-label" for="usr-force">Force password change on first login</label>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /.form-card-body -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/users">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Save User
+        </button>
+    </div>
+
+</form>

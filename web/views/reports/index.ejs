@@ -1,0 +1,46 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/reports/index.ejs — REPORTS · Reports hub.
+ * Route: GET /reports  ·  activeMenu: 'reports'.
+ *
+ * A catalogue of available reports, grouped into sections. Each card
+ * links to its report view (only Sales Register is fully built; the
+ * rest are placeholders at '#').
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   reportGroups [{ group, reports:[{title,desc,icon,tone,href}] }]
+ * ─────────────────────────────────────────────────────────── */
+
+var _groups = (typeof reportGroups !== 'undefined' && reportGroups) ? reportGroups : [];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Reports',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Reports' },
+    ],
+    actions: '',
+}) %>
+
+<% _groups.forEach(function (g) { %>
+    <section class="report-group">
+        <h2 class="report-group-title"><%= g.group %></h2>
+        <div class="report-grid">
+            <% g.reports.forEach(function (r) { %>
+                <a class="report-card" href="<%= r.href %>">
+                    <span class="report-card-icon report-card-icon--<%= r.tone %>">
+                        <i class="fa-solid <%= r.icon %>"></i>
+                    </span>
+                    <span class="report-card-body">
+                        <span class="report-card-title">
+                            <%= r.title %>
+                            <i class="fa-solid fa-arrow-right"></i>
+                        </span>
+                        <span class="report-card-desc"><%= r.desc %></span>
+                    </span>
+                </a>
+            <% }); %>
+        </div>
+    </section>
+<% }); %>

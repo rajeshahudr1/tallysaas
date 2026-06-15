@@ -1,0 +1,78 @@
+<%
+/* views/reports/gst-summary.ejs — GST summary: Outward (sales) vs Inward
+ * (purchase) tax + net payable. Locals: outward, inward, net_payable. */
+var _out = (typeof outward !== 'undefined' && outward) ? outward : {};
+var _in  = (typeof inward  !== 'undefined' && inward)  ? inward  : {};
+var _net = (typeof net_payable !== 'undefined') ? net_payable : 0;
+var _bc  = (typeof breadcrumb !== 'undefined' && breadcrumb) ? breadcrumb : [];
+function _inr(v) { return '₹' + Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _row(label, o, i) { return { label: label, o: o, i: i }; }
+var _rows = [
+    _row('Taxable Value', _out.taxable, _in.taxable),
+    _row('CGST',          _out.cgst,    _in.cgst),
+    _row('SGST',          _out.sgst,    _in.sgst),
+    _row('IGST',          _out.igst,    _in.igst),
+    _row('Total Tax',     _out.tax,     _in.tax),
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'GST Summary', breadcrumb: _bc,
+    actions: [{ label: 'Print / PDF', icon: 'fa-print', variant: 'light', id: 'report-print' }],
+}) %>
+
+<section class="stat-grid mb-3">
+    <article class="stat-card stat-card--blue">
+        <div class="stat-card-top"><span class="stat-icon"><i class="fa-solid fa-arrow-up-from-bracket"></i></span></div>
+        <div><div class="stat-label">Output GST (Sales)</div><div class="stat-value"><%= _inr(_out.tax) %></div></div>
+    </article>
+    <article class="stat-card stat-card--purple">
+        <div class="stat-card-top"><span class="stat-icon"><i class="fa-solid fa-arrow-down-to-bracket"></i></span></div>
+        <div><div class="stat-label">Input GST (Purchases)</div><div class="stat-value"><%= _inr(_in.tax) %></div></div>
+    </article>
+    <article class="stat-card stat-card--<%= _net >= 0 ? 'green' : 'amber' %>">
+        <div class="stat-card-top"><span class="stat-icon"><i class="fa-solid fa-scale-balanced"></i></span></div>
+        <div><div class="stat-label">Net GST <%= _net >= 0 ? 'Payable' : 'Credit' %></div><div class="stat-value"><%= _inr(Math.abs(_net)) %></div></div>
+    </article>
+    <article class="stat-card stat-card--teal">
+        <div class="stat-card-top"><span class="stat-icon"><i class="fa-solid fa-file-invoice"></i></span></div>
+        <div><div class="stat-label">Invoices (Out / In)</div><div class="stat-value"><%= (_out.count || 0) %> / <%= (_in.count || 0) %></div></div>
+    </article>
+</section>
+
+<div class="card">
+    <div class="report-meta-bar"><span><i class="fa-solid fa-percent me-1"></i> GST Summary — Outward vs Inward</span></div>
+    <div class="table-responsive">
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th>Particulars</th>
+                    <th class="num">Outward (Sales)</th>
+                    <th class="num">Inward (Purchase)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <td><%= r.label %></td>
+                        <td class="num"><%= _inr(r.o) %></td>
+                        <td class="num"><%= _inr(r.i) %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td><strong>Net GST <%= _net >= 0 ? 'Payable' : 'Credit (ITC)' %></strong></td>
+                    <td class="num" colspan="2"><strong><%= _inr(Math.abs(_net)) %></strong></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>
+</div>
+
+<script>
+    (function () {
+        var b = document.getElementById('report-print');
+        if (b) b.addEventListener('click', function () { window.print(); });
+    })();
+</script>

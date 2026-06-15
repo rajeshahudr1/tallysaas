@@ -1,0 +1,46 @@
+# ─────────────────────────────────────────────────────────────
+# Tally Cloud Sync — .gitignore
+# Keep secrets + heavy/generated artifacts OUT of the repo.
+# ─────────────────────────────────────────────────────────────
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Secrets / environment — NEVER commit (templates *.example are kept)
+.env
+**/.env
+*.env
+!**/*.env.example
+!.env.example
+
+# Agent runtime config (holds agent_token + machine fingerprint) + logs
+agent/config.ini
+**/logs/
+*.log
+
+# Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+# PyInstaller build output
+agent/build/
+agent/dist/
+*.spec
+
+# Sessions / uploads / runtime
+**/uploads/
+*.sqlite
+*.sqlite3
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*.tmp

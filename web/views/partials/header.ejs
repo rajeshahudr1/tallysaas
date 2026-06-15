@@ -1,0 +1,143 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/header.ejs — COMPONENT: Header (spec §2.2).
+ *
+ * Sticky top bar (70px), white, bottom border, offset right of the
+ * sidebar on desktop. Hamburger (opens mobile drawer), global search
+ * with a Ctrl+K chip, then a right cluster: company selector, an
+ * Install-App button (hidden until beforeinstallprompt), an offline
+ * dot, notification bell w/ count badge, settings gear, and the user
+ * profile dropdown.
+ *
+ * Expected locals:
+ *   user              {name, role, avatar, initials}
+ *   company           {id, name}
+ *   companies         [{id, name}]
+ *   notificationCount number
+ * ─────────────────────────────────────────────────────────── */
+var _user      = (typeof user !== 'undefined' && user) ? user : { name: 'User', role: '', avatar: '', initials: 'U' };
+var _company   = (typeof company !== 'undefined' && company) ? company : { name: 'Company' };
+var _companies = (typeof companies !== 'undefined' && companies) ? companies : [];
+var _notif     = (typeof notificationCount !== 'undefined') ? notificationCount : 0;
+%>
+<header class="topbar">
+
+    <!-- Left: hamburger (mobile drawer) + search -->
+    <div class="topbar-left">
+        <button class="topbar-hamburger" type="button"
+                data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas"
+                aria-controls="sidebarOffcanvas" aria-label="Open menu">
+            <i class="fa-solid fa-bars"></i>
+        </button>
+
+        <form class="topbar-search" role="search" method="get" action="/customers">
+            <i class="fa-solid fa-magnifying-glass topbar-search-icon" aria-hidden="true"></i>
+            <input type="search" name="search" class="topbar-search-input"
+                   placeholder="Search customers..." aria-label="Search">
+            <span class="topbar-search-kbd">Ctrl + K</span>
+        </form>
+    </div>
+
+    <!-- Right: company picker, install, notifications, settings, profile -->
+    <div class="topbar-right">
+
+        <!-- Company selector -->
+        <div class="dropdown topbar-company">
+            <button class="topbar-company-btn dropdown-toggle" type="button"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="fa-solid fa-building"></i>
+                <span class="topbar-company-name"><%= _company.name %></span>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <% _companies.forEach(function (c) { %>
+                    <% var _isCur = String(c.id) === String(_company.id); %>
+                    <li>
+                        <a class="dropdown-item <%= _isCur ? 'active' : '' %>" href="/switch-company/<%= c.id %>">
+                            <i class="fa-solid fa-building me-2 text-muted"></i><%= c.name %>
+                            <% if (_isCur) { %><i class="fa-solid fa-check ms-auto text-primary"></i><% } %>
+                        </a>
+                    </li>
+                <% }); %>
+            </ul>
+        </div>
+
+        <!-- Install App (hidden until app.js shows it) -->
+        <button class="btn btn-install" id="installAppBtn" type="button" hidden>
+            <i class="fa-solid fa-download me-1"></i>Install App
+        </button>
+
+        <!-- Offline indicator dot (toggled by app.js) -->
+        <span class="offline-indicator" id="offlineIndicator" title="You are offline" hidden>
+            <i class="fa-solid fa-wifi"></i>
+            <span class="offline-indicator-label">Offline</span>
+        </span>
+
+        <!-- Notifications (dropdown) -->
+        <div class="dropdown">
+            <button class="topbar-icon-btn" type="button" aria-label="Notifications"
+                    data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
+                <i class="fa-solid fa-bell"></i>
+                <% if (_notif > 0) { %>
+                    <span class="topbar-badge"><%= _notif %></span>
+                <% } %>
+            </button>
+            <div class="dropdown-menu dropdown-menu-end notif-menu">
+                <div class="notif-head">
+                    <span>Notifications</span>
+                    <% if (_notif > 0) { %><span class="badge bg-primary rounded-pill"><%= _notif %> new</span><% } %>
+                </div>
+                <% if (_notif > 0) { %>
+                    <a class="dropdown-item notif-item" href="/sync-logs">
+                        <span class="notif-item-icon"><i class="fa-solid fa-rotate"></i></span>
+                        <span>
+                            <span class="notif-item-title">Tally sync pending</span>
+                            <span class="notif-item-sub d-block">Some records are waiting to sync to Tally.</span>
+                        </span>
+                    </a>
+                    <a class="dropdown-item notif-item" href="/sync-dashboard">
+                        <span class="notif-item-icon"><i class="fa-solid fa-circle-info"></i></span>
+                        <span>
+                            <span class="notif-item-title">Sync status</span>
+                            <span class="notif-item-sub d-block">Open the sync dashboard for details.</span>
+                        </span>
+                    </a>
+                <% } else { %>
+                    <div class="notif-empty"><i class="fa-regular fa-bell-slash d-block mb-2 fs-5"></i>No new notifications</div>
+                <% } %>
+            </div>
+        </div>
+
+        <!-- Settings (links to the Settings page) -->
+        <a class="topbar-icon-btn d-none d-sm-inline-flex" href="/settings" aria-label="Settings" title="Settings">
+            <i class="fa-solid fa-gear"></i>
+        </a>
+
+        <!-- User profile -->
+        <div class="dropdown topbar-profile">
+            <button class="topbar-profile-btn dropdown-toggle" type="button"
+                    data-bs-toggle="dropdown" aria-expanded="false">
+                <span class="topbar-avatar">
+                    <% if (_user.avatar) { %>
+                        <img src="<%= _user.avatar %>" alt="<%= _user.name %>"
+                             onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+                        <span class="topbar-avatar-fallback" style="display:none;"><%= _user.initials || 'U' %></span>
+                    <% } else { %>
+                        <span class="topbar-avatar-fallback"><%= _user.initials || 'U' %></span>
+                    <% } %>
+                </span>
+                <span class="topbar-profile-text d-none d-md-flex">
+                    <span class="topbar-profile-name"><%= _user.name %></span>
+                    <span class="topbar-profile-role"><%= _user.role %></span>
+                </span>
+                <i class="fa-solid fa-chevron-down topbar-profile-caret"></i>
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+                <li><a class="dropdown-item" href="/settings"><i class="fa-solid fa-user me-2 text-muted"></i>Profile</a></li>
+                <li><a class="dropdown-item" href="/settings"><i class="fa-solid fa-gear me-2 text-muted"></i>Settings</a></li>
+                <li><hr class="dropdown-divider"></li>
+                <li><a class="dropdown-item text-danger" href="/logout"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Sign out</a></li>
+            </ul>
+        </div>
+
+    </div>
+</header>

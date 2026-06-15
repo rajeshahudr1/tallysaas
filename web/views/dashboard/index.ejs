@@ -1,0 +1,253 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * dashboard/index.ejs — PAGE 3: Dashboard (spec §6).
+ *
+ * Composes the dashboard screen entirely from theme.css component
+ * classes + the shared partials, driven by the locals the route
+ * (routes/web.js → GET /) injects from data/mock.js:
+ *
+ *   title, activeMenu, breadcrumb   (header/sidebar — via _layout)
+ *   stats          [{ label, value, icon, tone }]   — 8 stat cards
+ *   salesChart     { labels[], data[] }              — line chart
+ *   syncChart      { labels[], data[] }              — doughnut
+ *   recentInvoices [{ invoice, customer, amount, status, date }]
+ *   recentSync     [{ module, record, status, time }]
+ *
+ * Layout, top → bottom:
+ *   1. page-head (title + breadcrumb + a visual date-range pill)
+ *   2. .stat-grid    — 8 stat cards (icon chip + label + value + spark)
+ *   3. .chart-row    — Sales Overview (line) + Tally Sync Status (doughnut)
+ *   4. .recent-row   — Recent Invoices (Table component) + Recent Sync Activity
+ *
+ * Charts: numbers are emitted into a JSON island (#dashboardData) and
+ * read by /js/dashboard.js (Chart.js init), so the canvases stay
+ * declarative here and the data stays server-owned. dashboard.js is
+ * pulled in via the layout's `pageScript` slot (defined at the bottom
+ * of this file) so it only loads on this page.
+ *
+ * Only classes that already exist in public/css/theme.css are used.
+ * The small <style> block below adds two cosmetic helpers the spec
+ * implies (a tiny spark-line baseline + a status dot for the sync
+ * list) that were not present in theme.css — kept intentionally minimal.
+ * ─────────────────────────────────────────────────────────── */
+
+// Guard every optional local so a missing-locals render never crashes.
+var _stats          = (typeof stats !== 'undefined' && stats) ? stats : [];
+var _salesChart     = (typeof salesChart !== 'undefined' && salesChart) ? salesChart : { labels: [], data: [] };
+var _syncChart      = (typeof syncChart !== 'undefined' && syncChart) ? syncChart : { labels: [], data: [] };
+var _recentInvoices = (typeof recentInvoices !== 'undefined' && recentInvoices) ? recentInvoices : [];
+var _recentSync     = (typeof recentSync !== 'undefined' && recentSync) ? recentSync : [];
+
+// Column config for the Recent Invoices Table component (spec §6).
+// `status` uses the table's built-in mapping (Created→green,
+// Pending Tally→amber, Failed→red); `amount` uses Indian currency.
+var _invoiceColumns = [
+    { key: 'invoice',  label: 'Invoice #' },
+    { key: 'customer', label: 'Customer' },
+    { key: 'amount',   label: 'Amount',  type: 'currency', align: 'end' },
+    { key: 'status',   label: 'Status',  type: 'status' },
+    { key: 'date',     label: 'Date',    type: 'date' },
+];
+
+// Small per-stat-card trend captions (visual only — sparkline + delta).
+// Keyed by stat label so the spark/trend stays in sync if order changes.
+var _trends = {
+    'Total Companies':    { dir: 'up',   text: '+2 this month',  spark: [4, 5, 5, 6, 6, 7, 8] },
+    'Total Customers':    { dir: 'up',   text: '+12 this week',  spark: [120, 128, 131, 139, 144, 150, 156] },
+    'Total Products':     { dir: 'up',   text: '+8.4%',          spark: [480, 495, 502, 512, 525, 533, 542] },
+    "Today's Sales":      { dir: 'up',   text: '+6.1%',          spark: [82, 90, 86, 102, 110, 118, 124] },
+    'Pending Tally Sync': { dir: 'down', text: '-3 since 9am',   spark: [22, 20, 19, 17, 15, 14, 12] },
+    'Stock Value':        { dir: 'up',   text: '+2.3%',          spark: [44, 45, 45, 46, 47, 47, 48] },
+    'Invoice Amount':     { dir: 'up',   text: '+9.0%',          spark: [7.2, 7.8, 8.1, 8.6, 9.0, 9.4, 9.75] },
+    'Payment Received':   { dir: 'up',   text: '+4.7%',          spark: [6.4, 6.7, 6.9, 7.1, 7.3, 7.5, 7.6] },
+};
+
+// Map a sync-row status → an existing pill-status modifier class
+// (Synced→green, Pending→amber, Failed→red) — same vocabulary the
+// table component uses, reused here for the compact activity list.
+function _syncPillClass(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'synced')  return 'pill-status--success';
+    if (s === 'failed')  return 'pill-status--danger';
+    if (s === 'pending') return 'pill-status--warning';
+    return 'pill-status--muted';
+}
+
+// Build a tiny inline-SVG sparkline polyline from a numeric series,
+// normalised into a 0..100 × 0..28 viewBox (matches .stat-spark height).
+function _spark(series, color) {
+    var pts = (series && series.length) ? series : [0, 0];
+    var min = Math.min.apply(null, pts);
+    var max = Math.max.apply(null, pts);
+    var span = (max - min) || 1;
+    var step = 100 / (pts.length - 1 || 1);
+    var coords = pts.map(function (v, i) {
+        var x = (i * step).toFixed(1);
+        // Invert Y (SVG origin is top-left); 3px padding top/bottom.
+        var y = (25 - ((v - min) / span) * 22 + 1).toFixed(1);
+        return x + ',' + y;
+    }).join(' ');
+    return '<svg class="stat-spark" viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">'
+         + '<polyline fill="none" stroke="' + color + '" stroke-width="2" '
+         + 'stroke-linecap="round" stroke-linejoin="round" points="' + coords + '"/></svg>';
+}
+
+// Resolve a stat card's tone → the spark stroke colour (the same hue
+// theme.css uses for that tone's icon chip).
+var _toneStroke = {
+    blue:   '#2563EB',
+    purple: '#6D28D9',
+    teal:   '#0D9488',
+    green:  '#16A34A',
+    amber:  '#D97706',
+    indigo: '#4F46E5',
+};
+%>
+
+<%
+/* page-head actions = a visual-only date-range pill (spec §6 "right").
+   Passed as a raw HTML string, which page-head.ejs renders verbatim. */
+var _dateRangeAction =
+    '<button type="button" class="date-range-pill">'
+  +   '<i class="fa-regular fa-calendar"></i>'
+  +   '<span>01 Jun 2026 – 15 Jun 2026</span>'
+  +   '<i class="fa-solid fa-chevron-down ms-1 page-head-caret"></i>'
+  + '</button>';
+%>
+
+<!-- ─────────────────────────────────────────────────────────────
+     Two cosmetic helpers not present in theme.css:
+       .stat-spark-wrap — keeps the inline sparkline pinned to the
+                          card bottom at a fixed height.
+       .sync-status-dot — small coloured status dot for the activity
+                          list (mirrors the pill colours).
+     Everything else uses existing theme.css classes.
+     ───────────────────────────────────────────────────────────── -->
+<style>
+    .stat-spark-wrap { margin-top: 2px; line-height: 0; }
+    .stat-spark { display: block; }
+    .sync-status-dot {
+        width: 8px; height: 8px; border-radius: 50%;
+        display: inline-block; flex: 0 0 auto;
+    }
+    .sync-status-dot--success { background: var(--success); }
+    .sync-status-dot--danger  { background: var(--danger); }
+    .sync-status-dot--warning { background: var(--warning); }
+    .sync-status-dot--muted   { background: var(--text-muted); }
+    .sync-list-status {
+        display: inline-flex; align-items: center; gap: 7px;
+        font-size: 12px; font-weight: 600;
+    }
+</style>
+
+<!-- ── 1. Page head ──────────────────────────────────────────── -->
+<%- include('../partials/page-head', {
+    title: (typeof title !== 'undefined' ? title : 'Dashboard'),
+    breadcrumb: (typeof breadcrumb !== 'undefined' ? breadcrumb : [{ label: 'Dashboard' }]),
+    actions: _dateRangeAction,
+}) %>
+
+<!-- ── 2. Stat cards (8, 4-per-row on desktop) ───────────────── -->
+<section class="stat-grid">
+    <% _stats.forEach(function (s) { %>
+        <% var t = _trends[s.label] || { dir: 'up', text: '', spark: [] }; %>
+        <% var stroke = _toneStroke[s.tone] || _toneStroke.blue; %>
+        <article class="stat-card stat-card--<%= s.tone %>">
+            <div class="stat-card-top">
+                <span class="stat-icon"><i class="fa-solid <%= s.icon %>"></i></span>
+                <% if (t.text) { %>
+                    <span class="stat-trend <%= t.dir === 'down' ? 'is-down' : '' %>">
+                        <i class="fa-solid <%= t.dir === 'down' ? 'fa-arrow-trend-down' : 'fa-arrow-trend-up' %>"></i>
+                        <%= t.text %>
+                    </span>
+                <% } %>
+            </div>
+            <div>
+                <div class="stat-label"><%= s.label %></div>
+                <div class="stat-value"><%= s.value %></div>
+            </div>
+            <div class="stat-spark-wrap"><%- _spark(t.spark, stroke) %></div>
+        </article>
+    <% }); %>
+</section>
+
+<!-- ── 3. Charts row (Sales Overview + Tally Sync Status) ─────── -->
+<section class="chart-row">
+    <!-- Sales Overview — Chart.js line (canvas id read by dashboard.js) -->
+    <div class="card chart-card">
+        <div class="chart-card-head">
+            <h2 class="chart-card-title">Sales Overview</h2>
+            <span class="pill-badge">Monthly</span>
+        </div>
+        <div class="chart-card-canvas-wrap">
+            <canvas id="salesChart" aria-label="Monthly sales overview line chart" role="img"></canvas>
+        </div>
+    </div>
+
+    <!-- Tally Sync Status — Chart.js doughnut (canvas id read by dashboard.js) -->
+    <div class="card chart-card">
+        <div class="chart-card-head">
+            <h2 class="chart-card-title">Tally Sync Status</h2>
+            <span class="pill-badge">This Month</span>
+        </div>
+        <div class="chart-card-canvas-wrap">
+            <canvas id="syncChart" aria-label="Tally sync status doughnut chart" role="img"></canvas>
+        </div>
+    </div>
+</section>
+
+<!-- ── 4. Recent row (Recent Invoices + Recent Sync Activity) ── -->
+<section class="recent-row">
+
+    <!-- Recent Invoices — rendered through the shared Table component -->
+    <div class="card recent-card">
+        <div class="recent-card-head">
+            <h2 class="recent-card-title">Recent Invoices</h2>
+            <a href="/invoices" class="recent-card-link">View all</a>
+        </div>
+        <%- include('../partials/table', {
+            tableId: 'recentInvoicesTable',
+            columns: _invoiceColumns,
+            rows:    _recentInvoices,
+        }) %>
+    </div>
+
+    <!-- Recent Sync Activity — compact list (Module · Record · Status · Time) -->
+    <div class="card recent-card">
+        <div class="recent-card-head">
+            <h2 class="recent-card-title">Recent Sync Activity</h2>
+            <a href="/sync/logs" class="recent-card-link">View logs</a>
+        </div>
+        <ul class="sync-list">
+            <% _recentSync.forEach(function (row) { %>
+                <% var cls = _syncPillClass(row.status); %>
+                <% var dot = cls.replace('pill-status--', 'sync-status-dot--'); %>
+                <li class="sync-list-item">
+                    <span class="sync-list-icon"><i class="fa-solid fa-rotate"></i></span>
+                    <div class="sync-list-main">
+                        <div class="sync-list-module"><%= row.module %></div>
+                        <div class="sync-list-record"><%= row.record %></div>
+                    </div>
+                    <div class="sync-list-meta">
+                        <span class="sync-list-status">
+                            <span class="sync-status-dot <%= dot %>"></span>
+                            <span class="pill-status <%= cls %>"><%= row.status %></span>
+                        </span>
+                        <div class="sync-list-time"><%= row.time %></div>
+                    </div>
+                </li>
+            <% }); %>
+        </ul>
+    </div>
+</section>
+
+<!-- ── Chart data island (read by /js/dashboard.js) ──────────── -->
+<!-- /js/dashboard.js itself is injected via the layout's `pageScript`
+     slot (passed as a render local from routes/web.js → GET /), which
+     renders AFTER the Chart.js CDN tag so Chart is ready when it runs.
+     It must NOT be set from inside this template: express-ejs-layouts
+     rebuilds the layout's locals from the render options, so a template
+     assignment to `pageScript` never reaches the layout. -->
+<script type="application/json" id="dashboardData">
+    <%- JSON.stringify({ sales: _salesChart, sync: _syncChart }) %>
+</script>

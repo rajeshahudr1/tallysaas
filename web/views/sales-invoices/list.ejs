@@ -1,0 +1,134 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/sales-invoices/list.ejs — TRANSACTIONS · Sales Invoices.
+ * Route: GET /sales-invoices  ·  activeMenu: 'sales-inv'.
+ *
+ * Status column renders the Tally-sync workflow:
+ *   Pending Tally (amber) · Sent to Tally (blue) · Created (green) · Failed (red).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   invoiceRows      [ rows ]   — table body
+ *   invoicesTotal    number     — pagination total
+ *   page, perPage    numbers
+ *   customerNames / locationNames / invoiceStatuses — filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows     = (typeof invoiceRows !== 'undefined' && invoiceRows) ? invoiceRows : [];
+var _total    = (typeof invoicesTotal !== 'undefined') ? invoicesTotal : _rows.length;
+var _page     = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage  = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _custs    = (typeof customerNames !== 'undefined' && customerNames) ? customerNames : [];
+var _locs     = (typeof locationNames !== 'undefined' && locationNames) ? locationNames : [];
+var _statuses = (typeof invoiceStatuses !== 'undefined' && invoiceStatuses) ? invoiceStatuses : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',       label: 'Search',       placeholder: 'Invoice no / customer...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'customer',     label: 'Customer',     options: _opts('All Customers', _custs),  colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',       label: 'Status',       options: _opts('All Status', _statuses),  colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from',    label: 'Date From',    value: '2024-05-01',                      colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_to',      label: 'Date To',      value: '2024-05-31',                      colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'invoice_no',   label: 'Invoice No',  sortable: true, type: 'text' },
+    { key: 'date',         label: 'Date',        sortable: true, type: 'date' },
+    { key: 'customer',     label: 'Customer',    sortable: true, type: 'text' },
+    { key: 'location',     label: 'Location',    sortable: true, type: 'location' },
+    { key: 'amount',       label: 'Taxable',     sortable: true, type: 'currency' },
+    { key: 'gst',          label: 'GST',         sortable: true, type: 'currency' },
+    { key: 'total',        label: 'Total',       sortable: true, type: 'currency' },
+    { key: 'status',       label: 'Status',      sortable: true, type: 'status' },
+    { key: 'sales_person', label: 'Sales Person', sortable: true, type: 'text' },
+];
+
+var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Sales Invoices',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Sales Invoices' },
+    ],
+    actions: [
+        { label: 'Export',         icon: 'fa-upload', variant: 'light' },
+        { label: 'Create Invoice', icon: 'fa-plus',   gradient: true, href: '/sales-invoices/create' },
+    ],
+}) %>
+
+<form id="invoice-filters-form" autocomplete="off" method="get" action="/sales-invoices">
+    <%- include('../partials/filter-card', {
+        filterId: 'invoice-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Date' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'sales-invoices-table',
+        basePath: '/sales-invoices',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'print', 'delete'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

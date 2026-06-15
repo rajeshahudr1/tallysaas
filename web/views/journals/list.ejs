@@ -1,0 +1,40 @@
+<%
+/* views/journals/list.ejs — TRANSACTIONS · Journals listing. */
+var _rows    = (typeof journalRows !== 'undefined' && journalRows) ? journalRows : [];
+var _total   = (typeof journalsTotal !== 'undefined') ? journalsTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+
+var tableColumns = [
+    { key: 'voucher_no', label: 'Voucher No', sortable: true, type: 'text' },
+    { key: 'vch_type',   label: 'Type',       sortable: true, type: 'badge' },
+    { key: 'date',       label: 'Date',       sortable: true, type: 'date' },
+    { key: 'dr_ledger',  label: 'Debit (Dr)', sortable: true, type: 'text' },
+    { key: 'cr_ledger',  label: 'Credit (Cr)',sortable: true, type: 'text' },
+    { key: 'narration',  label: 'Narration',  type: 'text' },
+    { key: 'amount',     label: 'Amount',     sortable: true, type: 'currency' },
+    { key: 'status',     label: 'Status',     type: 'status' },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Journals',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Journals' }],
+    actions: [
+        { label: 'Export', icon: 'fa-upload', variant: 'light' },
+        { label: 'Add Journal', icon: 'fa-plus', gradient: true, href: '/journals/add' },
+    ],
+}) %>
+
+<div class="card">
+    <%- include('../partials/table', {
+        tableId: 'journals-table',
+        basePath: '/journals',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'delete'],
+    }) %>
+    <%- include('../partials/pagination', { page: _page, perPage: _perPage, total: _total }) %>
+</div>

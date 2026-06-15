@@ -1,0 +1,97 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/sidebar.ejs — COMPONENT: Sidebar (spec §2.1).
+ *
+ * Dark navy fixed nav, 260px. Logo (blue cloud chip) + grouped menu
+ * built from a DRY array; the item whose `key === activeMenu` gets the
+ * blue left-accent active treatment. The SAME markup is reused inside
+ * the mobile offcanvas drawer (see _layout.ejs).
+ *
+ * Expected locals:
+ *   activeMenu  string  — key of the active menu item (e.g. 'customers')
+ * ─────────────────────────────────────────────────────────── */
+var _active = (typeof activeMenu !== 'undefined') ? activeMenu : '';
+
+// Menu definition — grouped; `label:null` means an unlabelled group.
+// `href` of '#' marks not-yet-built screens (Phase-1 only ships 3 pages).
+var menu = [
+    { label: null, items: [
+        { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/' },
+    ]},
+    { label: 'Masters', items: [
+        { key: 'companies',  label: 'Companies',     icon: 'fa-building',      href: '/companies' },
+        { key: 'locations',  label: 'Locations',     icon: 'fa-location-dot',  href: '/locations' },
+        { key: 'sales',      label: 'Sales Persons', icon: 'fa-user-tie',      href: '/sales-persons' },
+        { key: 'customers',  label: 'Customers',     icon: 'fa-user-group',    href: '/customers' },
+        { key: 'suppliers',  label: 'Suppliers',     icon: 'fa-truck-field',   href: '/suppliers' },
+        { key: 'products',   label: 'Products',      icon: 'fa-box',           href: '/products' },
+        { key: 'categories', label: 'Categories',    icon: 'fa-tags',          href: '/categories' },
+    ]},
+    { label: 'Transactions', items: [
+        { key: 'sales-inv',    label: 'Sales Invoices',    icon: 'fa-file-invoice',     href: '/sales-invoices' },
+        { key: 'purchase-inv', label: 'Purchase Invoices', icon: 'fa-file-import',      href: '/purchase-invoices' },
+        { key: 'payments',     label: 'Payments',          icon: 'fa-money-bill-wave',  href: '/payments' },
+        { key: 'receipts',     label: 'Receipts',          icon: 'fa-receipt',          href: '/receipts' },
+        { key: 'journals',     label: 'Journals',          icon: 'fa-book',             href: '/journals' },
+        { key: 'inventory',    label: 'Inventory',         icon: 'fa-warehouse',        href: '/inventory' },
+    ]},
+    { label: 'Tally Sync', items: [
+        { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',     href: '/sync-dashboard' },
+        { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check', href: '/sync-logs' },
+    ]},
+    { label: 'Reports', items: [
+        { key: 'reports', label: 'Reports', icon: 'fa-chart-column', href: '/reports' },
+    ]},
+    { label: 'Settings', items: [
+        { key: 'users',    label: 'Users',                icon: 'fa-users',       href: '/users' },
+        { key: 'roles',    label: 'Roles & Permissions',  icon: 'fa-user-shield', href: '/roles' },
+        { key: 'settings', label: 'Settings',             icon: 'fa-gear',        href: '/settings' },
+    ]},
+];
+%>
+<div class="sidebar-inner">
+
+    <!-- Brand / logo -->
+    <a class="sidebar-brand" href="/">
+        <span class="sidebar-logo"><i class="fa-solid fa-cloud"></i></span>
+        <span class="sidebar-brand-text">Tally Cloud Sync</span>
+    </a>
+
+    <!-- Navigation — labelled groups collapse/expand on click (the chevron
+         rotates; state is remembered per-group via localStorage in app.js). -->
+    <nav class="sidebar-nav" aria-label="Primary">
+        <% menu.forEach(function (group) { %>
+            <% if (group.label) { %>
+                <% var gid = group.label.toLowerCase().replace(/[^a-z0-9]+/g, '-'); %>
+                <% var groupActive = group.items.some(function (it) { return it.key === _active; }); %>
+                <button type="button" class="sidebar-section sidebar-section-toggle"
+                        data-group="<%= gid %>" aria-expanded="true" aria-controls="grp-<%= gid %>">
+                    <span><%= group.label %></span>
+                    <i class="fa-solid fa-chevron-down sidebar-section-caret"></i>
+                </button>
+                <ul class="sidebar-list sidebar-group" id="grp-<%= gid %>" data-group-items="<%= gid %>">
+                    <% group.items.forEach(function (item) { %>
+                        <li>
+                            <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>">
+                                <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                <span class="sidebar-link-text"><%= item.label %></span>
+                            </a>
+                        </li>
+                    <% }); %>
+                </ul>
+            <% } else { %>
+                <ul class="sidebar-list">
+                    <% group.items.forEach(function (item) { %>
+                        <li>
+                            <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>">
+                                <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                <span class="sidebar-link-text"><%= item.label %></span>
+                            </a>
+                        </li>
+                    <% }); %>
+                </ul>
+            <% } %>
+        <% }); %>
+    </nav>
+
+</div>

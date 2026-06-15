@@ -1,0 +1,131 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/receipts/list.ejs — TRANSACTIONS · Receipts.
+ * Route: GET /receipts  ·  activeMenu: 'receipts'.
+ *
+ * Money received from customers (Tally Receipt Vouchers).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   receiptRows     [ rows ]   — table body
+ *   receiptsTotal   number     — pagination total
+ *   page, perPage   numbers
+ *   customerNames / paymentModes / invoiceStatuses — filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows     = (typeof receiptRows !== 'undefined' && receiptRows) ? receiptRows : [];
+var _total    = (typeof receiptsTotal !== 'undefined') ? receiptsTotal : _rows.length;
+var _page     = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage  = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _custs    = (typeof customerNames !== 'undefined' && customerNames) ? customerNames : [];
+var _modes    = (typeof paymentModes !== 'undefined' && paymentModes) ? paymentModes : [];
+var _statuses = (typeof invoiceStatuses !== 'undefined' && invoiceStatuses) ? invoiceStatuses : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',    label: 'Search',    placeholder: 'Receipt no / customer...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'customer',  label: 'Customer',  options: _opts('All Customers', _custs), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'mode',      label: 'Mode',      options: _opts('All Modes', _modes),     colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',    label: 'Status',    options: _opts('All Status', _statuses), colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from', label: 'Date From', value: '2024-05-01',                     colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'receipt_no', label: 'Receipt No', sortable: true, type: 'text' },
+    { key: 'date',       label: 'Date',       sortable: true, type: 'date' },
+    { key: 'party',      label: 'Customer',   sortable: true, type: 'text' },
+    { key: 'mode',       label: 'Mode',       sortable: true, type: 'badge' },
+    { key: 'reference',  label: 'Reference',  sortable: true, type: 'text' },
+    { key: 'amount',     label: 'Amount',     sortable: true, type: 'currency' },
+    { key: 'status',     label: 'Status',     sortable: true, type: 'status' },
+];
+
+var sortOptions = ['Date', 'Receipt No', 'Customer', 'Amount', 'Status'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Receipts',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Receipts' },
+    ],
+    actions: [
+        { label: 'Export',      icon: 'fa-upload', variant: 'light' },
+        { label: 'Add Receipt', icon: 'fa-plus',   gradient: true, href: '/receipts/add' },
+    ],
+}) %>
+
+<form id="receipt-filters-form" autocomplete="off" method="get" action="/receipts">
+    <%- include('../partials/filter-card', {
+        filterId: 'receipt-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Date' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'receipts-table',
+        basePath: '/receipts',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit', 'delete'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

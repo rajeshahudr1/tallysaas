@@ -1,0 +1,27 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/bottom-nav.ejs — mobile bottom navigation (spec §3).
+ *
+ * Fixed bottom bar, MOBILE ONLY (`d-lg-none`). 5 items; the item whose
+ * `key === activeMenu` is highlighted blue.
+ *
+ * Expected locals:
+ *   activeMenu  string
+ * ─────────────────────────────────────────────────────────── */
+var _active = (typeof activeMenu !== 'undefined') ? activeMenu : '';
+var items = [
+    { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high',  href: '/' },
+    { key: 'customers', label: 'Customers', icon: 'fa-user-group',  href: '/customers' },
+    { key: 'sales-inv', label: 'Invoice',   icon: 'fa-file-invoice', href: '/sales-invoices' },
+    { key: 'inventory', label: 'Stock',     icon: 'fa-warehouse',   href: '/inventory' },
+    { key: 'profile',   label: 'Profile',   icon: 'fa-user',        href: '/settings' },
+];
+%>
+<nav class="bottom-nav d-lg-none" aria-label="Mobile navigation">
+    <% items.forEach(function (item) { %>
+        <a class="bottom-nav-item <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>">
+            <i class="fa-solid <%= item.icon %> bottom-nav-icon"></i>
+            <span class="bottom-nav-label"><%= item.label %></span>
+        </a>
+    <% }); %>
+</nav>

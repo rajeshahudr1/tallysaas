@@ -1,0 +1,319 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/settings/index.ejs — SETTINGS · Settings.
+ * Route: GET /settings  ·  activeMenu: 'settings'.
+ *
+ * One tabbed form (reuses the FormCard tab nav) with 5 fully-built
+ * panes: General, Tally Sync, Invoice & Tax, Notifications, Branding.
+ * Values are pre-filled with the current (mock) configuration.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   financialYears / gstRates / paymentTerms  — select option sources
+ * ─────────────────────────────────────────────────────────── */
+
+var _fy    = (typeof financialYears !== 'undefined' && financialYears) ? financialYears : [];
+var _gst   = (typeof gstRates !== 'undefined' && gstRates) ? gstRates : [];
+var _terms = (typeof paymentTerms !== 'undefined' && paymentTerms) ? paymentTerms : [];
+
+/* Real data from GET /settings: company profile (companies row) + the
+ * key/value settings bag. _co/_s drive the prefills; the form posts
+ * company[...] → company profile, settings[...] → the bag. */
+var _co = (typeof companyProfile  !== 'undefined' && companyProfile)  ? companyProfile  : {};
+var _s  = (typeof companySettings !== 'undefined' && companySettings) ? companySettings : {};
+function _cv(k) { return (_co[k] != null) ? _co[k] : ''; }
+function _sv(k, d) { return (_s[k] != null && _s[k] !== '') ? _s[k] : (d != null ? d : ''); }
+function _sChk(k, dflt) { var v = _s[k]; if (v === undefined) return dflt ? 'checked' : ''; return (v === true || v === 'true' || v === 'on' || v === '1') ? 'checked' : ''; }
+
+function _optsSel(list, selected) {
+    var html = '';
+    (list || []).forEach(function (v) {
+        html += '<option value="' + v + '"' + (v === selected ? ' selected' : '') + '>' + v + '</option>';
+    });
+    return html;
+}
+
+var settingsTabs = [
+    { id: 'general', label: 'General',       icon: 'fa-sliders',           active: true },
+    { id: 'tally',   label: 'Tally Sync',    icon: 'fa-rotate'                          },
+    { id: 'invoice', label: 'Invoice & Tax', icon: 'fa-file-invoice'                    },
+    { id: 'notify',  label: 'Notifications', icon: 'fa-bell'                            },
+    { id: 'brand',   label: 'Branding',      icon: 'fa-palette'                         },
+];
+
+// A reusable notification toggle row (label + description + switch).
+var _notifs = [
+    { id: 'n-inv',   label: 'New invoice created',     desc: 'Email the customer when an invoice is generated.', on: true  },
+    { id: 'n-pay',   label: 'Payment received',        desc: 'Notify the team when a receipt is recorded.',      on: true  },
+    { id: 'n-sync',  label: 'Sync failure',            desc: 'Alert admins when a Tally sync fails.',            on: true  },
+    { id: 'n-stock', label: 'Low stock alert',         desc: 'Warn when an item drops below its reorder level.', on: true  },
+    { id: 'n-sms',   label: 'SMS on invoice',          desc: 'Send the customer an SMS with the invoice link.',  on: false },
+    { id: 'n-daily', label: 'Daily summary email',     desc: 'A daily digest of sales, payments and sync.',      on: false },
+];
+
+var headActions =
+    '<button type="reset" form="settings-form" class="btn btn-light">' +
+        '<i class="fa-solid fa-rotate-left me-1"></i>Reset' +
+    '</button>' +
+    '<button type="submit" form="settings-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>Save Settings' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Settings',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Settings' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="settings-form" class="card form-card" method="post" action="/settings" autocomplete="off" novalidate>
+
+    <%- include('../partials/form-card', { tabs: settingsTabs }) %>
+
+    <div class="tab-content form-card-body">
+
+        <!-- ════ GENERAL ════ -->
+        <div class="tab-pane fade show active" id="general" role="tabpanel" aria-labelledby="general-tab">
+            <h2 class="form-section-title">Company Profile</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="set-co-name">Company Name</label>
+                    <input type="text" class="form-control" id="set-co-name" name="company[name]" value="<%= _cv('name') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-co-email">Email</label>
+                    <input type="email" class="form-control" id="set-co-email" name="company[email]" value="<%= _cv('email') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-co-mobile">Mobile</label>
+                    <input type="tel" class="form-control" id="set-co-mobile" name="company[mobile]" value="<%= _cv('mobile') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-co-gst">GST Number</label>
+                    <input type="text" class="form-control text-uppercase" id="set-co-gst" name="company[gst_number]" value="<%= _cv('gst_number') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-co-pan">PAN Number</label>
+                    <input type="text" class="form-control text-uppercase" id="set-co-pan" name="company[pan_number]" value="<%= _cv('pan_number') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-fy">Financial Year</label>
+                    <select class="form-select" id="set-fy" name="company[financial_year]"><%- _optsSel(_fy, _cv('financial_year') || '2024-2025') %></select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-currency">Currency</label>
+                    <% var _cur = _sv('currency', 'INR — Indian Rupee (₹)'); %>
+                    <select class="form-select" id="set-currency" name="settings[currency]">
+                        <option <%= _cur.indexOf('INR') === 0 ? 'selected' : '' %>>INR — Indian Rupee (₹)</option>
+                        <option <%= _cur.indexOf('USD') === 0 ? 'selected' : '' %>>USD — US Dollar ($)</option>
+                        <option <%= _cur.indexOf('AED') === 0 ? 'selected' : '' %>>AED — UAE Dirham (د.إ)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-tz">Timezone</label>
+                    <% var _tz = _sv('timezone', 'Asia/Kolkata (IST)'); %>
+                    <select class="form-select" id="set-tz" name="settings[timezone]">
+                        <option <%= _tz.indexOf('Kolkata') > -1 ? 'selected' : '' %>>Asia/Kolkata (IST)</option>
+                        <option <%= _tz.indexOf('Dubai') > -1 ? 'selected' : '' %>>Asia/Dubai (GST)</option>
+                        <option <%= _tz === 'UTC' ? 'selected' : '' %>>UTC</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-dateformat">Date Format</label>
+                    <% var _df = _sv('date_format', 'DD/MM/YYYY'); %>
+                    <select class="form-select" id="set-dateformat" name="settings[date_format]">
+                        <option <%= _df === 'DD/MM/YYYY' ? 'selected' : '' %>>DD/MM/YYYY</option>
+                        <option <%= _df === 'MM/DD/YYYY' ? 'selected' : '' %>>MM/DD/YYYY</option>
+                        <option <%= _df === 'YYYY-MM-DD' ? 'selected' : '' %>>YYYY-MM-DD</option>
+                    </select>
+                </div>
+            </div>
+            <hr class="form-divider">
+            <div class="row g-4">
+                <div class="col-12">
+                    <label class="form-label" for="set-address">Registered Address</label>
+                    <textarea class="form-control" id="set-address" name="company[address]" rows="3" maxlength="300"
+                              data-counter="set-address-count"><%= _cv('address') %></textarea>
+                    <div class="char-counter"><span id="set-address-count">0/300</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ════ TALLY SYNC ════ -->
+        <div class="tab-pane fade" id="tally" role="tabpanel" aria-labelledby="tally-tab">
+            <div class="sync-conn is-connected">
+                <span class="sync-conn-icon"><i class="fa-solid fa-plug-circle-check"></i></span>
+                <div class="sync-conn-main">
+                    <div class="sync-conn-title"><span class="sync-conn-dot"></span>Local Sync Agent Connected</div>
+                    <div class="sync-conn-meta"><span>Agent <b>v1.4.2</b></span><span><b>TallyPrime 4.1</b></span><span>Heartbeat <b>12 sec ago</b></span></div>
+                </div>
+                <div class="sync-conn-actions">
+                    <button type="button" class="btn btn-light" data-sync-btn><i class="fa-solid fa-plug me-1"></i>Test Connection</button>
+                </div>
+            </div>
+            <h2 class="form-section-title">Sync Configuration</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="set-tally-url">Tally Server URL</label>
+                    <input type="text" class="form-control" id="set-tally-url" name="settings[tally_url]" value="<%= _sv('tally_url', 'http://localhost:9000') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-tally-co">Tally Company Name</label>
+                    <input type="text" class="form-control" id="set-tally-co" name="settings[tally_company]" value="<%= _sv('tally_company', '') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-sync-interval">Sync Interval</label>
+                    <% var _si = _sv('sync_interval', 'Every 5 minutes'); %>
+                    <select class="form-select" id="set-sync-interval" name="settings[sync_interval]">
+                        <% ['Real-time','Every 5 minutes','Every 15 minutes','Hourly','Manual only'].forEach(function (o) { %>
+                            <option <%= _si === o ? 'selected' : '' %>><%= o %></option>
+                        <% }); %>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-sync-dir">Sync Direction</label>
+                    <% var _sd = _sv('sync_direction', 'Two-way (Cloud ⇄ Tally)'); %>
+                    <select class="form-select" id="set-sync-dir" name="settings[sync_direction]">
+                        <% ['Two-way (Cloud ⇄ Tally)','Cloud → Tally only','Tally → Cloud only'].forEach(function (o) { %>
+                            <option <%= _sd === o ? 'selected' : '' %>><%= o %></option>
+                        <% }); %>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-retry">Retry Attempts</label>
+                    <input type="number" class="form-control" id="set-retry" name="settings[retry_attempts]" value="<%= _sv('retry_attempts', '3') %>" min="0" max="10">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-conflict">Conflict Resolution</label>
+                    <% var _cr = _sv('conflict_resolution', 'Cloud wins'); %>
+                    <select class="form-select" id="set-conflict" name="settings[conflict_resolution]">
+                        <% ['Cloud wins','Tally wins','Newest wins','Ask every time'].forEach(function (o) { %>
+                            <option <%= _cr === o ? 'selected' : '' %>><%= o %></option>
+                        <% }); %>
+                    </select>
+                </div>
+            </div>
+            <hr class="form-divider">
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-autosync" name="settings[auto_sync]" <%= _sChk('auto_sync', true) %>>
+                <label class="form-check-label" for="set-autosync">Enable automatic background sync</label>
+            </div>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-autostart" name="settings[auto_start]" <%= _sChk('auto_start', true) %>>
+                <label class="form-check-label" for="set-autostart">Auto-start sync agent with Windows</label>
+            </div>
+        </div>
+
+        <!-- ════ INVOICE & TAX ════ -->
+        <div class="tab-pane fade" id="invoice" role="tabpanel" aria-labelledby="invoice-tab">
+            <h2 class="form-section-title">Numbering & Tax Defaults</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="set-inv-prefix">Sales Invoice Prefix</label>
+                    <input type="text" class="form-control" id="set-inv-prefix" name="settings[inv_prefix]" value="<%= _sv('inv_prefix', 'INV-2024-') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-inv-next">Next Invoice Number</label>
+                    <input type="number" class="form-control" id="set-inv-next" name="settings[inv_next]" value="<%= _sv('inv_next', '157') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-pur-prefix">Purchase Bill Prefix</label>
+                    <input type="text" class="form-control" id="set-pur-prefix" name="settings[pur_prefix]" value="<%= _sv('pur_prefix', 'PUR-2024-') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-default-gst">Default GST Rate</label>
+                    <select class="form-select" id="set-default-gst" name="settings[default_gst]"><%- _optsSel(_gst, _sv('default_gst', '18%')) %></select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-default-terms">Default Payment Terms</label>
+                    <select class="form-select" id="set-default-terms" name="settings[default_terms]"><%- _optsSel(_terms, _sv('default_terms', '30 Days')) %></select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-tax-type">Default Tax Type</label>
+                    <% var _tt = _sv('tax_type', 'GST (CGST + SGST)'); %>
+                    <select class="form-select" id="set-tax-type" name="settings[tax_type]">
+                        <option <%= _tt.indexOf('GST (') === 0 ? 'selected' : '' %>>GST (CGST + SGST)</option>
+                        <option <%= _tt.indexOf('IGST') === 0 ? 'selected' : '' %>>IGST (Inter-state)</option>
+                    </select>
+                </div>
+            </div>
+            <hr class="form-divider">
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-roundoff" name="settings[round_off]" <%= _sChk('round_off', true) %>>
+                <label class="form-check-label" for="set-roundoff">Auto round-off invoice totals</label>
+            </div>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-showhsn" name="settings[show_hsn]" <%= _sChk('show_hsn', true) %>>
+                <label class="form-check-label" for="set-showhsn">Show HSN/SAC code on invoices</label>
+            </div>
+            <hr class="form-divider">
+            <div class="row g-4">
+                <div class="col-12">
+                    <label class="form-label" for="set-inv-terms">Invoice Terms &amp; Conditions</label>
+                    <textarea class="form-control" id="set-inv-terms" name="settings[inv_terms]" rows="3" maxlength="500"
+                              data-counter="set-terms-count"><%= _sv('inv_terms', 'Goods once sold will not be taken back. Subject to Ahmedabad jurisdiction.') %></textarea>
+                    <div class="char-counter"><span id="set-terms-count">0/500</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ════ NOTIFICATIONS ════ -->
+        <div class="tab-pane fade" id="notify" role="tabpanel" aria-labelledby="notify-tab">
+            <h2 class="form-section-title">Email &amp; SMS Alerts</h2>
+            <% _notifs.forEach(function (n) { %>
+                <div class="d-flex align-items-center justify-content-between py-3" style="border-bottom:1px solid var(--border)">
+                    <div>
+                        <div style="font-weight:600;font-size:14px"><%= n.label %></div>
+                        <div class="form-hint mb-0"><%= n.desc %></div>
+                    </div>
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" role="switch" id="<%= n.id %>" name="settings[<%= n.id %>]" <%= _sChk(n.id, n.on) %>>
+                    </div>
+                </div>
+            <% }); %>
+        </div>
+
+        <!-- ════ BRANDING ════ -->
+        <div class="tab-pane fade" id="brand" role="tabpanel" aria-labelledby="brand-tab">
+            <h2 class="form-section-title">Branding</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="set-app-name">App Display Name</label>
+                    <input type="text" class="form-control" id="set-app-name" name="settings[app_name]" value="<%= _sv('app_name', 'Tally Cloud Sync') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-logo">Logo</label>
+                    <input type="file" class="form-control" id="set-logo" accept="image/*">
+                    <div class="form-hint">Logo upload coming soon.</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-primary">Primary Color</label>
+                    <input type="color" class="form-control form-control-color" id="set-primary" name="settings[primary_color]" value="<%= _sv('primary_color', '#2563EB') %>" style="height:42px">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-accent">Accent Color</label>
+                    <input type="color" class="form-control form-control-color" id="set-accent" name="settings[accent_color]" value="<%= _sv('accent_color', '#6D28D9') %>" style="height:42px">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="set-theme">Theme</label>
+                    <% var _th = _sv('theme', 'Light'); %>
+                    <select class="form-select" id="set-theme" name="settings[theme]">
+                        <option <%= _th === 'Light' ? 'selected' : '' %>>Light</option>
+                        <option <%= _th.indexOf('Dark') === 0 ? 'selected' : '' %>>Dark (coming soon)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+    </div><!-- /.tab-content -->
+
+    <div class="form-card-footer">
+        <button type="reset" class="btn btn-light">Reset</button>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Save Settings
+        </button>
+    </div>
+
+</form>

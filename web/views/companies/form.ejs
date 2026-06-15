@@ -1,0 +1,227 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/companies/form.ejs — MASTERS · Add Company.
+ * Route: GET /companies/add  ·  activeMenu: 'companies'.
+ *
+ * Same shell as customers/form.ejs: page-head (Back + Save split
+ * button) + form-card tab nav (6 tabs) + page-owned .tab-content.
+ * Basic Information is the only fully-built pane; the rest are styled
+ * "coming next phase" placeholders. Behaviour (char counters) is wired
+ * by the existing /js/app.js via data-* hooks. Pure theme.css styling.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   financialYears  [ '2024-2025', … ] — Financial Year select options
+ * ─────────────────────────────────────────────────────────── */
+
+var _financialYears = (typeof financialYears !== 'undefined' && financialYears) ? financialYears : [];
+
+/* FormCard tabs (id === the pane id rendered below). */
+var formTabs = [
+    { id: 'basic',   label: 'Basic Information', icon: 'fa-id-card',          active: true },
+    { id: 'address', label: 'Address',           icon: 'fa-map-location-dot'               },
+    { id: 'tax',     label: 'Tax & Statutory',   icon: 'fa-percent'                        },
+    { id: 'fy',      label: 'Financial Year',    icon: 'fa-calendar-day'                   },
+    { id: 'brand',   label: 'Branding',          icon: 'fa-image'                          },
+    { id: 'custom',  label: 'Custom Fields',     icon: 'fa-table-cells'                    },
+];
+var placeholderPanes = formTabs.filter(function (t) { return t.id !== 'basic'; });
+
+/* Flat list → <option>s with a "Select …" sentinel. */
+function _selOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (v) { html += '<option value="' + v + '">' + v + '</option>'; });
+    return html;
+}
+
+/* page-head actions: Back link + a Save Company split button (string
+ * form, like the Add-Customer page, since a split button can't be
+ * expressed by the array form). */
+var headActions =
+    '<a class="btn btn-light" href="/companies">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Companies' +
+    '</a>' +
+    '<div class="btn-group">' +
+        '<button type="submit" form="company-form" class="btn btn-primary">' +
+            '<i class="fa-solid fa-floppy-disk me-1"></i>Save Company' +
+        '</button>' +
+        '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
+                'data-bs-toggle="dropdown" aria-expanded="false">' +
+            '<span class="visually-hidden">Toggle save options</span>' +
+        '</button>' +
+        '<ul class="dropdown-menu dropdown-menu-end">' +
+            '<li><button type="submit" form="company-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-floppy-disk me-2 text-muted"></i>Save</button></li>' +
+            '<li><button type="submit" form="company-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-plus me-2 text-muted"></i>Save &amp; Add Another</button></li>' +
+            '<li><button type="submit" form="company-form" class="dropdown-item">' +
+                '<i class="fa-solid fa-eye me-2 text-muted"></i>Save &amp; View</button></li>' +
+        '</ul>' +
+    '</div>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Add Company',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Companies', href: '/companies' },
+        { label: 'Add Company' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="company-form" class="card form-card" method="post" action="/companies" autocomplete="off" novalidate>
+
+    <%- include('../partials/form-card', { tabs: formTabs }) %>
+
+    <div class="tab-content form-card-body">
+
+        <!-- ════ PANE 1 — Basic Information (active) ════ -->
+        <div class="tab-pane fade show active" id="basic" role="tabpanel" aria-labelledby="basic-tab">
+
+            <div class="form-grid">
+
+                <!-- Row 1: Company Name* · Mobile* (+91) · Email -->
+                <div class="form-group">
+                    <label class="form-label" for="co-name">Company Name<span class="req">*</span></label>
+                    <input type="text" class="form-control" id="co-name" name="name"
+                           placeholder="Enter company name" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="co-mobile">Mobile Number<span class="req">*</span></label>
+                    <div class="input-affix">
+                        <select class="affix affix--prefix" name="mobile_cc" aria-label="Country code">
+                            <option value="+91" selected>🇮🇳 +91</option>
+                            <option value="+1">🇺🇸 +1</option>
+                            <option value="+44">🇬🇧 +44</option>
+                            <option value="+971">🇦🇪 +971</option>
+                        </select>
+                        <input type="tel" class="form-control" id="co-mobile" name="mobile"
+                               placeholder="98765 43210" inputmode="numeric" maxlength="10" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="co-email">Email</label>
+                    <div class="input-affix">
+                        <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
+                        <input type="email" class="form-control" id="co-email" name="email"
+                               placeholder="name@company.com">
+                    </div>
+                </div>
+
+                <!-- Row 2: GST Number · PAN Number · Financial Year -->
+                <div class="form-group">
+                    <label class="form-label" for="co-gst">GST Number</label>
+                    <input type="text" class="form-control text-uppercase" id="co-gst" name="gst_number"
+                           placeholder="24ABCDE1234F1Z5" maxlength="15">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="co-pan">PAN Number</label>
+                    <input type="text" class="form-control text-uppercase" id="co-pan" name="pan_number"
+                           placeholder="ABCDE1234F" maxlength="10">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="co-fy">Financial Year</label>
+                    <select class="form-select" id="co-fy" name="financial_year">
+                        <%- _selOpts('Select financial year', _financialYears) %>
+                    </select>
+                </div>
+
+            </div><!-- /.form-grid -->
+
+            <hr class="form-divider">
+
+            <!-- Status radios · Company logo upload · Tally Sync mini-card -->
+            <div class="row g-4 align-items-start">
+
+                <div class="col-12 col-md-5">
+                    <label class="form-label d-block">Status<span class="req">*</span></label>
+                    <div class="status-radios">
+                        <label class="status-radio is-active">
+                            <input type="radio" name="status" value="Active" checked>
+                            <span>Active</span>
+                        </label>
+                        <label class="status-radio is-inactive">
+                            <input type="radio" name="status" value="Inactive">
+                            <span>Inactive</span>
+                        </label>
+                        <label class="status-radio is-blocked">
+                            <input type="radio" name="status" value="Blocked">
+                            <span>Blocked</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-3">
+                    <label class="form-label d-block" for="co-logo">Company Logo</label>
+                    <input type="file" class="form-control" id="co-logo" name="logo" accept="image/*">
+                    <div class="form-hint">PNG/JPG/SVG, up to 1&nbsp;MB. Shown on invoices.</div>
+                </div>
+
+                <div class="col-12 col-md-4">
+                    <div class="sync-mini-card">
+                        <div>
+                            <div class="sync-mini-label">Tally Sync Status</div>
+                            <div class="sync-mini-value">Not Synced</div>
+                        </div>
+                        <button type="button" class="btn-sync-now" id="co-sync-now">
+                            <i class="fa-solid fa-rotate me-1"></i>Sync Now
+                        </button>
+                    </div>
+                </div>
+
+            </div><!-- /.row -->
+
+            <hr class="form-divider">
+
+            <!-- Address (left) + Notes (right) — quick essentials on the
+                 Basic tab; the full Address tab follows in a later phase. -->
+            <h2 class="form-section-title">Registered Address</h2>
+            <div class="row g-4">
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="co-address">Address</label>
+                    <textarea class="form-control" id="co-address" name="address"
+                              rows="4" maxlength="300" placeholder="Building, street, area, city, state, pincode…"
+                              data-counter="co-address-count"></textarea>
+                    <div class="char-counter"><span id="co-address-count">0/300</span></div>
+                </div>
+
+                <div class="col-12 col-md-6">
+                    <label class="form-label" for="co-notes">Notes</label>
+                    <textarea class="form-control" id="co-notes" name="notes"
+                              rows="4" maxlength="300" placeholder="Any notes about this company…"
+                              data-counter="co-notes-count"></textarea>
+                    <div class="char-counter"><span id="co-notes-count">0/300</span></div>
+                </div>
+            </div><!-- /.row -->
+
+        </div><!-- /#basic -->
+
+        <%
+        /* PANES 2–6 — styled "coming next phase" placeholders so the
+         * Bootstrap tabs switch cleanly (pane id === tab id). */
+        placeholderPanes.forEach(function (pane) { %>
+            <div class="tab-pane fade" id="<%= pane.id %>" role="tabpanel" aria-labelledby="<%= pane.id %>-tab">
+                <div class="tab-placeholder">
+                    <div class="tab-placeholder-icon">
+                        <i class="fa-solid <%= pane.icon %>"></i>
+                    </div>
+                    <div class="tab-placeholder-title"><%= pane.label %></div>
+                    <p class="mb-0">This section is coming in the next phase.</p>
+                </div>
+            </div>
+        <% }); %>
+
+    </div><!-- /.tab-content -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/companies">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Save Company
+        </button>
+    </div>
+
+</form>

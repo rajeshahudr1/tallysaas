@@ -1,0 +1,142 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/inventory/form.ejs — TRANSACTIONS · Stock Adjustment.
+ * Route: GET /inventory/adjust  ·  activeMenu: 'inventory'.
+ *
+ * Simple single-card form to manually add/reduce stock (e.g. damage,
+ * physical-count correction) — syncs to Tally as a stock journal.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   productNames     [ … ]  — Product select options
+ *   locationNames    [ … ]  — Location select options
+ *   adjustmentTypes  [ … ]  — Add / Reduce select options
+ * ─────────────────────────────────────────────────────────── */
+
+var _products = (typeof productOptions !== 'undefined' && productOptions) ? productOptions : [];
+var _locs     = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
+var _types    = [
+    { value: 'add',    label: 'Add (increase stock)' },
+    { value: 'remove', label: 'Reduce (decrease stock)' },
+    { value: 'set',    label: 'Set to exact quantity' },
+];
+
+function _selOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (v) { html += '<option value="' + v + '">' + v + '</option>'; });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/inventory">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Inventory' +
+    '</a>' +
+    '<button type="submit" form="adjust-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>Save Adjustment' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Stock Adjustment',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Inventory', href: '/inventory' },
+        { label: 'Stock Adjustment' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="adjust-form" class="card form-card" method="post" action="/inventory/adjust" autocomplete="off" novalidate>
+
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-sliders me-2 text-primary"></i>Stock Adjustment</h2>
+        <span class="pill-status pill-status--warning">Pending Tally</span>
+    </div>
+
+    <div class="form-card-body">
+
+        <div class="form-grid">
+
+            <!-- Row 1: Product* · Location · Adjustment Type* -->
+            <div class="form-group">
+                <label class="form-label" for="adj-product">Product<span class="req">*</span></label>
+                <select class="form-select" id="adj-product" name="product_id" required>
+                    <option value="" selected disabled hidden>Select product</option>
+                    <% _products.forEach(function (p) { %><option value="<%= p.id %>"><%= p.name %></option><% }); %>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="adj-location">Location</label>
+                <select class="form-select" id="adj-location" name="location_id">
+                    <option value="">Select location (optional)</option>
+                    <% _locs.forEach(function (l) { %><option value="<%= l.id %>"><%= l.name %></option><% }); %>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="adj-type">Adjustment Type<span class="req">*</span></label>
+                <select class="form-select" id="adj-type" name="adjustment_type" required>
+                    <option value="" selected disabled hidden>Select type</option>
+                    <% _types.forEach(function (t) { %><option value="<%= t.value %>"><%= t.label %></option><% }); %>
+                </select>
+            </div>
+
+            <!-- Row 2: Quantity* · Date* · Reason -->
+            <div class="form-group">
+                <label class="form-label" for="adj-qty">Quantity<span class="req">*</span></label>
+                <input type="number" class="form-control" id="adj-qty" name="quantity"
+                       placeholder="0" min="0" step="1" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="adj-date">Date<span class="req">*</span></label>
+                <input type="date" class="form-control" id="adj-date" name="date" value="2024-05-21" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="adj-reason">Reason</label>
+                <select class="form-select" id="adj-reason" name="reason">
+                    <option value="" selected disabled hidden>Select reason</option>
+                    <option>Physical count correction</option>
+                    <option>Damage / Breakage</option>
+                    <option>Expiry</option>
+                    <option>Theft / Loss</option>
+                    <option>Opening stock entry</option>
+                    <option>Other</option>
+                </select>
+            </div>
+
+        </div><!-- /.form-grid -->
+
+        <hr class="form-divider">
+
+        <div class="row g-4 align-items-start">
+            <div class="col-12 col-md-4">
+                <label class="form-label d-block">Sync to Tally</label>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="adj-tally" name="sync_tally" checked>
+                    <label class="form-check-label" for="adj-tally">Post as stock journal</label>
+                </div>
+                <div class="form-hint">Updates the stock item quantity in Tally.</div>
+            </div>
+
+            <div class="col-12 col-md-8">
+                <label class="form-label" for="adj-notes">Notes</label>
+                <textarea class="form-control" id="adj-notes" name="notes" rows="3"
+                          maxlength="300" placeholder="Details about this adjustment…"
+                          data-counter="adj-notes-count"></textarea>
+                <div class="char-counter"><span id="adj-notes-count">0/300</span></div>
+            </div>
+        </div>
+
+    </div><!-- /.form-card-body -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/inventory">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Save Adjustment
+        </button>
+    </div>
+
+</form>

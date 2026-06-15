@@ -1,0 +1,136 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/suppliers/list.ejs — MASTERS · Suppliers listing.
+ * Route: GET /suppliers  ·  activeMenu: 'suppliers'.
+ *
+ * Mirrors the Customers listing for the payables side. Pure
+ * composition of the reusable partials.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   supplierRows    [ rows ]   — table body
+ *   suppliersTotal  number     — pagination total
+ *   page, perPage   numbers
+ *   locationNames   [ … ]      — Location filter options
+ *   supplierGroups  [ … ]      — Supplier Group filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof supplierRows !== 'undefined' && supplierRows) ? supplierRows : [];
+var _total   = (typeof suppliersTotal !== 'undefined') ? suppliersTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _locs    = (typeof locationNames !== 'undefined' && locationNames) ? locationNames : [];
+var _groups  = (typeof supplierGroups !== 'undefined' && supplierGroups) ? supplierGroups : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',         label: 'Search',         placeholder: 'Search by name, mobile, GST...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'location',       label: 'Location',       options: _opts('All Locations', _locs),       colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'supplier_group', label: 'Supplier Group', options: _opts('All Groups', _groups),        colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',         label: 'Status',         options: _opts('All Status', ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
+    { type: 'text',   name: 'gst',            label: 'GST No.',        placeholder: 'Enter GST number',              colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'name',            label: 'Supplier Name',  sortable: true, type: 'text' },
+    { key: 'location',        label: 'Location',       sortable: true, type: 'location' },
+    { key: 'mobile',          label: 'Mobile',         sortable: true, type: 'text' },
+    { key: 'gst',             label: 'GST No.',        sortable: true, type: 'text' },
+    { key: 'group',           label: 'Group',          sortable: true, type: 'badge' },
+    { key: 'opening_balance', label: 'Opening Balance', sortable: true, type: 'currency' },
+    { key: 'payment_terms',   label: 'Payment Terms',  sortable: true, type: 'badge' },
+    { key: 'status',          label: 'Status',         sortable: true, type: 'status' },
+    { key: 'created_at',      label: 'Created At',     sortable: true, type: 'date' },
+];
+
+var sortOptions = ['Created At', 'Supplier Name', 'Location', 'Opening Balance', 'Status'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Suppliers',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Suppliers' },
+    ],
+    actions: [
+        { label: 'Export',       icon: 'fa-upload', variant: 'light' },
+        { label: 'Add Supplier', icon: 'fa-plus',   gradient: true, href: '/suppliers/add' },
+    ],
+}) %>
+
+<form id="supplier-filters-form" autocomplete="off" method="get" action="/suppliers">
+    <%- include('../partials/filter-card', {
+        filterId: 'supplier-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'suppliers-table',
+        basePath: '/suppliers',
+        editable: true,
+        sortKeys: ['name', 'status', 'created_at'],
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit', 'delete'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

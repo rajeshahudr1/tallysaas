@@ -1,0 +1,125 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/users/list.ejs — SETTINGS · Users.
+ * Route: GET /users  ·  activeMenu: 'users'.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   userRows     [ rows ]   — table body
+ *   usersTotal   number     — pagination total
+ *   page, perPage numbers
+ *   roles        [ … ]      — Role filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof userRows !== 'undefined' && userRows) ? userRows : [];
+var _total   = (typeof usersTotal !== 'undefined') ? usersTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _roles   = (typeof roles !== 'undefined' && roles) ? roles : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (4 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search', label: 'Search', placeholder: 'Name / email / mobile...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'role',   label: 'Role',   options: _opts('All Roles', _roles),     colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status', label: 'Status', options: _opts('All Status', ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_from', label: 'Created From', value: '2024-01-01',          colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'name',       label: 'Name',       sortable: true, type: 'text' },
+    { key: 'email',      label: 'Email',      sortable: true, type: 'text' },
+    { key: 'mobile',     label: 'Mobile',     sortable: true, type: 'text' },
+    { key: 'role',       label: 'Role',       sortable: true, type: 'badge' },
+    { key: 'last_login', label: 'Last Login', sortable: true, type: 'text' },
+    { key: 'status',     label: 'Status',     sortable: true, type: 'status' },
+    { key: 'created_at', label: 'Created At', sortable: true, type: 'date' },
+];
+
+var sortOptions = ['Created At', 'Name', 'Role', 'Status', 'Last Login'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Users',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Users' },
+    ],
+    actions: [
+        { label: 'Export',   icon: 'fa-upload', variant: 'light' },
+        { label: 'Add User', icon: 'fa-plus',   gradient: true, href: '/users/add' },
+    ],
+}) %>
+
+<form id="user-filters-form" autocomplete="off" method="get" action="/users">
+    <%- include('../partials/filter-card', {
+        filterId: 'user-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'users-table',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit', 'delete'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

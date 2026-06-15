@@ -1,0 +1,203 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/customers/list.ejs — PAGE 1: Customers listing (spec §4).
+ * Route: GET /customers  ·  activeMenu: 'customers'.
+ *
+ * Composes four reusable partials to match the screenshot exactly:
+ *   1. page-head    — "Customers" + Dashboard › Customers breadcrumb
+ *                     + Export (light) and gradient "+ Add Customer".
+ *   2. filter-card  — the 10-field Advanced Filters card (expanded),
+ *                     laid out 5-per-row then wrapping.
+ *   3. a table-toolbar row — "Show 10 entries" (left) + "Sort By"
+ *                     select + sort-direction button (right).
+ *   4. table        — selectable + index + view/edit/delete actions,
+ *                     the 9 typed columns, rows = mock.customers.
+ *   5. pagination   — page 1 / perPage 10 / total 156
+ *                     → "Showing 1 to 10 of 156 entries", 1..5 … 16.
+ *
+ * This view is PURE COMPOSITION: it owns no bespoke component CSS.
+ * It only assembles config objects (the filter `fields`, the table
+ * `columns`) and hands them to the partials, whose classes all live
+ * in public/css/theme.css. The one tiny <style> block below adds a
+ * 5-column responsive width that Bootstrap's grid does not provide
+ * out of the box (the filter row shows 5 fields across on ≥lg).
+ *
+ * Expected locals (provided by routes/web.js → res.render):
+ *   customers       [ customer rows ]   — table body
+ *   customersTotal  number  (156)       — pagination total
+ *   page, perPage   numbers (1, 10)     — pagination window
+ *   locations       [ 'Ahmedabad', … ]  — Location filter options
+ *   salesPersons    [ 'Rajesh Kumar', …]— Sales Person filter options
+ *   customerGroups  [ 'Retail', … ]      — Customer Group filter options
+ * (title / breadcrumb / activeMenu are also passed and consumed by
+ *  the layout + page-head.)
+ * ─────────────────────────────────────────────────────────── */
+
+/* Defensive reads — the page must never crash on a missing local
+ * (spec §10 quality bar). Empty fallbacks keep every partial happy. */
+var _customers      = (typeof customers !== 'undefined' && customers) ? customers : [];
+var _customersTotal = (typeof customersTotal !== 'undefined') ? customersTotal : _customers.length;
+var _page           = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage        = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _locations      = (typeof locations !== 'undefined' && locations) ? locations : [];
+var _salesPersons   = (typeof salesPersons !== 'undefined' && salesPersons) ? salesPersons : [];
+var _customerGroups = (typeof customerGroups !== 'undefined' && customerGroups) ? customerGroups : [];
+
+/* Helper: turn a flat string list into FilterCard <option> objects,
+ * prefixed with an "All …" sentinel (value '' = no filter). DRY so
+ * each select below is one line and mirrors the mock data source. */
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config — the 10 fields from spec §4 ──────────────
+ * colClass 'filter-col-fifth' = 5-across on ≥lg (see <style> below),
+ * gracefully falling back to col-md-4 (3-across) then col-sm-6 (2)
+ * then full width on the smallest screens. The two date fields are
+ * pre-filled with the screenshot's range (2024 full year). */
+var filterFields = [
+    { type: 'text',   name: 'search',          label: 'Search',          placeholder: 'Search by name, mobile, email...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'location',        label: 'Location',        options: _opts('All Locations',     _locations),      colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'sales_person',    label: 'Sales Person',    options: _opts('All Sales Persons', _salesPersons),   colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'customer_group',  label: 'Customer Group',  options: _opts('All Groups',        _customerGroups), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',          label: 'Status',          options: _opts('All Status',        ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
+
+    { type: 'text',   name: 'gst',             label: 'GST No.',         placeholder: 'Enter GST number',                 colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'opening_balance', label: 'Opening Balance', options: [{ value: '', label: 'All' }],          colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'credit_limit',    label: 'Credit Limit',    options: [{ value: '', label: 'All' }],          colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_from',    label: 'Created From',    value: '2024-01-01',                             colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_to',      label: 'Created To',      value: '2024-12-31',                             colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config — the 9 typed columns from spec §4 ────────────
+ * Types drive the partial's rendering (location & status pills,
+ * Indian-grouped ₹ for the two currency columns). All columns are
+ * sortable (visual chevrons only in Phase 1). Currency columns are
+ * right-aligned automatically by the partial. */
+var tableColumns = [
+    { key: 'name',            label: 'Customer Name',   sortable: true, type: 'text'     },
+    { key: 'location',        label: 'Location',        sortable: true, type: 'location' },
+    { key: 'mobile',          label: 'Mobile',          sortable: true, type: 'text'     },
+    { key: 'gst',             label: 'GST No.',         sortable: true, type: 'text'     },
+    { key: 'opening_balance', label: 'Opening Balance', sortable: true, type: 'currency' },
+    { key: 'credit_limit',    label: 'Credit Limit',    sortable: true, type: 'currency' },
+    { key: 'sales_person',    label: 'Sales Person',    sortable: true, type: 'text'     },
+    { key: 'status',          label: 'Status',          sortable: true, type: 'status'   },
+    { key: 'created_at',      label: 'Created At',      sortable: true, type: 'date'     },
+];
+
+/* "Sort By" toolbar options — mirrors the sortable table columns so
+ * the control reads naturally; "Created At" is pre-selected per the
+ * screenshot. Visual only in Phase 1. */
+var sortOptions = [
+    'Created At', 'Customer Name', 'Location', 'Opening Balance', 'Credit Limit', 'Status',
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Customers',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Customers' },
+    ],
+    /* Export (light, upload icon) + the gradient blue→purple "Add"
+     * button linking to the Add-Customer form. */
+    actions: [
+        { label: 'Export',       icon: 'fa-upload', variant: 'light' },
+        { label: 'Add Customer', icon: 'fa-plus',   gradient: true, href: '/customers/add' },
+    ],
+}) %>
+
+<!-- ── Advanced Filters (expanded) ─────────────────────────────── -->
+<!-- Phase 1 is visual-only: stop the Apply Filters submit from reloading
+     the page (matches the header search form's onsubmit guard). When the
+     API tier lands, replace this with a real GET to /customers?…filters. -->
+<form id="customer-filters-form" autocomplete="off" method="get" action="/customers">
+    <%- include('../partials/filter-card', {
+        filterId: 'customer-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<!-- ── Listing card: toolbar + table + pagination ──────────────── -->
+<div class="card">
+
+    <!-- Toolbar: "Show 10 entries" (left) · Sort By + direction (right).
+         Reuses .table-toolbar / .toolbar-show / .toolbar-sort / .sort-dir-btn
+         (theme.css §9). The "Show entries" select here mirrors the one in
+         the pagination footer for screenshot fidelity. -->
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Data table — selectable rows, index column, row actions. -->
+    <%- include('../partials/table', {
+        tableId: 'customers-table',
+        basePath: '/customers',
+        editable: true,
+        sortKeys: ['name', 'status', 'created_at'],
+        columns: tableColumns,
+        rows: _customers,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit', 'delete'],
+    }) %>
+
+    <!-- Pagination — "Showing 1 to 10 of 156 entries", pages 1..5 … 16. -->
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _customersTotal,
+    }) %>
+
+</div>
+
+<%
+/* ── Tiny, page-local style: 5-column filter grid ───────────────
+ * Bootstrap's grid offers 1/2/3/4/6/12 columns but NOT fifths, and
+ * spec §4 requires the filter fields "laid out 5 per row then
+ * wrapping". This is the only thing theme.css can't already express,
+ * so it lives here as a minimal, commented, responsive override.
+ * Breakpoints degrade gracefully: 5→3→2→1 across lg/md/sm/xs. */
+%>
+<style>
+    /* 5 fields across on ≥992px (each 20% wide, matching .row g-3 gutter). */
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    /* 3 across on md, 2 across on sm, 1 across below — keeps labels readable. */
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

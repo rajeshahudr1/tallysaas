@@ -1,0 +1,158 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/tally-sync/dashboard.ejs — TALLY SYNC · Sync Dashboard.
+ * Route: GET /sync-dashboard  ·  activeMenu: 'sync-dash'.
+ *
+ * The product's hub: live connection banner, 4 headline stat cards,
+ * a per-module sync table (counts + per-row Sync button), and a
+ * Recent Sync Activity list. Sync buttons get a demo spinner from
+ * /js/app.js ([data-sync-btn]).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   syncSummary { connected, agent_version, tally_version, company,
+ *                 last_heartbeat, last_sync }
+ *   syncStats   [{label,value,icon,tone}]              — 4 cards
+ *   syncModules [{module,total,synced,pending,failed,last_sync}]
+ *   recentSync  [{module,record,status,time, …}]       — activity list
+ * ─────────────────────────────────────────────────────────── */
+
+var _sum     = (typeof syncSummary !== 'undefined' && syncSummary) ? syncSummary : { connected: false };
+var _stats   = (typeof syncStats !== 'undefined' && syncStats) ? syncStats : [];
+var _modules = (typeof syncModules !== 'undefined' && syncModules) ? syncModules : [];
+var _recent  = (typeof recentSync !== 'undefined' && recentSync) ? recentSync : [];
+var _connected = !!_sum.connected;
+
+function _syncPill(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'synced')  return 'pill-status--success';
+    if (s === 'failed')  return 'pill-status--danger';
+    if (s === 'pending') return 'pill-status--warning';
+    return 'pill-status--muted';
+}
+function _cntCls(n) { return n > 0 ? '' : 'cnt-zero'; }
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Tally Sync Dashboard',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Tally Sync' },
+    ],
+    actions: [
+        { label: 'Retry Failed', icon: 'fa-arrow-rotate-left', variant: 'light', id: 'sync-retry' },
+        { label: 'Sync Now',     icon: 'fa-rotate', gradient: true, id: 'sync-now' },
+    ],
+}) %>
+
+<!-- ── Connection banner ─────────────────────────────────────── -->
+<div class="sync-conn <%= _connected ? 'is-connected' : 'is-disconnected' %>">
+    <span class="sync-conn-icon">
+        <i class="fa-solid <%= _connected ? 'fa-plug-circle-check' : 'fa-plug-circle-xmark' %>"></i>
+    </span>
+    <div class="sync-conn-main">
+        <div class="sync-conn-title">
+            <% if (_connected) { %><span class="sync-conn-dot"></span><% } %>
+            Local Sync Agent <%= _connected ? 'Connected' : 'Disconnected' %>
+        </div>
+        <div class="sync-conn-meta">
+            <span>Agent <b><%= _sum.agent_version || '—' %></b></span>
+            <span><b><%= _sum.tally_version || 'Tally' %></b></span>
+            <span>Company <b><%= _sum.company || '—' %></b></span>
+            <span>Heartbeat <b><%= _sum.last_heartbeat || '—' %></b></span>
+            <span>Last sync <b><%= _sum.last_sync || '—' %></b></span>
+        </div>
+    </div>
+    <div class="sync-conn-actions">
+        <button type="button" class="btn btn-light" data-sync-btn>
+            <i class="fa-solid fa-plug me-1"></i>Test Connection
+        </button>
+    </div>
+</div>
+
+<!-- ── Headline stat cards ───────────────────────────────────── -->
+<section class="stat-grid mb-3">
+    <% _stats.forEach(function (s) { %>
+        <article class="stat-card stat-card--<%= s.tone %>">
+            <div class="stat-card-top">
+                <span class="stat-icon"><i class="fa-solid <%= s.icon %>"></i></span>
+            </div>
+            <div>
+                <div class="stat-label"><%= s.label %></div>
+                <div class="stat-value"><%= s.value %></div>
+            </div>
+        </article>
+    <% }); %>
+</section>
+
+<!-- ── Module-wise sync ──────────────────────────────────────── -->
+<div class="card mb-3">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-layer-group me-2 text-primary"></i>Module-wise Sync</h2>
+        <button type="button" class="btn btn-primary btn-sm" data-sync-btn>
+            <i class="fa-solid fa-rotate me-1"></i>Sync All
+        </button>
+    </div>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Module</th>
+                    <th class="text-center">Total</th>
+                    <th class="text-center">Synced</th>
+                    <th style="min-width:140px">Progress</th>
+                    <th class="text-center">Pending</th>
+                    <th class="text-center">Failed</th>
+                    <th>Last Sync</th>
+                    <th class="text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _modules.forEach(function (m) { %>
+                    <% var pct = m.total ? Math.round((m.synced / m.total) * 100) : 0; %>
+                    <tr>
+                        <td><strong><%= m.module %></strong></td>
+                        <td class="text-center text-muted"><%= m.total.toLocaleString('en-IN') %></td>
+                        <td class="text-center"><span class="cnt cnt-ok"><%= m.synced.toLocaleString('en-IN') %></span></td>
+                        <td>
+                            <div class="d-flex align-items-center gap-2">
+                                <span class="sync-bar"><span style="width:<%= pct %>%"></span></span>
+                                <span class="text-muted" style="font-size:12px"><%= pct %>%</span>
+                            </div>
+                        </td>
+                        <td class="text-center"><span class="cnt cnt-warn <%= _cntCls(m.pending) %>"><%= m.pending %></span></td>
+                        <td class="text-center"><span class="cnt cnt-bad <%= _cntCls(m.failed) %>"><%= m.failed %></span></td>
+                        <td class="text-muted" style="font-size:13px"><%= m.last_sync %></td>
+                        <td class="text-end">
+                            <button type="button" class="btn-sync-row" data-sync-btn>
+                                <i class="fa-solid fa-rotate"></i> Sync
+                            </button>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ── Recent sync activity ──────────────────────────────────── -->
+<div class="card recent-card">
+    <div class="recent-card-head">
+        <h2 class="recent-card-title">Recent Sync Activity</h2>
+        <a href="/sync-logs" class="recent-card-link">View all logs</a>
+    </div>
+    <ul class="sync-list">
+        <% _recent.forEach(function (row) { %>
+            <li class="sync-list-item">
+                <span class="sync-list-icon"><i class="fa-solid fa-rotate"></i></span>
+                <div class="sync-list-main">
+                    <div class="sync-list-module"><%= row.module %></div>
+                    <div class="sync-list-record"><%= row.record %></div>
+                </div>
+                <div class="sync-list-meta">
+                    <span class="pill-status <%= _syncPill(row.status) %>"><%= row.status %></span>
+                    <div class="sync-list-time"><%= row.time %></div>
+                </div>
+            </li>
+        <% }); %>
+    </ul>
+</div>

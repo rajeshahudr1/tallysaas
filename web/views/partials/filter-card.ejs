@@ -1,0 +1,73 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/filter-card.ejs — COMPONENT: FilterCard (spec §2.4).
+ * Data-driven, collapsible advanced-filter card.
+ *
+ * Expected locals:
+ *   filterId    string
+ *   title?      string  (default "Advanced Filters")
+ *   fields      [{ type:'text'|'select'|'date', name, label, placeholder?,
+ *                  value?, options?:[{value,label}], colClass?:'col-md-3' }]
+ *   collapsed?  bool    (default false)
+ *
+ * The header chevron toggles a Bootstrap collapse on the body
+ * (#<filterId>-body). Footer: Reset (light) + Apply Filters (primary).
+ * ─────────────────────────────────────────────────────────── */
+var _id        = (typeof filterId !== 'undefined' && filterId) ? filterId : 'filter';
+var _title     = (typeof title !== 'undefined' && title) ? title : 'Advanced Filters';
+var _fields    = (typeof fields !== 'undefined' && fields) ? fields : [];
+var _collapsed = (typeof collapsed !== 'undefined') ? !!collapsed : false;
+/* Prefill each field from the live query string (so applied filters stick
+ * after the GET reload) + a Reset link back to the bare list path. */
+var _q     = (typeof currentQuery !== 'undefined' && currentQuery) ? currentQuery : {};
+var _path  = (typeof currentPath  !== 'undefined' && currentPath)  ? currentPath  : '';
+function _fval(f) {
+    if (_q[f.name] !== undefined && _q[f.name] !== '') return _q[f.name];
+    return (f.value !== undefined ? f.value : '');
+}
+%>
+<div class="card filter-card">
+    <div class="filter-card-head" data-bs-toggle="collapse" data-bs-target="#<%= _id %>-body"
+         aria-expanded="<%= _collapsed ? 'false' : 'true' %>" aria-controls="<%= _id %>-body" role="button">
+        <span class="filter-card-title">
+            <i class="fa-solid fa-filter"></i>
+            <%= _title %>
+        </span>
+        <i class="fa-solid fa-chevron-up filter-card-chevron"></i>
+    </div>
+
+    <div class="collapse <%= _collapsed ? '' : 'show' %>" id="<%= _id %>-body">
+        <div class="filter-card-body">
+            <div class="row g-3 filter-grid">
+                <% _fields.forEach(function (f) { %>
+                    <% var _v = _fval(f); %>
+                    <div class="<%= f.colClass || 'col-md-3 col-sm-6' %>">
+                        <label class="form-label filter-label" for="<%= _id %>-<%= f.name %>"><%= f.label %></label>
+                        <% if (f.type === 'select') { %>
+                            <select class="form-select filter-control" id="<%= _id %>-<%= f.name %>" name="<%= f.name %>">
+                                <% (f.options || []).forEach(function (opt) { %>
+                                    <option value="<%= opt.value %>" <%= (String(_v) === String(opt.value)) ? 'selected' : '' %>><%= opt.label %></option>
+                                <% }); %>
+                            </select>
+                        <% } else if (f.type === 'date') { %>
+                            <input type="date" class="form-control filter-control" id="<%= _id %>-<%= f.name %>"
+                                   name="<%= f.name %>" value="<%= _v || '' %>">
+                        <% } else { %>
+                            <input type="text" class="form-control filter-control" id="<%= _id %>-<%= f.name %>"
+                                   name="<%= f.name %>" placeholder="<%= f.placeholder || '' %>" value="<%= _v || '' %>">
+                        <% } %>
+                    </div>
+                <% }); %>
+            </div>
+
+            <div class="filter-card-footer">
+                <a href="<%= _path %>" class="btn btn-light btn-filter-reset">
+                    <i class="fa-solid fa-rotate-left me-1"></i>Reset
+                </a>
+                <button type="submit" class="btn btn-primary btn-filter-apply">
+                    <i class="fa-solid fa-filter me-1"></i>Apply Filters
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

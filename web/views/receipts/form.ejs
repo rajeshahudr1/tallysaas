@@ -1,0 +1,143 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/receipts/form.ejs — TRANSACTIONS · Add Receipt.
+ * Route: GET /receipts/add  ·  activeMenu: 'receipts'.
+ *
+ * Simple single-card voucher form (Tally Receipt Voucher). Money
+ * received IN from a customer.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   customerNames  [ … ]  — Customer (payer) select options
+ *   paymentModes   [ … ]  — Payment Mode select options
+ *   nextReceiptNo  string — read-only receipt voucher no.
+ * ─────────────────────────────────────────────────────────── */
+
+var _custOptions = (typeof customerOptions !== 'undefined' && customerOptions) ? customerOptions : [];
+var _modes  = (typeof paymentModes !== 'undefined' && paymentModes) ? paymentModes : [];
+var _rcpNo  = (typeof nextReceiptNo !== 'undefined' && nextReceiptNo) ? nextReceiptNo : '';
+
+function _selOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (v) { html += '<option value="' + v + '">' + v + '</option>'; });
+    return html;
+}
+// FK options: value = id (Customer select).
+function _fkOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (o) { html += '<option value="' + o.id + '">' + o.name + '</option>'; });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/receipts">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Receipts' +
+    '</a>' +
+    '<button type="submit" form="receipt-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Add Receipt',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Receipts', href: '/receipts' },
+        { label: 'Add Receipt' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="receipt-form" class="card form-card" method="post" action="/receipts" autocomplete="off" novalidate>
+
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-receipt me-2 text-primary"></i>Receipt Voucher</h2>
+        <span class="pill-status pill-status--warning">Pending Tally</span>
+    </div>
+
+    <div class="form-card-body">
+
+        <div class="form-grid">
+
+            <!-- Row 1: Customer* · Receipt No · Date* -->
+            <div class="form-group">
+                <label class="form-label" for="receipt-customer">Customer (Received From)<span class="req">*</span></label>
+                <select class="form-select" id="receipt-customer" name="customer_id" required>
+                    <%- _fkOpts('Select customer', _custOptions) %>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="receipt-no">Receipt No</label>
+                <input type="text" class="form-control" id="receipt-no" name="receipt_no" value="<%= _rcpNo %>" readonly>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="receipt-date">Receipt Date<span class="req">*</span></label>
+                <input type="date" class="form-control" id="receipt-date" name="receipt_date" value="2024-05-21" required>
+            </div>
+
+            <!-- Row 2: Mode* · Amount* · Reference No -->
+            <div class="form-group">
+                <label class="form-label" for="receipt-mode">Payment Mode<span class="req">*</span></label>
+                <select class="form-select" id="receipt-mode" name="mode" required>
+                    <%- _selOpts('Select mode', _modes) %>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="receipt-amount">Amount<span class="req">*</span></label>
+                <div class="input-affix">
+                    <input type="number" class="form-control has-suffix" id="receipt-amount" name="amount"
+                           placeholder="0.00" min="0" step="0.01" required>
+                    <span class="affix affix--suffix">₹</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="receipt-ref">Reference No</label>
+                <input type="text" class="form-control" id="receipt-ref" name="reference"
+                       placeholder="Cheque / UPI / NEFT ref">
+            </div>
+
+            <!-- Row 3: Bank / Account · (spacer) -->
+            <div class="form-group">
+                <label class="form-label" for="receipt-bank">Bank / Account</label>
+                <input type="text" class="form-control" id="receipt-bank" name="bank_account"
+                       placeholder="e.g. HDFC Current A/c">
+            </div>
+
+        </div><!-- /.form-grid -->
+
+        <hr class="form-divider">
+
+        <!-- Status · Is-Tally-Voucher · Notes -->
+        <div class="row g-4 align-items-start">
+            <div class="col-12 col-md-4">
+                <label class="form-label d-block">Is Tally Voucher</label>
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           id="receipt-tally" name="is_tally_voucher" checked>
+                    <label class="form-check-label" for="receipt-tally">Post to Tally as Receipt voucher</label>
+                </div>
+                <div class="form-hint">Creates a Receipt voucher under the customer ledger.</div>
+            </div>
+
+            <div class="col-12 col-md-8">
+                <label class="form-label" for="receipt-notes">Narration / Notes</label>
+                <textarea class="form-control" id="receipt-notes" name="notes" rows="3"
+                          maxlength="300" placeholder="Narration for this receipt…"
+                          data-counter="receipt-notes-count"></textarea>
+                <div class="char-counter"><span id="receipt-notes-count">0/300</span></div>
+            </div>
+        </div>
+
+    </div><!-- /.form-card-body -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/receipts">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally
+        </button>
+    </div>
+
+</form>

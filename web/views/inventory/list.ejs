@@ -1,0 +1,152 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/inventory/list.ejs — TRANSACTIONS · Inventory / Stock.
+ * Route: GET /inventory  ·  activeMenu: 'inventory'.
+ *
+ * A read-heavy summary: 4 stat cards (reusing the dashboard
+ * .stat-card classes) + the same reusable filter/table/pagination.
+ * Shows opening → purchased → sold → current stock, value and a
+ * derived stock-status pill (In Stock / Low Stock / Out of Stock).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   stockRows       [ rows ]   — table body
+ *   stockTotal      number     — pagination total
+ *   page, perPage   numbers
+ *   inventoryStats  [{label,value,icon,tone}]  — 4 summary cards
+ *   categoryNames / locationNames / stockStatuses — filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows     = (typeof stockRows !== 'undefined' && stockRows) ? stockRows : [];
+var _total    = (typeof stockTotal !== 'undefined') ? stockTotal : _rows.length;
+var _page     = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage  = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _stats    = (typeof inventoryStats !== 'undefined' && inventoryStats) ? inventoryStats : [];
+var _cats     = (typeof categoryNames !== 'undefined' && categoryNames) ? categoryNames : [];
+var _locs     = (typeof locationNames !== 'undefined' && locationNames) ? locationNames : [];
+var _statuses = (typeof stockStatuses !== 'undefined' && stockStatuses) ? stockStatuses : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',   label: 'Search',   placeholder: 'Search by product, SKU...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'category', label: 'Category', options: _opts('All Categories', _cats),  colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'location', label: 'Location', options: _opts('All Locations', _locs),   colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',   label: 'Stock Status', options: _opts('All', _statuses),     colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'unit',     label: 'Unit',     options: _opts('All Units', []),          colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config (location-wise stock movement) ────────────── */
+var tableColumns = [
+    { key: 'product',   label: 'Product',   sortable: true, type: 'text' },
+    { key: 'sku',       label: 'SKU',       sortable: true, type: 'badge' },
+    { key: 'location',  label: 'Location',  sortable: true, type: 'location' },
+    { key: 'opening',   label: 'Opening',   sortable: true, type: 'text', align: 'center' },
+    { key: 'purchased', label: 'Purchased', sortable: true, type: 'text', align: 'center' },
+    { key: 'sold',      label: 'Sold',      sortable: true, type: 'text', align: 'center' },
+    { key: 'current',   label: 'Current Stock', sortable: true, type: 'text', align: 'center' },
+    { key: 'value',     label: 'Stock Value', sortable: true, type: 'currency' },
+    { key: 'status',    label: 'Status',    sortable: true, type: 'status' },
+];
+
+var sortOptions = ['Product', 'Current Stock', 'Stock Value', 'Status'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Inventory',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Inventory' },
+    ],
+    actions: [
+        { label: 'Sync from Tally',  icon: 'fa-rotate', variant: 'light', id: 'inv-sync' },
+        { label: 'Stock Adjustment', icon: 'fa-sliders', gradient: true, href: '/inventory/adjust' },
+    ],
+}) %>
+
+<!-- ── Summary stat cards (reuse dashboard .stat-card classes) ──── -->
+<section class="stat-grid mb-3">
+    <% _stats.forEach(function (s) { %>
+        <article class="stat-card stat-card--<%= s.tone %>">
+            <div class="stat-card-top">
+                <span class="stat-icon"><i class="fa-solid <%= s.icon %>"></i></span>
+            </div>
+            <div>
+                <div class="stat-label"><%= s.label %></div>
+                <div class="stat-value"><%= s.value %></div>
+            </div>
+        </article>
+    <% }); %>
+</section>
+
+<form id="inventory-filters-form" autocomplete="off" method="get" action="/inventory">
+    <%- include('../partials/filter-card', {
+        filterId: 'inventory-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Product' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'inventory-table',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'edit'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

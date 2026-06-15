@@ -1,0 +1,43 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/form-card.ejs — COMPONENT: FormCard (spec §2.5).
+ * A tabbed-form SHELL: renders the white card header + tab navigation.
+ *
+ * Expected locals:
+ *   tabs   [{ id, label, icon, active?:bool }]
+ *
+ * CONTRACT — the INCLUDING PAGE owns the `.tab-content`:
+ *   The page includes this partial, then immediately follows it (inside
+ *   the SAME `.card`, after the header) with its own panes. Structure:
+ *
+ *     div.card.form-card
+ *       └─ include this partial (renders the .form-card-head tab nav)
+ *       └─ div.tab-content.form-card-body
+ *            ├─ div.tab-pane.fade.show.active#basic   (page's fields)
+ *            ├─ div.tab-pane.fade#address             (page's fields)
+ *            └─ …one pane per tab, id === tab.id
+ *
+ * Each tab's Bootstrap target is the pane whose id equals tab.id. The
+ * active tab gets a blue underline + blue text; the rest are muted. This
+ * keeps FormCard reusable across any tabbed form while pages keep their
+ * bespoke fields.
+ * ─────────────────────────────────────────────────────────── */
+var _tabs = (typeof tabs !== 'undefined' && tabs) ? tabs : [];
+%>
+<div class="form-card-head">
+    <ul class="nav form-tabs" role="tablist">
+        <% _tabs.forEach(function (tab, i) { %>
+            <li class="nav-item" role="presentation">
+                <button class="form-tab <%= tab.active ? 'active' : '' %>"
+                        id="<%= tab.id %>-tab"
+                        data-bs-toggle="tab" data-bs-target="#<%= tab.id %>"
+                        type="button" role="tab"
+                        aria-controls="<%= tab.id %>"
+                        aria-selected="<%= tab.active ? 'true' : 'false' %>">
+                    <% if (tab.icon) { %><i class="fa-solid <%= tab.icon %> me-2"></i><% } %>
+                    <span class="form-tab-label"><%= tab.label %></span>
+                </button>
+            </li>
+        <% }); %>
+    </ul>
+</div>

@@ -1,0 +1,95 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/pagination.ejs — COMPONENT: Pagination (spec §2.6).
+ *
+ * Expected locals:
+ *   page            number  (current page, 1-based)
+ *   perPage         number  (rows per page)
+ *   total           number  (total records)
+ *   perPageOptions? [10,25,50,100]
+ *
+ * Left:   "Show [select] entries".
+ * Center: "Showing X to Y of Z entries".
+ * Right:  First · Previous · 1 2 3 … last · Next · Last (current = blue).
+ * Visual only — no real routing in Phase 1.
+ * ─────────────────────────────────────────────────────────── */
+var _page    = (typeof page !== 'undefined' && page) ? Number(page) : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? Number(perPage) : 10;
+var _total   = (typeof total !== 'undefined' && total) ? Number(total) : 0;
+var _ppOpts  = (typeof perPageOptions !== 'undefined' && perPageOptions) ? perPageOptions : [10, 25, 50, 100];
+
+var _totalPages = Math.max(1, Math.ceil(_total / _perPage));
+var _from = _total === 0 ? 0 : ((_page - 1) * _perPage) + 1;
+var _to   = Math.min(_page * _perPage, _total);
+
+/* Build the page-number window: always show 1..5 (or fewer), an ellipsis,
+ * then the last page when there is a gap. */
+var _windowEnd = Math.min(5, _totalPages);
+var _pages = [];
+for (var p = 1; p <= _windowEnd; p++) _pages.push(p);
+
+/* Real navigation: build a URL for page N preserving the current path +
+ * query (search/status filters etc.). currentPath/currentQuery are global
+ * locals set in index.js. */
+var _path = (typeof currentPath !== 'undefined' && currentPath) ? currentPath : '';
+var _q    = (typeof currentQuery !== 'undefined' && currentQuery) ? currentQuery : {};
+function _pageUrl(n) {
+    var merged = Object.assign({}, _q, { page: n, per_page: _perPage });
+    var parts = [];
+    Object.keys(merged).forEach(function (k) {
+        var v = merged[k];
+        if (v !== undefined && v !== null && v !== '') parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+    });
+    return _path + (parts.length ? '?' + parts.join('&') : '');
+}
+%>
+<div class="pagination-bar">
+
+    <div class="pagination-show">
+        <span>Show</span>
+        <select class="form-select form-select-sm pagination-perpage" aria-label="Rows per page" data-perpage>
+            <% _ppOpts.forEach(function (n) { %>
+                <option value="<%= n %>" <%= n === _perPage ? 'selected' : '' %>><%= n %></option>
+            <% }); %>
+        </select>
+        <span>entries</span>
+    </div>
+
+    <div class="pagination-info">
+        Showing <strong><%= _from %></strong> to <strong><%= _to %></strong> of <strong><%= _total %></strong> entries
+    </div>
+
+    <nav aria-label="Page navigation">
+        <ul class="pagination pagination-nav mb-0">
+            <li class="page-item <%= _page === 1 ? 'disabled' : '' %>">
+                <a class="page-link" href="<%= _page === 1 ? '#' : _pageUrl(1) %>" aria-label="First">First</a>
+            </li>
+            <li class="page-item <%= _page === 1 ? 'disabled' : '' %>">
+                <a class="page-link" href="<%= _page === 1 ? '#' : _pageUrl(_page - 1) %>" aria-label="Previous"><i class="fa-solid fa-chevron-left"></i></a>
+            </li>
+
+            <% _pages.forEach(function (p) { %>
+                <li class="page-item <%= p === _page ? 'active' : '' %>">
+                    <a class="page-link" href="<%= _pageUrl(p) %>"><%= p %></a>
+                </li>
+            <% }); %>
+
+            <% if (_totalPages > _windowEnd + 1) { %>
+                <li class="page-item disabled"><span class="page-link">…</span></li>
+            <% } %>
+            <% if (_totalPages > _windowEnd) { %>
+                <li class="page-item <%= _page === _totalPages ? 'active' : '' %>">
+                    <a class="page-link" href="<%= _pageUrl(_totalPages) %>"><%= _totalPages %></a>
+                </li>
+            <% } %>
+
+            <li class="page-item <%= _page === _totalPages ? 'disabled' : '' %>">
+                <a class="page-link" href="<%= _page === _totalPages ? '#' : _pageUrl(_page + 1) %>" aria-label="Next"><i class="fa-solid fa-chevron-right"></i></a>
+            </li>
+            <li class="page-item <%= _page === _totalPages ? 'disabled' : '' %>">
+                <a class="page-link" href="<%= _page === _totalPages ? '#' : _pageUrl(_totalPages) %>" aria-label="Last">Last</a>
+            </li>
+        </ul>
+    </nav>
+
+</div>

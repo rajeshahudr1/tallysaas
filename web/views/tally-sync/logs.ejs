@@ -1,0 +1,129 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/tally-sync/logs.ejs — TALLY SYNC · Sync Logs.
+ * Route: GET /sync-logs  ·  activeMenu: 'sync-logs'.
+ *
+ * Full audit trail of every push/pull between the cloud and Tally.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   logRows         [ rows ]   — table body
+ *   logsTotal       number     — pagination total
+ *   page, perPage   numbers
+ *   syncModuleNames / syncDirections / syncLogStatuses — filter options
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows     = (typeof logRows !== 'undefined' && logRows) ? logRows : [];
+var _total    = (typeof logsTotal !== 'undefined') ? logsTotal : _rows.length;
+var _page     = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage  = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _modules  = (typeof syncModuleNames !== 'undefined' && syncModuleNames) ? syncModuleNames : [];
+var _dirs     = (typeof syncDirections !== 'undefined' && syncDirections) ? syncDirections : [];
+var _statuses = (typeof syncLogStatuses !== 'undefined' && syncLogStatuses) ? syncLogStatuses : [];
+
+function _opts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) { out.push({ value: v, label: v }); });
+    return out;
+}
+
+/* ── FilterCard config (5 fields) ───────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',    label: 'Search',    placeholder: 'Record / message...',     colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'module',    label: 'Module',    options: _opts('All Modules', _modules), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'direction', label: 'Direction', options: _opts('All', _dirs),            colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'status',    label: 'Status',    options: _opts('All Status', _statuses), colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from', label: 'Date From', value: '2024-05-01',                    colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'module',    label: 'Module',    sortable: true, type: 'text' },
+    { key: 'record',    label: 'Record',    sortable: true, type: 'text' },
+    { key: 'direction', label: 'Direction', sortable: true, type: 'badge' },
+    { key: 'status',    label: 'Status',    sortable: true, type: 'status' },
+    { key: 'message',   label: 'Message',   sortable: false, type: 'text' },
+    { key: 'time',      label: 'Time',      sortable: true, type: 'text' },
+];
+
+var sortOptions = ['Time', 'Module', 'Status'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Sync Logs',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Sync Logs' },
+    ],
+    actions: [
+        { label: 'Export',       icon: 'fa-upload', variant: 'light' },
+        { label: 'Retry Failed', icon: 'fa-arrow-rotate-left', gradient: true, id: 'logs-retry' },
+    ],
+}) %>
+
+<form id="logs-filters-form" autocomplete="off" method="get" action="/sync-logs">
+    <%- include('../partials/filter-card', {
+        filterId: 'logs-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+
+        <div class="toolbar-sort">
+            <span>Sort By</span>
+            <select class="form-select form-select-sm" aria-label="Sort by column">
+                <% sortOptions.forEach(function (label) { %>
+                    <option value="<%= label %>" <%= label === 'Time' ? 'selected' : '' %>><%= label %></option>
+                <% }); %>
+            </select>
+            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
+                <i class="fa-solid fa-arrow-down-short-wide"></i>
+            </button>
+        </div>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'sync-logs-table',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

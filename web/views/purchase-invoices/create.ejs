@@ -1,0 +1,211 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/purchase-invoices/create.ejs — TRANSACTIONS · Create Purchase.
+ * Route: GET /purchase-invoices/create  ·  activeMenu: 'purchase-inv'.
+ *
+ * Buy-side twin of the Create Invoice page. SAME markup contract, so it
+ * reuses /js/invoice.js (the .li-* row engine + inv-* totals). Differs
+ * only in: Supplier (not Customer), a Supplier Bill No field, and line
+ * items priced at PURCHASE price.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   supplierNames / locationNames    — header selects
+ *   invoiceProducts [{name,hsn,unit,rate,gst}]  — purchase-priced catalogue
+ *   nextBillNo      string            — read-only internal bill no.
+ * ─────────────────────────────────────────────────────────── */
+
+var _sups     = (typeof supplierOptions !== 'undefined' && supplierOptions) ? supplierOptions : [];
+var _locs     = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
+var _products = (typeof invoiceProducts !== 'undefined' && invoiceProducts) ? invoiceProducts : [];
+var _billNo   = (typeof nextBillNo !== 'undefined' && nextBillNo) ? nextBillNo : '';
+
+/* FK <select> options — value = id. */
+function _selOpts(placeholder, list) {
+    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (o) { html += '<option value="' + o.id + '">' + o.name + '</option>'; });
+    return html;
+}
+
+var _productOptions = '<option value="" selected>Select product</option>';
+_products.forEach(function (p) {
+    _productOptions +=
+        '<option value="' + p.id + '"' +
+        ' data-hsn="'  + (p.hsn || '')  + '"' +
+        ' data-unit="' + (p.unit || '') + '"' +
+        ' data-rate="' + (p.rate || 0)  + '"' +
+        ' data-gst="'  + (p.gst || 0)   + '">' + p.name + '</option>';
+});
+
+var headActions =
+    '<a class="btn btn-light" href="/purchase-invoices">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Purchases' +
+    '</a>' +
+    '<div class="btn-group">' +
+        '<button type="submit" form="purchase-form" class="btn btn-primary">' +
+            '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally' +
+        '</button>' +
+        '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
+                'data-bs-toggle="dropdown" aria-expanded="false">' +
+            '<span class="visually-hidden">Toggle save options</span>' +
+        '</button>' +
+        '<ul class="dropdown-menu dropdown-menu-end">' +
+            '<li><button type="submit" form="purchase-form" class="dropdown-item">' +
+                '<i class="fa-regular fa-floppy-disk me-2 text-muted"></i>Save as Draft</button></li>' +
+        '</ul>' +
+    '</div>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Create Purchase',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Purchase Invoices', href: '/purchase-invoices' },
+        { label: 'Create Purchase' },
+    ],
+    actions: headActions,
+}) %>
+
+<form id="purchase-form" method="post" action="/purchase-invoices" autocomplete="off" novalidate>
+
+    <!-- Line items are serialised to JSON here by /js/invoice.js on submit. -->
+    <input type="hidden" name="items_json" id="items-json">
+
+    <!-- ════ CARD 1 — Purchase Details ════ -->
+    <div class="card mb-3">
+        <div class="inv-section-head">
+            <h2 class="inv-section-title"><i class="fa-solid fa-file-import me-2 text-primary"></i>Purchase Details</h2>
+            <span class="pill-status pill-status--warning">Pending Tally</span>
+        </div>
+        <div class="inv-body">
+            <div class="form-grid">
+
+                <div class="form-group">
+                    <label class="form-label" for="pur-supplier">Supplier<span class="req">*</span></label>
+                    <select class="form-select" id="pur-supplier" name="supplier_id" required>
+                        <%- _selOpts('Select supplier', _sups) %>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="pur-no">Bill No</label>
+                    <input type="text" class="form-control" id="pur-no" name="bill_no"
+                           value="<%= _billNo %>" readonly>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="pur-supplier-bill">Supplier Bill No</label>
+                    <input type="text" class="form-control" id="pur-supplier-bill" name="supplier_bill_no"
+                           placeholder="Supplier's invoice number">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="pur-date">Bill Date<span class="req">*</span></label>
+                    <input type="date" class="form-control" id="pur-date" name="bill_date" value="2024-05-21" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="pur-location">Location</label>
+                    <select class="form-select" id="pur-location" name="location_id">
+                        <%- _selOpts('Select location', _locs) %>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="pur-due">Due Date</label>
+                    <input type="date" class="form-control" id="pur-due" name="due_date" value="2024-06-20">
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- ════ CARD 2 — Line Items (reuses /js/invoice.js) ════ -->
+    <div class="card mb-3">
+        <div class="inv-section-head">
+            <h2 class="inv-section-title"><i class="fa-solid fa-list me-2 text-primary"></i>Line Items</h2>
+            <span class="form-hint mb-0" id="inv-itemcount">0 item(s)</span>
+        </div>
+
+        <div class="li-table-wrap">
+            <table class="li-table">
+                <thead>
+                    <tr>
+                        <th class="li-idx">#</th>
+                        <th>Product</th>
+                        <th>HSN</th>
+                        <th class="num">Qty</th>
+                        <th>Unit</th>
+                        <th class="num">Rate (₹)</th>
+                        <th class="num">Disc %</th>
+                        <th class="num">Taxable (₹)</th>
+                        <th class="num">GST %</th>
+                        <th class="num">GST Amt (₹)</th>
+                        <th class="num">Amount (₹)</th>
+                        <th class="center"></th>
+                    </tr>
+                </thead>
+                <tbody id="li-body"></tbody>
+            </table>
+        </div>
+
+        <div class="inv-body pt-0">
+            <button type="button" class="li-addrow" id="li-add-row">
+                <i class="fa-solid fa-plus"></i> Add Row
+            </button>
+        </div>
+
+        <div class="inv-foot">
+            <div>
+                <label class="form-label" for="pur-notes">Notes / Terms</label>
+                <textarea class="form-control" id="pur-notes" name="notes" rows="5"
+                          maxlength="500" placeholder="Delivery notes, terms…"></textarea>
+            </div>
+
+            <div class="inv-totals">
+                <div class="inv-total-row"><span class="lbl">Subtotal</span><span class="val" id="inv-subtotal">₹0.00</span></div>
+                <div class="inv-total-row"><span class="lbl">Discount</span><span class="val" id="inv-discount">− ₹0.00</span></div>
+                <div class="inv-total-row"><span class="lbl">Taxable Value</span><span class="val" id="inv-taxable">₹0.00</span></div>
+                <div class="inv-total-row"><span class="lbl">CGST</span><span class="val" id="inv-cgst">₹0.00</span></div>
+                <div class="inv-total-row"><span class="lbl">SGST</span><span class="val" id="inv-sgst">₹0.00</span></div>
+                <div class="inv-total-row"><span class="lbl">Round Off</span><span class="val" id="inv-roundoff">+ ₹0.00</span></div>
+                <div class="inv-total-row grand"><span class="lbl">Grand Total</span><span class="val" id="inv-grand">₹0.00</span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════ Footer actions ════ -->
+    <div class="card">
+        <div class="form-card-footer" style="border-top:0; background:#fff;">
+            <a class="btn btn-light" href="/purchase-invoices">Cancel</a>
+            <button type="submit" class="btn btn-light">
+                <i class="fa-regular fa-floppy-disk me-1"></i>Save as Draft
+            </button>
+            <button type="submit" class="btn btn-primary">
+                <i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally
+            </button>
+        </div>
+    </div>
+
+</form>
+
+<!-- ── Line-item row template (cloned by /js/invoice.js) ─────────── -->
+<template id="li-row-tpl">
+    <tr class="li-row">
+        <td class="li-idx"></td>
+        <td><select class="li-product"><%- _productOptions %></select></td>
+        <td><input type="text" class="li-hsn" readonly placeholder="—"></td>
+        <td><input type="number" class="li-qty li-num" min="0" step="1" value="1"></td>
+        <td><input type="text" class="li-unit" readonly placeholder="—"></td>
+        <td><input type="number" class="li-rate li-num" min="0" step="0.01" value="0"></td>
+        <td><input type="number" class="li-disc li-num" min="0" max="100" step="0.01" value="0"></td>
+        <td><span class="li-taxable li-cell-calc">₹0.00</span></td>
+        <td><input type="number" class="li-gst li-num" min="0" step="0.01" value="0"></td>
+        <td><span class="li-gstamt li-cell-calc">₹0.00</span></td>
+        <td><span class="li-amount li-cell-calc">₹0.00</span></td>
+        <td class="center">
+            <button type="button" class="li-remove" title="Remove row" aria-label="Remove row">
+                <i class="fa-regular fa-trash-can"></i>
+            </button>
+        </td>
+    </tr>
+</template>

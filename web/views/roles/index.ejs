@@ -1,0 +1,120 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/roles/index.ejs — SETTINGS · Roles & Permissions.
+ * Route: GET /roles  ·  activeMenu: 'roles'.
+ *
+ * RBAC screen: a row of selectable role chips + a module × action
+ * permission matrix. /js/rbac.js reads the per-role permission map
+ * from the #rbacData JSON island and swaps the matrix checkboxes when
+ * a role is selected (and wires per-column select-all). Visual only.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   roles           [ … ]                       — 5 roles
+ *   roleUserCounts  { role: count }
+ *   rbacModules     [ … ]                        — matrix rows
+ *   rbacActions     ['view','create','edit','delete','export']
+ *   rbacPermissions { role: { module: {action:bool} } }
+ * ─────────────────────────────────────────────────────────── */
+
+var _roles   = (typeof roles !== 'undefined' && roles) ? roles : [];
+var _counts  = (typeof roleUserCounts !== 'undefined' && roleUserCounts) ? roleUserCounts : {};
+var _modules = (typeof rbacModules !== 'undefined' && rbacModules) ? rbacModules : [];
+var _actions = (typeof rbacActions !== 'undefined' && rbacActions) ? rbacActions : [];
+var _perms   = (typeof rbacPermissions !== 'undefined' && rbacPermissions) ? rbacPermissions : {};
+var _roleIds = (typeof roleIds !== 'undefined' && roleIds) ? roleIds : {};
+// Normalise modules to {key,label} so the view works for both the API
+// ({key,label}) and any plain-string fallback.
+_modules = _modules.map(function (m) { return (m && typeof m === 'object') ? m : { key: m, label: m }; });
+
+// Default selected role = the second one (Company Admin) if present.
+var _defaultRole = _roles.length > 1 ? _roles[1] : (_roles[0] || '');
+
+var _roleIcons = {
+    'Super Admin':   'fa-crown',
+    'Company Admin': 'fa-user-gear',
+    'Sales Manager': 'fa-user-tie',
+    'Sales Person':  'fa-user',
+    'Accountant':    'fa-calculator',
+};
+var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 'fa-trash-can', export: 'fa-upload' };
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Roles & Permissions',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Roles & Permissions' },
+    ],
+    actions: [
+        { label: 'Add Role',         icon: 'fa-plus',         gradient: true },
+        { label: 'Save Permissions', icon: 'fa-floppy-disk',  variant: 'light', id: 'rbac-save' },
+    ],
+}) %>
+
+<!-- ── Role selector chips ───────────────────────────────────── -->
+<div class="card mb-3">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-user-shield me-2 text-primary"></i>Select Role</h2>
+    </div>
+    <div class="inv-body">
+        <div class="rbac-roles">
+            <% _roles.forEach(function (r) { %>
+                <label class="rbac-role-chip <%= r === _defaultRole ? 'is-active' : '' %>">
+                    <input type="radio" name="rbac-role" value="<%= r %>" data-role-id="<%= _roleIds[r] || '' %>" <%= r === _defaultRole ? 'checked' : '' %>>
+                    <span class="rbac-role-chip-icon"><i class="fa-solid <%= _roleIcons[r] || 'fa-user' %>"></i></span>
+                    <span>
+                        <span class="rbac-role-chip-name"><%= r %></span><br>
+                        <span class="rbac-role-chip-meta"><%= (_counts[r] || 0) %> user(s)</span>
+                    </span>
+                </label>
+            <% }); %>
+        </div>
+    </div>
+</div>
+
+<!-- ── Permission matrix ─────────────────────────────────────── -->
+<div class="card">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title">
+            <i class="fa-solid fa-table-list me-2 text-primary"></i>
+            Permissions — <span id="rbacActiveRole" class="text-primary"><%= _defaultRole %></span>
+        </h2>
+        <span class="form-hint mb-0">Tick the actions each role can perform per module.</span>
+    </div>
+
+    <div class="table-responsive">
+        <table class="rbac-matrix" id="rbacMatrix">
+            <thead>
+                <tr>
+                    <th>Module</th>
+                    <% _actions.forEach(function (a) { %>
+                        <th>
+                            <span class="rbac-col-action">
+                                <i class="fa-solid <%= _actionIcons[a] %>"></i>
+                                <span><%= a.charAt(0).toUpperCase() + a.slice(1) %></span>
+                                <input type="checkbox" data-col-action="<%= a %>" title="Toggle column">
+                            </span>
+                        </th>
+                    <% }); %>
+                </tr>
+            </thead>
+            <tbody>
+                <% _modules.forEach(function (m) { %>
+                    <% var pm = (_perms[_defaultRole] && _perms[_defaultRole][m.key]) ? _perms[_defaultRole][m.key] : {}; %>
+                    <tr>
+                        <td><%= m.label %></td>
+                        <% _actions.forEach(function (a) { %>
+                            <td>
+                                <input type="checkbox" data-module="<%= m.key %>" data-action="<%= a %>"
+                                       <%= pm[a] ? 'checked' : '' %>>
+                            </td>
+                        <% }); %>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Per-role permission map → consumed by /js/rbac.js -->
+<script type="application/json" id="rbacData"><%- JSON.stringify(_perms) %></script>
