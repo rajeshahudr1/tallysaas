@@ -52,6 +52,7 @@ var _invoiceColumns = [
 // Small per-stat-card trend captions (visual only — sparkline + delta).
 // Keyed by stat label so the spark/trend stays in sync if order changes.
 var _trends = {
+    'Total Licenses':     { dir: 'up',   text: '',               spark: [1, 1, 2, 2, 3, 3, 4] },
     'Total Companies':    { dir: 'up',   text: '+2 this month',  spark: [4, 5, 5, 6, 6, 7, 8] },
     'Total Customers':    { dir: 'up',   text: '+12 this week',  spark: [120, 128, 131, 139, 144, 150, 156] },
     'Total Products':     { dir: 'up',   text: '+8.4%',          spark: [480, 495, 502, 512, 525, 533, 542] },
@@ -105,14 +106,33 @@ var _toneStroke = {
 %>
 
 <%
-/* page-head actions = a visual-only date-range pill (spec §6 "right").
+/* page-head actions = a WORKING date-range picker (spec §6 "right"), same
+   pill look but now a Bootstrap dropdown with From/To date inputs that GET-
+   submit back to "/?from=&to=" so the dashboard re-renders for the range.
    Passed as a raw HTML string, which page-head.ejs renders verbatim. */
+var _rFrom  = (typeof rangeFrom  !== 'undefined' && rangeFrom)  ? rangeFrom  : '';
+var _rTo    = (typeof rangeTo    !== 'undefined' && rangeTo)    ? rangeTo    : '';
+var _rLabel = (typeof rangeLabel !== 'undefined' && rangeLabel) ? rangeLabel : 'Select range';
 var _dateRangeAction =
-    '<button type="button" class="date-range-pill">'
-  +   '<i class="fa-regular fa-calendar"></i>'
-  +   '<span>01 Jun 2026 – 15 Jun 2026</span>'
-  +   '<i class="fa-solid fa-chevron-down ms-1 page-head-caret"></i>'
-  + '</button>';
+    '<div class="dropdown date-range-dd">'
+  +   '<button type="button" class="date-range-pill" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">'
+  +     '<i class="fa-regular fa-calendar"></i>'
+  +     '<span>' + _rLabel + '</span>'
+  +     '<i class="fa-solid fa-chevron-down ms-1 page-head-caret"></i>'
+  +   '</button>'
+  +   '<div class="dropdown-menu dropdown-menu-end p-3" style="min-width:260px;">'
+  +     '<form method="get" action="/">'
+  +       '<div class="mb-2"><label class="form-label small mb-1">From</label>'
+  +         '<input type="date" name="from" class="form-control form-control-sm" value="' + _rFrom + '" required></div>'
+  +       '<div class="mb-3"><label class="form-label small mb-1">To</label>'
+  +         '<input type="date" name="to" class="form-control form-control-sm" value="' + _rTo + '" required></div>'
+  +       '<div class="d-flex gap-2">'
+  +         '<button type="submit" class="btn btn-primary btn-sm flex-grow-1">Apply</button>'
+  +         '<a href="/" class="btn btn-light btn-sm">Reset</a>'
+  +       '</div>'
+  +     '</form>'
+  +   '</div>'
+  + '</div>';
 %>
 
 <!-- ─────────────────────────────────────────────────────────────

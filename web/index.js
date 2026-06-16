@@ -29,6 +29,7 @@ const compression  = require('compression');
 const helmet       = require('helmet');
 
 const mock = require('./data/mock');
+const api  = require('./Helpers/apiClient');
 
 // Header initials fallback (e.g. "Rajesh Admin" → "RA").
 function initialsOf(name) {
@@ -104,7 +105,7 @@ app.use(session({
  * values so the standalone login page still renders. Page routes
  * override title/activeMenu/breadcrumb as needed.
  * ─────────────────────────────────────────────────────────── */
-app.use((req, res, next) => {
+app.use(async (req, res, next) => {
     // One-shot flash message (set by POST handlers, shown on the next page).
     res.locals.flash = (req.session && req.session.flash) || null;
     if (req.session && req.session.flash) delete req.session.flash;
@@ -114,20 +115,89 @@ app.use((req, res, next) => {
         res.locals.user = {
             name: u.name || 'User',
             role: u.role || u.role_slug || '',
+            role_slug: u.role_slug || '',
             avatar: '/img/avatar.svg',
             initials: initialsOf(u.name),
         };
     } else {
         res.locals.user = mock.user;
     }
-    // Company switcher — real, license-scoped companies stored on the session
-    // at login (fall back to mock before login so the standalone pages render).
-    res.locals.companies = (req.session && Array.isArray(req.session.companies) && req.session.companies.length)
-        ? req.session.companies : mock.companies;
-    res.locals.company = (req.session && req.session.companyId != null)
-        ? { id: req.session.companyId, name: req.session.companyName || 'Company' }
-        : mock.company;
-    res.locals.notificationCount = mock.notificationCount;
+    // Super-admin flag — drives the cross-tenant "Licenses" sidebar item and
+    // the super-admin route guard. Derived from the session user's role slug.
+    res.locals.isSuperAdmin = !!(u && u.role_slug === 'super-admin');
+    // License-admin (tenant) flag — drives the tenant "Roles" sidebar item and
+    // the company-admin route guard. Derived from the session user's role slug.
+    res.locals.isCompanyAdmin = !!(u && u.role_slug === 'company-admin');
+    // ── Top switcher — ROLE-AWARE, ALWAYS FRESH ──────────────────────
+    //   • super-admin   → TWO levels: a LICENSE dropdown + a COMPANY dropdown
+    //                     for the SELECTED license (defaults to the first).
+    //   • everyone else → ONE level: the COMPANY dropdown for their license
+    //                     (their license is implicit from login → hidden).
+    // Whatever company ends up selected is pinned to req.session.companyId so
+    // apiClient sends X-Company-Id and every page shows THAT company's data.
+    // No mock fallback once logged in: an empty account shows an empty switcher,
+    // never stale demo data.
+    let licenses = [];            // super-admin only
+    let companies = [];           // companies of the selected/own license
+    let selectedLicenseId = null; // super-admin only
+
+    if (u && req.session && req.session.token) {
+        try {
+            if (res.locals.isSuperAdmin) {
+                const lr = await api.callApi(req, 'GET', '/super-admin/licenses?per_page=100');
+                if (lr.body && lr.body.status === 200 && lr.body.data && Array.isArray(lr.body.data.data)) {
+                    licenses = lr.body.data.data.map((l) => ({ id: l.id, name: l.holder_name || ('License ' + l.id) }));
+                }
+                // Selected license: the session's choice if still valid, else the first.
+                const sel = licenses.find((l) => Number(l.id) === Number(req.session.licenseId)) || licenses[0] || null;
+                selectedLicenseId = sel ? sel.id : null;
+                if (selectedLicenseId != null) {
+                    const cr = await api.callApi(req, 'GET', '/my-companies?license_id=' + encodeURIComponent(selectedLicenseId));
+                    if (cr.body && cr.body.status === 200 && cr.body.data && Array.isArray(cr.body.data.data)) {
+                        companies = cr.body.data.data.map((c) => ({ id: c.id, name: c.name }));
+                    }
+                }
+            } else {
+                const cr = await api.callApi(req, 'GET', '/my-companies');
+                if (cr.body && cr.body.status === 200 && cr.body.data && Array.isArray(cr.body.data.data)) {
+                    companies = cr.body.data.data.map((c) => ({ id: c.id, name: c.name }));
+                }
+            }
+        } catch (_) { /* non-fatal — empty switcher below */ }
+    }
+
+    // Persist resolved selection so the switch routes + apiClient stay in sync.
+    if (res.locals.isSuperAdmin) req.session.licenseId = selectedLicenseId;
+    req.session.companies = companies;
+
+    // Selected company: the session's choice if still in the list, else the first.
+    const selCompany = companies.find((c) => Number(c.id) === Number(req.session.companyId)) || companies[0] || null;
+    req.session.companyId = selCompany ? selCompany.id : null;   // pin → X-Company-Id
+
+    res.locals.licenses          = licenses;
+    res.locals.selectedLicenseId = selectedLicenseId;
+    res.locals.selectedLicense   = licenses.find((l) => Number(l.id) === Number(selectedLicenseId)) || null;
+    res.locals.companies         = companies;
+    res.locals.company           = selCompany ? { id: selCompany.id, name: selCompany.name } : null;
+
+    // ── Notification BELL — REAL sync activity (no mock) ─────────────────
+    // Drive the header bell from GET /sync/notifications (company-scoped). The
+    // badge = failed/unread count in the last 24h; the dropdown lists the recent
+    // rows with friendly reasons. Only call when logged in with a resolved
+    // company; on ANY error fall back to 0 / [] (never to mock data). Non-fatal:
+    // a sync-feed hiccup must never break page rendering.
+    res.locals.notificationCount = 0;
+    res.locals.syncNotifs        = [];
+    if (u && req.session && req.session.token && req.session.companyId != null) {
+        try {
+            const nr = await api.callApi(req, 'GET', '/sync/notifications');
+            if (nr.body && nr.body.status === 200 && nr.body.data) {
+                const d = nr.body.data;
+                res.locals.notificationCount = Number(d.unread) || 0;
+                res.locals.syncNotifs = Array.isArray(d.recent) ? d.recent : [];
+            }
+        } catch (_) { /* non-fatal — keep the 0 / [] defaults above */ }
+    }
 
     // Layout / page defaults (overridden per route).
     res.locals.title      = 'Tally Cloud Sync';

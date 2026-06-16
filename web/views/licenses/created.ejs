@@ -1,0 +1,137 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/licenses/created.ejs — PLATFORM ADMIN · License created (ONE-TIME).
+ * Rendered DIRECTLY by POST /licenses (NOT a redirect) so the secrets are
+ * shown exactly once and never persisted to the session / db / logs.
+ *
+ * Prominently reveals the agent license_key and the license-admin login
+ * (email + auto-generated password, when present), each with a Copy button
+ * and a clear "save these now — they will not be shown again" warning.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   licenseKey    string  — the one-time agent key (TCS-XXXXX-…)
+ *   adminEmail    string  — the license-admin login id
+ *   adminPassword string? — present ONLY when the api auto-generated it
+ *   license       object  — { holder_name, plan, key_prefix, ... } for context
+ * ─────────────────────────────────────────────────────────── */
+
+var _key   = (typeof licenseKey !== 'undefined' && licenseKey) ? licenseKey : '';
+var _email = (typeof adminEmail !== 'undefined' && adminEmail) ? adminEmail : '';
+var _pass  = (typeof adminPassword !== 'undefined' && adminPassword) ? adminPassword : '';
+var _lic   = (typeof license !== 'undefined' && license) ? license : {};
+%>
+
+<%- include('../partials/page-head', {
+    title: 'License Created',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Licenses', href: '/licenses' },
+        { label: 'License Created' },
+    ],
+    actions: [
+        { label: 'Back to Licenses', icon: 'fa-arrow-left', variant: 'light', href: '/licenses' },
+    ],
+}) %>
+
+<div class="alert alert-warning flash-banner" role="alert">
+    <i class="fa-solid fa-triangle-exclamation me-2"></i>
+    <strong>Save these now — they will not be shown again.</strong>
+    The license key and the auto-generated password are revealed only on this screen.
+</div>
+
+<div class="card">
+    <div class="card-body p-4">
+
+        <div class="mb-4">
+            <h2 class="form-section-title">
+                License for <%= _lic.holder_name || 'New License' %>
+            </h2>
+            <p class="text-muted mb-0">
+                Plan: <span class="pill-badge"><%= _lic.plan || 'standard' %></span>
+                <% if (_lic.key_prefix) { %>
+                    &nbsp;·&nbsp; Prefix: <code><%= _lic.key_prefix %></code>
+                <% } %>
+            </p>
+        </div>
+
+        <hr class="form-divider">
+
+        <!-- Agent License Key -->
+        <div class="form-group mb-4">
+            <label class="form-label">Agent License Key</label>
+            <div class="input-affix">
+                <input type="text" class="form-control" id="reveal-key" value="<%= _key %>" readonly>
+                <button type="button" class="btn btn-light affix affix--suffix" data-copy-target="reveal-key" title="Copy license key">
+                    <i class="fa-regular fa-copy me-1"></i>Copy
+                </button>
+            </div>
+            <div class="form-hint">Used once to activate &amp; machine-bind the Tally agent.</div>
+        </div>
+
+        <hr class="form-divider">
+
+        <h2 class="form-section-title">License Admin Login</h2>
+
+        <!-- Admin Email -->
+        <div class="form-group mb-4">
+            <label class="form-label">Admin Email</label>
+            <div class="input-affix">
+                <input type="text" class="form-control" id="reveal-email" value="<%= _email %>" readonly>
+                <button type="button" class="btn btn-light affix affix--suffix" data-copy-target="reveal-email" title="Copy admin email">
+                    <i class="fa-regular fa-copy me-1"></i>Copy
+                </button>
+            </div>
+        </div>
+
+        <!-- Admin Password (only when auto-generated) -->
+        <% if (_pass) { %>
+            <div class="form-group mb-2">
+                <label class="form-label">Admin Password <span class="pill-badge">auto-generated</span></label>
+                <div class="input-affix">
+                    <input type="text" class="form-control" id="reveal-password" value="<%= _pass %>" readonly>
+                    <button type="button" class="btn btn-light affix affix--suffix" data-copy-target="reveal-password" title="Copy admin password">
+                        <i class="fa-regular fa-copy me-1"></i>Copy
+                    </button>
+                </div>
+                <div class="form-hint">This password is shown only once. Share it securely with the license admin.</div>
+            </div>
+        <% } else { %>
+            <div class="form-hint mb-2">
+                <i class="fa-solid fa-circle-info me-1"></i>
+                The admin password was set to the value you supplied and is not shown here.
+            </div>
+        <% } %>
+
+    </div>
+</div>
+
+<div class="form-card-footer">
+    <a class="btn btn-primary" href="/licenses">
+        <i class="fa-solid fa-arrow-left me-1"></i>Back to Licenses
+    </a>
+</div>
+
+<script>
+    // One-time reveal: copy-to-clipboard for the key / login fields. No values
+    // are sent anywhere — this only reads the readonly inputs on this page.
+    (function () {
+        document.querySelectorAll('[data-copy-target]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var el = document.getElementById(btn.getAttribute('data-copy-target'));
+                if (!el) return;
+                var done = function () {
+                    var orig = btn.innerHTML;
+                    btn.innerHTML = '<i class="fa-solid fa-check me-1"></i>Copied';
+                    setTimeout(function () { btn.innerHTML = orig; }, 1500);
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(el.value).then(done).catch(function () {
+                        el.select(); document.execCommand('copy'); done();
+                    });
+                } else {
+                    el.select(); document.execCommand('copy'); done();
+                }
+            });
+        });
+    })();
+</script>

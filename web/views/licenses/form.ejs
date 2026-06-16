@@ -1,0 +1,183 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/licenses/form.ejs — PLATFORM ADMIN · Register License.
+ * Route: GET /licenses/register  ·  activeMenu: 'licenses'  ·  super-admin only.
+ *
+ * Registers a platform licence which (api-side) also creates the licence's
+ * default auto-approved admin login. On success the POST handler renders
+ * licenses/created (the ONE-TIME key + admin-login reveal) — NOT a redirect.
+ *
+ * Same shell/classes as suppliers/form.ejs (page-head + form-card tabs +
+ * .form-grid). Single "License Details" pane. On an api validation error the
+ * POST handler re-renders THIS form with `error` + `old` so input survives.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   error?  string  — api/validation message to surface above the form
+ *   old?    object  — the previously-entered values (preserved on error)
+ * ─────────────────────────────────────────────────────────── */
+
+var _err = (typeof error !== 'undefined' && error) ? error : null;
+var _old = (typeof old !== 'undefined' && old) ? old : {};
+function _v(k, dflt) { return (_old && _old[k] != null && _old[k] !== '') ? _old[k] : (dflt != null ? dflt : ''); }
+
+var formTabs = [
+    { id: 'details', label: 'License Details', icon: 'fa-key', active: true },
+];
+
+var plans = ['standard', 'pro', 'enterprise'];
+function _planOpts(current) {
+    var cur = String(current || 'standard');
+    var html = '';
+    plans.forEach(function (p) {
+        var sel = (cur === p) ? ' selected' : '';
+        var label = p.charAt(0).toUpperCase() + p.slice(1);
+        html += '<option value="' + p + '"' + sel + '>' + label + '</option>';
+    });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/licenses">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Licenses' +
+    '</a>' +
+    '<button type="submit" form="license-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>Register License' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Register License',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Licenses', href: '/licenses' },
+        { label: 'Register License' },
+    ],
+    actions: headActions,
+}) %>
+
+<% if (_err) { %>
+    <div class="alert alert-danger alert-dismissible fade show flash-banner" role="alert">
+        <i class="fa-solid fa-circle-exclamation me-2"></i>
+        <%= _err %>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+<% } %>
+
+<form id="license-form" class="card form-card" method="post" action="/licenses" autocomplete="off" novalidate>
+
+    <%- include('../partials/form-card', { tabs: formTabs }) %>
+
+    <div class="tab-content form-card-body">
+
+        <!-- ════ License Details (active) ════ -->
+        <div class="tab-pane fade show active" id="details" role="tabpanel" aria-labelledby="details-tab">
+
+            <h2 class="form-section-title">License</h2>
+            <div class="form-grid">
+
+                <!-- Row 1: Holder Name* · Plan · Tally Serial -->
+                <div class="form-group">
+                    <label class="form-label" for="lic-holder">Holder Name<span class="req">*</span></label>
+                    <input type="text" class="form-control" id="lic-holder" name="holder_name"
+                           value="<%= _v('holder_name') %>"
+                           placeholder="Business / customer name" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-plan">Plan</label>
+                    <select class="form-select" id="lic-plan" name="plan">
+                        <%- _planOpts(_v('plan', 'standard')) %>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-serial">Tally Serial</label>
+                    <input type="text" class="form-control" id="lic-serial" name="tally_serial"
+                           value="<%= _v('tally_serial') %>"
+                           placeholder="Tally license serial (optional)">
+                </div>
+
+                <!-- Row 2: Max Companies · Max Users · Valid Until -->
+                <div class="form-group">
+                    <label class="form-label" for="lic-max-companies">Max Companies</label>
+                    <input type="number" class="form-control" id="lic-max-companies" name="max_companies"
+                           value="<%= _v('max_companies', 5) %>"
+                           placeholder="5" min="1" step="1">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-max-users">Max Users</label>
+                    <input type="number" class="form-control" id="lic-max-users" name="max_users"
+                           value="<%= _v('max_users', 10) %>"
+                           placeholder="10" min="1" step="1">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-valid-until">Valid Until</label>
+                    <input type="date" class="form-control" id="lic-valid-until" name="valid_until"
+                           value="<%= _v('valid_until') %>">
+                </div>
+
+            </div><!-- /.form-grid -->
+
+            <hr class="form-divider">
+
+            <h2 class="form-section-title">License Admin Login</h2>
+            <div class="form-grid">
+
+                <!-- Row 1: Admin Email* · Admin Name · Admin Mobile -->
+                <div class="form-group">
+                    <label class="form-label" for="lic-admin-email">Admin Email<span class="req">*</span></label>
+                    <div class="input-affix">
+                        <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
+                        <input type="email" class="form-control" id="lic-admin-email" name="admin_email"
+                               value="<%= _v('admin_email') %>"
+                               placeholder="admin@company.com" required>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-admin-name">Admin Name</label>
+                    <input type="text" class="form-control" id="lic-admin-name" name="admin_name"
+                           value="<%= _v('admin_name') %>"
+                           placeholder="License admin full name">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-admin-mobile">Admin Mobile</label>
+                    <div class="input-affix">
+                        <select class="affix affix--prefix" name="admin_mobile_cc" aria-label="Country code">
+                            <option value="+91" selected>🇮🇳 +91</option>
+                            <option value="+1">🇺🇸 +1</option>
+                            <option value="+44">🇬🇧 +44</option>
+                            <option value="+971">🇦🇪 +971</option>
+                        </select>
+                        <input type="tel" class="form-control" id="lic-admin-mobile" name="admin_mobile"
+                               value="<%= _v('admin_mobile') %>"
+                               placeholder="98765 43210" inputmode="numeric" maxlength="10">
+                    </div>
+                </div>
+
+                <!-- Row 2: Admin Password (optional) -->
+                <div class="form-group">
+                    <label class="form-label" for="lic-admin-password">Admin Password</label>
+                    <input type="text" class="form-control" id="lic-admin-password" name="admin_password"
+                           value="<%= _v('admin_password') %>"
+                           placeholder="Leave blank to auto-generate" autocomplete="off">
+                    <div class="form-hint">Leave blank to auto-generate — it will be shown once after creation.</div>
+                </div>
+
+            </div><!-- /.form-grid -->
+
+        </div><!-- /#details -->
+
+    </div><!-- /.tab-content -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/licenses">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Register License
+        </button>
+    </div>
+
+</form>

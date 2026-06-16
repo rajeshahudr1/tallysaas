@@ -23,10 +23,15 @@
 
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
+const { friendlyReason } = require('../../Helpers/syncReason');
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const DEFAULT_PER_PAGE = 10;
 const MAX_PER_PAGE     = 100;
+
+// Notification bell window: rows are "recent" within this lookback.
+const NOTIF_WINDOW_MS  = 24 * 60 * 60 * 1000;   // last 24h
+const NOTIF_RECENT_MAX = 15;                    // newest rows in the dropdown
 
 // An agent is "connected" if its license was seen within this window.
 const CONNECTED_WINDOW_MS = 5 * 60 * 1000;
@@ -129,17 +134,35 @@ async function summary(req, res) {
         if (company && company.license_id) {
             license = await db('licenses')
                 .where('id', company.license_id)
-                .first('id', 'status', 'last_seen_at', 'agent_version', 'machine_id');
+                .first('id', 'status', 'last_seen_at', 'agent_version', 'machine_id',
+                       'last_open_companies');
         }
 
         const lastSeen  = license && license.last_seen_at ? new Date(license.last_seen_at) : null;
         const connected = !!(lastSeen && (Date.now() - lastSeen.getTime()) <= CONNECTED_WINDOW_MS);
+
+        // The agent reports the Tally companies currently open via heartbeat
+        // (stored JSON-encoded on the license). Parse it back to an array so the
+        // web Sync page can show "Currently open in Tally: X, Y". Tolerate a
+        // missing column / bad JSON by falling back to an empty list.
+        let openCompanies = [];
+        if (license && license.last_open_companies) {
+            try {
+                const parsed = JSON.parse(license.last_open_companies);
+                if (Array.isArray(parsed)) {
+                    openCompanies = parsed.map((n) => String(n == null ? '' : n).trim()).filter((n) => n);
+                }
+            } catch {
+                openCompanies = [];
+            }
+        }
 
         const summaryBlock = {
             connected,
             status:        license && license.status ? license.status : 'unknown',
             agent_version: license ? (license.agent_version || null) : null,
             last_seen_at:  license ? (license.last_seen_at || null) : null,
+            last_open_companies: openCompanies,
             company:       company ? (company.name || null) : null,
         };
 
@@ -249,7 +272,107 @@ async function logs(req, res) {
     }
 }
 
+/**
+ * notifications(req,res) — GET /sync/notifications
+ *
+ * Drives the web/app notification BELL straight from tally_sync_logs (company-
+ * scoped). The "unread" count = failed rows in the last 24h (this is what the
+ * badge shows). Shape:
+ *   { data: {
+ *       unread, fail_count, ok_count,
+ *       last_sync_at,
+ *       recent: [ {id, module, record_type, status, direction,
+ *                  reason:{cause,fix,severity}, raw_message, when} ],
+ *       failed_by_module: [ {module, n} ],
+ *   } }
+ *
+ * `recent` is the 15 newest rows (id desc) decorated with friendlyReason() so
+ * the bell shows a plain-language cause/fix on failures. The window math uses a
+ * JS-side cutoff timestamp so it works regardless of DB clock formatting.
+ */
+async function notifications(req, res) {
+    try {
+        const companyId = req.companyId;
+        const cutoff    = new Date(Date.now() - NOTIF_WINDOW_MS);
+
+        const [
+            unreadRow,
+            okRow,
+            lastRow,
+            recent,
+            failedByModule,
+        ] = await Promise.all([
+            // Unread badge = failed in the last 24h. FAILED rows are written with
+            // synced_at = NULL (AgentController.result), so the 24h window MUST key
+            // off created_at — filtering failed rows on synced_at would always be
+            // false (NULL >= cutoff) and the badge would never move off 0.
+            db('tally_sync_logs')
+                .where('company_id', companyId)
+                .where('status', 'failed')
+                .where('created_at', '>=', cutoff)
+                .count('id as c').first(),
+            // OK = synced/created in the last 24h. These rows carry synced_at.
+            db('tally_sync_logs')
+                .where('company_id', companyId)
+                .whereIn('status', ['synced', 'created'])
+                .where('synced_at', '>=', cutoff)
+                .count('id as c').first(),
+            // Newest synced_at across all rows (last activity).
+            db('tally_sync_logs')
+                .where('company_id', companyId)
+                .max('synced_at as m').first(),
+            // The 15 newest rows for the dropdown feed. created_at is pulled too
+            // so failed rows (synced_at = NULL) still carry a usable timestamp.
+            db('tally_sync_logs')
+                .where('company_id', companyId)
+                .orderBy('id', 'desc')
+                .limit(NOTIF_RECENT_MAX)
+                .select('id', 'module', 'record_type', 'status', 'direction',
+                        'message', 'synced_at', 'created_at'),
+            // Per-module failure tally (all-time, company-scoped).
+            db('tally_sync_logs')
+                .where('company_id', companyId)
+                .where('status', 'failed')
+                .select('module')
+                .count('id as n')
+                .groupBy('module')
+                .orderBy('n', 'desc'),
+        ]);
+
+        const recentOut = recent.map((r) => ({
+            id:          r.id,
+            module:      r.module || '',
+            record_type: r.record_type || '',
+            status:      r.status || '',
+            direction:   r.direction || '',
+            reason:      friendlyReason(r.message, r.status),
+            raw_message: r.message || '',
+            // synced_at is NULL on failed rows → fall back to created_at so the
+            // bell can render a relative time for failures too.
+            when:        r.synced_at || r.created_at || null,
+        }));
+
+        const failedOut = failedByModule.map((r) => ({
+            module: r.module || '(unknown)',
+            n:      Number(r.n) || 0,
+        }));
+
+        return R.successResponse(res, {
+            unread:           asCount(unreadRow),
+            fail_count:       asCount(unreadRow),
+            ok_count:         asCount(okRow),
+            last_sync_at:     lastRow ? (lastRow.m || null) : null,
+            recent:           recentOut,
+            failed_by_module: failedOut,
+        });
+    } catch (err) {
+        console.error('sync.notifications error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 module.exports = {
     summary,
     logs,
+    notifications,
 };

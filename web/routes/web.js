@@ -20,6 +20,7 @@ const mock    = require('../data/mock');
 const api     = require('../Helpers/apiClient');
 const { requireAuth } = require('../Middlewares/sessionGuard');
 const AuthController   = require('../Controllers/AuthController');
+const { friendlyReason, RESTART_HELP } = require('../Helpers/syncReason');
 
 /* ── Public auth routes (NO guard) ──────────────────────────── */
 router.get('/login',  AuthController.showLogin);
@@ -45,6 +46,54 @@ router.get('/switch-company/:id', (req, res) => {
         if (req.session) req.session.flash = { type: 'success', msg: `Switched to ${match.name}.` };
     } else if (req.session) {
         req.session.flash = { type: 'error', msg: 'You do not have access to that company.' };
+    }
+    return req.session.save(() => res.redirect(back));
+});
+
+/* ── License switcher (GET /switch-license/:id) — super-admin only ──
+ * The super-admin's top selector lists LICENSES (the customers they manage);
+ * this remembers the chosen license id on the session. The license name is
+ * resolved fresh by the global middleware from /super-admin/licenses. */
+router.get('/switch-license/:id', (req, res) => {
+    const id = Number(req.params.id);
+    const back = req.get('Referer') || '/';
+    const isSuper = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
+    if (isSuper && Number.isInteger(id) && id > 0) {
+        req.session.licenseId = id;
+        // Reset the company so the global middleware re-defaults to THIS
+        // license's first company (and sends its X-Company-Id).
+        req.session.companyId = null;
+        req.session.flash = { type: 'success', msg: 'License selected.' };
+    }
+    return req.session.save(() => res.redirect(back));
+});
+
+/* ── Open in Tally (POST /open-in-tally/:companyId) ─────────────
+ * From the header company switcher, queue an "open_company" command for the
+ * customer-side agent (running next to Tally). The api inserts an
+ * agent_commands row scoped to the caller's license; the agent picks it up on
+ * its next poll and opens that company in Tally (clean tally.ini rewrite, or
+ * a UI-automation fallback for Educational Tally). We just relay the api's
+ * msg to a flash and bounce back to the page the user was on. */
+router.post('/open-in-tally/:companyId', async (req, res) => {
+    const id   = Number(req.params.companyId);
+    const back = req.get('Referer') || '/';
+    if (!Number.isInteger(id) || id <= 0) {
+        setFlash(req, 'error', 'Invalid company.');
+        return req.session.save(() => res.redirect(back));
+    }
+    try {
+        const result = await api.post(req, '/account/agent/open-company', { company_id: id });
+        // The api returns { status:201, show, msg, data } on success; treat any
+        // 2xx body.status as success and surface the api's own message.
+        const bodyStatus = result && result.body && result.body.status;
+        const ok  = bodyStatus && bodyStatus >= 200 && bodyStatus < 300;
+        const msg = (result && result.body && result.body.msg)
+            || (ok ? 'Open command queued. The agent will open it in Tally shortly.'
+                   : apiError(result, 'Could not queue the open command.'));
+        setFlash(req, ok ? 'success' : 'error', msg);
+    } catch (_) {
+        setFlash(req, 'error', 'Could not reach the API server.');
     }
     return req.session.save(() => res.redirect(back));
 });
@@ -156,6 +205,40 @@ function setFlash(req, type, msg) {
     if (req.session) req.session.flash = { type, msg };
 }
 
+/* Super-admin gate for the cross-tenant Licenses screens. The session user's
+ * role_slug is set at login (api echoes it on body.data.user). A non-super-
+ * admin gets a 403 (HTML page or JSON envelope) rather than a silent pass —
+ * the api also enforces this, but we block here so the routes/menu never leak. */
+function requireSuperAdmin(req, res, next) {
+    const u = req.session && req.session.user;
+    if (u && u.role_slug === 'super-admin') return next();
+    if (req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1) {
+        return res.status(403).json({ status: 403, show: true, msg: 'Super-admin access required.' });
+    }
+    return res.status(403).render('errors/404', {
+        title: 'Forbidden',
+        activeMenu: '',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Forbidden' }],
+    });
+}
+
+/* License-admin (tenant) gate for the custom-role management screens. Mirrors
+ * requireSuperAdmin but checks role_slug==='company-admin'. A non-company-admin
+ * gets a 403 (HTML page or JSON envelope) rather than a silent pass — the api
+ * also enforces can('users',*), but we block here so the routes/menu never leak. */
+function requireCompanyAdmin(req, res, next) {
+    const u = req.session && req.session.user;
+    if (u && u.role_slug === 'company-admin') return next();
+    if (req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1) {
+        return res.status(403).json({ status: 403, show: true, msg: 'License-admin access required.' });
+    }
+    return res.status(403).render('errors/404', {
+        title: 'Forbidden',
+        activeMenu: '',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Forbidden' }],
+    });
+}
+
 /* Pull a clean error message out of an api envelope / transport result. */
 function apiError(result, fallback) {
     if (result && result.networkError) return 'Cannot reach the API server.';
@@ -184,7 +267,23 @@ function txStatusLabel(s) {
 /* ── PAGE 3 — Dashboard (GET /) ─────────────────────────────── */
 router.get('/', async (req, res, next) => {
     try {
-        const { body } = await api.get(req, '/dashboard/summary');
+        // Date-range picker (header pill). Default = current month (1st → today)
+        // so the pill always shows a concrete, working range; the user can
+        // change it. Both dates flow to the api, which scopes the money metrics.
+        const _isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
+        const _today = new Date();
+        const _p2 = (n) => String(n).padStart(2, '0');
+        const todayStr = `${_today.getFullYear()}-${_p2(_today.getMonth() + 1)}-${_p2(_today.getDate())}`;
+        const monthStartStr = `${todayStr.slice(0, 8)}01`;
+        let rangeFrom = _isYmd(req.query.from) ? req.query.from : monthStartStr;
+        let rangeTo   = _isYmd(req.query.to)   ? req.query.to   : todayStr;
+        if (rangeFrom > rangeTo) { const t = rangeFrom; rangeFrom = rangeTo; rangeTo = t; }
+        const _MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const _fmtR = (s) => { const a = s.split('-'); return `${Number(a[2])} ${_MON[Number(a[1]) - 1]} ${a[0]}`; };
+        const rangeLabel = `${_fmtR(rangeFrom)} – ${_fmtR(rangeTo)}`;
+
+        const { body } = await api.get(req,
+            '/dashboard/summary?from=' + encodeURIComponent(rangeFrom) + '&to=' + encodeURIComponent(rangeTo));
         const data = (body && body.data) || {};
 
         const counts = data.counts || {};
@@ -212,6 +311,19 @@ router.get('/', async (req, res, next) => {
             { label: 'Invoice Amount',     value: inr(counts.invoice_amount),   icon: 'fa-file-invoice',      tone: 'blue'   },
             { label: 'Payment Received',   value: inr(counts.payment_received), icon: 'fa-money-bill-wave',   tone: 'green'  },
         ];
+
+        // Super-admin only: prepend a platform-level "Total Licenses" card.
+        // Count comes from the licenses list meta.total (accurate beyond the
+        // 100 the header switcher fetches); fall back to that list's length.
+        if (res.locals.isSuperAdmin) {
+            let licenseCount = Array.isArray(res.locals.licenses) ? res.locals.licenses.length : 0;
+            try {
+                const lr = await api.get(req, '/super-admin/licenses?per_page=1');
+                const meta = lr && lr.body && lr.body.data && lr.body.data.meta;
+                if (meta && Number.isFinite(Number(meta.total))) licenseCount = Number(meta.total);
+            } catch (_) { /* keep the fallback count */ }
+            stats.unshift({ label: 'Total Licenses', value: grp(licenseCount), icon: 'fa-key', tone: 'indigo' });
+        }
 
         // Chart payloads — pass through as {labels,data}, defaulting to empty
         // arrays so /js/dashboard.js + the JSON island never see undefined.
@@ -261,6 +373,11 @@ router.get('/', async (req, res, next) => {
             syncChart,
             recentInvoices,
             recentSync,
+
+            // Date-range picker state (header pill).
+            rangeFrom,
+            rangeTo,
+            rangeLabel,
 
             // Chart.js init for THIS page only. Passed as a real render local
             // (NOT assigned inside the template) so it reaches the layout's
@@ -1122,16 +1239,29 @@ router.get('/sync-logs', async (req, res, next) => {
         const rows     = Array.isArray(payload.data) ? payload.data : [];
         const meta     = payload.meta || { total: rows.length, page, per_page: perPage };
 
-        // Map api columns → the view's expected keys.
-        const logRows = rows.map((r) => ({
-            id:        r.id,
-            module:    r.module || '',
-            record:    r.record_id || r.record_type || '',
-            direction: r.direction || '',
-            status:    txStatusLabel(r.status),
-            message:   r.message || '',
-            time:      fmtDate(r.synced_at || r.created_at),
-        }));
+        // Map api columns → the view's expected keys. For each row we also
+        // compute the FRIENDLY reason + fix from the raw Tally message so the
+        // view shows a plain-language cause/fix on failures (not just the raw
+        // message). `failed` flags the row so the view can style + show the fix.
+        const logRows = rows.map((r) => {
+            const isFailed = String(r.status || '').toLowerCase() === 'failed';
+            const fr = friendlyReason(r.message, r.status);
+            return {
+                id:        r.id,
+                module:    r.module || '',
+                record:    r.record_id || r.record_type || '',
+                direction: r.direction || '',
+                status:    txStatusLabel(r.status),
+                // On failures show the friendly cause in the Message column;
+                // success rows keep their (short) raw note.
+                message:   isFailed ? fr.cause : (r.message || ''),
+                reason:    fr.cause,
+                fix:       fr.fix,
+                raw:       r.message || '',
+                failed:    isFailed,
+                time:      fmtDate(r.synced_at || r.created_at),
+            };
+        });
 
         res.render('tally-sync/logs', {
             title: 'Sync Logs',
@@ -1145,6 +1275,9 @@ router.get('/sync-logs', async (req, res, next) => {
             logsTotal: meta.total != null ? meta.total : logRows.length,
             page:      meta.page    != null ? meta.page    : page,
             perPage:   meta.per_page != null ? meta.per_page : perPage,
+
+            // "Common fixes / How to restart" help panel content.
+            restartHelp: RESTART_HELP,
 
             // Filter dropdown option sources (still mock — api doesn't provide them).
             syncModuleNames: mock.syncModuleNames,
@@ -2034,6 +2167,371 @@ router.post('/:resource/:id/delete', async (req, res, next) => {
         if (apiOk(result)) setFlash(req, 'success', 'Record deleted successfully.');
         else setFlash(req, 'error', apiError(result, 'Could not delete the record.'));
         return req.session.save(() => res.redirect('/' + resource));
+    } catch (err) { next(err); }
+});
+
+/* ── PLATFORM ADMIN · Licenses (super-admin only) ────────────────
+ * Cross-tenant licence management. Each route is gated by requireSuperAdmin
+ * (the api also enforces super-admin, but we block here so nothing leaks).
+ * The one-time license_key + auto-generated admin password are revealed on a
+ * rendered success screen and are NEVER stored in the session/db/logs. */
+
+/* GET /licenses — paginated cross-tenant licence list. */
+router.get('/licenses', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const { rows, meta } = await apiList(req, '/super-admin/licenses');
+        const licenseRows = rows.map((r) => ({
+            id:               r.id,
+            holder_name:      r.holder_name || '',
+            key_prefix:       r.key_prefix ? (String(r.key_prefix).replace(/[-\s]*$/, '') + '-…') : '—',
+            plan:             r.plan || 'standard',
+            companies_count:  r.companies_count != null ? r.companies_count : 0,
+            max_companies:    r.max_companies != null ? r.max_companies : 0,
+            max_users:        r.max_users != null ? r.max_users : 0,
+            status:           r.status || '',
+            status_label:     r.status === 'suspended' ? 'Suspended' : (r.status === 'active' ? 'Active' : (r.status || '')),
+            valid_until:      r.valid_until ? fmtDate(r.valid_until) : '',
+            machine_bound:    !!(r.machine_id || r.machine_bound_at),
+            last_seen_at:     r.last_seen_at ? fmtDate(r.last_seen_at) : '',
+        }));
+        res.render('licenses/list', {
+            title: 'Licenses',
+            activeMenu: 'licenses',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Licenses' }],
+            licenseRows, licensesTotal: meta.total, page: meta.page, perPage: meta.per_page,
+        });
+    } catch (err) { next(err); }
+});
+
+/* GET /licenses/register — empty Register form. */
+router.get('/licenses/register', requireSuperAdmin, (req, res) => {
+    res.render('licenses/form', {
+        title: 'Register License',
+        activeMenu: 'licenses',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Licenses', href: '/licenses' },
+            { label: 'Register License' },
+        ],
+        error: null,
+        old: {},
+    });
+});
+
+/* POST /licenses — register a licence (api also creates its default admin).
+ * On success render the ONE-TIME reveal screen with the api data (NO redirect,
+ * NO session/db/log persistence of the key/password). On error re-render the
+ * form with the message + the entered values so nothing is lost. */
+router.post('/licenses', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            holder_name:   b.holder_name,
+            tally_serial:  b.tally_serial || undefined,
+            plan:          b.plan || 'standard',
+            max_companies: num(b.max_companies),
+            max_users:     num(b.max_users),
+            valid_until:   b.valid_until || undefined,
+            admin_email:   b.admin_email,
+            admin_name:    b.admin_name || undefined,
+            admin_mobile:  b.admin_mobile || undefined,
+            admin_password: b.admin_password || undefined,
+        };
+        const result = await api.post(req, '/super-admin/licenses', payload);
+        if (apiOk(result)) {
+            const data  = (result.body && result.body.data) || {};
+            const login = data.admin_login || {};
+            // Render the one-time reveal directly from the response. These
+            // secrets are intentionally NOT written to the session/db/logs.
+            return res.render('licenses/created', {
+                title: 'License Created',
+                activeMenu: 'licenses',
+                breadcrumb: [
+                    { label: 'Dashboard', href: '/' },
+                    { label: 'Licenses', href: '/licenses' },
+                    { label: 'License Created' },
+                ],
+                licenseKey:    data.license_key || '',
+                adminEmail:    login.email || payload.admin_email || '',
+                adminPassword: login.password || '',   // present only when auto-generated
+                license:       data.license || {},
+            });
+        }
+        // Re-render the form with the error + the entered values (input survives).
+        return res.status(200).render('licenses/form', {
+            title: 'Register License',
+            activeMenu: 'licenses',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Licenses', href: '/licenses' },
+                { label: 'Register License' },
+            ],
+            error: apiError(result, 'Could not register the license.'),
+            old: {
+                holder_name: b.holder_name, tally_serial: b.tally_serial, plan: b.plan,
+                max_companies: b.max_companies, max_users: b.max_users, valid_until: b.valid_until,
+                admin_email: b.admin_email, admin_name: b.admin_name, admin_mobile: b.admin_mobile,
+                // NOTE: admin_password is intentionally NOT echoed back.
+            },
+        });
+    } catch (err) { next(err); }
+});
+
+/* Shared handler for the licence state-change actions (suspend / activate /
+ * reset-machine). Calls the matching api endpoint, flashes, returns to list. */
+function licenseAction(apiPath, okMsg, failMsg) {
+    return async (req, res, next) => {
+        try {
+            const id = Number(req.params.id);
+            const result = await api.post(req, `/super-admin/licenses/${id}/${apiPath}`, {});
+            if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || okMsg);
+            else setFlash(req, 'error', apiError(result, failMsg));
+            return req.session.save(() => res.redirect('/licenses'));
+        } catch (err) { next(err); }
+    };
+}
+router.post('/licenses/:id/suspend',       requireSuperAdmin, licenseAction('suspend',       'License suspended.',        'Could not suspend the license.'));
+router.post('/licenses/:id/activate',      requireSuperAdmin, licenseAction('activate',      'License reactivated.',      'Could not activate the license.'));
+router.post('/licenses/:id/reset-machine', requireSuperAdmin, licenseAction('reset-machine', 'Agent machine unbound.',    'Could not reset the machine.'));
+
+/* ── PLATFORM ADMIN · License Modules / entitlements (super-admin only) ──────
+ * Which modules a license's roles MAY use. The api returns a module × action
+ * matrix with the currently-granted cells; an empty grant set (all_granted)
+ * means the license is implicitly entitled to EVERYTHING until restricted. */
+
+/* GET /licenses/:id/permissions — render the entitlement grid for one license. */
+router.get('/licenses/:id/permissions', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const { body } = await api.get(req, `/super-admin/licenses/${id}/permissions`);
+        const data = (body && body.data) || {};
+        res.render('licenses/permissions', {
+            title: 'License Modules',
+            activeMenu: 'licenses',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Licenses', href: '/licenses' },
+                { label: 'Modules' },
+            ],
+            license:    data.license || { id },
+            modules:    Array.isArray(data.modules) ? data.modules : [],
+            actions:    Array.isArray(data.actions) ? data.actions : ['view', 'create', 'edit', 'delete', 'export'],
+            granted:    data.granted || {},
+            allGranted: !!data.all_granted,
+        });
+    } catch (err) { next(err); }
+});
+
+/* POST /licenses/:id/permissions — save the ticked module×action entitlements.
+ * Browsers can't PUT from a form, so we proxy to api.put. The checkbox grid
+ * submits `perm` = '<module>.<action>' (a single box arrives as a string, many
+ * as an array), so [].concat(...) normalises it to a slugs array. */
+router.post('/licenses/:id/permissions', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const slugs = [].concat(req.body.perm || []);
+        const result = await api.put(req, `/super-admin/licenses/${id}/permissions`, { slugs });
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Module entitlements saved.');
+        else setFlash(req, 'error', apiError(result, 'Could not save module entitlements.'));
+        return req.session.save(() => res.redirect('/licenses'));
+    } catch (err) { next(err); }
+});
+
+/* ── SETTINGS · Roles (license-admin / tenant; company-admin only) ───────────
+ * Custom role management, license-scoped. The permission grids are ALWAYS built
+ * from the license's entitlements (GET /account/roles/available-permissions),
+ * never a hardcoded module list. The api enforces can('users',*) too. WEB paths
+ * use /roles-admin (NOT /roles) to avoid colliding with the Phase-1 RBAC demo. */
+
+/* Turn a permissions array (['mod.action', …]) into a quick-lookup set for the
+ * grid's pre-check. */
+function permsToSet(list) {
+    const out = {};
+    (Array.isArray(list) ? list : []).forEach((s) => { if (s) out[String(s)] = true; });
+    return out;
+}
+
+/* GET /roles-admin — list this license's roles (system + custom). */
+router.get('/roles-admin', requireCompanyAdmin, async (req, res, next) => {
+    try {
+        const { body } = await api.get(req, '/account/roles');
+        // The api wraps the list in { data:[...], meta } under body.data (the
+        // standard LIST envelope), so read body.data.data. Stay defensive in
+        // case body.data is ever a plain array.
+        const payload = (body && body.data) || {};
+        const rows = Array.isArray(payload) ? payload
+            : (Array.isArray(payload.data) ? payload.data : []);
+        const roleRows = rows.map((r) => ({
+            id:         r.id,
+            name:       r.name || '',
+            slug:       r.slug || '',
+            is_system:  !!r.is_system,
+            editable:   !!r.editable,
+            user_count: r.user_count != null ? Number(r.user_count) : 0,
+        }));
+        res.render('roles/list', {
+            title: 'Roles',
+            activeMenu: 'roles-admin',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Roles' }],
+            roleRows,
+        });
+    } catch (err) { next(err); }
+});
+
+/* GET /roles-admin/new — empty create form, grid built from entitlements. */
+router.get('/roles-admin/new', requireCompanyAdmin, async (req, res, next) => {
+    try {
+        const { body } = await api.get(req, '/account/roles/available-permissions');
+        const data = (body && body.data) || {};
+        res.render('roles/form', {
+            title: 'New Role',
+            activeMenu: 'roles-admin',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Roles', href: '/roles-admin' },
+                { label: 'New Role' },
+            ],
+            mode: 'create',
+            editable: true,
+            role: {},
+            modules: Array.isArray(data.modules) ? data.modules : [],
+            permsSet: {},
+        });
+    } catch (err) { next(err); }
+});
+
+/* GET /roles-admin/:id — edit form (or read-only view for system roles),
+ * pre-filled from the role's current permissions. Grid built from entitlements. */
+router.get('/roles-admin/:id', requireCompanyAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const [permsRes, roleRes] = await Promise.all([
+            api.get(req, '/account/roles/available-permissions'),
+            api.get(req, `/account/roles/${id}`),
+        ]);
+        const permsData = (permsRes.body && permsRes.body.data) || {};
+        const role      = (roleRes.body && roleRes.body.data) || { id };
+        const editable  = !!role.editable;
+        res.render('roles/form', {
+            title: editable ? 'Edit Role' : 'View Role',
+            activeMenu: 'roles-admin',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Roles', href: '/roles-admin' },
+                { label: editable ? 'Edit Role' : 'View Role' },
+            ],
+            mode: 'edit',
+            editable,
+            role,
+            modules: Array.isArray(permsData.modules) ? permsData.modules : [],
+            permsSet: permsToSet(role.permissions),
+        });
+    } catch (err) { next(err); }
+});
+
+/* POST /roles-admin — create a custom role with the ticked permissions. */
+router.post('/roles-admin', requireCompanyAdmin, async (req, res, next) => {
+    try {
+        const slugs = [].concat(req.body.perm || []);
+        const result = await api.post(req, '/account/roles', { name: req.body.name, slugs });
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Role created successfully.');
+        else setFlash(req, 'error', apiError(result, 'Could not create the role.'));
+        return req.session.save(() => res.redirect('/roles-admin'));
+    } catch (err) { next(err); }
+});
+
+/* POST /roles-admin/:id — save a custom role: rename, then set its permissions.
+ * Browsers can't PUT from a form, so we proxy to api.put for both calls. If the
+ * rename fails we surface that and skip the permissions update. */
+router.post('/roles-admin/:id', requireCompanyAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const slugs = [].concat(req.body.perm || []);
+        const renameRes = await api.put(req, `/account/roles/${id}`, { name: req.body.name });
+        if (!apiOk(renameRes)) {
+            setFlash(req, 'error', apiError(renameRes, 'Could not save the role.'));
+            return req.session.save(() => res.redirect('/roles-admin'));
+        }
+        const permsRes = await api.put(req, `/account/roles/${id}/permissions`, { slugs });
+        if (apiOk(permsRes)) setFlash(req, 'success', (permsRes.body && permsRes.body.msg) || 'Role saved successfully.');
+        else setFlash(req, 'error', apiError(permsRes, 'Role renamed, but its permissions could not be saved.'));
+        return req.session.save(() => res.redirect('/roles-admin'));
+    } catch (err) { next(err); }
+});
+
+/* POST /roles-admin/:id/delete — delete a custom role (api returns 422 with a
+ * message when the role is still assigned to users; surface that message). */
+router.post('/roles-admin/:id/delete', requireCompanyAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const result = await api.del(req, `/account/roles/${id}`);
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Role deleted.');
+        else setFlash(req, 'error', apiError(result, 'Could not delete the role.'));
+        return req.session.save(() => res.redirect('/roles-admin'));
+    } catch (err) { next(err); }
+});
+
+/* ── PLATFORM ADMIN · User Approvals (super-admin only) ──────────
+ * A company-admin creates users who are PENDING and cannot sign in until the
+ * platform super-admin approves them here (approval = a paid seat, capped by
+ * the license max_users) or rejects them. Every route is gated by the SAME
+ * requireSuperAdmin guard the licence screens use (the api also enforces it,
+ * but we block here so the routes/menu never leak). */
+
+/* GET /user-approvals — paginated cross-tenant list of PENDING users. */
+router.get('/user-approvals', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const { rows, meta } = await apiList(req, '/super-admin/users/pending');
+        const approvalRows = rows.map((r) => {
+            const used = r.license_used_seats != null ? Number(r.license_used_seats) : 0;
+            const max  = r.license_max_users  != null ? Number(r.license_max_users)  : 0;
+            return {
+                id:                 r.id,
+                name:               r.name || '',
+                email:              r.email || '',
+                mobile:             r.mobile || '',
+                role:               r.role || '',
+                // company is null when the user spans all companies under the license.
+                company:            r.company || '— (all companies)',
+                license_holder:     r.license_holder || '—',
+                license_used_seats: used,
+                license_max_users:  max,
+                // Subtle warning pill when the license has no free seats left.
+                seats_full:         max > 0 && used >= max,
+                created_at:         r.created_at ? fmtDate(r.created_at) : '—',
+            };
+        });
+        res.render('users/approvals', {
+            title: 'User Approvals',
+            activeMenu: 'user-approvals',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'User Approvals' }],
+            approvalRows, approvalsTotal: meta.total, page: meta.page, perPage: meta.per_page,
+        });
+    } catch (err) { next(err); }
+});
+
+/* POST /user-approvals/:id/approve — provision a paid seat (capped by the
+ * license). On success flash body.msg; on the 422 seat-cap failure flash the
+ * api's seat-cap message. Always return to the list. */
+router.post('/user-approvals/:id/approve', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const result = await api.post(req, `/super-admin/users/${id}/approve`, {});
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'User approved. They can now sign in.');
+        else setFlash(req, 'error', apiError(result, 'Could not approve the user.'));
+        return req.session.save(() => res.redirect('/user-approvals'));
+    } catch (err) { next(err); }
+});
+
+/* POST /user-approvals/:id/reject — reject a pending user request. */
+router.post('/user-approvals/:id/reject', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const result = await api.post(req, `/super-admin/users/${id}/reject`, {});
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'User request rejected.');
+        else setFlash(req, 'error', apiError(result, 'Could not reject the user.'));
+        return req.session.save(() => res.redirect('/user-approvals'));
     } catch (err) { next(err); }
 });
 

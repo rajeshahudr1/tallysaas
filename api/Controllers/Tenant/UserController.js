@@ -41,6 +41,7 @@ const LIST_COLUMNS = [
     'users.mobile',
     'roles.name as role',
     'users.status',
+    'users.approval_status',
     'users.last_login_at',
     'users.created_at',
 ];
@@ -128,6 +129,23 @@ async function create(req, res) {
             return R.errorResponse(res, DUP_EMAIL_MSG, 422);
         }
 
+        // Enforce the assignable-role policy server-side (the UI dropdown is not a
+        // security boundary): a tenant may assign a global SYSTEM role EXCEPT the
+        // platform/admin roles (super-admin, company-admin), or one of THEIR OWN
+        // license's custom roles — nothing else. Super Admin (no license) bypasses.
+        const isSuper = req.user && req.user.role_slug === 'super-admin';
+        if (!isSuper) {
+            const licenseId = (req.user && req.user.license_id) || null;
+            const role = await db('roles').where('id', body.role_id)
+                .first('id', 'slug', 'is_system', 'license_id');
+            const assignable = role
+                && !['super-admin', 'company-admin'].includes(role.slug)
+                && ((role.is_system && role.license_id == null) || role.license_id === licenseId);
+            if (!assignable) {
+                return R.errorResponse(res, 'You cannot assign that role.', 422);
+            }
+        }
+
         const password_hash = await hash(body.password);
 
         // Coerce optional fields away from `undefined` — knex throws "Undefined
@@ -143,15 +161,19 @@ async function create(req, res) {
             password_hash,
             status:        body.status || 'Active',
             location_id:   body.location_id ?? null,
+            // Per-user billing: a company-created user starts PENDING and cannot
+            // log in until the platform Super Admin approves them (which also
+            // provisions their subscription seat). See AuthController login gate.
+            approval_status: 'pending',
         };
 
         // Return only safe columns (never the hash / session secrets).
         const [inserted] = await db('users').insert(row).returning([
             'id', 'company_id', 'license_id', 'role_id',
-            'name', 'email', 'mobile', 'status', 'location_id', 'created_at',
+            'name', 'email', 'mobile', 'status', 'approval_status', 'location_id', 'created_at',
         ]);
 
-        return R.successResponse(res, inserted, 'User created.');
+        return R.successResponse(res, inserted, 'User created. Awaiting Super Admin approval before they can sign in.');
     } catch (err) {
         console.error('users.create error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);

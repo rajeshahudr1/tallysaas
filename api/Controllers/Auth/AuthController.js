@@ -82,6 +82,7 @@ async function login(req, res) {
                 'u.email',
                 'u.password_hash',
                 'u.status',
+                'u.approval_status',
                 'u.active_session_jti',
                 'u.session_last_seen',
                 'u.session_expires_at',
@@ -111,6 +112,16 @@ async function login(req, res) {
         }
 
         const isSuperAdmin = user.role_slug === 'super-admin';
+
+        // 3b. Approval gate (per-user billing). A user created by a company is
+        //     PENDING until the platform Super Admin approves the seat. Super
+        //     Admin bypasses. Rejected/pending → a clear, distinct message.
+        if (!isSuperAdmin && user.approval_status !== 'approved') {
+            const msg = user.approval_status === 'rejected'
+                ? 'Your account request was declined. Please contact your administrator.'
+                : 'Your account is awaiting administrator approval.';
+            return R.errorResponse(res, msg, 403);
+        }
 
         // 4. Subscription gate (per-user). Super Admin (platform owner) bypasses.
         //    Reject when there is no active, in-date subscription.

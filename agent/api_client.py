@@ -173,11 +173,19 @@ class ApiClient:
         self.log.info("Activation successful.")
         return data
 
-    def heartbeat(self, agent_token: str, agent_version: str) -> dict[str, Any]:
+    def heartbeat(
+        self,
+        agent_token: str,
+        agent_version: str,
+        open_companies: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
         """Send a heartbeat so the cloud knows the agent is alive.
 
         POSTs ``{agent_version}`` to ``{api_url}/agent/heartbeat`` with the
-        ``Authorization: Bearer <agent_token>`` header.
+        ``Authorization: Bearer <agent_token>`` header. When ``open_companies``
+        is provided (the names of the companies currently open in Tally), it is
+        included as ``{open_companies: [...]}`` so the cloud can record + display
+        what is currently open. ``None`` omits the field (leaves the last value).
 
         Returns the ``data`` part of the envelope, which holds ``status``
         (``'active'`` / ``'suspended'``) and related fields.
@@ -189,7 +197,9 @@ class ApiClient:
         """
         self.log.debug("Sending heartbeat (v=%s)", agent_version)
         headers = {"Authorization": f"Bearer {agent_token}"}
-        payload = {"agent_version": agent_version}
+        payload: dict[str, Any] = {"agent_version": agent_version}
+        if open_companies is not None:
+            payload["open_companies"] = open_companies
         try:
             resp = self._post("agent/heartbeat", json=payload, headers=headers)
         except requests.RequestException as exc:
@@ -253,23 +263,36 @@ class ApiClient:
     def import_from_tally(
         self,
         agent_token: str,
-        company_id: int,
         ledgers: list[dict[str, Any]],
         stock_items: list[dict[str, Any]],
         vouchers: list[dict[str, Any]] | None = None,
+        godowns: list[dict[str, Any]] | None = None,
+        *,
+        company_name: str | None = None,
+        company_id: int | None = None,
     ) -> dict[str, Any]:
-        """Tally → Cloud: upload masters + vouchers read from Tally to be upserted.
+        """Tally → Cloud: upload masters + vouchers read from one Tally company.
 
-        POSTs ``{company_id, ledgers, stock_items, vouchers}`` to
-        ``{api_url}/agent/import``. Returns the import counts. Raises
-        :class:`AgentError` on transport / non-200.
+        POSTs ``{company_name|company_id, ledgers, stock_items, vouchers,
+        godowns}`` to ``{api_url}/agent/import``. The cloud FINDS-OR-CREATES the
+        company (by name, under this license) so a Tally company auto-creates its
+        cloud company on first pull. ``godowns`` (default empty) become rows in
+        the cloud locations table. Returns the import counts (incl.
+        ``company_id`` and ``company_created``). Raises :class:`AgentError` on
+        transport/non-200.
         """
         vouchers = vouchers or []
-        if not ledgers and not stock_items and not vouchers:
+        godowns = godowns or []
+        if not ledgers and not stock_items and not vouchers and not godowns:
             return {}
         headers = {"Authorization": f"Bearer {agent_token}"}
-        payload = {"company_id": company_id, "ledgers": ledgers,
-                   "stock_items": stock_items, "vouchers": vouchers}
+        payload: dict[str, Any] = {"ledgers": ledgers,
+                                   "stock_items": stock_items, "vouchers": vouchers,
+                                   "godowns": godowns}
+        if company_name:
+            payload["company_name"] = company_name
+        if company_id:
+            payload["company_id"] = company_id
         try:
             resp = self._post("agent/import", json=payload, headers=headers)
         except requests.RequestException as exc:
@@ -280,3 +303,78 @@ class ApiClient:
         if body.get("status") != 200:
             raise AgentError(body.get("msg", "Could not import from Tally."))
         return body.get("data") or {}
+
+    # ------------------------------------------------------------------ #
+    # Cloud → agent command channel (open_company, ...)
+    # ------------------------------------------------------------------ #
+    def get_commands(self, agent_token: str) -> list[dict[str, Any]]:
+        """Drain the queued cloud→agent commands for this license.
+
+        GETs ``{api_url}/agent/commands`` (Bearer agent_token). The cloud flips
+        the returned rows to ``running`` server-side, so each command is handed
+        out once. Returns the ``commands`` list — each entry is
+        ``{id, type, company_id, company_name, company_number}``.
+
+        Best-effort: ANY failure (transport, non-200 envelope, odd body) is
+        logged and turned into ``[]`` so a command-channel hiccup never disrupts
+        the normal heartbeat/sync loop.
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        try:
+            resp = self._get("agent/commands", headers=headers)
+        except requests.RequestException as exc:
+            self.log.warning("Get-commands transport error: %s", exc)
+            return []
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            self.log.warning(
+                "Get-commands rejected (status=%s): %s",
+                body.get("status"), body.get("msg", "?"),
+            )
+            return []
+        data = body.get("data") or {}
+        commands = data.get("commands")
+        return commands if isinstance(commands, list) else []
+
+    def command_result(
+        self,
+        agent_token: str,
+        cmd_id: Any,
+        status: str,
+        result: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> bool:
+        """Report a command's outcome back to the cloud.
+
+        POSTs ``{status, result?, error?}`` to
+        ``{api_url}/agent/commands/<id>/result`` (Bearer agent_token). ``status``
+        is ``'done'`` or ``'failed'`` (the cloud coerces anything else to
+        ``'failed'`` so a row never stays stuck in ``running``).
+
+        Best-effort: returns ``True`` when the cloud accepted it (200 envelope),
+        ``False`` on any transport/non-200 failure. Never raises — a missed
+        result report must not kill the loop.
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        payload: dict[str, Any] = {"status": status}
+        if result is not None:
+            payload["result"] = result
+        if error is not None:
+            payload["error"] = error
+        try:
+            resp = self._post(
+                f"agent/commands/{cmd_id}/result", json=payload, headers=headers
+            )
+        except requests.RequestException as exc:
+            self.log.warning("Command-result transport error (id=%s): %s", cmd_id, exc)
+            return False
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            self.log.warning(
+                "Command-result rejected (id=%s, status=%s): %s",
+                cmd_id, body.get("status"), body.get("msg", "?"),
+            )
+            return False
+        return True

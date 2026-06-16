@@ -21,12 +21,17 @@ async function list(req, res) {
         const user = req.user || {};
         let qb = db('companies')
             .whereNull('deleted_at')
-            .select('id', 'name')
+            .select('id', 'name', 'license_id')
             .orderBy('name', 'asc');
 
-        // Regular users are scoped to their license; Super Admin sees all.
+        // Regular users are scoped to their license; Super Admin sees all,
+        // but may narrow to ONE license via ?license_id= (drives the super
+        // admin's License→Company two-level switcher).
         if (user.role_slug !== 'super-admin') {
             qb = qb.where('license_id', user.license_id != null ? user.license_id : -1);
+        } else if (req.query.license_id != null && req.query.license_id !== '') {
+            const lid = Number(req.query.license_id);
+            if (Number.isInteger(lid) && lid > 0) qb = qb.where('license_id', lid);
         }
 
         const rows = await qb;

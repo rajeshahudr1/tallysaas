@@ -16,9 +16,32 @@
  *   notificationCount number
  * ─────────────────────────────────────────────────────────── */
 var _user      = (typeof user !== 'undefined' && user) ? user : { name: 'User', role: '', avatar: '', initials: 'U' };
-var _company   = (typeof company !== 'undefined' && company) ? company : { name: 'Company' };
+var _company   = (typeof company !== 'undefined' && company) ? company : null;
 var _companies = (typeof companies !== 'undefined' && companies) ? companies : [];
 var _notif     = (typeof notificationCount !== 'undefined') ? notificationCount : 0;
+// Two-level top switcher. The super-admin gets a LICENSE dropdown + a COMPANY
+// dropdown (companies of the chosen license); everyone else gets only the
+// COMPANY dropdown (their license is implicit from login, so it stays hidden).
+var _isSuper   = (typeof isSuperAdmin !== 'undefined') && isSuperAdmin;
+var _licenses  = (typeof licenses !== 'undefined' && licenses) ? licenses : [];
+var _selLic    = (typeof selectedLicense !== 'undefined' && selectedLicense) ? selectedLicense : null;
+// REAL sync-activity feed for the bell (see web/index.js → GET /sync/notifications).
+var _notifs    = (typeof syncNotifs !== 'undefined' && Array.isArray(syncNotifs)) ? syncNotifs : [];
+// Short relative time ("just now", "5m", "3h", "2d") from an ISO/Date string.
+function _relTime(v) {
+    if (!v) return '';
+    var t = new Date(v).getTime();
+    if (isNaN(t)) return '';
+    var s = Math.floor((Date.now() - t) / 1000);
+    if (s < 0) s = 0;
+    if (s < 45)    return 'just now';
+    if (s < 3600)  return Math.round(s / 60) + 'm';
+    if (s < 86400) return Math.round(s / 3600) + 'h';
+    if (s < 604800) return Math.round(s / 86400) + 'd';
+    var d = new Date(v);
+    var p = function (n) { return String(n).padStart(2, '0'); };
+    return p(d.getDate()) + '/' + p(d.getMonth() + 1);
+}
 %>
 <header class="topbar">
 
@@ -30,36 +53,93 @@ var _notif     = (typeof notificationCount !== 'undefined') ? notificationCount 
             <i class="fa-solid fa-bars"></i>
         </button>
 
-        <form class="topbar-search" role="search" method="get" action="/customers">
+        <!-- Desktop: full search box -->
+        <form class="topbar-search d-none d-lg-flex" role="search" method="get" action="/customers">
             <i class="fa-solid fa-magnifying-glass topbar-search-icon" aria-hidden="true"></i>
             <input type="search" name="search" class="topbar-search-input"
                    placeholder="Search customers..." aria-label="Search">
             <span class="topbar-search-kbd">Ctrl + K</span>
         </form>
+        <!-- Mobile: a search button → opens the sidebar drawer (search + nav live there) -->
+        <button class="topbar-hamburger d-lg-none" type="button"
+                data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas"
+                aria-controls="sidebarOffcanvas" aria-label="Search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+        </button>
     </div>
 
     <!-- Right: company picker, install, notifications, settings, profile -->
     <div class="topbar-right">
 
-        <!-- Company selector -->
+        <!-- ── Top switcher ───────────────────────────────────────────
+             Desktop (≥lg): inline License (super-admin) + Company dropdowns.
+             Mobile  (<lg): ONE compact button → #switcherModal popup, because
+                            the two inline dropdowns overflow a phone header. -->
+        <div class="topbar-switchers d-none d-lg-flex align-items-center">
+        <% if (_isSuper) { %>
+            <!-- License dropdown (super-admin): which customer/license to operate on -->
+            <div class="dropdown topbar-company">
+                <button class="topbar-company-btn dropdown-toggle" type="button"
+                        data-bs-toggle="dropdown" aria-expanded="false" title="License">
+                    <i class="fa-solid fa-id-card-clip"></i>
+                    <span class="topbar-company-name"><%= _selLic ? _selLic.name : 'Select license' %></span>
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><h6 class="dropdown-header">Licenses</h6></li>
+                    <% if (!_licenses.length) { %>
+                        <li><span class="dropdown-item-text text-muted small">No licenses yet</span></li>
+                    <% } %>
+                    <% _licenses.forEach(function (l) { %>
+                        <% var _curL = _selLic && String(l.id) === String(_selLic.id); %>
+                        <li>
+                            <a class="dropdown-item <%= _curL ? 'active' : '' %>" href="/switch-license/<%= l.id %>">
+                                <i class="fa-solid fa-id-card-clip me-2 text-muted"></i><%= l.name %>
+                                <% if (_curL) { %><i class="fa-solid fa-check ms-auto text-primary"></i><% } %>
+                            </a>
+                        </li>
+                    <% }); %>
+                </ul>
+            </div>
+        <% } %>
+
+        <!-- Company dropdown (everyone) — the active company drives all data -->
         <div class="dropdown topbar-company">
             <button class="topbar-company-btn dropdown-toggle" type="button"
-                    data-bs-toggle="dropdown" aria-expanded="false">
+                    data-bs-toggle="dropdown" aria-expanded="false" title="Company">
                 <i class="fa-solid fa-building"></i>
-                <span class="topbar-company-name"><%= _company.name %></span>
+                <span class="topbar-company-name"><%= _company ? _company.name : 'No company' %></span>
             </button>
             <ul class="dropdown-menu dropdown-menu-end">
+                <li><h6 class="dropdown-header">Companies</h6></li>
+                <% if (!_companies.length) { %>
+                    <li><span class="dropdown-item-text text-muted small"><%= _isSuper ? 'No companies in this license' : 'No companies' %></span></li>
+                <% } %>
                 <% _companies.forEach(function (c) { %>
-                    <% var _isCur = String(c.id) === String(_company.id); %>
-                    <li>
-                        <a class="dropdown-item <%= _isCur ? 'active' : '' %>" href="/switch-company/<%= c.id %>">
+                    <% var _isCur = _company && String(c.id) === String(_company.id); %>
+                    <li class="d-flex align-items-center">
+                        <a class="dropdown-item flex-grow-1 <%= _isCur ? 'active' : '' %>" href="/switch-company/<%= c.id %>">
                             <i class="fa-solid fa-building me-2 text-muted"></i><%= c.name %>
                             <% if (_isCur) { %><i class="fa-solid fa-check ms-auto text-primary"></i><% } %>
                         </a>
+                        <!-- Queue an "Open in Tally" command for the agent. -->
+                        <form method="post" action="/open-in-tally/<%= c.id %>" class="m-0 ps-1 pe-2">
+                            <button type="submit" class="btn btn-sm btn-link p-1 text-muted" title="Open in Tally" aria-label="Open <%= c.name %> in Tally">
+                                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                            </button>
+                        </form>
                     </li>
                 <% }); %>
             </ul>
         </div>
+        </div>
+
+        <!-- Mobile: ONE compact button → opens the switcher popup (#switcherModal) -->
+        <button class="topbar-company-btn d-lg-none" type="button"
+                data-bs-toggle="modal" data-bs-target="#switcherModal" title="Switch company">
+            <i class="fa-solid fa-building"></i>
+            <span class="topbar-switch-ctx"><%= _company ? _company.name : (_isSuper ? 'Select license' : 'Company') %></span>
+            <i class="fa-solid fa-chevron-down ms-1 topbar-switch-caret"></i>
+        </button>
 
         <!-- Install App (hidden until app.js shows it) -->
         <button class="btn btn-install" id="installAppBtn" type="button" hidden>
@@ -72,8 +152,8 @@ var _notif     = (typeof notificationCount !== 'undefined') ? notificationCount 
             <span class="offline-indicator-label">Offline</span>
         </span>
 
-        <!-- Notifications (dropdown) -->
-        <div class="dropdown">
+        <!-- Notifications (dropdown) — desktop only; on mobile it lives in the drawer -->
+        <div class="dropdown d-none d-lg-block">
             <button class="topbar-icon-btn" type="button" aria-label="Notifications"
                     data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
                 <i class="fa-solid fa-bell"></i>
@@ -83,26 +163,41 @@ var _notif     = (typeof notificationCount !== 'undefined') ? notificationCount 
             </button>
             <div class="dropdown-menu dropdown-menu-end notif-menu">
                 <div class="notif-head">
-                    <span>Notifications</span>
-                    <% if (_notif > 0) { %><span class="badge bg-primary rounded-pill"><%= _notif %> new</span><% } %>
+                    <span>Tally Sync Activity</span>
+                    <% if (_notif > 0) { %><span class="badge bg-danger rounded-pill"><%= _notif %> failed</span><% } %>
                 </div>
-                <% if (_notif > 0) { %>
-                    <a class="dropdown-item notif-item" href="/sync-logs">
-                        <span class="notif-item-icon"><i class="fa-solid fa-rotate"></i></span>
-                        <span>
-                            <span class="notif-item-title">Tally sync pending</span>
-                            <span class="notif-item-sub d-block">Some records are waiting to sync to Tally.</span>
-                        </span>
-                    </a>
-                    <a class="dropdown-item notif-item" href="/sync-dashboard">
-                        <span class="notif-item-icon"><i class="fa-solid fa-circle-info"></i></span>
-                        <span>
-                            <span class="notif-item-title">Sync status</span>
-                            <span class="notif-item-sub d-block">Open the sync dashboard for details.</span>
-                        </span>
+                <% if (_notifs.length) { %>
+                    <% _notifs.forEach(function (n) {
+                        var _failed = String(n.status || '').toLowerCase() === 'failed';
+                        var _reason = (n.reason && n.reason.cause) ? n.reason.cause : (n.raw_message || '');
+                        var _rec    = [n.module, n.record_type].filter(Boolean).join(' ');
+                    %>
+                        <a class="dropdown-item notif-item" href="/sync-logs">
+                            <span class="notif-item-icon">
+                                <% if (_failed) { %>
+                                    <i class="fa-solid fa-triangle-exclamation text-danger"></i>
+                                <% } else { %>
+                                    <i class="fa-solid fa-circle-check text-success"></i>
+                                <% } %>
+                            </span>
+                            <span class="flex-grow-1">
+                                <span class="notif-item-title d-flex align-items-center justify-content-between">
+                                    <span><%= _rec || (n.module || 'Tally sync') %></span>
+                                    <span class="notif-item-time text-muted small ms-2"><%= _relTime(n.when) %></span>
+                                </span>
+                                <% if (_failed && _reason) { %>
+                                    <span class="notif-item-sub d-block text-danger"><%= _reason %></span>
+                                <% } else { %>
+                                    <span class="notif-item-sub d-block">Synced to Tally.</span>
+                                <% } %>
+                            </span>
+                        </a>
+                    <% }); %>
+                    <a class="dropdown-item notif-item notif-foot text-center" href="/sync-logs">
+                        <span class="w-100">View all</span>
                     </a>
                 <% } else { %>
-                    <div class="notif-empty"><i class="fa-regular fa-bell-slash d-block mb-2 fs-5"></i>No new notifications</div>
+                    <div class="notif-empty"><i class="fa-regular fa-bell-slash d-block mb-2 fs-5"></i>No recent sync activity</div>
                 <% } %>
             </div>
         </div>
@@ -141,3 +236,54 @@ var _notif     = (typeof notificationCount !== 'undefined') ? notificationCount 
 
     </div>
 </header>
+
+<!-- ── Mobile switcher popup (opened by the d-lg-none button above) ──────
+     Holds the License (super-admin) + Company pickers in a centred modal so
+     the phone header stays uncluttered. Same /switch-* links as the desktop
+     dropdowns, so selecting one navigates + re-renders with the new scope. -->
+<div class="modal fade" id="switcherModal" tabindex="-1" aria-hidden="true" aria-labelledby="switcherModalLabel">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="switcherModalLabel">Switch</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <% if (_isSuper) { %>
+                    <!-- License dropdown — picking one switches + reloads -->
+                    <label class="form-label small text-uppercase text-muted mb-1">License</label>
+                    <select class="form-select mb-3"
+                            onchange="if(this.value){window.location.href='/switch-license/'+this.value;}">
+                        <% if (!_licenses.length) { %>
+                            <option value="">No licenses yet</option>
+                        <% } %>
+                        <% _licenses.forEach(function (l) { %>
+                            <option value="<%= l.id %>" <%= (_selLic && String(l.id) === String(_selLic.id)) ? 'selected' : '' %>><%= l.name %></option>
+                        <% }); %>
+                    </select>
+                <% } %>
+
+                <!-- Company dropdown — picking one switches + reloads -->
+                <label class="form-label small text-uppercase text-muted mb-1">Company</label>
+                <select class="form-select" <%= !_companies.length ? 'disabled' : '' %>
+                        onchange="if(this.value){window.location.href='/switch-company/'+this.value;}">
+                    <% if (!_companies.length) { %>
+                        <option value=""><%= _isSuper ? 'No companies in this license' : 'No companies' %></option>
+                    <% } %>
+                    <% _companies.forEach(function (c) { %>
+                        <option value="<%= c.id %>" <%= (_company && String(c.id) === String(_company.id)) ? 'selected' : '' %>><%= c.name %></option>
+                    <% }); %>
+                </select>
+
+                <% if (_company) { %>
+                    <!-- Open the selected company in Tally via the local agent. -->
+                    <form method="post" action="/open-in-tally/<%= _company.id %>" class="mt-3">
+                        <button type="submit" class="btn btn-outline-primary btn-sm w-100">
+                            <i class="fa-solid fa-arrow-up-right-from-square me-1"></i>Open in Tally
+                        </button>
+                    </form>
+                <% } %>
+            </div>
+        </div>
+    </div>
+</div>

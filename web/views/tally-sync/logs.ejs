@@ -19,6 +19,19 @@ var _perPage  = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
 var _modules  = (typeof syncModuleNames !== 'undefined' && syncModuleNames) ? syncModuleNames : [];
 var _dirs     = (typeof syncDirections !== 'undefined' && syncDirections) ? syncDirections : [];
 var _statuses = (typeof syncLogStatuses !== 'undefined' && syncLogStatuses) ? syncLogStatuses : [];
+var _restartHelp = (typeof restartHelp !== 'undefined' && restartHelp) ? restartHelp : '';
+
+// Failed rows on THIS page → the "Failure reasons & fixes" list. De-dupe by
+// cause so a screenful of the same error collapses to one actionable card.
+var _failed = _rows.filter(function (r) { return r.failed; });
+var _seenCause = {};
+var _fixes = [];
+_failed.forEach(function (r) {
+    var key = String(r.reason || '');
+    if (_seenCause[key]) return;
+    _seenCause[key] = true;
+    _fixes.push({ module: r.module, reason: r.reason, fix: r.fix, raw: r.raw });
+});
 
 function _opts(all, list) {
     var out = [{ value: '', label: all }];
@@ -112,6 +125,58 @@ var sortOptions = ['Time', 'Module', 'Status'];
     }) %>
 
 </div>
+
+<!-- ── Common fixes / How to restart ──────────────────────────────────────
+     Per-failure plain-language cause + fix (de-duped from the rows on this
+     page) plus a fixed "how to restart the agent" note. Hidden entirely when
+     nothing on the page failed. -->
+<div class="card mt-3">
+    <div class="card-body">
+        <h6 class="mb-3">
+            <i class="fa-solid fa-circle-question text-primary me-2"></i>Common fixes / How to restart
+        </h6>
+
+        <% if (_fixes.length) { %>
+            <div class="sync-fixes">
+                <% _fixes.forEach(function (f) { %>
+                    <div class="sync-fix-item">
+                        <div class="sync-fix-cause">
+                            <i class="fa-solid fa-triangle-exclamation text-danger me-2"></i>
+                            <strong><%= f.reason %></strong>
+                            <% if (f.module) { %><span class="text-muted small ms-2">(<%= f.module %>)</span><% } %>
+                        </div>
+                        <div class="sync-fix-fix text-muted">
+                            <i class="fa-solid fa-screwdriver-wrench me-2"></i><%= f.fix %>
+                        </div>
+                        <% if (f.raw && String(f.raw) !== String(f.reason)) { %>
+                            <div class="sync-fix-raw small text-muted mt-1">
+                                <i class="fa-regular fa-message me-2"></i>Tally said: <%= f.raw %>
+                            </div>
+                        <% } %>
+                    </div>
+                <% }); %>
+            </div>
+        <% } else { %>
+            <p class="text-muted mb-3">
+                <i class="fa-solid fa-circle-check text-success me-2"></i>No failures on this page.
+            </p>
+        <% } %>
+
+        <% if (_restartHelp) { %>
+            <div class="alert alert-info d-flex align-items-start mb-0 mt-3" role="note">
+                <i class="fa-solid fa-rotate-right me-2 mt-1"></i>
+                <span><%= _restartHelp %></span>
+            </div>
+        <% } %>
+    </div>
+</div>
+
+<style>
+    .sync-fixes { display: grid; gap: .75rem; }
+    .sync-fix-item { padding: .75rem 1rem; border: 1px solid var(--bs-border-color, #e5e7eb); border-radius: .5rem; background: #fafafa; }
+    .sync-fix-cause { margin-bottom: .25rem; }
+    .sync-fix-fix { font-size: .9rem; }
+</style>
 
 <style>
     @media (min-width: 992px) {

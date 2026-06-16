@@ -11,6 +11,10 @@
  *   activeMenu  string  — key of the active menu item (e.g. 'customers')
  * ─────────────────────────────────────────────────────────── */
 var _active = (typeof activeMenu !== 'undefined') ? activeMenu : '';
+// Cross-tenant platform admin? The "Licenses" group is shown ONLY then.
+var _isSuperAdmin = (typeof isSuperAdmin !== 'undefined') ? !!isSuperAdmin : false;
+// Tenant license-admin? The custom-role "Roles" item is shown ONLY then.
+var _isCompanyAdmin = (typeof isCompanyAdmin !== 'undefined') ? !!isCompanyAdmin : false;
 
 // Menu definition — grouped; `label:null` means an unlabelled group.
 // `href` of '#' marks not-yet-built screens (Phase-1 only ships 3 pages).
@@ -48,6 +52,25 @@ var menu = [
         { key: 'settings', label: 'Settings',             icon: 'fa-gear',        href: '/settings' },
     ]},
 ];
+
+// Tenant license-admin custom-role management. Appended to the Settings group
+// ONLY for the company-admin so they can create/manage license-scoped roles.
+if (_isCompanyAdmin) {
+    var _settings = menu.find(function (g) { return g.label === 'Settings'; });
+    if (_settings) {
+        _settings.items.push({ key: 'roles-admin', label: 'Roles', icon: 'fa-user-shield', href: '/roles-admin' });
+    }
+}
+
+// Platform-admin-only group: licence management lives outside the tenant menus
+// and is shown ONLY for the super-admin (cross-company operator). It is their
+// primary workflow, so PIN it to the TOP — right under Dashboard, above Masters.
+if (_isSuperAdmin) {
+    menu.splice(1, 0, { label: 'Platform Admin', items: [
+        { key: 'licenses',       label: 'Licenses',       icon: 'fa-key',         href: '/licenses' },
+        { key: 'user-approvals', label: 'User Approvals', icon: 'fa-user-check',  href: '/user-approvals' },
+    ]});
+}
 %>
 <div class="sidebar-inner">
 

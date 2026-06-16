@@ -1,0 +1,131 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/licenses/list.ejs — PLATFORM ADMIN · Licenses listing.
+ * Route: GET /licenses  ·  activeMenu: 'licenses'  ·  super-admin only.
+ *
+ * Cross-tenant list of platform licences. Each license drives the
+ * machine-bound Tally agent + a default license-admin login. The actions
+ * (Suspend/Activate toggle, Reset machine) are POST forms hitting the
+ * super-admin api endpoints (proxied by routes/web.js).
+ *
+ * The table is rendered inline (NOT via partials/table) because its row
+ * actions are POST forms, which the generic table component does not
+ * support — but it reuses the SAME .card / .table.data-table / .pill-status
+ * classes so it looks identical to every other listing.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   licenseRows   [ rows ]   — table body (already mapped for display)
+ *   licensesTotal number     — pagination total
+ *   page, perPage numbers
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof licenseRows !== 'undefined' && licenseRows) ? licenseRows : [];
+var _total   = (typeof licensesTotal !== 'undefined') ? licensesTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+
+/* status string → the shared pill modifier class (matches partials/table). */
+function _statusClass(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'active')    return 'pill-status--success';
+    if (s === 'suspended') return 'pill-status--danger';
+    return 'pill-status--muted';
+}
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Licenses',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Licenses' },
+    ],
+    actions: [
+        { label: 'Register License', icon: 'fa-plus', gradient: true, href: '/licenses/register' },
+    ],
+}) %>
+
+<div class="card">
+
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="licenses-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th class="text-start">Holder</th>
+                    <th class="text-start">Key Prefix</th>
+                    <th class="text-start">Plan</th>
+                    <th class="text-start">Companies</th>
+                    <th class="text-start">Max Users</th>
+                    <th class="text-start">Status</th>
+                    <th class="text-start">Valid Until</th>
+                    <th class="text-start">Machine</th>
+                    <th class="text-start">Last Seen</th>
+                    <th class="text-end data-table-actions-head">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="11">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            No licenses found.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _rows.forEach(function (row, i) { %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td class="text-start"><%= row.holder_name %></td>
+                        <td class="text-start"><code><%= row.key_prefix %></code></td>
+                        <td class="text-start"><span class="pill-badge"><%= row.plan %></span></td>
+                        <td class="text-start"><%= row.companies_count %> / <%= row.max_companies %></td>
+                        <td class="text-start"><%= row.max_users %></td>
+                        <td class="text-start">
+                            <span class="pill-status <%= _statusClass(row.status) %>"><%= row.status_label %></span>
+                        </td>
+                        <td class="text-start"><%= row.valid_until || '—' %></td>
+                        <td class="text-start">
+                            <% if (row.machine_bound) { %>
+                                <span class="pill-status pill-status--info">Bound</span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--muted">Unbound</span>
+                            <% } %>
+                        </td>
+                        <td class="text-start"><%= row.last_seen_at || '—' %></td>
+                        <td class="text-end data-table-actions">
+                            <a href="/licenses/<%= row.id %>/permissions" class="btn btn-light btn-sm" title="Manage module entitlements">
+                                <i class="fa-solid fa-cubes me-1"></i>Modules
+                            </a>
+                            <% if (row.status === 'active') { %>
+                                <form method="post" action="/licenses/<%= row.id %>/suspend" class="d-inline">
+                                    <button type="submit" class="btn btn-light btn-sm" title="Suspend license">
+                                        <i class="fa-solid fa-ban me-1"></i>Suspend
+                                    </button>
+                                </form>
+                            <% } else { %>
+                                <form method="post" action="/licenses/<%= row.id %>/activate" class="d-inline">
+                                    <button type="submit" class="btn btn-light btn-sm" title="Reactivate license">
+                                        <i class="fa-solid fa-circle-check me-1"></i>Activate
+                                    </button>
+                                </form>
+                            <% } %>
+                            <form method="post" action="/licenses/<%= row.id %>/reset-machine" class="d-inline">
+                                <button type="submit" class="btn btn-light btn-sm" title="Unbind the agent machine"
+                                        <%= row.machine_bound ? '' : 'disabled' %>>
+                                    <i class="fa-solid fa-rotate me-1"></i>Reset Machine
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>

@@ -75,24 +75,28 @@ exports.seed = async function (knex) {
         await knex('users')
             .where('id', existingUser.id)
             .update({
-                name:          ADMIN.name,
-                role_id:       superAdminRole.id,
-                company_id:    companyId,
-                password_hash: passwordHash,
-                status:        ADMIN.status,
-                deleted_at:    null,
-                updated_at:    knex.fn.now(),
+                name:            ADMIN.name,
+                role_id:         superAdminRole.id,
+                company_id:      companyId,
+                password_hash:   passwordHash,
+                status:          ADMIN.status,
+                approval_status: 'approved',
+                approved_at:     knex.fn.now(),
+                deleted_at:      null,
+                updated_at:      knex.fn.now(),
             });
         console.log(`✓ super-admin user '${email}' updated (id=${existingUser.id})`);
     } else {
         const [u] = await knex('users')
             .insert({
-                name:          ADMIN.name,
+                name:            ADMIN.name,
                 email,
-                role_id:       superAdminRole.id,
-                company_id:    companyId,
-                password_hash: passwordHash,
-                status:        ADMIN.status,
+                role_id:         superAdminRole.id,
+                company_id:      companyId,
+                password_hash:   passwordHash,
+                status:          ADMIN.status,
+                approval_status: 'approved',
+                approved_at:     knex.fn.now(),
             })
             .returning('id');
         console.log(`✓ super-admin user '${email}' created (id=${u.id})`);

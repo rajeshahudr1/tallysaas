@@ -13,7 +13,10 @@ const activateSchema = Joi.object({
 });
 
 const heartbeatSchema = Joi.object({
-    agent_version: Joi.string().trim().max(40).allow('', null),
+    agent_version:  Joi.string().trim().max(40).allow('', null),
+    // Names of the companies currently OPEN in Tally (so the cloud can show
+    // "currently open in Tally"). Optional — omitted when Tally is unreachable.
+    open_companies: Joi.array().items(Joi.string().trim().max(191)).max(500).allow(null),
 });
 
 module.exports = { activateSchema, heartbeatSchema };

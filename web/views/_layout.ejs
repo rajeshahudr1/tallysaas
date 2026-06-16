@@ -46,7 +46,7 @@ var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
 
     <!-- App theme (single source of custom styling). ?v bust = force fresh
          CSS past any stale service-worker cache after an update. -->
-    <link rel="stylesheet" href="/css/theme.css?v=3">
+    <link rel="stylesheet" href="/css/theme.css?v=4">
 </head>
 <body class="app">
 
@@ -58,6 +58,26 @@ var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
     <!-- ── Mobile sidebar (offcanvas drawer) ──────────────────── -->
     <div class="offcanvas offcanvas-start sidebar-offcanvas" tabindex="-1" id="sidebarOffcanvas"
          aria-label="Navigation menu">
+        <!-- Search lives HERE on mobile (the header only shows a search icon
+             that opens this drawer). Submits to the customers search. -->
+        <div class="offcanvas-search p-3 pb-1">
+            <form role="search" method="get" action="/customers" class="position-relative m-0">
+                <i class="fa-solid fa-magnifying-glass position-absolute"
+                   style="left:14px; top:50%; transform:translateY(-50%); color:#9CA3AF; pointer-events:none;"></i>
+                <input type="search" name="search" class="form-control"
+                       style="padding-left:38px; border-radius:10px;"
+                       placeholder="Search..." aria-label="Search">
+            </form>
+        </div>
+        <!-- Notifications (mobile lives HERE — the header bell is desktop-only) -->
+        <a href="/sync-dashboard" class="offcanvas-notif d-flex align-items-center gap-2 mx-3 mb-1 px-2 py-2 rounded text-decoration-none"
+           style="color:#CBD5E1;">
+            <i class="fa-solid fa-bell"></i>
+            <span>Notifications</span>
+            <% if (typeof notificationCount !== 'undefined' && Number(notificationCount) > 0) { %>
+                <span class="badge bg-primary rounded-pill ms-auto"><%= notificationCount %></span>
+            <% } %>
+        </a>
         <%- include('partials/sidebar', { activeMenu: _activeMenu }) %>
     </div>
 

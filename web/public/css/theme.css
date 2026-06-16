@@ -840,6 +840,12 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
     .topbar-search-kbd { display: none; }
     .topbar-company-name { display: none; }
 
+    /* Phone header: hide the bulky Install button (the desktop app.js toggle
+       still controls it ≥lg) + cap the compact switcher pill's text. */
+    #installAppBtn { display: none !important; }
+    .topbar-switch-ctx { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topbar-switch-caret { font-size: 11px; color: var(--text-muted); }
+
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
     .chart-row { grid-template-columns: 1fr; }
     .recent-row { grid-template-columns: 1fr; }

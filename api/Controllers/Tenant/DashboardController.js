@@ -53,6 +53,13 @@ function num(x) {
     return Number(x || 0);
 }
 
+// Validate a 'YYYY-MM-DD' query param → return it (string) or null.
+function parseDate(v) {
+    if (typeof v !== 'string') return null;
+    const s = v.trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
 // First day of the current month as "YYYY-MM-01" (for the today_sales filter).
 function firstOfThisMonth() {
     const d   = new Date();
@@ -69,6 +76,41 @@ async function summary(req, res) {
     try {
         const companyId   = req.companyId;
         const monthStart  = firstOfThisMonth();
+
+        // Optional dashboard date range (from the header date-range picker).
+        // When both are valid YYYY-MM-DD (from ≤ to), the date-sensitive money
+        // metrics + recent invoices scope to [from, to]; otherwise their
+        // original defaults apply (today_sales = this month; rest = all-time).
+        const from = parseDate(req.query.from);
+        const to   = parseDate(req.query.to);
+        const hasRange = !!(from && to && from <= to);
+
+        const todaySalesQ = db('invoices').where('company_id', companyId)
+            .whereNull('deleted_at').where('type', 'sales').whereNot('status', 'failed');
+        if (hasRange) todaySalesQ.whereBetween('invoice_date', [from, to]);
+        else todaySalesQ.where('invoice_date', '>=', monthStart);
+
+        const invoiceAmountQ = db('invoices').where('company_id', companyId)
+            .whereNull('deleted_at').where('type', 'sales');
+        if (hasRange) invoiceAmountQ.whereBetween('invoice_date', [from, to]);
+
+        const paymentReceivedQ = db('payments').where('company_id', companyId)
+            .whereNull('deleted_at').where('type', 'receipt');
+        if (hasRange) paymentReceivedQ.whereBetween('payment_date', [from, to]);
+
+        const recentInvoicesQ = db('invoices')
+            .leftJoin('customers', 'customers.id', 'invoices.customer_id')
+            .where('invoices.company_id', companyId)
+            .whereNull('invoices.deleted_at')
+            .where('invoices.type', 'sales');
+        if (hasRange) recentInvoicesQ.whereBetween('invoices.invoice_date', [from, to]);
+        recentInvoicesQ.orderBy('invoices.id', 'desc').limit(6).select(
+            'invoices.invoice_no',
+            'customers.name as customer',
+            'invoices.total',
+            'invoices.status',
+            'invoices.invoice_date',
+        );
 
         const [
             companiesCnt,
@@ -101,13 +143,8 @@ async function summary(req, res) {
             db('suppliers').where('company_id', companyId)
                 .whereNull('deleted_at').count('id as c').first(),
 
-            // today_sales — this-month sales total, excluding failed vouchers.
-            db('invoices').where('company_id', companyId)
-                .whereNull('deleted_at')
-                .where('type', 'sales')
-                .whereNot('status', 'failed')
-                .where('invoice_date', '>=', monthStart)
-                .sum('total as s').first(),
+            // today_sales — sales total for the selected range (else this month).
+            todaySalesQ.sum('total as s').first(),
 
             // pending_sync parts (summed below).
             db('customers').where('company_id', companyId)
@@ -131,15 +168,11 @@ async function summary(req, res) {
                 .whereNull('deleted_at')
                 .sum(db.raw('sales_price * opening_stock')).first(),
 
-            // invoice_amount — Σ total over all sales invoices.
-            db('invoices').where('company_id', companyId)
-                .whereNull('deleted_at').where('type', 'sales')
-                .sum('total as s').first(),
+            // invoice_amount — Σ total over sales invoices (range-scoped).
+            invoiceAmountQ.sum('total as s').first(),
 
-            // payment_received — Σ amount over receipt vouchers.
-            db('payments').where('company_id', companyId)
-                .whereNull('deleted_at').where('type', 'receipt')
-                .sum('amount as s').first(),
+            // payment_received — Σ amount over receipt vouchers (range-scoped).
+            paymentReceivedQ.sum('amount as s').first(),
 
             // ── sales_chart — monthly sales totals, grouped by month bucket ──
             db('invoices').where('company_id', companyId)
@@ -156,21 +189,8 @@ async function summary(req, res) {
             db('tally_sync_logs').where('company_id', companyId)
                 .where('status', 'failed').count('id as c').first(),
 
-            // ── recent_invoices — last 6 sales invoices w/ customer name ──
-            db('invoices')
-                .leftJoin('customers', 'customers.id', 'invoices.customer_id')
-                .where('invoices.company_id', companyId)
-                .whereNull('invoices.deleted_at')
-                .where('invoices.type', 'sales')
-                .orderBy('invoices.id', 'desc')
-                .limit(6)
-                .select(
-                    'invoices.invoice_no',
-                    'customers.name as customer',
-                    'invoices.total',
-                    'invoices.status',
-                    'invoices.invoice_date',
-                ),
+            // ── recent_invoices — last 6 sales invoices (range-scoped) ──
+            recentInvoicesQ,
 
             // ── recent_sync — last 6 sync log entries ──
             db('tally_sync_logs').where('company_id', companyId)
@@ -227,6 +247,7 @@ async function summary(req, res) {
 
         return R.successResponse(res, {
             counts,
+            range: hasRange ? { from, to } : null,
             sales_chart: { labels, data: salesData },
             sync_chart,
             recent_invoices: recentInvoices,

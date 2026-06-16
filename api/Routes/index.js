@@ -92,6 +92,11 @@ const {
 const { createLicenseSchema, listLicenseSchema } = require('../Validators/license');
 const { activateSchema, heartbeatSchema }        = require('../Validators/agent');
 const { createUserSchema, listUserSchema }       = require('../Validators/user');
+const {
+    createRoleSchema,
+    updateRoleSchema,
+    setRolePermissionsSchema,
+} = require('../Validators/role');
 const { createCompanySchema, listCompanySchema } = require('../Validators/company');
 const { createJournalSchema, listJournalSchema } = require('../Validators/journal');
 const { createAdjustmentSchema }                 = require('../Validators/inventory');
@@ -110,6 +115,7 @@ const PaymentController       = require('../Controllers/Tenant/PaymentController
 const LicenseController       = require('../Controllers/SuperAdmin/LicenseController');
 const CompanyController       = require('../Controllers/SuperAdmin/CompanyController');
 const AgentController         = require('../Controllers/Agent/AgentController');
+const AgentCommandController  = require('../Controllers/Tenant/AgentCommandController');
 const DashboardController     = require('../Controllers/Tenant/DashboardController');
 const InventoryController     = require('../Controllers/Tenant/InventoryController');
 const UserController          = require('../Controllers/Tenant/UserController');
@@ -121,6 +127,7 @@ const MyCompaniesController   = require('../Controllers/Tenant/MyCompaniesContro
 const ConfigController        = require('../Controllers/Tenant/ConfigController');
 const TenantCompanyController = require('../Controllers/Tenant/CompanyController');
 const RbacController          = require('../Controllers/SuperAdmin/RbacController');
+const UserApprovalController  = require('../Controllers/SuperAdmin/UserApprovalController');
 const JournalController       = require('../Controllers/Tenant/JournalController');
 
 // ── DB (for the /health probe) ────────────────────────────────────
@@ -197,6 +204,10 @@ router.get('/agent/pending',  authenticateAgent, AgentController.pending);
 router.post('/agent/result',  authenticateAgent, AgentController.result);
 // Tally → Cloud: the agent imports masters read from the open Tally company.
 router.post('/agent/import',  authenticateAgent, AgentController.importFromTally);
+// Command channel: the agent drains queued commands (open_company …) and reports
+// each outcome. Pickup is transactional + license-scoped (see getCommands).
+router.get('/agent/commands',             authenticateAgent, AgentController.getCommands);
+router.post('/agent/commands/:id/result', authenticateAgent, AgentController.commandResult);
 
 // ───────────────────────────────────────────────────────────────────
 // Super-Admin · License management
@@ -213,11 +224,26 @@ router.post('/super-admin/licenses/:id/suspend',
 router.post('/super-admin/licenses/:id/activate',
     authenticate, requireSuperAdmin, LicenseController.activate);
 
+// Super-Admin · per-user approval queue (each approved user = a paid seat).
+router.get('/super-admin/users/pending',
+    authenticate, requireSuperAdmin, UserApprovalController.listPending);
+router.post('/super-admin/users/:id/approve',
+    authenticate, requireSuperAdmin, UserApprovalController.approve);
+router.post('/super-admin/users/:id/reject',
+    authenticate, requireSuperAdmin, UserApprovalController.reject);
+
 // Super-Admin · Roles & Permissions matrix (roles are global → platform op).
 router.get('/permissions/matrix',
     authenticate, requireSuperAdmin, RbacController.matrix);
 router.put('/roles/:id/permissions',
     authenticate, requireSuperAdmin, RbacController.updateRolePermissions);
+
+// Super-Admin · per-license module ENTITLEMENTS (which modules a license's
+// roles may use). Phase C — backs the license module-access screen.
+router.get('/super-admin/licenses/:id/permissions',
+    authenticate, requireSuperAdmin, RbacController.licenseMatrix);
+router.put('/super-admin/licenses/:id/permissions',
+    authenticate, requireSuperAdmin, RbacController.setLicensePermissions);
 
 // Super-Admin · per-company concurrent web-session cap (max_sessions_per_user).
 router.get('/super-admin/companies',
@@ -645,12 +671,39 @@ router.post(
     InventoryController.adjust,
 );
 
-// Roles — read-only list for the user-management role dropdown.
+// Roles — assignable-roles list for the Add/Edit User dropdown (license-scoped).
 router.get(
     '/roles',
     authenticate, resolveCompany, can('users', 'view'),
     RoleController.list,
 );
+
+// Tenant (license-admin) custom-role MANAGEMENT (Phase C). License-scoped; a
+// license-admin builds roles only from the modules their license is entitled to.
+// NOTE: 'available-permissions' is registered before '/:id' so it isn't captured.
+router.get('/account/roles',
+    authenticate, can('users', 'view'), RoleController.manageList);
+router.get('/account/roles/available-permissions',
+    authenticate, can('users', 'view'), RoleController.availablePermissions);
+router.get('/account/roles/:id',
+    authenticate, can('users', 'view'), RoleController.get);
+router.post('/account/roles',
+    authenticate, can('users', 'create'), validate(createRoleSchema), RoleController.create);
+router.put('/account/roles/:id',
+    authenticate, can('users', 'edit'), validate(updateRoleSchema), RoleController.update);
+router.put('/account/roles/:id/permissions',
+    authenticate, can('users', 'edit'), validate(setRolePermissionsSchema), RoleController.setPermissions);
+router.delete('/account/roles/:id',
+    authenticate, can('users', 'delete'), RoleController.remove);
+
+// Account · cloud→agent command channel (user-auth, license-scoped). A user
+// queues "open this company in Tally"; the local agent drains it via /agent/*.
+// `authenticate` only — license scope comes from req.user.license_id (same as
+// the /account/roles management routes above).
+router.post('/account/agent/open-company',
+    authenticate, AgentCommandController.openCompany);
+router.get('/account/agent/commands',
+    authenticate, AgentCommandController.list);
 
 // Users — company user management.
 router.get(
@@ -688,6 +741,12 @@ router.get(
     '/sync/logs',
     authenticate, resolveCompany, can('tally-sync', 'view'),
     SyncController.logs,
+);
+// Notification-bell feed (unread failed count + recent rows w/ friendly reasons).
+router.get(
+    '/sync/notifications',
+    authenticate, resolveCompany, can('tally-sync', 'view'),
+    SyncController.notifications,
 );
 
 // Journal vouchers (Dr/Cr accounting entry — syncs to Tally as a Journal).

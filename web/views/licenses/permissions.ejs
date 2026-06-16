@@ -1,0 +1,146 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/licenses/permissions.ejs — PLATFORM ADMIN · License Modules.
+ * Route: GET /licenses/:id/permissions  ·  activeMenu: 'licenses'  ·  super-admin only.
+ *
+ * Module × action entitlement grid for ONE license: which modules this
+ * license's roles may use. Rows = modules (label), columns = the 5 actions,
+ * cells = checkboxes named `perm` with value `<moduleKey>.<action>` (so
+ * Express parses req.body.perm into an array). Pre-checked from `granted`.
+ *
+ * When `all_granted` is true the license has NO explicit grants yet and is
+ * therefore entitled to EVERYTHING — a banner explains that saving a
+ * selection will restrict it. Submit → POST /licenses/:id/permissions.
+ *
+ * Reuses the SAME .rbac-matrix grid + .card / .pill-badge / theme classes as
+ * the tenant Roles screen, so it looks identical to the rest of the app.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   license     { id, holder_name }
+ *   modules     [ { key, label } ]
+ *   actions     [ 'view','create','edit','delete','export' ]
+ *   granted     { <moduleKey>: { <action>: true } }
+ *   allGranted  bool
+ * ─────────────────────────────────────────────────────────── */
+
+var _lic     = (typeof license !== 'undefined' && license) ? license : {};
+var _modules = (typeof modules !== 'undefined' && modules) ? modules : [];
+var _actions = (typeof actions !== 'undefined' && actions) ? actions : [];
+var _granted = (typeof granted !== 'undefined' && granted) ? granted : {};
+var _all     = (typeof allGranted !== 'undefined') ? !!allGranted : false;
+var _holder  = _lic.holder_name || ('License #' + (_lic.id || ''));
+
+var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 'fa-trash-can', export: 'fa-upload' };
+%>
+
+<%- include('../partials/page-head', {
+    title: 'License Modules — ' + _holder,
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Licenses', href: '/licenses' },
+        { label: 'Modules' },
+    ],
+    actions: [
+        { label: 'Back to Licenses', icon: 'fa-arrow-left', variant: 'light', href: '/licenses' },
+    ],
+}) %>
+
+<% if (_all) { %>
+    <div class="alert alert-warning flash-banner" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2"></i>
+        <strong>This license currently has access to ALL modules.</strong>
+        Saving a selection below will restrict it to only the ticked modules &amp; actions.
+    </div>
+<% } %>
+
+<form id="license-perms-form" method="post" action="/licenses/<%= _lic.id %>/permissions" autocomplete="off">
+    <div class="card">
+        <div class="inv-section-head">
+            <h2 class="inv-section-title">
+                <i class="fa-solid fa-cubes me-2 text-primary"></i>Module Entitlements
+            </h2>
+            <span class="form-hint mb-0">Tick the actions this license's roles may use per module.</span>
+        </div>
+
+        <% if (!_modules.length) { %>
+            <div class="data-table-empty text-center text-muted py-5">
+                <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                No modules are available to configure.
+            </div>
+        <% } else { %>
+            <div class="table-responsive">
+                <table class="rbac-matrix" id="licensePermsMatrix">
+                    <thead>
+                        <tr>
+                            <th>Module</th>
+                            <% _actions.forEach(function (a) { %>
+                                <th>
+                                    <span class="rbac-col-action">
+                                        <i class="fa-solid <%= _actionIcons[a] || 'fa-check' %>"></i>
+                                        <span><%= a.charAt(0).toUpperCase() + a.slice(1) %></span>
+                                        <input type="checkbox" data-col-action="<%= a %>" title="Toggle column">
+                                    </span>
+                                </th>
+                            <% }); %>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% _modules.forEach(function (m) { %>
+                            <% var gm = (_granted && _granted[m.key]) ? _granted[m.key] : {}; %>
+                            <tr>
+                                <td>
+                                    <%= m.label %>
+                                    <input type="checkbox" class="ms-2" data-row-toggle title="Toggle row">
+                                </td>
+                                <% _actions.forEach(function (a) { %>
+                                    <td>
+                                        <input type="checkbox" name="perm" value="<%= m.key %>.<%= a %>"
+                                               data-action="<%= a %>"
+                                               <%= gm[a] ? 'checked' : '' %>>
+                                    </td>
+                                <% }); %>
+                            </tr>
+                        <% }); %>
+                    </tbody>
+                </table>
+            </div>
+        <% } %>
+    </div>
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/licenses">Cancel</a>
+        <button type="submit" class="btn btn-primary" <%= _modules.length ? '' : 'disabled' %>>
+            <i class="fa-solid fa-floppy-disk me-1"></i>Save Entitlements
+        </button>
+    </div>
+</form>
+
+<script>
+    /* Per-column + per-row "select all / none" toggles for the entitlement
+     * grid. Pure UI — only flips the checkboxes the form already submits. */
+    (function () {
+        var table = document.getElementById('licensePermsMatrix');
+        if (!table) return;
+
+        // Column toggles (header checkbox flips every cell for that action).
+        table.querySelectorAll('[data-col-action]').forEach(function (head) {
+            head.addEventListener('change', function () {
+                var act = head.getAttribute('data-col-action');
+                table.querySelectorAll('input[name="perm"][data-action="' + act + '"]').forEach(function (cb) {
+                    cb.checked = head.checked;
+                });
+            });
+        });
+
+        // Row toggles (the checkbox in the module cell flips that row).
+        table.querySelectorAll('[data-row-toggle]').forEach(function (rowCb) {
+            rowCb.addEventListener('change', function () {
+                var row = rowCb.closest('tr');
+                if (!row) return;
+                row.querySelectorAll('input[name="perm"]').forEach(function (cb) {
+                    cb.checked = rowCb.checked;
+                });
+            });
+        });
+    })();
+</script>
