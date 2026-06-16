@@ -118,6 +118,7 @@ const SyncController          = require('../Controllers/Tenant/SyncController');
 const ReportController        = require('../Controllers/Tenant/ReportController');
 const RoleController          = require('../Controllers/Tenant/RoleController');
 const MyCompaniesController   = require('../Controllers/Tenant/MyCompaniesController');
+const ConfigController        = require('../Controllers/Tenant/ConfigController');
 const TenantCompanyController = require('../Controllers/Tenant/CompanyController');
 const RbacController          = require('../Controllers/SuperAdmin/RbacController');
 const JournalController       = require('../Controllers/Tenant/JournalController');
@@ -177,6 +178,11 @@ router.get('/me', authenticate, AuthController.me);
 
 // Companies the caller may switch between (license-scoped; super-admin = all).
 router.get('/my-companies', authenticate, MyCompaniesController.list);
+
+// Config enumeration lists (supplier groups, payment terms, GST rates, units,
+// statuses …) — the single source for non-master-table dropdowns shared by the
+// web BFF and the mobile app. Global enums → authenticate only.
+router.get('/config/options', authenticate, ConfigController.options);
 
 // ───────────────────────────────────────────────────────────────────
 // Python sync AGENT (no user auth — license-key / agent-token based)

@@ -85,6 +85,42 @@ async function fetchOptions(req, basePath) {
     return rows.map((r) => ({ id: r.id, name: r.name }));
 }
 
+/* Fetch config-enumeration dropdown lists from the api's single source
+ * (GET /config/options — api/Helpers/appOptions.js), so the web BFF and the
+ * mobile app share ONE list (nothing hardcoded; one place to change).
+ *
+ * Takes an array of snake_case keys (e.g. ['supplier_groups','payment_terms'])
+ * and returns an object keyed by the camelCase render-local NAMES the EJS
+ * views already expect (e.g. { supplierGroups, paymentTerms }) — so callers
+ * just spread the result into res.render with no renaming.
+ *
+ * Unlike LIST endpoints, /config/options returns body.data as a FLAT
+ * key->string[] map (so read body.data[snake_key] directly, NOT
+ * body.data.data). Per requested key: use the api array when present, else
+ * fall back to the matching mock.<camelCase> array (resilience if the api is
+ * briefly unreachable). */
+const CONFIG_KEY_TO_LOCAL = {
+    supplier_groups: 'supplierGroups',
+    customer_groups: 'customerGroups',
+    payment_terms:   'paymentTerms',
+    payment_modes:   'paymentModes',
+    gst_rates:       'gstRates',
+    units:           'units',
+    financial_years: 'financialYears',
+};
+async function fetchConfig(req, keys) {
+    const wanted = Array.isArray(keys) ? keys : [keys];
+    const { body } = await api.get(req, `/config/options?keys=${wanted.join(',')}`);
+    const ok = body && body.status === 200 && body.data;
+    const out = {};
+    for (const key of wanted) {
+        const local = CONFIG_KEY_TO_LOCAL[key];
+        if (!local) continue;
+        out[local] = (ok && Array.isArray(body.data[key])) ? body.data[key] : mock[local];
+    }
+    return out;
+}
+
 /* Products as line-item picker options (id + the data the invoice.js
  * engine reads). `priceField` = 'sales_price' (sales) or 'purchase_price'. */
 async function fetchInvoiceProducts(req, priceField) {
@@ -239,6 +275,7 @@ router.get('/', async (req, res, next) => {
 router.get('/companies', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/companies');
+        const config = await fetchConfig(req, ['financial_years']);
         const companyRows = rows.map((r) => ({
             id: r.id, name: r.name, gst: r.gst_number || '', pan: r.pan_number || '',
             mobile: r.mobile || '', email: r.email || '', financial_year: r.financial_year || '',
@@ -251,7 +288,7 @@ router.get('/companies', async (req, res, next) => {
             // NOTE: `companyRows` (NOT `companies`) — `companies` is the global
             // header-switcher list; reusing it here would corrupt that dropdown.
             companyRows, companiesTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            financialYears: mock.financialYears,
+            ...config,
         });
     } catch (err) { next(err); }
 });
@@ -286,19 +323,22 @@ router.post('/companies', async (req, res, next) => {
 });
 
 /* ── MASTERS · Add Company (GET /companies/add) ─────────────── */
-router.get('/companies/add', (req, res) => {
-    res.render('companies/form', {
-        title: 'Add Company',
-        activeMenu: 'companies',
-        breadcrumb: [
-            { label: 'Dashboard', href: '/' },
-            { label: 'Companies', href: '/companies' },
-            { label: 'Add Company' },
-        ],
+router.get('/companies/add', async (req, res, next) => {
+    try {
+        const config = await fetchConfig(req, ['financial_years']);
+        res.render('companies/form', {
+            title: 'Add Company',
+            activeMenu: 'companies',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Companies', href: '/companies' },
+                { label: 'Add Company' },
+            ],
 
-        // Form dropdown option sources.
-        financialYears: mock.financialYears,
-    });
+            // Form dropdown option sources.
+            ...config,
+        });
+    } catch (err) { next(err); }
 });
 
 /* ── MASTERS · Locations listing (GET /locations) ───────────── */
@@ -410,6 +450,7 @@ router.post('/sales-persons', async (req, res, next) => {
 router.get('/suppliers', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/suppliers');
+        const config = await fetchConfig(req, ['supplier_groups']);
         const supplierRows = rows.map((r) => ({
             id: r.id, name: r.name, location: r.location || '', mobile: r.mobile,
             gst: r.gst_number || '', group: r.supplier_group || '',
@@ -421,7 +462,7 @@ router.get('/suppliers', async (req, res, next) => {
             activeMenu: 'suppliers',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Suppliers' }],
             supplierRows, suppliersTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            locationNames: mock.locationNames, supplierGroups: mock.supplierGroups,
+            locationNames: mock.locationNames, ...config,
         });
     } catch (err) { next(err); }
 });
@@ -430,6 +471,7 @@ router.get('/suppliers', async (req, res, next) => {
 router.get('/suppliers/add', async (req, res, next) => {
     try {
         const locationOptions = await fetchOptions(req, '/locations');
+        const config = await fetchConfig(req, ['supplier_groups', 'payment_terms']);
         res.render('suppliers/form', {
             title: 'Add Supplier',
             activeMenu: 'suppliers',
@@ -439,8 +481,7 @@ router.get('/suppliers/add', async (req, res, next) => {
                 { label: 'Add Supplier' },
             ],
             locationOptions,                 // FK (id+name) for the Location select
-            supplierGroups: mock.supplierGroups,
-            paymentTerms:   mock.paymentTerms,
+            ...config,
         });
     } catch (err) { next(err); }
 });
@@ -468,6 +509,7 @@ router.post('/suppliers', async (req, res, next) => {
 router.get('/products', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/products');
+        const config = await fetchConfig(req, ['gst_rates']);
         const productRows = rows.map((r) => ({
             id: r.id, name: r.name, sku: r.sku || '', category: r.category || '',
             hsn: r.hsn_code || '', gst_rate: (r.gst_rate != null ? parseFloat(r.gst_rate) + '%' : ''),
@@ -480,7 +522,7 @@ router.get('/products', async (req, res, next) => {
             activeMenu: 'products',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Products' }],
             productRows, productsTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            categoryNames: mock.categoryNames, gstRates: mock.gstRates,
+            categoryNames: mock.categoryNames, ...config,
         });
     } catch (err) { next(err); }
 });
@@ -489,6 +531,7 @@ router.get('/products', async (req, res, next) => {
 router.get('/products/add', async (req, res, next) => {
     try {
         const categoryOptions = await fetchOptions(req, '/categories');
+        const config = await fetchConfig(req, ['units', 'gst_rates']);
         res.render('products/form', {
             title: 'Add Product',
             activeMenu: 'products',
@@ -498,8 +541,7 @@ router.get('/products/add', async (req, res, next) => {
                 { label: 'Add Product' },
             ],
             categoryOptions,                 // FK (id+name) for the Category select
-            units:    mock.units,
-            gstRates: mock.gstRates,
+            ...config,
         });
     } catch (err) { next(err); }
 });
@@ -748,6 +790,7 @@ router.post('/purchase-invoices', async (req, res, next) => {
 router.get('/payments', async (req, res, next) => {
   try {
     const { rows, meta } = await apiList(req, '/payments');
+    const config = await fetchConfig(req, ['payment_modes']);
     const paymentRows = rows.map((r) => ({
         id: r.id, payment_no: r.voucher_no, date: fmtDate(r.payment_date),
         party: r.party || '', mode: r.mode || '', reference: r.reference || '—',
@@ -767,7 +810,7 @@ router.get('/payments', async (req, res, next) => {
         perPage:         meta.per_page,
 
         supplierNames:   mock.supplierNames,
-        paymentModes:    mock.paymentModes,
+        ...config,
         invoiceStatuses: mock.invoiceStatuses,
     });
   } catch (err) { next(err); }
@@ -777,6 +820,7 @@ router.get('/payments', async (req, res, next) => {
 router.get('/payments/add', async (req, res, next) => {
     try {
         const supplierOptions = await fetchOptions(req, '/suppliers');
+        const config = await fetchConfig(req, ['payment_modes']);
         res.render('payments/form', {
             title: 'Add Payment',
             activeMenu: 'payments',
@@ -786,7 +830,7 @@ router.get('/payments/add', async (req, res, next) => {
                 { label: 'Add Payment' },
             ],
             supplierOptions,                 // FK (id+name) for the Supplier select
-            paymentModes:  mock.paymentModes,
+            ...config,
             nextPaymentNo: mock.nextPaymentNo,
         });
     } catch (err) { next(err); }
@@ -814,6 +858,7 @@ router.post('/payments', async (req, res, next) => {
 router.get('/receipts', async (req, res, next) => {
   try {
     const { rows, meta } = await apiList(req, '/receipts');
+    const config = await fetchConfig(req, ['payment_modes']);
     const receiptRows = rows.map((r) => ({
         id: r.id, receipt_no: r.voucher_no, date: fmtDate(r.payment_date),
         party: r.party || '', mode: r.mode || '', reference: r.reference || '—',
@@ -833,7 +878,7 @@ router.get('/receipts', async (req, res, next) => {
         perPage:         meta.per_page,
 
         customerNames:   mock.customerNames,
-        paymentModes:    mock.paymentModes,
+        ...config,
         invoiceStatuses: mock.invoiceStatuses,
     });
   } catch (err) { next(err); }
@@ -843,6 +888,7 @@ router.get('/receipts', async (req, res, next) => {
 router.get('/receipts/add', async (req, res, next) => {
     try {
         const customerOptions = await fetchOptions(req, '/customers');
+        const config = await fetchConfig(req, ['payment_modes']);
         res.render('receipts/form', {
             title: 'Add Receipt',
             activeMenu: 'receipts',
@@ -852,7 +898,7 @@ router.get('/receipts/add', async (req, res, next) => {
                 { label: 'Add Receipt' },
             ],
             customerOptions,                 // FK (id+name) for the Customer select
-            paymentModes:  mock.paymentModes,
+            ...config,
             nextReceiptNo: mock.nextReceiptNo,
         });
     } catch (err) { next(err); }
@@ -1501,6 +1547,7 @@ router.get('/settings', async (req, res, next) => {
         const payload  = (body && body.data) || {};
         const companyProfile  = payload.company  || {};
         const companySettings = payload.settings || {};
+        const config = await fetchConfig(req, ['financial_years', 'gst_rates', 'payment_terms']);
 
         res.render('settings/index', {
             title: 'Settings',
@@ -1515,10 +1562,8 @@ router.get('/settings', async (req, res, next) => {
             companyProfile,            // = body.data.company  {name,email,mobile,gst_number,pan_number,financial_year,address}
             companySettings,           // = body.data.settings {arbitrary key/values}
 
-            // Select option sources the API does not provide (kept on mock).
-            financialYears: mock.financialYears,
-            gstRates:       mock.gstRates,
-            paymentTerms:   mock.paymentTerms,
+            // Config-enumeration option sources (api single source /config/options).
+            ...config,
         });
     } catch (err) { next(err); }
 });
@@ -1544,6 +1589,7 @@ router.get('/customers', async (req, res, next) => {
         const payload  = (body && body.data) || {};
         const rows     = Array.isArray(payload.data) ? payload.data : [];
         const meta     = payload.meta || { total: rows.length, page, per_page: perPage };
+        const config   = await fetchConfig(req, ['customer_groups']);
 
         // Map api columns → the view's expected keys.
         const customers = rows.map((r) => ({
@@ -1575,7 +1621,7 @@ router.get('/customers', async (req, res, next) => {
             // Filter dropdown option sources (still mock for now).
             locations:      mock.locations,
             salesPersons:   mock.salesPersons,
-            customerGroups: mock.customerGroups,
+            ...config,
         });
     } catch (err) {
         next(err);
@@ -1710,10 +1756,11 @@ router.get('/suppliers/:id/edit', async (req, res, next) => {
         const id = Number(req.params.id);
         const [record, locationOptions] = await Promise.all([fetchRecord(req, '/suppliers', id), fetchOptions(req, '/locations')]);
         if (!record) { setFlash(req, 'error', 'Supplier not found.'); return req.session.save(() => res.redirect('/suppliers')); }
+        const config = await fetchConfig(req, ['supplier_groups', 'payment_terms']);
         res.render('suppliers/form', {
             title: 'Edit Supplier', activeMenu: 'suppliers',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Suppliers', href: '/suppliers' }, { label: 'Edit Supplier' }],
-            record, locationOptions, supplierGroups: mock.supplierGroups, paymentTerms: mock.paymentTerms,
+            record, locationOptions, ...config,
         });
     } catch (err) { next(err); }
 });
@@ -1739,10 +1786,11 @@ router.get('/products/:id/edit', async (req, res, next) => {
         const id = Number(req.params.id);
         const [record, categoryOptions] = await Promise.all([fetchRecord(req, '/products', id), fetchOptions(req, '/categories')]);
         if (!record) { setFlash(req, 'error', 'Product not found.'); return req.session.save(() => res.redirect('/products')); }
+        const config = await fetchConfig(req, ['units', 'gst_rates']);
         res.render('products/form', {
             title: 'Edit Product', activeMenu: 'products',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Products', href: '/products' }, { label: 'Edit Product' }],
-            record, categoryOptions, units: mock.units, gstRates: mock.gstRates,
+            record, categoryOptions, ...config,
         });
     } catch (err) { next(err); }
 });

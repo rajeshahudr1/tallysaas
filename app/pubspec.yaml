@@ -1,0 +1,53 @@
+name: tallysaas_app
+description: Tally Cloud Sync — TallySaaS companion mobile app
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.6
+
+  # ─── Networking ─────────────────────────────────────────────
+  # Dio gives us interceptors (auth header + X-Company-Id forwarder),
+  # cancel tokens, and structured DioException → API envelope.
+  dio: ^5.4.3+1
+
+  # ─── State management + DI ──────────────────────────────────
+  # Riverpod = compile-safe DI + reactive providers. Every service and
+  # piece of session state is exposed as a provider.
+  flutter_riverpod: ^2.5.1
+
+  # ─── Routing ─────────────────────────────────────────────────
+  # Declarative routes + redirect-based auth guard (Splash → Login →
+  # AppShell), driven off sessionProvider.
+  go_router: ^14.1.0
+
+  # ─── Storage ─────────────────────────────────────────────────
+  # secure_storage   → JWT token, company id, cached user blob.
+  # shared_preferences → theme choice + other non-secret toggles.
+  flutter_secure_storage: ^9.2.2
+  shared_preferences: ^2.2.3
+
+  # ─── Formatting + i18n primitives ───────────────────────────
+  # `intl` powers the ₹ / en_IN money + dd/MM/yyyy date formatters.
+  intl: ^0.19.0
+
+  # ─── Visual assets ───────────────────────────────────────────
+  flutter_svg: ^2.0.10+1
+
+  # ─── Charts (dashboard sparklines + report traces) ──────────
+  fl_chart: ^0.68.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
