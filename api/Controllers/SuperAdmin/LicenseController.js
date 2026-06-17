@@ -24,6 +24,7 @@ const licenseKey   = require('../../Helpers/licenseKey');
 const keyCrypto    = require('../../Helpers/keyCrypto');
 const passwords    = require('../../Helpers/passwords');
 const entitlements = require('../../Helpers/entitlements');
+const { reconcileLicenseSeatsTx } = require('../../Helpers/seats');
 const db           = require('../../config/db').db;
 
 const NOT_FOUND = 'License not found.';
@@ -231,19 +232,35 @@ async function get(req, res) {
         const clearKey    = encRow ? keyCrypto.decryptKey(encRow.license_key_enc) : null;
         const keyAvailable = !!clearKey;
 
-        const companies = await db('companies')
+        // Companies ordered by the SAME rule the sync gate uses (created_at asc,
+        // id asc) so we can mark the first max_companies as Syncing and the rest
+        // as over-limit (computed on-the-fly — there is no stored sync flag).
+        const companyRows = await db('companies')
             .where('license_id', lic.id).whereNull('deleted_at')
-            .orderBy('id', 'asc')
+            .orderBy('created_at', 'asc').orderBy('id', 'asc')
             .select('id', 'name', 'status');
+        const maxCompanies = lic.max_companies != null ? Number(lic.max_companies) : null;
+        const companies = companyRows.map((c, i) => ({
+            ...c,
+            syncing: maxCompanies == null ? true : i < maxCompanies,
+        }));
 
+        // Users ordered by the SAME rule the seat reconcile uses (created_at asc,
+        // id asc). Mark the license-admin (role slug company-admin, company_id
+        // NULL) so the UI never lets the operator confuse it for a seat user.
         const users = await db('users')
             .leftJoin('roles', 'roles.id', 'users.role_id')
             .where('users.license_id', lic.id).whereNull('users.deleted_at')
-            .orderBy('users.id', 'asc')
+            .orderBy('users.created_at', 'asc').orderBy('users.id', 'asc')
             .select(
                 'users.id', 'users.name', 'users.email', 'users.status',
-                'roles.name as role',
-            );
+                'users.company_id', 'roles.name as role', 'roles.slug as role_slug',
+            )
+            .then((rows) => rows.map((u) => ({
+                id: u.id, name: u.name, email: u.email, status: u.status,
+                role: u.role,
+                is_license_admin: u.role_slug === 'company-admin' && u.company_id == null,
+            })));
 
         const lastSeen  = lic.last_seen_at ? new Date(lic.last_seen_at) : null;
         const connected = !!(lastSeen && (Date.now() - lastSeen.getTime()) <= CONNECTED_WINDOW_MS);
@@ -341,6 +358,21 @@ async function update(req, res) {
 
         patch.updated_at = new Date();
         await db('licenses').where('id', lic.id).update(patch);
+
+        // SEAT auto-adjust: when max_users changed, re-evaluate which users are
+        // Active vs Inactive (license-admin + the oldest up to the new cap stay
+        // Active; the newest excess go Inactive — and vice-versa when the cap is
+        // raised). Best-effort: a reconcile failure must NOT fail the license
+        // save (the patch is already committed). max_companies needs NO persisted
+        // change — sync gating is computed on-the-fly (see AgentController).
+        if (Object.prototype.hasOwnProperty.call(patch, 'max_users')
+            && Number(patch.max_users) !== Number(lic.max_users)) {
+            try {
+                await reconcileLicenseSeatsTx(lic.id);
+            } catch (reErr) {
+                console.error('LicenseController.update seat reconcile error:', reErr);
+            }
+        }
 
         const updated = await db('licenses').where('id', lic.id).first(PUBLIC_COLUMNS);
         return R.successResponse(res, { license: updated }, 'License updated.');

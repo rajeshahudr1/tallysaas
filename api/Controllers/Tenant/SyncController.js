@@ -228,7 +228,7 @@ async function summary(req, res) {
                 .where('id', company.license_id)
                 .first('id', 'status', 'last_seen_at', 'agent_version', 'machine_id',
                        'last_open_companies', 'auto_update',
-                       'sync_push_enabled', 'sync_pull_enabled');
+                       'sync_push_enabled', 'sync_pull_enabled', 'sync_enabled');
         }
 
         // ── LIVE connectivity ── computed fresh from licenses.last_seen_at on
@@ -287,11 +287,16 @@ async function summary(req, res) {
         // Default ON when the column is missing/unreadable (matches /agent/version).
         const autoUpdate = license && license.auto_update != null ? !!license.auto_update : true;
 
-        // Per-license AUTO-sync DIRECTION toggles (Requirement 1). These gate
-        // ONLY the agent's automatic loop (the heartbeat echoes the same flags);
-        // the dashboard's MANUAL per-module buttons are independent of them.
-        // Default ON when the column is missing/unreadable, so existing licenses
-        // (and a pre-migration DB) read as both-directions-ON with no regression.
+        // Per-license AUTO-sync toggles. These gate ONLY the agent's automatic
+        // loop (the heartbeat echoes the EFFECTIVE flags); the dashboard's MANUAL
+        // per-module buttons are independent of them. We return the RAW values
+        // here (NOT the effective push&&sync_enabled the heartbeat sends) so the
+        // read-only Settings/Dashboard UI shows exactly what each switch is set
+        // to. Default ON when the column is missing/unreadable, so existing
+        // licenses (and a pre-migration DB) read as all-ON with no regression.
+        //   • sync_enabled — the MASTER "Auto-sync" switch (migration 0041).
+        //   • push_enabled / pull_enabled — the per-direction auto toggles.
+        const syncEnabled = license && license.sync_enabled      != null ? !!license.sync_enabled      : true;
         const pushEnabled = license && license.sync_push_enabled != null ? !!license.sync_push_enabled : true;
         const pullEnabled = license && license.sync_pull_enabled != null ? !!license.sync_pull_enabled : true;
 
@@ -315,7 +320,11 @@ async function summary(req, res) {
             mandatory_update: mandatory,
             release_notes:    releaseNotes,
             auto_update:      autoUpdate,
-            // Auto-sync direction toggles (the agent loop honours these).
+            // Auto-sync toggles (RAW values for the read-only UI). The master
+            // sync_enabled gates everything; push/pull are the per-direction
+            // auto toggles. The agent loop honours the EFFECTIVE combination
+            // (sync_enabled && direction) via the heartbeat, not these raw flags.
+            sync_enabled:     syncEnabled,
             push_enabled:     pushEnabled,
             pull_enabled:     pullEnabled,
         };
@@ -501,16 +510,72 @@ async function buildAgentUpdateNotif(companyId) {
 }
 
 /**
+ * The set of notification keys the given user has already marked read. Returns a
+ * Set<string> of notification_key values (the bell item id as TEXT). Best-effort:
+ * a read-table hiccup must never sink the feed — an empty Set just renders the
+ * pre-read-tracking behaviour (everything unread). PER USER (user_id = sub).
+ */
+async function readKeySet(userId) {
+    try {
+        if (userId == null) return new Set();
+        const rows = await db('notification_reads')
+            .where('user_id', userId)
+            .select('notification_key');
+        return new Set(rows.map((r) => String(r.notification_key)));
+    } catch (err) {
+        console.error('sync.notifications readKeySet (ignored):', err && err.message);
+        return new Set();
+    }
+}
+
+/**
+ * The CURRENTLY-UNREAD notification keys for a user (as TEXT) — the SINGLE source
+ * of truth for both the badge count (its length) and markAllRead (the keys to
+ * bulk-insert). Computed from:
+ *   • each failed tally_sync_logs row in the 24h window whose id (stringified)
+ *     is NOT in `readSet`, PLUS
+ *   • the "agent-update-<version>" key when an update is available AND not read.
+ * Takes the ALREADY-LOADED `readSet` + `updateNotif` so callers that built them
+ * don't re-query / re-build (no N+1, no duplicate buildAgentUpdateNotif). One
+ * cheap id-only window query for the failed candidates.
+ */
+async function computeUnreadKeys(companyId, readSet, updateNotif) {
+    const cutoff = new Date(Date.now() - NOTIF_WINDOW_MS);
+
+    // Candidate failed-in-window log ids (just the id — cheap), minus read ones.
+    const failedRows = await db('tally_sync_logs')
+        .where('company_id', companyId)
+        .where('status', 'failed')
+        .where('created_at', '>=', cutoff)
+        .select('id');
+    const keys = [];
+    for (const r of failedRows) {
+        const key = String(r.id);
+        if (!readSet.has(key)) keys.push(key);
+    }
+
+    // The synthetic agent-update entry (one, keyed by version) when unread.
+    if (updateNotif) {
+        const key = String(updateNotif.id);
+        if (!readSet.has(key)) keys.push(key);
+    }
+
+    return keys;
+}
+
+/**
  * notifications(req,res) — GET /sync/notifications
  *
  * Drives the web/app notification BELL straight from tally_sync_logs (company-
- * scoped). The "unread" count = failed rows in the last 24h (this is what the
- * badge shows). Shape:
+ * scoped) MINUS this user's already-read items (notification_reads, PER USER).
+ * The "unread" count = failed rows in the last 24h NOT yet read by this user
+ * (+1 for an unread agent-update entry). Each recent[] item carries `read`.
+ * Shape:
  *   { data: {
  *       unread, fail_count, ok_count,
  *       last_sync_at,
  *       recent: [ {id, module, record_type, status, direction,
- *                  reason:{cause,fix,severity}, raw_message, when} ],
+ *                  reason:{cause,fix,severity}, raw_message, when, read} ],
  *       failed_by_module: [ {module, n} ],
  *   } }
  *
@@ -521,19 +586,25 @@ async function buildAgentUpdateNotif(companyId) {
 async function notifications(req, res) {
     try {
         const companyId = req.companyId;
+        const userId    = req.user && req.user.sub;
         const cutoff    = new Date(Date.now() - NOTIF_WINDOW_MS);
 
+        // This user's already-read item keys (PER USER). recent[] items get a
+        // `read` flag from this; the badge subtracts them from the unread count.
+        const readSet = await readKeySet(userId);
+
         const [
-            unreadRow,
+            failRow,
             okRow,
             lastRow,
             recent,
             failedByModule,
         ] = await Promise.all([
-            // Unread badge = failed in the last 24h. FAILED rows are written with
-            // synced_at = NULL (AgentController.result), so the 24h window MUST key
-            // off created_at — filtering failed rows on synced_at would always be
-            // false (NULL >= cutoff) and the badge would never move off 0.
+            // Total failed in the last 24h (fail_count surface — NOT the badge;
+            // the badge is the read-aware `unread` recomputed below). FAILED rows
+            // are written with synced_at = NULL (AgentController.result), so the
+            // 24h window MUST key off created_at — filtering failed rows on
+            // synced_at would always be false (NULL >= cutoff).
             db('tally_sync_logs')
                 .where('company_id', companyId)
                 .where('status', 'failed')
@@ -578,6 +649,9 @@ async function notifications(req, res) {
             // synced_at is NULL on failed rows → fall back to created_at so the
             // bell can render a relative time for failures too.
             when:        r.synced_at || r.created_at || null,
+            // PER-USER read flag (item id stringified, matched against the read
+            // set). Non-failed rows are decorative but still carry the flag.
+            read:        readSet.has(String(r.id)),
         }));
 
         const failedOut = failedByModule.map((r) => ({
@@ -594,13 +668,22 @@ async function notifications(req, res) {
         // for auto ones; they just update before/around seeing it). Best-effort:
         // a release/license lookup hiccup must never sink the whole feed.
         const updateNotif = await buildAgentUpdateNotif(companyId);
-        if (updateNotif) recentOut.unshift(updateNotif);
+        if (updateNotif) {
+            updateNotif.read = readSet.has(String(updateNotif.id));
+            recentOut.unshift(updateNotif);
+        }
+
+        // ── Read-aware badge ── the unread count EXCLUDES this user's already-
+        // read items: failed-in-window rows not yet read + (1 if an unread
+        // agent-update entry exists). This is what persists across reload — the
+        // server subtracts read items so the re-rendered badge is correct.
+        const unread = (await computeUnreadKeys(companyId, readSet, updateNotif)).length;
 
         return R.successResponse(res, {
-            // The bell badge counts failed syncs; bump it by 1 so the new-version
-            // entry is visible (and the badge isn't 0 with an item sitting there).
-            unread:           asCount(unreadRow) + (updateNotif ? 1 : 0),
-            fail_count:       asCount(unreadRow),
+            // Read-aware unread badge (failed-in-window not yet read by this user
+            // + an unread agent-update entry).
+            unread:           unread,
+            fail_count:       asCount(failRow),
             ok_count:         asCount(okRow),
             last_sync_at:     lastRow ? (lastRow.m || null) : null,
             recent:           recentOut,
@@ -609,6 +692,98 @@ async function notifications(req, res) {
         });
     } catch (err) {
         console.error('sync.notifications error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * Recompute the read-aware unread badge count for a user, FRESH from the DB.
+ * Loads this user's read set + the agent-update entry, then counts the currently-
+ * unread keys. Shared by markRead()/markAllRead() so they return the SAME count
+ * the next GET /sync/notifications would render. PER USER + company-scoped.
+ */
+async function freshUnreadCount(companyId, userId) {
+    const readSet = await readKeySet(userId);
+    const updateNotif = await buildAgentUpdateNotif(companyId);
+    const keys = await computeUnreadKeys(companyId, readSet, updateNotif);
+    return keys.length;
+}
+
+/**
+ * Idempotently mark a set of notification keys read for a user. Inserts one
+ * (user_id, notification_key, read_at) row per key, ON CONFLICT
+ * (user_id, notification_key) DO NOTHING — so re-marking the same key is a no-op
+ * (the count can never over-drop). No-op on an empty list. Best-effort dedup of
+ * the input keys. Uses Postgres' ON CONFLICT DO NOTHING via knex
+ * .onConflict([...]).ignore().
+ */
+async function insertReads(userId, keys) {
+    const uniq = Array.from(new Set(keys.map((k) => String(k)).filter((k) => k)));
+    if (!uniq.length) return 0;
+    const now = new Date();
+    const rows = uniq.map((k) => ({ user_id: userId, notification_key: k, read_at: now }));
+    await db('notification_reads')
+        .insert(rows)
+        .onConflict(['user_id', 'notification_key'])
+        .ignore();
+    return uniq.length;
+}
+
+/**
+ * markRead(req,res) — POST /sync/notifications/read   (user-auth, company-scoped)
+ * Body: { key } OR { keys: [...] } — the notification key(s) to mark read for
+ * THIS user (req.user.sub). A key is the bell item id as text: a tally_sync_logs
+ * id stringified OR "agent-update-<version>". Idempotent (ON CONFLICT DO NOTHING)
+ * so clicking the same notification twice never over-counts. Returns the FRESH
+ * read-aware { unread } so the client can set the live badge. 422 if no key.
+ */
+async function markRead(req, res) {
+    try {
+        const companyId = req.companyId;
+        const userId    = req.user && req.user.sub;
+        if (userId == null) return R.errorResponse(res, 'Not authenticated.', 401);
+
+        const b = req.body || {};
+        let keys = [];
+        if (Array.isArray(b.keys)) keys = b.keys;
+        else if (b.key != null) keys = [b.key];
+        keys = keys.map((k) => String(k == null ? '' : k).trim()).filter((k) => k);
+
+        if (!keys.length) return R.errorResponse(res, 'A notification key is required.', 422);
+
+        await insertReads(userId, keys);
+
+        const unread = await freshUnreadCount(companyId, userId);
+        return R.successResponse(res, { unread });
+    } catch (err) {
+        console.error('sync.markRead error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * markAllRead(req,res) — POST /sync/notifications/read-all  (user-auth, scoped)
+ *
+ * Marks EVERY currently-unread item read for THIS user: computes the live unread
+ * keys (failed-in-window log ids not yet read + the agent-update key if unread)
+ * and bulk-inserts them ON CONFLICT DO NOTHING. After this the read-aware unread
+ * count is 0, so we return { unread: 0 }. Idempotent.
+ */
+async function markAllRead(req, res) {
+    try {
+        const companyId = req.companyId;
+        const userId    = req.user && req.user.sub;
+        if (userId == null) return R.errorResponse(res, 'Not authenticated.', 401);
+
+        const readSet = await readKeySet(userId);
+        const updateNotif = await buildAgentUpdateNotif(companyId);
+        const keys = await computeUnreadKeys(companyId, readSet, updateNotif);
+
+        await insertReads(userId, keys);
+
+        return R.successResponse(res, { unread: 0 });
+    } catch (err) {
+        console.error('sync.markAllRead error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);
     }
 }
@@ -867,6 +1042,8 @@ module.exports = {
     summary,
     logs,
     notifications,
+    markRead,
+    markAllRead,
     retry,
     pull,
     logDetail,

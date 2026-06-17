@@ -109,6 +109,41 @@ function buildUpdate(body) {
     return patch;
 }
 
+/**
+ * Return the sales_persons.id linked to the requesting login user (req.user.sub)
+ * within this company, or null when the caller is NOT a sales-person-user. A
+ * single indexed lookup; super-admin (no sub) and ordinary users fall through to
+ * null (unaffected). Soft-deleted sales_persons rows are ignored.
+ */
+async function salesPersonForUser(req) {
+    const userId = req.user && req.user.sub;
+    if (!userId || req.companyId == null) return null;
+    const row = await db('sales_persons')
+        .where('company_id', req.companyId)
+        .where('user_id', userId)
+        .whereNull('deleted_at')
+        .first('id');
+    return row ? row.id : null;
+}
+
+/**
+ * extraScope — ADDS a restriction (never widens) for a sales-person-user:
+ * they see ONLY the customers assigned to them in sales_person_customers (any
+ * location). Super-admin / company-admin / non-sales-person users are
+ * UNAFFECTED (salesPersonForUser returns null → no extra filter). Company +
+ * location scoping already applied by the factory stays intact.
+ */
+async function customerExtraScope(qb, req) {
+    const salesPersonId = await salesPersonForUser(req);
+    if (salesPersonId == null) return; // not a sales-person-user → unrestricted
+    qb.whereIn('customers.id', (sub) => {
+        sub.select('customer_id')
+            .from('sales_person_customers')
+            .where('company_id', req.companyId)
+            .where('sales_person_id', salesPersonId);
+    });
+}
+
 // Build the five handlers from the factory and re-export them by name.
 const controller = crud.build({
     table:       'customers',
@@ -120,6 +155,7 @@ const controller = crud.build({
     baseQuery,
     buildInsert,
     buildUpdate,
+    extraScope:  customerExtraScope,
 });
 
 module.exports = {

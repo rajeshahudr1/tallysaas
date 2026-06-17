@@ -32,6 +32,28 @@ const AGENT_TOKEN_TTL = '7d';
 const INVALID_KEY_MSG = 'Invalid license key.';
 
 /**
+ * Company SYNC gating (on-the-fly, NO stored flag): a license may sync only its
+ * FIRST `max_companies` companies, ordered by created_at asc (id asc as a
+ * tie-break), non-deleted. Companies beyond the cap do NOT sync (they're
+ * excluded from the pull/push queue, the activate list and the command targets).
+ * A null/absent max_companies → unlimited (no cap applied). The cap auto-adjusts
+ * whenever max_companies changes — there is nothing to migrate.
+ *
+ * Returns the ordered, capped company rows for the license (the columns asked
+ * for). `maxCompanies` is read from the license row; pass it through so callers
+ * that already hold it avoid a second read.
+ */
+async function syncingCompanies(licenseId, maxCompanies, columns) {
+    let qb = db('companies')
+        .where('license_id', licenseId)
+        .whereNull('deleted_at')
+        .orderBy('created_at', 'asc').orderBy('id', 'asc')
+        .select(columns);
+    if (maxCompanies != null) qb = qb.limit(Number(maxCompanies));
+    return qb;
+}
+
+/**
  * POST /api/v1/agent/activate
  * Body (validated): { license_key, machine_id, agent_version? }
  */
@@ -70,12 +92,12 @@ async function activate(req, res) {
                 .update({ agent_version: agent_version || lic.agent_version, last_seen_at: now, updated_at: now });
         }
 
-        // Companies this license may sync.
-        const companies = await db('companies')
-            .where('license_id', lic.id)
-            .whereNull('deleted_at')
-            .select('id', 'name', 'slug', 'status')
-            .orderBy('id', 'asc');
+        // Companies this license may sync — only the FIRST max_companies
+        // (created_at asc, id asc), on-the-fly. The rest are over the limit and
+        // are excluded from sync everywhere (queue / commands / results).
+        const companies = await syncingCompanies(
+            lic.id, lic.max_companies, ['id', 'name', 'slug', 'status'],
+        );
 
         const agentToken = jwt.sign(
             { kind: 'agent', license_id: lic.id, machine_id },
@@ -106,6 +128,14 @@ async function activate(req, res) {
  * pass when the cloud has them turned off (Requirement 1). Both default to true
  * when the column is null/unreadable, so an older license / pre-migration DB
  * behaves exactly as before (both directions ON).
+ *
+ * The MASTER "Auto-sync" switch (licenses.sync_enabled) sits ABOVE the two
+ * direction toggles: when it is OFF, NOTHING auto-syncs. We enforce that here,
+ * cloud-side, by echoing EFFECTIVE gates — push_enabled = sync_enabled &&
+ * sync_push_enabled and pull_enabled = sync_enabled && sync_pull_enabled — so
+ * the ALREADY-DEPLOYED agent (no rebuild) skips ALL automatic push AND pull
+ * while Auto-sync is OFF. sync_enabled is echoed too for completeness. Both the
+ * master flag and the direction flags default ON when null/unreadable.
  */
 async function heartbeat(req, res) {
     try {
@@ -127,31 +157,46 @@ async function heartbeat(req, res) {
         }
         await db('licenses').where('id', req.license.id).update(patch);
 
-        // Per-license AUTO-sync direction toggles. authenticateAgent selects a
-        // fixed column set (no sync flags), so read them here. Default ON when
-        // the column is null OR the table predates the migration (best-effort:
-        // a read error must never break a working heartbeat).
+        // Per-license AUTO-sync toggles: the MASTER switch (sync_enabled) and the
+        // two DIRECTION toggles (push/pull). authenticateAgent selects a fixed
+        // column set (no sync flags), so read them here. Each defaults ON when the
+        // column is null OR the table predates the migration (best-effort: a read
+        // error must never break a working heartbeat).
+        let syncEnabled = true;
         let pushEnabled = true;
         let pullEnabled = true;
         try {
             const lic = await db('licenses').where('id', req.license.id)
-                .first('sync_push_enabled', 'sync_pull_enabled');
+                .first('sync_enabled', 'sync_push_enabled', 'sync_pull_enabled');
             if (lic) {
+                if (lic.sync_enabled      != null) syncEnabled = !!lic.sync_enabled;
                 if (lic.sync_push_enabled != null) pushEnabled = !!lic.sync_push_enabled;
                 if (lic.sync_pull_enabled != null) pullEnabled = !!lic.sync_pull_enabled;
             }
         } catch (e) {
+            syncEnabled = true;
             pushEnabled = true;
             pullEnabled = true;
         }
+
+        // EFFECTIVE gates: the master Auto-sync switch beats the direction toggles.
+        // With Auto-sync OFF, BOTH effective gates are false → the deployed agent
+        // skips ALL automatic push and pull (no rebuild needed). With Auto-sync ON,
+        // the direction toggles decide each pass as before.
+        const effectivePush = syncEnabled && pushEnabled;
+        const effectivePull = syncEnabled && pullEnabled;
 
         return R.successResponse(res, {
             status: req.license.status,
             license_id: req.license.id,
             server_time: now.toISOString(),
-            // Auto-sync direction gates the agent loop reads each cycle.
-            push_enabled: pushEnabled,
-            pull_enabled: pullEnabled,
+            // EFFECTIVE auto-sync direction gates the agent loop reads each cycle
+            // (master Auto-sync AND the per-direction toggle). Auto-sync OFF → both
+            // false so the agent skips every automatic sync pass.
+            push_enabled: effectivePush,
+            pull_enabled: effectivePull,
+            // The raw master switch, echoed for completeness.
+            sync_enabled: syncEnabled,
         }, 'ok');
     } catch (err) {
         console.error('AgentController.heartbeat error:', err);
@@ -188,9 +233,14 @@ function tallyDate(d) {
  */
 async function pending(req, res) {
     try {
-        const companies = await db('companies')
-            .where('license_id', req.license.id).whereNull('deleted_at')
-            .select('id', 'name', 'slug', 'tally_guid');
+        // SYNC GATE: only the first max_companies companies (created_at asc, id
+        // asc) sync — the rest are excluded from the pull/push queue. max_companies
+        // isn't on req.license (authenticateAgent selects a fixed set), so read it.
+        const licRow = await db('licenses').where('id', req.license.id).first('max_companies');
+        const maxCompanies = licRow ? licRow.max_companies : null;
+        const companies = await syncingCompanies(
+            req.license.id, maxCompanies, ['id', 'name', 'slug', 'tally_guid'],
+        );
         const companyIds = companies.map((c) => c.id);
         if (!companyIds.length) {
             return R.successResponse(res, {
@@ -351,9 +401,12 @@ async function pending(req, res) {
 async function result(req, res) {
     try {
         const results = Array.isArray(req.body && req.body.results) ? req.body.results : [];
-        const companyIds = (await db('companies')
-            .where('license_id', req.license.id).whereNull('deleted_at').pluck('id'));
-        const allowed = new Set(companyIds.map(Number));
+        // Only accept results for the FIRST max_companies (syncing) companies —
+        // a company over the sync limit must not be pushed/stamped.
+        const licRow = await db('licenses').where('id', req.license.id).first('max_companies');
+        const maxCompanies = licRow ? licRow.max_companies : null;
+        const syncing = await syncingCompanies(req.license.id, maxCompanies, ['id']);
+        const allowed = new Set(syncing.map((c) => Number(c.id)));
 
         let processed = 0;
         for (const r of results) {
@@ -508,6 +561,17 @@ async function importFromTally(req, res) {
         }
         if (!cid) {
             return R.errorResponse(res, 'No target company — send company_name (the Tally company) or a valid company_id.', 422);
+        }
+
+        // SYNC GATE: refuse a pull into a company that is OVER the license sync
+        // limit (only the first max_companies, created_at asc, may sync). A
+        // just-created company passed the cap check above, so it is in the set.
+        const licGate = await db('licenses').where('id', licenseId).first('max_companies');
+        const syncSet = await syncingCompanies(licenseId, licGate ? licGate.max_companies : null, ['id']);
+        const syncIds = new Set(syncSet.map((c) => Number(c.id)));
+        if (!syncIds.has(Number(cid))) {
+            return R.errorResponse(res,
+                'This company is over the license sync limit (max_companies) and does not sync. Raise the limit to sync it.', 403);
         }
 
         const ledgers    = Array.isArray(req.body.ledgers) ? req.body.ledgers : [];
@@ -926,9 +990,22 @@ async function importFromTally(req, res) {
 async function getCommands(req, res) {
     try {
         const now = new Date();
+        // SYNC GATE: a command that targets a specific company is only served
+        // when that company is within the license's first max_companies (the
+        // syncing set). Company-less commands (company_id NULL, e.g. self_update)
+        // always pass. Computed on-the-fly from max_companies.
+        const licRow = await db('licenses').where('id', req.license.id).first('max_companies');
+        const maxCompanies = licRow ? licRow.max_companies : null;
+        const syncing = await syncingCompanies(req.license.id, maxCompanies, ['id']);
+        const allowedCompanyIds = syncing.map((c) => Number(c.id));
+
         const claimed = await db.transaction(async (trx) => {
             const rows = await trx('agent_commands')
                 .where({ license_id: req.license.id, status: 'pending' })
+                .where((b) => {
+                    b.whereNull('company_id');
+                    if (allowedCompanyIds.length) b.orWhereIn('company_id', allowedCompanyIds);
+                })
                 .orderBy('id', 'asc')
                 .limit(10)
                 .forUpdate()

@@ -1,42 +1,65 @@
 <%
 /* ─────────────────────────────────────────────────────────────
- * views/roles/index.ejs — SETTINGS · Roles & Permissions.
- * Route: GET /roles  ·  activeMenu: 'roles'.
+ * views/roles/index.ejs — SETTINGS · Roles & Permissions (UNIFIED).
+ * Route: GET /roles  ·  activeMenu: 'roles'  ·  requireRoleManager.
  *
- * RBAC screen: a row of selectable role chips + a module × action
- * permission matrix. /js/rbac.js reads the per-role permission map
- * from the #rbacData JSON island and swaps the matrix checkboxes when
- * a role is selected (and wires per-column select-all). Visual only.
+ * ONE screen for role management, backed by the REAL /account/roles API:
+ *   • Role selector chips — every VISIBLE role (system + custom) with its
+ *     user count. Selecting one loads its permission matrix.
+ *   • Permission MATRIX for the selected role: rows = entitled modules,
+ *     columns = that module's entitled actions, checkboxes pre-checked from
+ *     the role's granted slugs. THREE select-all levels: per-COLUMN (header),
+ *     per-ROW (module), and a GLOBAL Select-All / Clear-All.
+ *   • Add Role (modal → POST /roles), Rename (modal → POST /roles/:id),
+ *     Delete (confirm modal → POST /roles/:id/delete) for CUSTOM roles.
+ *   • Save Permissions → /js/rbac.js POSTs the checked slugs to
+ *     POST /roles/:id/permissions.
+ *
+ * System / protected roles are READ-ONLY: no rename, no delete, matrix
+ * checkboxes disabled.
+ *
+ * /js/rbac.js reads the per-role granted-slug map from the #rbacData JSON
+ * island and swaps the matrix when a chip is selected, then keeps the URL's
+ * ?role= in sync so the server re-renders the right entitlements grid.
  *
  * Expected locals (routes/web.js → res.render):
- *   roles           [ … ]                       — 5 roles
- *   roleUserCounts  { role: count }
- *   rbacModules     [ … ]                        — matrix rows
- *   rbacActions     ['view','create','edit','delete','export']
- *   rbacPermissions { role: { module: {action:bool} } }
+ *   roles         [ { id, name, slug, is_system, license_id, editable, user_count } ]
+ *   modules       [ { key, label, actions:[ 'view', ... ] } ]   (entitled only)
+ *   selected      { id, name, slug, is_system, editable, ... } | null
+ *   selectedPerms { '<module>.<action>': true }                  (selected role)
+ *   permsByRole   { roleId: { '<module>.<action>': true } }      (every role)
  * ─────────────────────────────────────────────────────────── */
 
-var _roles   = (typeof roles !== 'undefined' && roles) ? roles : [];
-var _counts  = (typeof roleUserCounts !== 'undefined' && roleUserCounts) ? roleUserCounts : {};
-var _modules = (typeof rbacModules !== 'undefined' && rbacModules) ? rbacModules : [];
-var _actions = (typeof rbacActions !== 'undefined' && rbacActions) ? rbacActions : [];
-var _perms   = (typeof rbacPermissions !== 'undefined' && rbacPermissions) ? rbacPermissions : {};
-var _roleIds = (typeof roleIds !== 'undefined' && roleIds) ? roleIds : {};
-// Normalise modules to {key,label} so the view works for both the API
-// ({key,label}) and any plain-string fallback.
-_modules = _modules.map(function (m) { return (m && typeof m === 'object') ? m : { key: m, label: m }; });
+var _roles    = (typeof roles !== 'undefined' && roles) ? roles : [];
+var _modules  = (typeof modules !== 'undefined' && modules) ? modules : [];
+var _selected = (typeof selected !== 'undefined' && selected) ? selected : null;
+var _selPerms = (typeof selectedPerms !== 'undefined' && selectedPerms) ? selectedPerms : {};
+var _byRole   = (typeof permsByRole !== 'undefined' && permsByRole) ? permsByRole : {};
 
-// Default selected role = the second one (Company Admin) if present.
-var _defaultRole = _roles.length > 1 ? _roles[1] : (_roles[0] || '');
+var _selId    = _selected ? _selected.id : null;
+var _editable = _selected ? !!_selected.editable : false;
+var _isCustom = _selected ? (!_selected.is_system) : false;
 
-var _roleIcons = {
-    'Super Admin':   'fa-crown',
-    'Company Admin': 'fa-user-gear',
-    'Sales Manager': 'fa-user-tie',
-    'Sales Person':  'fa-user',
-    'Accountant':    'fa-calculator',
-};
+// The union of every module's actions, in a stable order, drives the matrix
+// COLUMN headers. A module that is not entitled to an action shows a blank cell.
+var _ACTION_ORDER = ['view', 'create', 'edit', 'delete', 'export'];
+var _seen = {};
+_modules.forEach(function (m) { (m.actions || []).forEach(function (a) { _seen[a] = true; }); });
+var _columns = _ACTION_ORDER.filter(function (a) { return _seen[a]; });
+
 var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 'fa-trash-can', export: 'fa-upload' };
+var _roleIcons = {
+    'super-admin':   'fa-crown',
+    'company-admin': 'fa-user-gear',
+};
+function _roleIcon(r) { return _roleIcons[r.slug] || (r.is_system ? 'fa-user-shield' : 'fa-user'); }
+
+// Header actions: a WORKING Add Role (opens the modal) + a Save Permissions
+// button (disabled-looking handled by rbac.js when the role is read-only).
+var _headActions = [
+    { label: 'Add Role',         icon: 'fa-plus',        gradient: true, id: 'rbac-add' },
+    { label: 'Save Permissions', icon: 'fa-floppy-disk', variant: 'light', id: 'rbac-save' },
+];
 %>
 
 <%- include('../partials/page-head', {
@@ -45,76 +68,210 @@ var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 
         { label: 'Dashboard', href: '/' },
         { label: 'Roles & Permissions' },
     ],
-    actions: [
-        { label: 'Add Role',         icon: 'fa-plus',         gradient: true },
-        { label: 'Save Permissions', icon: 'fa-floppy-disk',  variant: 'light', id: 'rbac-save' },
-    ],
+    actions: _headActions,
 }) %>
 
 <!-- ── Role selector chips ───────────────────────────────────── -->
 <div class="card mb-3">
     <div class="inv-section-head">
         <h2 class="inv-section-title"><i class="fa-solid fa-user-shield me-2 text-primary"></i>Select Role</h2>
+        <span class="form-hint mb-0">Pick a role to view or edit its permissions.</span>
     </div>
     <div class="inv-body">
-        <div class="rbac-roles">
-            <% _roles.forEach(function (r) { %>
-                <label class="rbac-role-chip <%= r === _defaultRole ? 'is-active' : '' %>">
-                    <input type="radio" name="rbac-role" value="<%= r %>" data-role-id="<%= _roleIds[r] || '' %>" <%= r === _defaultRole ? 'checked' : '' %>>
-                    <span class="rbac-role-chip-icon"><i class="fa-solid <%= _roleIcons[r] || 'fa-user' %>"></i></span>
-                    <span>
-                        <span class="rbac-role-chip-name"><%= r %></span><br>
-                        <span class="rbac-role-chip-meta"><%= (_counts[r] || 0) %> user(s)</span>
-                    </span>
-                </label>
-            <% }); %>
-        </div>
+        <% if (!_roles.length) { %>
+            <div class="data-table-empty text-center text-muted py-4">
+                <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                No roles found. Use <strong>Add Role</strong> to create one.
+            </div>
+        <% } else { %>
+            <div class="rbac-roles">
+                <% _roles.forEach(function (r) { %>
+                    <label class="rbac-role-chip <%= r.id === _selId ? 'is-active' : '' %>">
+                        <input type="radio" name="rbac-role" value="<%= r.id %>"
+                               data-role-id="<%= r.id %>"
+                               data-role-name="<%= r.name %>"
+                               data-editable="<%= r.editable ? '1' : '0' %>"
+                               data-system="<%= r.is_system ? '1' : '0' %>"
+                               <%= r.id === _selId ? 'checked' : '' %>>
+                        <span class="rbac-role-chip-icon"><i class="fa-solid <%= _roleIcon(r) %>"></i></span>
+                        <span>
+                            <span class="rbac-role-chip-name"><%= r.name %></span>
+                            <% if (r.is_system) { %>
+                                <span class="pill-status pill-status--info ms-1">System</span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--success ms-1">Custom</span>
+                            <% } %>
+                            <br>
+                            <span class="rbac-role-chip-meta"><%= r.user_count || 0 %> user(s)</span>
+                        </span>
+                    </label>
+                <% }); %>
+            </div>
+        <% } %>
     </div>
 </div>
 
-<!-- ── Permission matrix ─────────────────────────────────────── -->
+<!-- ── Permission matrix for the selected role ──────────────────── -->
 <div class="card">
     <div class="inv-section-head">
         <h2 class="inv-section-title">
             <i class="fa-solid fa-table-list me-2 text-primary"></i>
-            Permissions — <span id="rbacActiveRole" class="text-primary"><%= _defaultRole %></span>
+            Permissions — <span id="rbacActiveRole" class="text-primary"><%= _selected ? _selected.name : '—' %></span>
         </h2>
-        <span class="form-hint mb-0">Tick the actions each role can perform per module.</span>
+        <div class="d-flex align-items-center gap-2">
+            <% if (_selected && _isCustom) { %>
+                <button type="button" class="btn btn-light btn-sm" id="rbac-rename"
+                        data-role-id="<%= _selId %>" data-role-name="<%= _selected.name %>"
+                        <%= _editable ? '' : 'disabled' %>>
+                    <i class="fa-solid fa-pen me-1"></i>Rename
+                </button>
+                <button type="button" class="btn btn-light btn-sm" data-row-delete
+                        data-delete-url="/roles/<%= _selId %>"
+                        data-delete-label="the role &quot;<%= _selected.name %>&quot;"
+                        <%= _editable ? '' : 'disabled' %>>
+                    <i class="fa-regular fa-trash-can me-1"></i>Delete
+                </button>
+            <% } %>
+        </div>
     </div>
 
-    <div class="table-responsive">
-        <table class="rbac-matrix" id="rbacMatrix">
-            <thead>
-                <tr>
-                    <th>Module</th>
-                    <% _actions.forEach(function (a) { %>
-                        <th>
-                            <span class="rbac-col-action">
-                                <i class="fa-solid <%= _actionIcons[a] %>"></i>
-                                <span><%= a.charAt(0).toUpperCase() + a.slice(1) %></span>
-                                <input type="checkbox" data-col-action="<%= a %>" title="Toggle column">
-                            </span>
-                        </th>
-                    <% }); %>
-                </tr>
-            </thead>
-            <tbody>
-                <% _modules.forEach(function (m) { %>
-                    <% var pm = (_perms[_defaultRole] && _perms[_defaultRole][m.key]) ? _perms[_defaultRole][m.key] : {}; %>
+    <% if (_selected && _selected.is_system) { %>
+        <div class="inv-body pt-0">
+            <div class="alert alert-info flash-banner mb-0" role="alert">
+                <i class="fa-solid fa-circle-info me-2"></i>
+                This is a built-in <strong>system role</strong> and cannot be edited. Its effective permissions are shown below.
+            </div>
+        </div>
+    <% } %>
+
+    <% if (!_selected) { %>
+        <div class="data-table-empty text-center text-muted py-5">
+            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+            Select a role above to manage its permissions.
+        </div>
+    <% } else if (!_modules.length) { %>
+        <div class="data-table-empty text-center text-muted py-5">
+            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+            This license is not entitled to any modules yet.
+            <div class="form-hint mt-2">Ask the platform administrator to grant module access to your license.</div>
+        </div>
+    <% } else { %>
+        <% if (_editable) { %>
+            <div class="inv-body pt-0 pb-0">
+                <label class="rbac-global-toggle">
+                    <input type="checkbox" id="rbac-select-all">
+                    <span><i class="fa-solid fa-list-check me-1"></i>Select All / Clear All</span>
+                </label>
+            </div>
+        <% } %>
+        <div class="table-responsive">
+            <table class="rbac-matrix" id="rbacMatrix" data-editable="<%= _editable ? '1' : '0' %>">
+                <thead>
                     <tr>
-                        <td><%= m.label %></td>
-                        <% _actions.forEach(function (a) { %>
-                            <td>
-                                <input type="checkbox" data-module="<%= m.key %>" data-action="<%= a %>"
-                                       <%= pm[a] ? 'checked' : '' %>>
-                            </td>
+                        <th>Module</th>
+                        <% _columns.forEach(function (a) { %>
+                            <th>
+                                <span class="rbac-col-action">
+                                    <i class="fa-solid <%= _actionIcons[a] || 'fa-check' %>"></i>
+                                    <span><%= a.charAt(0).toUpperCase() + a.slice(1) %></span>
+                                    <input type="checkbox" data-col-action="<%= a %>" title="Toggle column" <%= _editable ? '' : 'disabled' %>>
+                                </span>
+                            </th>
                         <% }); %>
                     </tr>
-                <% }); %>
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    <% _modules.forEach(function (m) { %>
+                        <% var acts = (m && m.actions) ? m.actions : []; %>
+                        <tr>
+                            <td>
+                                <span class="rbac-row-label">
+                                    <input type="checkbox" class="rbac-row-toggle me-2" data-row-toggle title="Toggle row" <%= _editable ? '' : 'disabled' %>>
+                                    <%= m.label || m.key %>
+                                </span>
+                            </td>
+                            <% _columns.forEach(function (a) { %>
+                                <td>
+                                    <% if (acts.indexOf(a) !== -1) { %>
+                                        <% var slug = m.key + '.' + a; %>
+                                        <input type="checkbox" data-module="<%= m.key %>" data-action="<%= a %>"
+                                               <%= _selPerms[slug] ? 'checked' : '' %> <%= _editable ? '' : 'disabled' %>>
+                                    <% } else { %>
+                                        <span class="text-muted">—</span>
+                                    <% } %>
+                                </td>
+                            <% }); %>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
+
+<!-- ── Add Role modal ───────────────────────────────────────────── -->
+<div class="modal fade" id="addRoleModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post" action="/roles" autocomplete="off">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fa-solid fa-plus text-primary me-2"></i>Add Role</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label class="form-label" for="add-role-name">Role Name<span class="req">*</span></label>
+                        <input type="text" class="form-control" id="add-role-name" name="name"
+                               placeholder="e.g. Branch Accountant" required>
+                        <div class="form-hint">You can set its permissions on the next screen.</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-plus me-1"></i>Create Role</button>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
 
-<!-- Per-role permission map → consumed by /js/rbac.js -->
-<script type="application/json" id="rbacData"><%- JSON.stringify(_perms) %></script>
+<!-- ── Rename Role modal ────────────────────────────────────────── -->
+<div class="modal fade" id="renameRoleModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <form method="post" action="/roles/0" id="renameRoleForm" autocomplete="off">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="fa-solid fa-pen text-primary me-2"></i>Rename Role</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label class="form-label" for="rename-role-name">Role Name<span class="req">*</span></label>
+                        <input type="text" class="form-control" id="rename-role-name" name="name" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Per-role granted-slug map → consumed by /js/rbac.js -->
+<script type="application/json" id="rbacData"><%- JSON.stringify(_byRole) %></script>
+
+<style>
+    /* Global select-all toggle bar + row/column toggle affordances — reuse the
+     * theme tokens so it matches the rest of the app (no bespoke palette). */
+    .rbac-global-toggle {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 8px 12px; margin: 4px 0 12px; cursor: pointer; user-select: none;
+        border: 1px dashed var(--border); border-radius: 8px; font-size: 13.5px; font-weight: 600;
+        color: var(--text); background: #fff;
+    }
+    .rbac-global-toggle input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; }
+    .rbac-row-label { display: inline-flex; align-items: center; }
+    .rbac-row-toggle { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
+</style>

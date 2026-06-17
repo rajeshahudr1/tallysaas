@@ -39,15 +39,42 @@ const COMPANY_FIELDS = [
     'address',
 ];
 
+// The SYNC flags live on the LICENSE (license-scoped), NOT in the per-company
+// `settings` bag — they control the agent. The Settings form now EDITS them, so
+// these are the keys we accept in body.settings and route to the licenses row.
+// `push_enabled` / `pull_enabled` are accepted as aliases of the sync_* columns
+// so the form (or app) can submit either spelling.
+const SYNC_KEY_TO_COLUMN = {
+    auto_update:       'auto_update',
+    sync_enabled:      'sync_enabled',
+    sync_push_enabled: 'sync_push_enabled',
+    push_enabled:      'sync_push_enabled',
+    sync_pull_enabled: 'sync_pull_enabled',
+    pull_enabled:      'sync_pull_enabled',
+};
+
+// Coerce a checkbox/string-tolerant truthy value to a strict boolean (matches
+// AgentCommandController's toBool so the Settings form and the dashboard agree).
+// The bare-form switches post a hidden empty companion + the checkbox under the
+// SAME name, so an extended-parsed body yields an ARRAY (e.g. ['', 'on']) when
+// checked or a bare '' when unchecked — take the LAST value so a checked box wins.
+function toBool(raw) {
+    const v = Array.isArray(raw) ? raw[raw.length - 1] : raw;
+    return (v === true || v === 1 || v === '1'
+        || v === 'true' || v === 'on' || v === 'yes');
+}
+
 /**
  * GET /api/v1/settings
  * Reads the company profile row + folds the settings rows into a flat object.
  */
 async function get(req, res) {
     try {
+        // license_id is read here (not surfaced as editable) so we can prefill the
+        // license-scoped SYNC flags below.
         const company = await db('companies')
             .where('id', req.companyId)
-            .first(...COMPANY_FIELDS);
+            .first(...COMPANY_FIELDS, 'license_id');
         if (!company) return R.errorResponse(res, NOT_FOUND, 404);
 
         const rows = await db('settings')
@@ -59,7 +86,35 @@ async function get(req, res) {
             settings[row.key] = row.value;
         }
 
-        return R.successResponse(res, { company, settings });
+        // The SYNC toggles live on the LICENSE, so the Settings form prefills from
+        // there (NOT from the settings bag). Default ON when the column/row is
+        // null/unreadable (matches the agent + SyncController defaults), so an
+        // older license / pre-migration DB shows all-ON with no regression. Best-
+        // effort: a read hiccup must never sink the whole settings load.
+        let sync = {
+            auto_update: true, push_enabled: true, pull_enabled: true, sync_enabled: true,
+        };
+        try {
+            if (company.license_id) {
+                const lic = await db('licenses')
+                    .where('id', company.license_id)
+                    .first('auto_update', 'sync_push_enabled', 'sync_pull_enabled', 'sync_enabled');
+                if (lic) {
+                    sync = {
+                        auto_update:  lic.auto_update       != null ? !!lic.auto_update       : true,
+                        push_enabled: lic.sync_push_enabled != null ? !!lic.sync_push_enabled : true,
+                        pull_enabled: lic.sync_pull_enabled != null ? !!lic.sync_pull_enabled : true,
+                        sync_enabled: lic.sync_enabled      != null ? !!lic.sync_enabled      : true,
+                    };
+                }
+            }
+        } catch (e) {
+            sync = { auto_update: true, push_enabled: true, pull_enabled: true, sync_enabled: true };
+        }
+
+        // Strip the internal-only license_id from the surfaced company object.
+        const { license_id, ...companyOut } = company;
+        return R.successResponse(res, { company: companyOut, settings, sync });
     } catch (err) {
         console.error('settings.get error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);
@@ -87,6 +142,40 @@ async function update(req, res) {
             }
         }
 
+        // Split the SYNC flags out of the settings bag — they belong on the
+        // LICENSE (they control the agent), not in the per-company `settings`
+        // table. Build a licenses patch (last spelling wins for aliased keys) and
+        // a cleaned settings object that excludes the sync keys so they are NOT
+        // also stored as company settings. Both halves are part of the same txn.
+        const licensePatch  = {};
+        const settingsClean = {};
+        if (settingsPatchIn) {
+            for (const key of Object.keys(settingsPatchIn)) {
+                const col = SYNC_KEY_TO_COLUMN[key];
+                if (col) {
+                    licensePatch[col] = toBool(settingsPatchIn[key]);
+                } else {
+                    settingsClean[key] = settingsPatchIn[key];
+                }
+            }
+        }
+        const hasSettings = Object.keys(settingsClean).length > 0;
+        const hasLicense  = Object.keys(licensePatch).length > 0;
+
+        // Resolve the company's license up front when we have sync flags to write,
+        // so we can fail clearly before opening the txn. The route is already
+        // authenticated + company-scoped (can('settings','edit')), so whoever may
+        // edit settings may flip these — consistent with the rest of the save.
+        let licenseId = null;
+        if (hasLicense) {
+            const comp = await db('companies').where('id', req.companyId).first('license_id');
+            licenseId = comp ? comp.license_id : null;
+            if (!licenseId) {
+                return R.errorResponse(res,
+                    'This company is not linked to a license, so sync settings cannot be changed here.', 422);
+            }
+        }
+
         await db.transaction(async (trx) => {
             if (Object.keys(companyPatch).length > 0) {
                 // timestamps(true,true) only defaults updated_at on INSERT — stamp
@@ -96,13 +185,22 @@ async function update(req, res) {
                     .update({ ...companyPatch, updated_at: new Date() });
             }
 
-            if (settingsPatchIn) {
+            // SYNC flags → the licenses row (license-scoped). The agent reads these
+            // back (heartbeat / version), so the Settings form is now the editor.
+            if (hasLicense) {
+                await trx('licenses')
+                    .where('id', licenseId)
+                    .whereNull('deleted_at')
+                    .update({ ...licensePatch, updated_at: new Date() });
+            }
+
+            if (hasSettings) {
                 const now = new Date();
-                for (const key of Object.keys(settingsPatchIn)) {
+                for (const key of Object.keys(settingsClean)) {
                     // `value` is a jsonb column — encode explicitly so scalars
                     // (string/number/bool) AND objects are written as valid jsonb
                     // (the driver won't reliably coerce a bare JS scalar).
-                    const value = db.raw('?::jsonb', [JSON.stringify(settingsPatchIn[key] ?? null)]);
+                    const value = db.raw('?::jsonb', [JSON.stringify(settingsClean[key] ?? null)]);
                     await trx('settings')
                         .insert({
                             company_id: req.companyId,

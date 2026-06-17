@@ -314,6 +314,164 @@ def relaunch_installed(installed_exe: str) -> bool:
         return False
 
 
+# The detached cleanup batch the Uninstall flow drops to delete the install
+# folder AFTER this exe (which lives inside it and so cannot delete itself) exits.
+_CLEANUP_BAT = "_agent_uninstall.bat"
+
+
+def _is_real_install_dir(install_dir: str) -> bool:
+    """Guard: only treat ``install_dir`` as deletable when it is the REAL install
+    folder of a FROZEN exe - never a dev/source checkout.
+
+    Requires: running as the frozen exe; the dir is this exe's own folder; the
+    installed exe is present in it; and it is an absolute path with a parent (so
+    we never rmdir a drive root). Returns False for any source-run / odd path.
+    """
+    try:
+        if not running_frozen():
+            return False
+        install_dir = os.path.abspath(install_dir)
+        if os.path.normcase(install_dir) != os.path.normcase(app_dir()):
+            return False
+        # The install dir must actually hold the installed exe (sanity check).
+        if not os.path.isfile(os.path.join(install_dir, INSTALLED_EXE_NAME)):
+            # Fall back to the running exe's own name being inside it.
+            if os.path.normcase(os.path.dirname(exe_path())) != \
+                    os.path.normcase(install_dir):
+                return False
+        parent = os.path.dirname(install_dir)
+        if not parent or os.path.normcase(parent) == os.path.normcase(install_dir):
+            return False  # a drive root (e.g. C:\) has no real parent -> refuse.
+        return True
+    except Exception:
+        return False
+
+
+def spawn_folder_cleanup(install_dir: str, elevated: bool = False) -> bool:
+    """Write + launch a DETACHED batch that deletes the whole install folder.
+
+    The running GUI exe lives INSIDE ``install_dir`` and cannot delete itself, so
+    (mirroring the self-update swap) we drop a batch that: waits in a loop until
+    this exe is no longer locked (we are exiting), ``rmdir /s /q`` the folder, then
+    deletes itself. Launched DETACHED with no window so it survives our exit, and
+    from a TEMP copy so it is not sitting inside the folder it deletes.
+
+    ``elevated`` -> launch the batch via ShellExecuteW(runas) (the folder is under
+    a protected location like C:\\). Returns True if the batch was launched. Never
+    deletes anything itself; all deletion happens in the detached batch AFTER the
+    guard in the caller confirmed this is the real install dir.
+    """
+    if os.name != "nt":
+        return False
+    import tempfile
+    # Drop the batch in TEMP (NOT inside install_dir, which it will delete).
+    try:
+        bat_fd, bat = tempfile.mkstemp(suffix=".bat", prefix="tcs_uninstall_")
+    except Exception:
+        return False
+    exe = exe_path()
+    lines = [
+        "@echo off",
+        "setlocal",
+        'set "DIR=' + install_dir + '"',
+        'set "EXE=' + exe + '"',
+        "rem Wait for the running agent to exit and release its exe, then purge",
+        "rem the whole install folder. Deleting the exe succeeds only once the",
+        "rem process has released it, so it doubles as the 'is it unlocked' probe.",
+        "set /a tries=0",
+        ":waitloop",
+        'if not exist "%EXE%" goto purge',
+        'del /F /Q "%EXE%" >nul 2>&1',
+        'if not exist "%EXE%" goto purge',
+        "set /a tries+=1",
+        "if %tries% geq 60 goto purge",
+        "ping -n 2 127.0.0.1 >nul",
+        "goto waitloop",
+        ":purge",
+        "ping -n 2 127.0.0.1 >nul",
+        'rmdir /s /q "%DIR%" >nul 2>&1',
+        'del /F /Q "%~f0" >nul 2>&1',
+    ]
+    try:
+        with os.fdopen(bat_fd, "w", encoding="ascii", errors="replace") as fh:
+            fh.write("\r\n".join(lines) + "\r\n")
+    except Exception:
+        try:
+            os.close(bat_fd)
+        except Exception:
+            pass
+        return False
+    if elevated:
+        # Launch the batch elevated so rmdir can remove a folder under C:\.
+        return _run_elevated_program("cmd.exe", '/c "%s"' % bat, wait=False)
+    try:
+        flags = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED|NEW_GROUP|NO_WINDOW
+        subprocess.Popen(["cmd.exe", "/c", bat], close_fds=True,
+                         creationflags=flags)
+        return True
+    except Exception:
+        return False
+
+
+def _run_elevated_program(program: str, params: str, wait: bool = False) -> bool:
+    """ShellExecuteW(runas) an arbitrary program+params (the UAC building block).
+
+    Mirrors :func:`run_elevated_verb` but for a generic program (used to launch
+    the cleanup batch elevated). Returns True if the elevated process launched.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return False
+    SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    SEE_MASK_NO_CONSOLE = 0x00008000
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", ctypes.c_ulong),
+            ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIcon", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NO_CONSOLE
+    info.hwnd = None
+    info.lpVerb = "runas"
+    info.lpFile = program
+    info.lpParameters = params
+    info.lpDirectory = None
+    info.nShow = 0  # SW_HIDE
+    try:
+        ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info))
+    except Exception:
+        return False
+    if not ok or not info.hProcess:
+        return False
+    if not wait:
+        try:
+            ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        except Exception:
+            pass
+        return True
+    return True
+
+
 # --------------------------------------------------------------------------- #
 # Windows service control (Phase 2): one exe serves GUI + service + management
 # --------------------------------------------------------------------------- #
@@ -371,7 +529,8 @@ def _control_target() -> str:
     return exe_path()
 
 
-def run_elevated_verb(verb: str, wait: bool = True, timeout: int = 60) -> bool:
+def run_elevated_verb(verb: str, wait: bool = True, timeout: int = 60,
+                      extra: "Optional[str]" = None) -> bool:
     """Re-launch THIS exe with a service ``verb`` ELEVATED (UAC) and wait for it.
 
     Uses ``ShellExecuteW(..., 'runas', ...)`` so Windows shows the consent
@@ -382,6 +541,11 @@ def run_elevated_verb(verb: str, wait: bool = True, timeout: int = 60) -> bool:
 
     For a frozen exe the parameters are just the verb. From source we pass the
     gui_agent.py path plus the verb so the same routing runs under python.exe.
+
+    ``extra`` is an OPTIONAL extra argument appended AFTER the verb (quoted) -
+    used by ``install-service`` to carry the absolute, STABLE installed-exe path
+    (``<install_dir>\\TallyCloudSync.exe``) so the elevated copy registers the
+    service to that exact path, never to whatever exe is currently running.
     """
     if os.name != "nt":
         return False
@@ -392,10 +556,11 @@ def run_elevated_verb(verb: str, wait: bool = True, timeout: int = 60) -> bool:
         return False
 
     program = _control_target()
+    tail = (' "%s"' % extra) if extra else ""
     if running_frozen():
-        params = verb
+        params = verb + tail
     else:
-        params = '"%s" %s' % (os.path.abspath(__file__), verb)
+        params = '"%s" %s%s' % (os.path.abspath(__file__), verb, tail)
 
     SEE_MASK_NOCLOSEPROCESS = 0x00000040
     SEE_MASK_NO_CONSOLE = 0x00008000
@@ -693,7 +858,10 @@ class SetupView:
 
         # Sensible defaults from any existing config. NOTE: the server URL is
         # BAKED into the exe (config.API_BASE_URL) and is NOT asked here.
-        self.var_key = tk.StringVar(value=cfg.license_key or "")
+        # The license key is NEVER pre-filled from the stored config (it must
+        # not be displayed in the GUI); the operator types/pastes it once, into
+        # a MASKED field, on first-run install.
+        self.var_key = tk.StringVar(value="")
         self.var_dir = tk.StringVar(value=DEFAULT_INSTALL_DIR)
         self.var_tally = tk.StringVar(value=self._detect_tally(cfg))
         self.var_interval = tk.StringVar(value=str(cfg.sync_interval or 60))
@@ -702,7 +870,7 @@ class SetupView:
         self.var_desktop = tk.BooleanVar(value=True)
 
         r = 0
-        self._row(form, r, "License key:", self.var_key); r += 1
+        self._row_secret(form, r, "License key:", self.var_key); r += 1
         self._row_browse(form, r, "Install folder:", self.var_dir,
                          self._browse_dir); r += 1
         self._row_browse(form, r, "Tally exe:", self.var_tally,
@@ -745,6 +913,29 @@ class SetupView:
         ttk.Label(form, text=label).grid(row=r, column=0, sticky="w",
                                          padx=(0, 8), pady=4)
         ttk.Entry(form, textvariable=var).grid(row=r, column=1, sticky="ew", pady=4)
+
+    def _row_secret(self, form, r, label, var) -> None:
+        """A masked (password-style) entry with a Show/Hide eye toggle.
+
+        Defaults to HIDDEN (show="*"), so the key the operator types/pastes is
+        not left visible on screen; the toggle flips show between "*" (hidden)
+        and "" (shown) so they can verify what they typed, then re-hide it.
+        """
+        ttk.Label(form, text=label).grid(row=r, column=0, sticky="w",
+                                         padx=(0, 8), pady=4)
+        entry = ttk.Entry(form, textvariable=var, show="*")
+        entry.grid(row=r, column=1, sticky="ew", pady=4)
+
+        def _toggle():
+            if entry.cget("show") == "":
+                entry.configure(show="*")
+                toggle_btn.configure(text="Show")
+            else:
+                entry.configure(show="")
+                toggle_btn.configure(text="Hide")
+
+        toggle_btn = ttk.Button(form, text="Show", width=6, command=_toggle)
+        toggle_btn.grid(row=r, column=2, padx=(8, 0), pady=4)
 
     def _row_browse(self, form, r, label, var, cmd) -> None:
         ttk.Label(form, text=label).grid(row=r, column=0, sticky="w",
@@ -971,7 +1162,13 @@ class SetupView:
             self._append("[..] Registering the background Windows service "
                          "(a UAC prompt will appear)...")
             try:
-                ok = run_elevated_verb("install-service", wait=True, timeout=90)
+                # Pass the STABLE install-dir exe path so the service binPath is
+                # ALWAYS <install_dir>\TallyCloudSync.exe - never the launcher /
+                # release / temp exe that ran this installer. The service then
+                # reads <install_dir>\config.ini (the token) and writes its logs
+                # + .status.json into <install_dir> (its own folder).
+                ok = run_elevated_verb("install-service", wait=True, timeout=90,
+                                       extra=os.path.abspath(installed_exe))
             except Exception as exc:
                 ok = False
                 self.logger.error("Service install failed: %s", exc)
@@ -1054,6 +1251,15 @@ class DashboardView:
         self.service_mode = service_installed()
         self._status_mtime = 0.0  # last .status.json mtime we read (service mode)
 
+        # Live log tail (SERVICE mode): the background service writes to
+        # <install_dir>/logs/agent.log; we tail it into the Activity console so
+        # the user sees real sync activity for a process the GUI does not host.
+        self._logtail_path = os.path.join(app_dir(), "logs", "agent.log")
+        self._logtail_pos = 0       # byte offset we have read up to.
+        self._logtail_size = 0      # last seen file size (detect rotation/shrink).
+        self._logtail_inited = False
+        self._logtail_buf = ""      # carry a partial last line between reads.
+
         # Tap the engine logger so the activity tail shows real log lines.
         self._install_log_tap()
 
@@ -1120,8 +1326,11 @@ class DashboardView:
             # the one syncer). Just reflect the service's state + last status.
             self._activity("[i] Background service mode: the Windows service "
                            "'Tally Cloud Sync' performs the sync. This window "
-                           "monitors and controls it.")
+                           "monitors and controls it. Live activity from "
+                           + self._logtail_path + " follows:")
             self.app.root.after(300, self._refresh_service_status)
+            # Stream the service's log file into the Activity console.
+            self.app.root.after(400, self._tail_service_log)
         else:
             # Portable mode: no service installed -> run the sync in-process.
             self._activity("[i] Portable mode: no Windows service installed; "
@@ -1134,7 +1343,11 @@ class DashboardView:
         cfg = self.cfg
         # NOTE: the server URL is baked into the exe (constants.API_BASE_URL) so
         # there is no editable Server URL field here - only non-secret settings.
-        self.s_key = tk.StringVar(value=cfg.license_key)
+        # The license key is NEVER displayed or pre-filled here: per owner
+        # policy the key is visible ONLY in the cloud super-admin License View.
+        # The Dashboard shows a non-secret "License: Activated" status and a
+        # separate explicit "Re-activate with new key..." button that opens a
+        # blank, masked prompt - the stored key is never read into any widget.
         self.s_tally = tk.StringVar(value=cfg.tally_exe)
         self.s_interval = tk.StringVar(value=str(cfg.sync_interval))
         self.s_autoupdate = tk.BooleanVar(value=bool(cfg.auto_update))
@@ -1149,7 +1362,20 @@ class DashboardView:
                 ttk.Button(st, text="Browse", command=browse).grid(
                     row=r, column=2, padx=(8, 0), pady=4)
 
-        row(0, "License key:", self.s_key)
+        # Non-secret license status: "Activated" when an agent token is stored;
+        # NEVER the key itself (the key is not available/shown locally).
+        activated = is_activated(cfg)
+        ttk.Label(st, text="License:").grid(row=0, column=0, sticky="w",
+                                            padx=(0, 8), pady=4)
+        self.lbl_license = ttk.Label(
+            st,
+            text="Activated" if activated else "Not activated",
+            foreground="#0a7d28" if activated else "#b00020")
+        self.lbl_license.grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Button(st, text="Re-activate with new key...",
+                   command=self.on_reactivate_prompt).grid(
+            row=0, column=2, padx=(8, 0), pady=4)
+
         row(1, "Tally exe:", self.s_tally, self._browse_tally)
         row(2, "Sync interval (s):", self.s_interval)
         ttk.Checkbutton(st, text="Auto-update the agent",
@@ -1281,13 +1507,41 @@ class DashboardView:
             return
         state = service_state()
         running = (state == "running")
-        # "Connected" needs more than 'running' - the last cycle must have
-        # reached the cloud. Read .status.json for the live detail.
+        # "Connected" = the agent's last cycle reached the cloud recently. The
+        # service's OWN .status.json (running + ok + a fresh timestamp) is the
+        # RELIABLE signal and does NOT depend on the SCM query, which can fail for
+        # a non-admin GUI and would then falsely read Disconnected even while the
+        # service is happily syncing. Fall back to the SCM 'running' state only
+        # when there is no fresh status file.
         snap = self._read_status_file()
-        connected = running and bool(snap.get("ok")) if snap else running
+        status_fresh = False
+        status_alive = False  # running + fresh ts even if ok is briefly false.
+        if snap:
+            try:
+                import time as _t
+                age = _t.time() - float(snap.get("ts") or 0)
+                fresh_ts = age <= 150.0
+                status_fresh = (bool(snap.get("running")) and bool(snap.get("ok"))
+                                and fresh_ts)
+                status_alive = bool(snap.get("running")) and fresh_ts
+            except Exception:
+                status_fresh = False
+                status_alive = False
+        if status_fresh:
+            connected = True
+        elif snap:
+            connected = running and bool(snap.get("ok"))
+        else:
+            connected = running
         self._set_status(connected)
         self._connected = connected
-        if running:
+        # Start/Stop reflect the EFFECTIVE running state, not the raw SCM query.
+        # The SCM query fails for a NON-ADMIN GUI and would falsely read
+        # not-running, wrongly enabling Start on a happily-syncing service. A
+        # fresh .status.json (running, with a recent ts - even if ok briefly
+        # false) is the reliable "the service is alive" signal, so OR it in.
+        running_eff = running or status_fresh or status_alive
+        if running_eff:
             self.btn_start.configure(state="disabled")
             self.btn_stop.configure(state="normal")
         else:
@@ -1316,6 +1570,94 @@ class DashboardView:
         except Exception:
             return {}
 
+    # -- live log tail (service mode) ------------------------------------- #
+    # Max lines kept in the Activity widget so a long-running tail never grows
+    # memory unbounded; the oldest lines are trimmed as new ones arrive.
+    _ACTIVITY_MAX_LINES = 600
+
+    def _tail_service_log(self) -> None:
+        """Stream new bytes of the service's agent.log into the Activity console.
+
+        Opens <install_dir>/logs/agent.log, seeks to the END on the first read
+        (so only NEW activity shows), then on each tick reads appended bytes and
+        appends whole new lines. Handles the file not existing yet and rotation /
+        truncation (size shrank or file replaced) by re-seeking to the start.
+        Best-effort: any error is swallowed and the tail simply retries next tick.
+        Re-arms itself via root.after while in service mode.
+        """
+        if not self.service_mode:
+            return
+        try:
+            self._read_log_appended()
+        except Exception:
+            pass
+        try:
+            self.app.root.after(1500, self._tail_service_log)
+        except Exception:
+            pass
+
+    def _read_log_appended(self) -> None:
+        """Read newly appended log bytes and append complete lines to Activity."""
+        path = self._logtail_path
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            # File not there yet (logs/ created on first service log) - wait.
+            return
+        if not self._logtail_inited:
+            # First read: skip existing history, start at the END (only new lines).
+            self._logtail_pos = size
+            self._logtail_buf = ""
+            self._logtail_inited = True
+        elif size < self._logtail_size:
+            # Rotation / truncation: the live file shrank or was replaced -> read
+            # it from the beginning so we do not skip the fresh content.
+            self._logtail_pos = 0
+            self._logtail_buf = ""
+        self._logtail_size = size
+        if size <= self._logtail_pos:
+            return  # nothing new.
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                fh.seek(self._logtail_pos)
+                chunk = fh.read()
+                self._logtail_pos = fh.tell()
+        except OSError:
+            return
+        if not chunk:
+            return
+        data = self._logtail_buf + chunk
+        # Keep a trailing partial line (no newline yet) for the next read.
+        if data.endswith("\n"):
+            self._logtail_buf = ""
+            lines = data.splitlines()
+        else:
+            parts = data.splitlines()
+            self._logtail_buf = parts[-1] if parts else ""
+            lines = parts[:-1]
+        if not lines:
+            return
+        for line in lines:
+            self._activity(line, scroll=False)
+        self._trim_activity()
+        try:
+            self.activity.see("end")
+        except Exception:
+            pass
+
+    def _trim_activity(self) -> None:
+        """Cap the Activity widget to the last N lines to bound memory."""
+        try:
+            # Text index "end-1c" is the last char; line count is its line number.
+            total = int(self.activity.index("end-1c").split(".")[0])
+            if total > self._ACTIVITY_MAX_LINES:
+                drop = total - self._ACTIVITY_MAX_LINES
+                self.activity.configure(state="normal")
+                self.activity.delete("1.0", "%d.0" % (drop + 1))
+                self.activity.configure(state="disabled")
+        except Exception:
+            pass
+
     def on_open_logs(self) -> None:
         logs = os.path.join(app_dir(), "logs")
         try:
@@ -1328,12 +1670,15 @@ class DashboardView:
             messagebox.showerror(APP_TITLE, "Could not open the logs folder:\n" + str(exc))
 
     def on_save(self) -> None:
-        """Persist settings; re-activate if the license key changed.
+        """Persist the NON-SECRET settings only.
 
-        The server URL is baked (constants.API_BASE_URL), so only a license-key
-        change triggers a re-activation now.
+        Save NEVER touches the license key: the key is not shown on the
+        Dashboard and a normal Save must not need or display it. Changing the
+        key is an explicit action (the "Re-activate with new key..." button),
+        which prompts for a fresh key in a blank, masked entry. Here we load the
+        stored config (preserving its already-stored, encrypted key untouched)
+        and write back only the interval, tally path and toggles.
         """
-        key = self.s_key.get().strip()
         try:
             interval = int(self.s_interval.get().strip() or "60")
             if interval <= 0:
@@ -1341,15 +1686,13 @@ class DashboardView:
         except ValueError:
             interval = 60
 
-        reactivate = (key != self.cfg.license_key)
-
+        # Load the stored config so the existing (encrypted) license_key is
+        # carried through unchanged; we only overwrite non-secret settings.
         cfg = load_config_safe()
-        cfg.license_key = key
         cfg.tally_exe = self.s_tally.get().strip()
         cfg.sync_interval = interval
         cfg.auto_update = bool(self.s_autoupdate.get())
 
-        # Save off-thread only the network part; config write is quick + local.
         try:
             cfg.save()
         except Exception as exc:
@@ -1365,14 +1708,84 @@ class DashboardView:
         else:
             remove_startup_vbs()
 
-        if reactivate and key:
+        self.cfg = cfg
+        self.s_msg.configure(text="Saved.", foreground="#0a7d28")
+        self._activity("[OK] Settings saved.")
+        self.lbl_version.configure(text="Version: " + (cfg.agent_version or "?"))
+
+    def on_reactivate_prompt(self) -> None:
+        """Open a small modal with a BLANK, MASKED entry to re-activate.
+
+        The prompt is NEVER pre-filled with the stored key (the key is never
+        read back into a widget). On submit it activates with the entered key
+        and saves it ENCRYPTED, without ever echoing the old/stored key.
+        """
+        top = tk.Toplevel(self.app.root)
+        top.title("Re-activate with new key")
+        top.transient(self.app.root)
+        top.resizable(False, False)
+        frm = ttk.Frame(top, padding=14)
+        frm.pack(fill="both", expand=True)
+
+        ttk.Label(frm,
+                  text="Enter a new license key to re-activate this agent.",
+                  wraplength=360, foreground="#444").grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+        ttk.Label(frm, text="License key:").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4)
+        var_newkey = tk.StringVar(value="")  # ALWAYS blank, never pre-filled.
+        entry = ttk.Entry(frm, textvariable=var_newkey, show="*", width=34)
+        entry.grid(row=1, column=1, sticky="ew", pady=4)
+        frm.columnconfigure(1, weight=1)
+
+        def _toggle():
+            if entry.cget("show") == "":
+                entry.configure(show="*")
+                eye.configure(text="Show")
+            else:
+                entry.configure(show="")
+                eye.configure(text="Hide")
+
+        eye = ttk.Button(frm, text="Show", width=6, command=_toggle)
+        eye.grid(row=1, column=2, padx=(8, 0), pady=4)
+
+        msg = ttk.Label(frm, text="", foreground="#b00020", wraplength=360)
+        msg.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=3, column=0, columnspan=3, sticky="e", pady=(10, 0))
+
+        def submit():
+            new_key = var_newkey.get().strip()
+            if not new_key:
+                msg.configure(text="Please enter a license key.")
+                return
+            # Load the stored config and apply ONLY the new key in memory; the
+            # worker activates + persists it (encrypted) via set_token/save.
+            cfg = load_config_safe()
+            cfg.license_key = new_key
+            try:
+                cfg.save()
+            except Exception as exc:
+                msg.configure(text="Could not save: " + str(exc))
+                return
             self.s_msg.configure(text="Re-activating...", foreground="#444")
-            self._reactivate(cfg, key)
-        else:
-            self.cfg = cfg
-            self.s_msg.configure(text="Saved.", foreground="#0a7d28")
-            self._activity("[OK] Settings saved.")
-            self.lbl_version.configure(text="Version: " + (cfg.agent_version or "?"))
+            self._reactivate(cfg, new_key)
+            try:
+                top.destroy()
+            except Exception:
+                pass
+
+        ttk.Button(btns, text="Re-activate", command=submit).pack(side="left")
+        ttk.Button(btns, text="Cancel",
+                   command=top.destroy).pack(side="left", padx=(8, 0))
+
+        try:
+            entry.focus_set()
+            top.grab_set()
+        except Exception:
+            pass
 
     def _reactivate(self, cfg: Config, key: str) -> None:
         """Re-activate with a changed key/URL on a worker thread."""
@@ -1405,6 +1818,11 @@ class DashboardView:
                 self.cfg = cfg
                 self.s_msg.configure(text="Re-activated + saved.",
                                      foreground="#0a7d28")
+                try:
+                    self.lbl_license.configure(text="Activated",
+                                               foreground="#0a7d28")
+                except Exception:
+                    pass
                 self._activity("[OK] Re-activated with the new license key.")
                 # Apply the new token: service mode restarts the service so it
                 # reloads config (one UAC prompt); portable mode bounces the
@@ -1423,19 +1841,31 @@ class DashboardView:
         threading.Thread(target=worker, name="reactivate", daemon=True).start()
 
     def on_uninstall(self) -> None:
-        """Stop + remove the service (elevated), the launcher + shortcuts (confirm).
+        """Fully uninstall: stop+remove the service, remove launcher + shortcuts,
+        AND delete the entire install folder (via a detached cleanup batch).
 
         Best-effort throughout with clear messages. The service stop/remove needs
-        admin, so it goes through the same elevated verb (one UAC prompt). The
-        installed files are left in place (the running exe holds itself open);
-        the operator can delete the folder afterwards.
+        admin (one UAC prompt via the elevated verb). The running exe lives INSIDE
+        the install folder, so it cannot delete the folder itself; instead a
+        DETACHED batch is dropped that waits for this process to exit, then
+        ``rmdir /s /q`` the whole folder and deletes itself. After spawning it we
+        close the GUI so the exe is released and the batch can finish the purge.
         """
-        if not messagebox.askyesno(
-                APP_TITLE,
-                "Uninstall Tally Cloud Sync?\n\nThis stops syncing and removes the "
-                "background service / auto-start launcher and shortcuts. The "
-                "installed files in this folder are left in place (you can delete "
-                "the folder manually after closing this window)."):
+        install_dir = app_dir()
+        can_purge = _is_real_install_dir(install_dir)
+        if can_purge:
+            prompt = ("Uninstall Tally Cloud Sync?\n\nThis stops syncing, removes "
+                      "the background service / auto-start launcher and shortcuts, "
+                      "and DELETES the entire install folder:\n\n  " + install_dir +
+                      "\n\nThis window will close so the folder can be removed. "
+                      "This cannot be undone.")
+        else:
+            prompt = ("Uninstall Tally Cloud Sync?\n\nThis stops syncing and "
+                      "removes the background service / auto-start launcher and "
+                      "shortcuts. The install folder will be LEFT in place (it "
+                      "does not look like a real install folder, so it is not "
+                      "auto-deleted); you can remove it manually.")
+        if not messagebox.askyesno(APP_TITLE, prompt):
             return
         self._activity("[..] Uninstalling...")
         had_service = self.service_mode
@@ -1457,29 +1887,104 @@ class DashboardView:
             remove_startup_vbs()
             remove_shortcuts()
             self.app.root.after(
-                0, lambda: self._after_uninstall(had_service, removed_service))
+                0, lambda: self._after_uninstall(
+                    had_service, removed_service, install_dir, can_purge))
         threading.Thread(target=worker, name="uninstall", daemon=True).start()
 
-    def _after_uninstall(self, had_service: bool, removed_service: bool) -> None:
+    @staticmethod
+    def _install_dir_needs_elevation(install_dir: str) -> bool:
+        """True when deleting ``install_dir`` likely needs admin (not under the
+        current user's profile / temp - e.g. it lives under C:\\ or Program Files)."""
+        try:
+            d = os.path.normcase(os.path.abspath(install_dir))
+            safe_roots = []
+            for env in ("USERPROFILE", "LOCALAPPDATA", "APPDATA", "TEMP", "TMP"):
+                val = os.environ.get(env, "")
+                if val:
+                    safe_roots.append(os.path.normcase(os.path.abspath(val)))
+            for root in safe_roots:
+                if d == root or d.startswith(root + os.sep):
+                    return False  # under the user's own space -> no admin needed.
+            return True  # anywhere else (C:\..., Program Files) -> assume elevated.
+        except Exception:
+            return True
+
+    def _after_uninstall(self, had_service: bool, removed_service: bool,
+                         install_dir: str, can_purge: bool) -> None:
         self.service_mode = service_installed()  # re-check (may now be gone)
         self._set_status(False)
         if had_service and not removed_service:
+            # The service is still installed; do NOT delete the folder (its exe is
+            # still referenced by the SCM). Let the operator retry.
             self._activity("[!] Could not remove the service (UAC declined?). "
-                           "Auto-start launcher + shortcuts were removed.")
-            note = ("The background service could not be removed (admin was "
-                    "declined). Re-run Uninstall and accept the prompt to remove "
-                    "it. The auto-start launcher and shortcuts were removed.")
-        else:
+                           "Auto-start launcher + shortcuts were removed; the "
+                           "install folder was NOT deleted.")
+            messagebox.showinfo(
+                APP_TITLE,
+                "The background service could not be removed (admin was declined). "
+                "Re-run Uninstall and accept the prompt. The auto-start launcher "
+                "and shortcuts were removed; the install folder was kept.")
+            self.btn_start.configure(state="normal")
+            self.btn_stop.configure(state="disabled")
+            return
+
+        if not can_purge:
             self._activity("[OK] Uninstalled (service / auto-start + shortcuts "
-                           "removed).")
-            note = ("The background service / auto-start launcher and shortcuts "
-                    "were removed; syncing stopped.")
-        messagebox.showinfo(
-            APP_TITLE,
-            note + "\n\nYou can now close this window and delete the install "
-            "folder.")
-        self.btn_start.configure(state="normal")
-        self.btn_stop.configure(state="disabled")
+                           "removed). Install folder left in place.")
+            messagebox.showinfo(
+                APP_TITLE,
+                "The background service / auto-start launcher and shortcuts were "
+                "removed; syncing stopped. The install folder was left in place; "
+                "you can delete it manually.")
+            self.btn_start.configure(state="normal")
+            self.btn_stop.configure(state="disabled")
+            return
+
+        # Spawn the detached cleanup batch, then close the GUI so this exe is
+        # released and the batch can delete the folder.
+        elevate = self._install_dir_needs_elevation(install_dir)
+        launched = False
+        try:
+            launched = spawn_folder_cleanup(install_dir, elevated=elevate)
+        except Exception as exc:
+            self.logger.error("Folder cleanup spawn failed: %s", exc)
+        if launched:
+            self._activity("[OK] Uninstalled. Closing now so the install folder "
+                           "can be deleted.")
+            messagebox.showinfo(
+                APP_TITLE,
+                "Tally Cloud Sync has been uninstalled. This window will now close "
+                "and the install folder will be removed in the background.")
+            try:
+                self.app.root.after(200, self._force_quit)
+            except Exception:
+                self._force_quit()
+        else:
+            self._activity("[!] Uninstalled the service / launcher, but could not "
+                           "start the folder cleanup. Delete the folder manually.")
+            messagebox.showinfo(
+                APP_TITLE,
+                "The service / auto-start launcher and shortcuts were removed, but "
+                "the install folder could not be auto-deleted. You can close this "
+                "window and delete:\n\n  " + install_dir)
+            self.btn_start.configure(state="normal")
+            self.btn_stop.configure(state="disabled")
+
+    def _force_quit(self) -> None:
+        """Tear down the window + process so the install dir is unlocked.
+
+        Releases the single-instance lock (its lock file lives in the install dir,
+        which the cleanup batch is about to delete), stops the tray + loop, then
+        hard-exits so the exe is fully released for the detached rmdir.
+        """
+        try:
+            self.app.quit_app()
+        except Exception:
+            pass
+        try:
+            os._exit(0)
+        except Exception:
+            pass
 
     # -- live pump --------------------------------------------------------- #
     def _poll(self) -> None:
@@ -1646,7 +2151,20 @@ def _route_service_argv(argv: list[str]) -> Optional[int]:
             print("pywin32 not available; service control is unavailable.")
             return 1
         if verb == "install-service":
-            return svc.install_service()
+            # OPTIONAL trailing token = the absolute STABLE installed-exe path the
+            # service must be registered to (<install_dir>\TallyCloudSync.exe).
+            # We use the ORIGINAL argv (not the lower-cased copy) so the path
+            # keeps its real casing. The token right AFTER 'install-service' is
+            # the exe path; absent -> install_service() falls back to the running
+            # frozen exe (a manual elevated install from the install dir).
+            exe_arg = None
+            for i, a in enumerate(args):
+                if a == "install-service" and i + 1 < len(argv):
+                    candidate = argv[i + 1].strip().strip('"')
+                    if candidate and candidate.lower() not in SERVICE_VERBS:
+                        exe_arg = candidate
+                    break
+            return svc.install_service(exe_arg)
         if verb == "remove-service":
             return svc.remove_service()
         if verb == "start-service":

@@ -104,24 +104,21 @@ async function login(req, res) {
             return R.errorResponse(res, BAD_CREDS_MSG, 401);
         }
 
-        // 3. Account must be Active (Inactive / Blocked are rejected AFTER a
-        //    successful password check, so a disabled account can't be probed by
-        //    the distinct message unless the caller already knows the password).
+        // 3. Account must be Active. This is now the SEAT gate: a license allows
+        //    max_users Active users (the license-admin + the oldest up to the
+        //    cap); the newest excess users are system-deactivated (Inactive), so
+        //    an over-seat user is blocked here with a clear message. (Manual
+        //    approval is RETIRED — there is no longer a pending/approval gate.)
+        //    Checked AFTER a successful password verify so a disabled account
+        //    can't be probed unless the caller already knows the password.
         if (user.status !== 'Active') {
-            return R.errorResponse(res, DISABLED_MSG, 403);
+            const msg = user.status === 'Inactive'
+                ? 'Your account is inactive — the license seat limit is reached. Please contact your administrator.'
+                : DISABLED_MSG;
+            return R.errorResponse(res, msg, 403);
         }
 
         const isSuperAdmin = user.role_slug === 'super-admin';
-
-        // 3b. Approval gate (per-user billing). A user created by a company is
-        //     PENDING until the platform Super Admin approves the seat. Super
-        //     Admin bypasses. Rejected/pending → a clear, distinct message.
-        if (!isSuperAdmin && user.approval_status !== 'approved') {
-            const msg = user.approval_status === 'rejected'
-                ? 'Your account request was declined. Please contact your administrator.'
-                : 'Your account is awaiting administrator approval.';
-            return R.errorResponse(res, msg, 403);
-        }
 
         // 4. Subscription gate (per-user). Super Admin (platform owner) bypasses.
         //    Reject when there is no active, in-date subscription.

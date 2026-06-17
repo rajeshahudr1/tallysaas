@@ -31,6 +31,7 @@
         initCharCounters();
         initSameAsShipping();
         initSyncButtons();
+        initNotifications();
         initPwaInstall();
         initOfflineIndicator();
         // Bootstrap's collapse already toggles aria-expanded on the
@@ -325,6 +326,107 @@
                 }, 1400);
             });
         });
+    }
+
+    /* ── Notification bell read-tracking ──────────────────────────
+     * Per-item read state for the header bell (header.ejs):
+     *   • Clicking a [data-notif-key] item → POST /notifications/read {key};
+     *     on success set the live .topbar-badge to the returned `unread`
+     *     (remove it at 0) + mark that item read. The item's normal navigation
+     *     is NOT blocked — we fire the fetch and let the real link proceed (only
+     *     preventDefault for placeholder "#"/empty hrefs, e.g. agent-update).
+     *   • Clicking #notif-mark-all → preventDefault + POST /notifications/read-all
+     *     → badge to 0 (removed) + every dropdown item marked read.
+     * Everything is null-guarded so a page without the bell is a no-op. Bodies
+     * are form-encoded (matches the web's express.urlencoded parser). */
+    function initNotifications() {
+        // Locate the bell's badge fresh each time (it may have been removed).
+        function badgeEl() { return document.querySelector('.topbar-badge'); }
+
+        // Set the visible unread number. 0 (or null/blank) removes the badge.
+        function setBadge(n) {
+            var num = Number(n);
+            var el = badgeEl();
+            if (!Number.isFinite(num) || num <= 0) {
+                if (el && el.parentNode) el.parentNode.removeChild(el);
+                return;
+            }
+            if (el) { el.textContent = String(num); return; }
+            // No badge present but count > 0: recreate it inside the bell button.
+            var btn = document.querySelector('.topbar-icon-btn');
+            if (!btn) return;
+            var span = document.createElement('span');
+            span.className = 'topbar-badge';
+            span.textContent = String(num);
+            btn.appendChild(span);
+        }
+
+        // Flip an item's read classes.
+        function markItemRead(item) {
+            if (!item) return;
+            item.classList.remove('is-unread');
+            item.classList.add('is-read');
+        }
+
+        // POST a form-encoded body and resolve the parsed JSON (or null).
+        // keepalive:true so the request still completes when the click also
+        // navigates the page away (failed-sync items link to /sync-logs) — the
+        // body is tiny, well under the keepalive size cap, so the mark-read
+        // actually lands and persists across the reload.
+        function postForm(action, params) {
+            var body = new URLSearchParams(params || {}).toString();
+            return fetch(action, {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+                keepalive: true,
+                body: body,
+            }).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+        }
+
+        // Per-item click (delegated). Fire the mark-read, DON'T block real nav.
+        document.addEventListener('click', function (e) {
+            var item = e.target.closest('[data-notif-key]');
+            if (!item) return;
+            var key = item.getAttribute('data-notif-key');
+            if (!key) return;
+            // Already read → nothing to do (idempotent server-side anyway).
+            if (item.classList.contains('is-read')) return;
+
+            // If the link has no real destination (placeholder "#"/empty — e.g.
+            // the agent-update entry), keep the dropdown usable by preventing the
+            // jump; otherwise let the browser navigate after we fire the fetch.
+            var href = item.getAttribute('href') || '';
+            if (href === '' || href.charAt(0) === '#') e.preventDefault();
+
+            postForm('/notifications/read', { key: key }).then(function (j) {
+                if (j && j.ok) {
+                    markItemRead(item);
+                    if (j.unread != null) setBadge(j.unread);
+                }
+            });
+        });
+
+        // "Mark all read" → zero the badge + mark every dropdown item read.
+        var markAll = document.getElementById('notif-mark-all');
+        if (markAll) {
+            markAll.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                postForm('/notifications/read-all', {}).then(function (j) {
+                    if (j && j.ok) {
+                        setBadge(0);
+                        document.querySelectorAll('[data-notif-key]').forEach(markItemRead);
+                        // Hide itself — there is nothing left to mark.
+                        markAll.style.display = 'none';
+                    }
+                });
+            });
+        }
     }
 
     /* ── Char counters ────────────────────────────────────────────

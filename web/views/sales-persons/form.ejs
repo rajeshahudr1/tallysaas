@@ -1,33 +1,69 @@
 <%
 /* ─────────────────────────────────────────────────────────────
- * views/sales-persons/form.ejs — MASTERS · Add Sales Person.
- * Route: GET /sales-persons/add  ·  activeMenu: 'sales'.
+ * views/sales-persons/form.ejs — MASTERS · Add / Edit Sales Person.
+ * Route: GET /sales-persons/add  ·  /sales-persons/:id/edit
+ * activeMenu: 'sales'.
  *
- * Two fully-built panes:
- *   • Basic Information — name/code/mobile/email/joining/status.
+ * Three panes:
+ *   • Basic Information — name/code/mobile/email/joining/status PLUS the
+ *     OPTIONAL login fields (password + confirm + role). The SINGLE email
+ *     above doubles as the login email. Setting a password makes the sales
+ *     person a LOGIN USER → POST /sales-persons/:id/login (same identity).
+ *     Leave the password blank for no login.
  *   • Assigned Locations — the SalesPerson↔Location MAPPING UI: a grid
- *     of selectable location cards (checkboxes). Selecting many = the
- *     person can access customers in all those locations.
- * Other tabs are styled placeholders.
+ *     of selectable location cards (checkboxes). Submits real location IDs
+ *     (name="location_ids[]" value=loc.id) → PUT /sales-persons/:id/locations.
+ *   • Customer Assign — per ASSIGNED LOCATION, tick that location's customers
+ *     to assign to this sales person. Inputs name="customer_ids[<locId>][]".
+ *     Edit-mode only (needs a saved sales person + assigned locations).
  *
  * Expected locals (routes/web.js → res.render):
- *   locationOptions  [ {name,code,city,state,customers}, … ]
+ *   locationOptions       [ {id,name,code,city,state,customers}, … ]
+ *   roleOptions           [ {id,name,slug}, … ]            (login role select)
+ *   record                the sales_persons row on EDIT (else undefined)
+ *   assignedLocationIds   [Number, …]                       (edit prefill)
+ *   linkedUser            {id,email,role_id,status}|null     (edit prefill)
+ *   locationCustomers     { '<locationId>': [ {id,name,mobile}, … ] }  (edit)
+ *   assignedCustomers     { '<locationId>': [customerId, …] }          (edit)
  * ─────────────────────────────────────────────────────────── */
 
 var _locationOptions = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
+var _roleOptions     = (typeof roleOptions     !== 'undefined' && roleOptions)     ? roleOptions     : [];
 
 var _rec   = (typeof record !== 'undefined' && record) ? record : null;
 var _isEdit = !!_rec;
 function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }
 
+// Edit-mode prefill payloads (all default-safe so add-mode never throws).
+var _assignedLocs  = (typeof assignedLocationIds !== 'undefined' && Array.isArray(assignedLocationIds)) ? assignedLocationIds.map(Number) : [];
+var _linkedUser    = (typeof linkedUser !== 'undefined' && linkedUser) ? linkedUser : null;
+var _locCustomers  = (typeof locationCustomers !== 'undefined' && locationCustomers) ? locationCustomers : {};
+var _assignedCust  = (typeof assignedCustomers !== 'undefined' && assignedCustomers) ? assignedCustomers : {};
+
+function _isLocChecked(id){ return _assignedLocs.indexOf(Number(id)) !== -1; }
+function _isCustChecked(locId, custId){
+    var arr = _assignedCust[String(locId)];
+    return Array.isArray(arr) && arr.indexOf(Number(custId)) !== -1;
+}
+
+// The login role select defaults to the system "sales-person" role (so the new
+// login can only do what a sales person should). On edit we honour the linked
+// user's saved role_id.
+var _defaultRoleId = null;
+for (var _ri = 0; _ri < _roleOptions.length; _ri++) {
+    if (String(_roleOptions[_ri].slug) === 'sales-person') { _defaultRoleId = Number(_roleOptions[_ri].id); break; }
+}
+var _selectedRoleId = (_linkedUser && _linkedUser.role_id != null) ? Number(_linkedUser.role_id) : _defaultRoleId;
+
+// Only the assigned locations get a Customer-Assign section (you assign that
+// location's customers only after the location is assigned + saved).
+var _assignedLocObjs = _locationOptions.filter(function (loc) { return _isLocChecked(loc.id); });
+
 var formTabs = [
-    { id: 'basic',     label: 'Basic Information',  icon: 'fa-id-card',        active: true },
-    { id: 'locations', label: 'Assigned Locations', icon: 'fa-location-dot'                 },
-    { id: 'access',    label: 'Login & Access',     icon: 'fa-key'                          },
-    { id: 'custom',    label: 'Custom Fields',      icon: 'fa-table-cells'                  },
+    { id: 'basic',     label: 'Basic Information',  icon: 'fa-id-card',     active: true },
+    { id: 'locations', label: 'Assigned Locations', icon: 'fa-location-dot'              },
+    { id: 'custom',    label: 'Customer Assign',    icon: 'fa-user-check'                },
 ];
-/* Only #access and #custom are placeholders (basic + locations are built). */
-var placeholderPanes = formTabs.filter(function (t) { return t.id === 'access' || t.id === 'custom'; });
 
 var headActions =
     '<a class="btn btn-light" href="/sales-persons">' +
@@ -104,8 +140,10 @@ var headActions =
                     <div class="input-affix">
                         <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
                         <input type="email" class="form-control" id="sp-email" name="email"
-                               value="<%= _v('email') %>" placeholder="name@company.com">
+                               value="<%= _isEdit ? (_linkedUser ? _linkedUser.email : _v('email')) : _v('email') %>"
+                               placeholder="name@company.com">
                     </div>
+                    <div class="form-hint mt-1">Also used as the sign-in email if you give them a login below.</div>
                 </div>
 
                 <div class="form-group">
@@ -114,6 +152,61 @@ var headActions =
                 </div>
 
             </div><!-- /.form-grid -->
+
+            <hr class="form-divider">
+
+            <!-- ── Optional login (merged from the old "Login & Access" tab) ── -->
+            <h2 class="form-section-title mb-1">Login &amp; Access <span class="text-muted" style="font-weight:400;">(optional)</span></h2>
+            <% if (_linkedUser) { %>
+                <p class="form-hint mb-3">
+                    <i class="fa-solid fa-circle-check text-success me-1"></i>
+                    Login active for <strong><%= _linkedUser.email %></strong> (status: <%= _linkedUser.status %>).
+                    Change the role below, or set a new password to reset it. Leave the password blank to keep it as-is.
+                </p>
+            <% } else { %>
+                <p class="form-hint mb-3">
+                    Set a password + role to give this sales person a login (optional).
+                    Leave password blank for no login. The <strong>Email</strong> above is used as their sign-in email.
+                </p>
+            <% } %>
+
+            <div class="form-grid">
+
+                <div class="form-group">
+                    <label class="form-label" for="sp-password"><%= _linkedUser ? 'New Password' : 'Password' %></label>
+                    <input type="password" class="form-control" id="sp-password" name="password"
+                           placeholder="<%= _linkedUser ? 'Leave blank to keep current' : 'Min 8 characters' %>"
+                           minlength="8" autocomplete="new-password">
+                    <div class="form-hint mt-1"><%= _linkedUser ? 'Only fill this in to reset the password.' : 'At least 8 characters. Leave blank for no login.' %></div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sp-password2">Confirm Password</label>
+                    <input type="password" class="form-control" id="sp-password2" name="password_confirm"
+                           placeholder="Re-enter the password" minlength="8" autocomplete="new-password">
+                    <div class="invalid-feedback" id="sp-pass-mismatch">Passwords do not match.</div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="sp-role">Login Role</label>
+                    <select class="form-control" id="sp-role" name="role_id">
+                        <option value="">— Select role —</option>
+                        <% _roleOptions.forEach(function (r) { %>
+                            <option value="<%= r.id %>" <%= (_selectedRoleId != null && Number(r.id) === _selectedRoleId) ? 'selected' : '' %>>
+                                <%= r.name %><%= String(r.slug) === 'sales-person' ? ' (recommended)' : '' %>
+                            </option>
+                        <% }); %>
+                    </select>
+                    <div class="form-hint mt-1">The <strong>Sales Person</strong> role limits them to their own customers. Required only if you set a password.</div>
+                </div>
+
+            </div><!-- /.form-grid (login) -->
+
+            <div class="form-hint mt-2">
+                <i class="fa-solid fa-triangle-exclamation me-1 text-warning"></i>
+                Creating a login consumes a user seat on your licence. If the seat limit is reached the login is
+                created but kept <strong>Inactive</strong> until you raise the plan.
+            </div>
 
             <hr class="form-divider">
 
@@ -139,7 +232,9 @@ var headActions =
                     <div class="form-hint mt-4">
                         <i class="fa-solid fa-circle-info me-1"></i>
                         Assign which locations this person can access in the
-                        <strong>Assigned Locations</strong> tab.
+                        <strong>Assigned Locations</strong> tab, then pick their
+                        customers in <strong>Customer Assign</strong>. Giving them a
+                        login (above) is optional.
                     </div>
                 </div>
             </div>
@@ -165,14 +260,15 @@ var headActions =
             <div class="assign-grid">
                 <% _locationOptions.forEach(function (loc) { %>
                     <label class="assign-card">
-                        <input type="checkbox" name="locations[]" value="<%= loc.name %>" data-check-group="sp-loc">
+                        <input type="checkbox" name="location_ids[]" value="<%= loc.id %>"
+                               data-check-group="sp-loc" <%= _isLocChecked(loc.id) ? 'checked' : '' %>>
                         <span class="assign-card-body">
                             <span class="assign-card-name">
                                 <i class="fa-solid fa-location-dot"></i><%= loc.name %>
-                                <span class="assign-card-code"><%= loc.code %></span>
+                                <% if (loc.code) { %><span class="assign-card-code"><%= loc.code %></span><% } %>
                             </span>
                             <span class="assign-card-meta">
-                                <%= loc.city %>, <%= loc.state %> · <%= loc.customers %> customers
+                                <%= [loc.city, loc.state].filter(Boolean).join(', ') %><% if (loc.customers) { %> · <%= loc.customers %> customers<% } %>
                             </span>
                         </span>
                         <span class="assign-card-check"><i class="fa-solid fa-check"></i></span>
@@ -185,18 +281,82 @@ var headActions =
 
         </div><!-- /#locations -->
 
-        <%
-        placeholderPanes.forEach(function (pane) { %>
-            <div class="tab-pane fade" id="<%= pane.id %>" role="tabpanel" aria-labelledby="<%= pane.id %>-tab">
-                <div class="tab-placeholder">
-                    <div class="tab-placeholder-icon">
-                        <i class="fa-solid <%= pane.icon %>"></i>
-                    </div>
-                    <div class="tab-placeholder-title"><%= pane.label %></div>
-                    <p class="mb-0">This section is coming in the next phase.</p>
+        <!-- ════ PANE 3 — Customer Assign ════ -->
+        <div class="tab-pane fade" id="custom" role="tabpanel" aria-labelledby="custom-tab">
+
+            <div class="assign-head">
+                <div>
+                    <h2 class="form-section-title mb-1">Customer Assign</h2>
+                    <p class="form-hint mb-0">For each assigned location, tick the customers this sales person should
+                        be able to see and bill. They will see <strong>only</strong> the customers ticked here.</p>
                 </div>
             </div>
-        <% }); %>
+
+            <% if (!_isEdit) { %>
+                <div class="tab-placeholder">
+                    <div class="tab-placeholder-icon"><i class="fa-solid fa-user-check"></i></div>
+                    <div class="tab-placeholder-title">Save the sales person first</div>
+                    <p class="mb-0">Create the sales person and assign their locations, then come back here to assign
+                        customers per location.</p>
+                </div>
+            <% } else if (!_assignedLocObjs.length) { %>
+                <div class="tab-placeholder">
+                    <div class="tab-placeholder-icon"><i class="fa-solid fa-location-dot"></i></div>
+                    <div class="tab-placeholder-title">No locations assigned yet</div>
+                    <p class="mb-0">Assign one or more locations in the <strong>Assigned Locations</strong> tab and save,
+                        then their customers will appear here.</p>
+                </div>
+            <% } else { %>
+                <% _assignedLocObjs.forEach(function (loc) {
+                       var custs = Array.isArray(_locCustomers[String(loc.id)]) ? _locCustomers[String(loc.id)] : [];
+                       var grp = 'sp-cust-' + loc.id;
+                %>
+                    <div class="cust-section">
+                        <%# Always submit this location's key (empty value) so unticking
+                            every customer still sends an empty list → clears the location.
+                            NOTE: the key is "loc<id>" (NOT a bare number) so the extended
+                            body parser keeps it an OBJECT key — a numeric key like [10]
+                            would be treated as a sparse ARRAY index and lose the id. %>
+                        <input type="hidden" name="customer_ids[loc<%= loc.id %>][]" value="">
+                        <div class="cust-section-head">
+                            <div class="cust-section-title">
+                                <i class="fa-solid fa-location-dot"></i>
+                                <%= loc.name %>
+                                <% if (loc.code) { %><span class="assign-card-code"><%= loc.code %></span><% } %>
+                                <span class="cust-section-count"><%= custs.length %> customer<%= custs.length === 1 ? '' : 's' %></span>
+                            </div>
+                            <% if (custs.length) { %>
+                                <div class="cust-section-actions">
+                                    <button type="button" class="btn btn-sm btn-light" data-cust-all="<%= grp %>">Assign all</button>
+                                    <button type="button" class="btn btn-sm btn-light" data-cust-none="<%= grp %>">Clear</button>
+                                </div>
+                            <% } %>
+                        </div>
+
+                        <% if (!custs.length) { %>
+                            <p class="text-muted mb-0">No customers in this location yet.</p>
+                        <% } else { %>
+                            <div class="assign-grid">
+                                <% custs.forEach(function (c) { %>
+                                    <label class="assign-card">
+                                        <input type="checkbox" name="customer_ids[loc<%= loc.id %>][]" value="<%= c.id %>"
+                                               data-cust-group="<%= grp %>" <%= _isCustChecked(loc.id, c.id) ? 'checked' : '' %>>
+                                        <span class="assign-card-body">
+                                            <span class="assign-card-name">
+                                                <i class="fa-solid fa-user"></i><%= c.name %>
+                                            </span>
+                                            <span class="assign-card-meta"><%= c.mobile || '—' %></span>
+                                        </span>
+                                        <span class="assign-card-check"><i class="fa-solid fa-check"></i></span>
+                                    </label>
+                                <% }); %>
+                            </div>
+                        <% } %>
+                    </div>
+                <% }); %>
+            <% } %>
+
+        </div><!-- /#custom -->
 
     </div><!-- /.tab-content -->
 
@@ -210,8 +370,8 @@ var headActions =
 </form>
 
 <%
-/* Page-local styling for the Assigned-Locations mapping grid (not a
- * shared component — specific to this feature). Selected state is
+/* Page-local styling for the Assigned-Locations + Customer-Assign grids
+ * (not a shared component — specific to this feature). Selected state is
  * driven by the checkbox via :has(), no JS needed for the visuals. */
 %>
 <style>
@@ -255,4 +415,108 @@ var headActions =
     .assign-card:has(input:checked) .assign-card-check {
         background: var(--primary); border-color: var(--primary); color: #fff;
     }
+
+    /* Customer-Assign per-location sections */
+    .cust-section {
+        border: 1px solid var(--border); border-radius: 12px;
+        padding: 16px; margin-bottom: 16px; background: #fff;
+    }
+    .cust-section-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+    }
+    .cust-section-title {
+        display: flex; align-items: center; gap: 8px;
+        font-weight: 600; font-size: 15px; color: var(--text);
+    }
+    .cust-section-title > i { color: var(--primary); }
+    .cust-section-count {
+        font-size: 12px; font-weight: 500; color: var(--text-muted);
+    }
+    .cust-section-actions { display: flex; gap: 8px; }
+    .sp-pass-bad { border-color: #dc3545 !important; }
+    .sp-pass-bad ~ .invalid-feedback { display: block; }
 </style>
+
+<script>
+/* ─────────────────────────────────────────────────────────────
+ * Sales-Person form behaviours (page-local):
+ *   • OPTIONAL login validation (JS-only). Login is opt-in: only when a
+ *     password is typed do we require email + role + a matching, ≥8-char
+ *     password. With the password blank we create NO login and run NO login
+ *     checks — so a sales person with no login always saves cleanly. None of
+ *     the login fields carry the HTML `required` attribute (a required control
+ *     in a non-visible state would silently block submit) — all of them now
+ *     live in the always-visible Basic tab, so focusing the offender works.
+ *   • Customer-Assign per-section "Assign all" / "Clear" buttons.
+ * The Assigned-Locations "Select all" uses the site-wide
+ * [data-select-all-checks] wiring in /js/app.js (no duplication here).
+ * ─────────────────────────────────────────────────────────── */
+(function () {
+    'use strict';
+
+    var form  = document.getElementById('sp-form');
+    var email = document.getElementById('sp-email');
+    var role  = document.getElementById('sp-role');
+    var pass  = document.getElementById('sp-password');
+    var pass2 = document.getElementById('sp-password2');
+
+    function val(el) { return el ? String(el.value || '').trim() : ''; }
+    function passwordsMatch() { return val(pass) === val(pass2); }
+    function markMismatch(bad) {
+        if (!pass2) return;
+        pass2.classList.toggle('sp-pass-bad', !!bad);
+        pass2.setCustomValidity(bad ? 'Passwords do not match.' : '');
+    }
+    // Live confirm-match feedback (only meaningful once a password is typed).
+    if (pass2) {
+        var recheck = function () { markMismatch(val(pass) !== '' && !passwordsMatch()); };
+        pass2.addEventListener('input', recheck);
+        if (pass) pass.addEventListener('input', recheck);
+    }
+
+    function fail(field, msg) {
+        window.alert(msg);
+        if (field && typeof field.focus === 'function') field.focus();
+    }
+
+    if (form) {
+        form.addEventListener('submit', function (e) {
+            // Login is OPTIONAL: no password ⇒ no login ⇒ skip all login checks.
+            if (val(pass) === '') { markMismatch(false); return; }
+
+            // A password was set ⇒ a login will be created: validate it.
+            if (val(email) === '') {
+                e.preventDefault(); e.stopPropagation();
+                return fail(email, 'Enter an email to give this sales person a login (or clear the password to skip the login).');
+            }
+            if (val(pass).length < 8) {
+                e.preventDefault(); e.stopPropagation();
+                return fail(pass, 'The login password must be at least 8 characters.');
+            }
+            if (!passwordsMatch()) {
+                e.preventDefault(); e.stopPropagation();
+                markMismatch(true);
+                return fail(pass2, 'The passwords do not match.');
+            }
+            if (val(role) === '') {
+                e.preventDefault(); e.stopPropagation();
+                return fail(role, 'Pick a login role for this sales person (or clear the password to skip the login).');
+            }
+        });
+    }
+
+    // Customer-Assign: per-section Assign-all / Clear.
+    function setGroup(group, checked) {
+        document.querySelectorAll('[data-cust-group="' + group + '"]').forEach(function (cb) {
+            cb.checked = checked;
+        });
+    }
+    document.querySelectorAll('[data-cust-all]').forEach(function (btn) {
+        btn.addEventListener('click', function () { setGroup(btn.getAttribute('data-cust-all'), true); });
+    });
+    document.querySelectorAll('[data-cust-none]').forEach(function (btn) {
+        btn.addEventListener('click', function () { setGroup(btn.getAttribute('data-cust-none'), false); });
+    });
+})();
+</script>

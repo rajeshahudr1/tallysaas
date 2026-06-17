@@ -25,6 +25,8 @@
 const R  = require('../../Helpers/response');
 const db = require('../../config/db').db;
 const { hash } = require('../../Helpers/passwords');
+const { reconcileLicenseSeats } = require('../../Helpers/seats');
+const { emailInUse, EMAIL_TAKEN_MSG } = require('../../Helpers/emailUnique');
 
 const OOPS_MSG       = 'Oops..Something went wrong. Please try again.';
 const DUP_EMAIL_MSG  = 'A user with this email already exists.';
@@ -123,15 +125,11 @@ async function create(req, res) {
         const email = body.email;
 
         // Duplicate-email guard. The email is the login identity, so it must be
-        // unique across the whole install (global), which also covers the
-        // company-scoped case. Ignore soft-deleted rows so a previously removed
-        // email can be reused.
-        const existing = await db('users')
-            .whereNull('deleted_at')
-            .where('email', email)
-            .first();
-        if (existing) {
-            return R.errorResponse(res, DUP_EMAIL_MSG, 422);
+        // unique across the whole install — across BOTH users AND sales_persons
+        // (one email = one person). Ignore soft-deleted rows so a previously
+        // removed email can be reused.
+        if (await emailInUse(db, email, {})) {
+            return R.errorResponse(res, EMAIL_TAKEN_MSG, 422);
         }
 
         // Enforce the assignable-role policy server-side (the UI dropdown is not a
@@ -153,33 +151,18 @@ async function create(req, res) {
 
         const password_hash = await hash(body.password);
 
-        // Approval policy: a user CREATED by a company-admin (or the super-admin)
-        // under their own license is AUTO-APPROVED so they can sign in right away
-        // — the creating admin is the authority for their own license. We still
-        // enforce the license's max_users seat cap before auto-approving; if the
-        // cap is reached the user is created PENDING (a super-admin can approve
-        // later by raising the cap). Any other creator path stays PENDING.
-        const creatorSlug = req.user && req.user.role_slug;
-        const adminCreated = creatorSlug === 'company-admin' || creatorSlug === 'super-admin';
-        const licenseId    = (req.user && req.user.license_id) || null;
-
-        // Seat-cap check (only relevant when we'd auto-approve under a license).
-        let autoApprove = adminCreated;
-        if (autoApprove && licenseId) {
-            const license = await db('licenses').where('id', licenseId).first('max_users', 'plan', 'valid_until');
-            if (license && license.max_users != null) {
-                const [{ used }] = await db('users')
-                    .where('license_id', licenseId)
-                    .where('approval_status', 'approved')
-                    .whereNull('deleted_at')
-                    .count({ used: 'id' });
-                if (Number(used) >= Number(license.max_users)) autoApprove = false;
-            }
-        }
+        // No more manual approval: every user is created APPROVED (the legacy
+        // approval columns stay consistent — always approved). Whether the user
+        // can actually log in is decided purely by the SEAT count: after we
+        // insert, reconcileLicenseSeats() flips the license-admin + the OLDEST
+        // users up to max_users to Active and the rest (the newest excess) to
+        // Inactive. So a new user over the cap ends up Inactive (no 422).
+        const licenseId = (req.user && req.user.license_id) || null;
 
         // Coerce optional fields away from `undefined` — knex throws "Undefined
         // binding(s)" on an undefined insert value (it does NOT substitute the
-        // column DEFAULT). status defaults to 'Active' (a NOT NULL column).
+        // column DEFAULT). status defaults to 'Active' (a NOT NULL column); the
+        // seat reconcile below may flip it to Inactive when over the cap.
         const now = new Date();
         const row = {
             company_id:    req.companyId,
@@ -194,43 +177,36 @@ async function create(req, res) {
             // users in THEIR own location (force it); an unrestricted creator
             // keeps the chosen/blank location_id (blank = all locations).
             location_id:   req.locationId != null ? req.locationId : (body.location_id ?? null),
-            // Auto-approved when an admin creates a user under their own license
-            // (see above); otherwise pending the Super Admin's approval queue.
-            approval_status: autoApprove ? 'approved' : 'pending',
-            approved_at:     autoApprove ? now : null,
-            approved_by:     autoApprove && req.user ? req.user.sub : null,
+            // Approval is RETIRED — always approved so the legacy columns stay
+            // consistent (login is gated by status + subscription, not approval).
+            approval_status: 'approved',
+            approved_at:     now,
+            approved_by:     req.user ? req.user.sub : null,
         };
 
-        // Create the user and (when auto-approved) provision the active
-        // subscription SEAT in one transaction, so the login subscription gate
-        // passes immediately. The seat mirrors UserApprovalController.approve.
+        // Create the user, then reconcile the license seats in the SAME
+        // transaction (row-locks the license). The new (newest) user is Active
+        // only if within the seat count; over the cap it becomes Inactive. The
+        // reconcile also provisions/expires subscriptions so the login gate is
+        // consistent. A user without a license (super-admin path) is just
+        // created Active.
         const inserted = await db.transaction(async (trx) => {
             const [u] = await trx('users').insert(row).returning([
                 'id', 'company_id', 'license_id', 'role_id',
                 'name', 'email', 'mobile', 'status', 'approval_status', 'location_id', 'created_at',
             ]);
-            if (autoApprove) {
-                const today = now.toISOString().slice(0, 10);
-                let validUntil = new Date(now.getTime() + 10 * 365 * 24 * 60 * 60 * 1000)
-                    .toISOString().slice(0, 10);
-                let plan = 'standard';
-                if (licenseId) {
-                    const lic = await trx('licenses').where('id', licenseId).first('plan', 'valid_until');
-                    if (lic) {
-                        plan = lic.plan || plan;
-                        if (lic.valid_until) validUntil = new Date(lic.valid_until).toISOString().slice(0, 10);
-                    }
-                }
-                await trx('subscriptions').insert({
-                    user_id: u.id, plan, valid_from: today, valid_until: validUntil, status: 'active',
-                });
+            if (licenseId) {
+                await reconcileLicenseSeats(trx, licenseId);
+                // Re-read the (possibly flipped) status so the response is honest.
+                const fresh = await trx('users').where('id', u.id).first('status');
+                if (fresh) u.status = fresh.status;
             }
             return u;
         });
 
-        const msg = inserted.approval_status === 'approved'
+        const msg = inserted.status === 'Active'
             ? 'User created. They can sign in now.'
-            : 'User created. Awaiting Super Admin approval before they can sign in (license seat limit reached).';
+            : 'User created but inactive — the license seat limit is reached. Raise the plan (max_users) to activate them.';
         return R.successResponse(res, inserted, msg);
     } catch (err) {
         console.error('users.create error:', err);

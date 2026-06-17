@@ -131,6 +131,25 @@ function fmtDateTime(v) {
            `${p(h)}:${p(d.getMinutes())} ${ampm}`;
 }
 
+/* The agent is "connected" only if its last heartbeat landed within this window.
+ * MUST match the api's CONNECTED_WINDOW_MS (SyncController + LicenseController =
+ * 150s = 2.5 missed 60s beats) so the Sync Dashboard's connection state is
+ * IDENTICAL to the License detail "Agent Online/Offline" for the same agent. The
+ * api already computes `connected` from licenses.last_seen_at; the web re-applies
+ * this freshness rule defensively against the returned heartbeat timestamp so a
+ * STALE/ABSENT heartbeat can NEVER render a fake "Connected" — it reads
+ * Disconnected/Offline, honestly, like the License page. */
+const SYNC_CONNECTED_WINDOW_MS = 150 * 1000;
+
+/* True iff `tsIso` (an ISO heartbeat/last_seen string) is within the connected
+ * window of now. Missing/blank/unparseable → false (no fresh heartbeat). */
+function isHeartbeatFresh(tsIso) {
+    if (!tsIso) return false;
+    const t = new Date(tsIso).getTime();
+    if (isNaN(t)) return false;
+    return (Date.now() - t) <= SYNC_CONNECTED_WINDOW_MS;
+}
+
 /* Generic list fetch: forwards page/per_page/search/status query params to
  * the api and returns { rows, meta }. Each page maps `rows` to its view's
  * expected field names before rendering. */
@@ -156,6 +175,109 @@ async function fetchOptions(req, basePath) {
     const { body } = await api.get(req, `${basePath}?per_page=100`);
     const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
     return rows.map((r) => ({ id: r.id, name: r.name }));
+}
+
+/* Assignable roles as {id,name,slug} for the Sales-Person login-role select —
+ * keeps `slug` (unlike fetchOptions) so the view can default-highlight the
+ * system "sales-person" role. */
+async function fetchRoleOptions(req) {
+    const { body } = await api.get(req, '/roles?per_page=100');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    return rows.map((r) => ({ id: r.id, name: r.name, slug: r.slug }));
+}
+
+/* Locations as the richer card objects the Sales-Person "Assigned Locations"
+ * grid renders (id + name + code + city + state). Real ids are submitted as
+ * location_ids[] → PUT /sales-persons/:id/locations. */
+async function fetchLocationCards(req) {
+    const { body } = await api.get(req, '/locations?per_page=100');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    return rows.map((r) => ({
+        id: r.id, name: r.name, code: r.code || '', city: r.city || '', state: r.state || '',
+        customers: r.customers || '',
+    }));
+}
+
+/* All company customers bucketed by location_id → { '<locId>': [{id,name,mobile}] }.
+ * The /customers list carries customers.* (so location_id is present); the
+ * crudController list has no per-location query filter, so we fetch once and
+ * group client-side. Used to build the per-location checklists in the
+ * Sales-Person "Customer Assign" tab. */
+async function fetchCustomersByLocation(req) {
+    const { body } = await api.get(req, '/customers?per_page=100');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    const byLoc = {};
+    for (const r of rows) {
+        if (r.location_id == null) continue;
+        const key = String(r.location_id);
+        if (!byLoc[key]) byLoc[key] = [];
+        byLoc[key].push({ id: r.id, name: r.name, mobile: r.mobile || '' });
+    }
+    return byLoc;
+}
+
+/* Forward the Sales-Person form's OPTIONAL login to POST /sales-persons/:id/login
+ * (create-or-update the linked login user). Login is OPT-IN and keyed off the
+ * PASSWORD: only when a password is supplied do we create/update a login. The
+ * sales person's SINGLE email (b.email) doubles as the login email — there is
+ * no separate login_email field anymore. Returns a per-action flash result
+ * { ok, msg } or null when no password was given (no login wanted → skip). The
+ * api enforces dup-email + seat-limit + role-assignability — we surface its msg. */
+async function applySalesPersonLogin(req, id, b) {
+    const pass = (b.password || '').trim();
+    // No password ⇒ the operator does not want a login. Skip entirely so the
+    // base sales person still saves cleanly (the main bug we are fixing).
+    if (!pass) return null;
+    const email  = (b.email || '').trim();
+    const roleId = _num(b.role_id);
+    const payload = { email, role_id: roleId, password: pass };
+    const result = await api.post(req, `/sales-persons/${id}/login`, payload);
+    return { ok: apiOk(result), msg: apiError(result, 'Could not save the login.'), raw: result };
+}
+
+/* Normalise a checkbox group value into a positive-int array. The extended
+ * (qs) body parser returns: an array for a normal multi-value group, a scalar
+ * for a single value, OR — when a group has MORE than qs's default arrayLimit
+ * (20) entries — a plain OBJECT keyed by numeric index ({0:..,1:..,…}). The
+ * per-location customer checklist can easily exceed 20 (the hidden empty input
+ * + 20 ticks), so we MUST handle the object form or every id is lost. */
+function toPosIntArray(v) {
+    if (v == null) return [];
+    let arr;
+    if (Array.isArray(v)) arr = v;
+    else if (typeof v === 'object') arr = Object.values(v); // qs arrayLimit overflow
+    else arr = [v];
+    return arr.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+/* Forward the selected Assigned-Locations to PUT /sales-persons/:id/locations.
+ * location_ids[] arrives as a string|string[]|object; normalise to a number[]. */
+async function applySalesPersonLocations(req, id, b) {
+    const location_ids = toPosIntArray(b['location_ids']);
+    const result = await api.put(req, `/sales-persons/${id}/locations`, { location_ids });
+    return { ok: apiOk(result), msg: apiError(result, 'Could not save the assigned locations.') };
+}
+
+/* Forward per-location customer ticks to PUT /sales-persons/:id/customers, once
+ * per location key. customer_ids arrives as { 'loc<id>': string|string[] } from
+ * the name="customer_ids[loc<id>][]" inputs — the "loc" prefix keeps it an
+ * OBJECT key in the extended body parser (a bare number would become a sparse
+ * array index and lose the location id). A location with no ticks still submits
+ * an empty-value hidden input, so the key is always present and unticking
+ * everything clears that location. */
+async function applySalesPersonCustomers(req, id, b) {
+    const map = (b && b.customer_ids && typeof b.customer_ids === 'object') ? b.customer_ids : null;
+    if (!map) return { ok: true, msg: '' };
+    let allOk = true;
+    let firstErr = '';
+    for (const locKey of Object.keys(map)) {
+        const locationId = Number(String(locKey).replace(/^loc/, ''));
+        if (!Number.isInteger(locationId) || locationId <= 0) continue;
+        const customer_ids = toPosIntArray(map[locKey]);
+        const result = await api.put(req, `/sales-persons/${id}/customers`, { location_id: locationId, customer_ids });
+        if (!apiOk(result)) { allOk = false; if (!firstErr) firstErr = apiError(result, 'Could not save customer assignments.'); }
+    }
+    return { ok: allOk, msg: firstErr };
 }
 
 /* Fetch config-enumeration dropdown lists from the api's single source
@@ -265,7 +387,7 @@ function requireCompanyAdmin(req, res, next) {
 
 /* Role-management gate: BOTH the super-admin (manages every role across
  * licenses + global templates) AND the company-admin (manages their own
- * license's custom roles) may reach the /roles-admin screens. The api enforces
+ * license's custom roles) may reach the unified /roles screen. The api enforces
  * the finer hierarchy (super-admin vs license-scoped, PROTECTED_SLUGS); this
  * just keeps the routes/menu from leaking to plain users. */
 function requireRoleManager(req, res, next) {
@@ -573,24 +695,33 @@ router.get('/sales-persons', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-/* ── MASTERS · Add Sales Person (GET /sales-persons/add) ────── */
-router.get('/sales-persons/add', (req, res) => {
-    res.render('sales-persons/form', {
-        title: 'Add Sales Person',
-        activeMenu: 'sales',
-        breadcrumb: [
-            { label: 'Dashboard', href: '/' },
-            { label: 'Sales Persons', href: '/sales-persons' },
-            { label: 'Add Sales Person' },
-        ],
-
-        // Full location list for the "Assigned Locations" mapping pane.
-        locationOptions: mock.locationsList,
-    });
+/* ── MASTERS · Add Sales Person (GET /sales-persons/add) ──────
+ * Real locations (Assigned-Locations cards) + assignable roles (login role
+ * select). Customer-Assign is edit-only (needs a saved sales person + its
+ * assigned locations), so add-mode shows the "save first" hint. */
+router.get('/sales-persons/add', async (req, res, next) => {
+    try {
+        const [locationOptions, roleOptions] = await Promise.all([
+            fetchLocationCards(req),
+            fetchRoleOptions(req),
+        ]);
+        res.render('sales-persons/form', {
+            title: 'Add Sales Person',
+            activeMenu: 'sales',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Sales Persons', href: '/sales-persons' },
+                { label: 'Add Sales Person' },
+            ],
+            locationOptions,
+            roleOptions,
+        });
+    } catch (err) { next(err); }
 });
 
-/* ── POST /sales-persons — create via api (base fields; the
- * Assigned-Locations mapping is a separate endpoint, not yet wired) ── */
+/* ── POST /sales-persons — create via api, then (best-effort) link a login
+ * user and replace the assigned locations. On success we redirect to the EDIT
+ * page so the operator can immediately assign per-location customers. */
 router.post('/sales-persons', async (req, res, next) => {
     try {
         const b = req.body;
@@ -600,9 +731,35 @@ router.post('/sales-persons', async (req, res, next) => {
             joining_date: b.joining_date || undefined, status: b.status || 'Active',
         };
         const result = await api.post(req, '/sales-persons', payload);
-        if (apiOk(result)) { setFlash(req, 'success', 'Sales person created successfully.'); return req.session.save(() => res.redirect('/sales-persons')); }
-        setFlash(req, 'error', apiError(result, 'Could not create sales person.'));
-        return req.session.save(() => res.redirect('/sales-persons/add'));
+        if (!apiOk(result)) {
+            setFlash(req, 'error', apiError(result, 'Could not create sales person.'));
+            return req.session.save(() => res.redirect('/sales-persons/add'));
+        }
+        const id = result.body.data && result.body.data.id;
+
+        // Assigned locations + (optional) login. Collect any warnings so the
+        // operator knows if a login could not be created (dup email / seat cap).
+        const warnings = [];
+        let loginNote = '';
+        if (id) {
+            const locRes = await applySalesPersonLocations(req, id, b);
+            if (!locRes.ok) warnings.push(locRes.msg);
+
+            const loginRes = await applySalesPersonLogin(req, id, b);
+            if (loginRes && !loginRes.ok) warnings.push(loginRes.msg);
+            // The api's success msg carries the seat-limit "created Inactive" note
+            // when over max_users — surface it so the operator isn't surprised.
+            else if (loginRes && loginRes.ok && loginRes.msg) loginNote = loginRes.msg;
+        }
+
+        if (warnings.length) {
+            setFlash(req, 'error', 'Sales person created, but: ' + warnings.join(' '));
+        } else {
+            setFlash(req, 'success',
+                'Sales person created successfully. ' + (loginNote || 'Now assign their customers per location.'));
+        }
+        // To the edit page so the per-location customer checklists are available.
+        return req.session.save(() => res.redirect(id ? `/sales-persons/${id}/edit` : '/sales-persons'));
     } catch (err) { next(err); }
 });
 
@@ -1223,9 +1380,18 @@ async function buildSyncDashboardData(req) {
     const modules = Array.isArray(data.modules) ? data.modules : [];
     const recent  = Array.isArray(data.recent)  ? data.recent  : [];
 
-    const connected = !!summary.connected;
-    // Date AND time everywhere "Last Sync" / heartbeat is shown.
-    const heartbeatTxt = summary.heartbeat_at ? fmtDateTime(summary.heartbeat_at) : '—';
+    // CONNECTION = 100% REAL, derived from the agent's last heartbeat. The api
+    // computes `summary.connected` from licenses.last_seen_at (≤150s = live); we
+    // re-apply the SAME freshness rule against the returned heartbeat timestamp
+    // (heartbeat_at / last_seen_at) so a STALE or ABSENT heartbeat can never show
+    // a fake "Connected" — it reads Disconnected/Offline, exactly like the License
+    // detail page. We AND the two so it's connected only when BOTH agree.
+    const heartbeatIso = summary.heartbeat_at || summary.last_seen_at || null;
+    const connected = !!summary.connected && isHeartbeatFresh(heartbeatIso);
+    // Date AND time everywhere "Last Sync" / heartbeat is shown. The heartbeat is
+    // the REAL last_seen time (or '—' if the agent has never been seen) — NOT a
+    // faked recent time when disconnected.
+    const heartbeatTxt = heartbeatIso ? fmtDateTime(heartbeatIso) : '—';
     const lastSyncTxt  = summary.last_sync_at ? fmtDateTime(summary.last_sync_at) : '—';
 
     const totalSynced = Number(stats.total_synced) || 0;
@@ -1266,8 +1432,10 @@ async function buildSyncDashboardData(req) {
     const mandatoryUpdate = !!summary.mandatory_update;
     const autoUpdate      = summary.auto_update !== false;   // default ON
 
-    // Auto-sync DIRECTION toggles (Requirement 1). Per-license push/pull flags
-    // the agent loop honours; default ON when absent (matches the api default).
+    // Auto-sync toggles. The MASTER switch (sync_enabled) plus the per-direction
+    // push/pull flags the agent loop honours; default ON when absent (matches the
+    // api default). RAW values for the read-only Dashboard status line.
+    const syncEnabled = summary.sync_enabled !== false;
     const pushEnabled = summary.push_enabled !== false;
     const pullEnabled = summary.pull_enabled !== false;
 
@@ -1290,7 +1458,9 @@ async function buildSyncDashboardData(req) {
         mandatory_update: mandatoryUpdate,
         auto_update:      autoUpdate,
         release_notes:    summary.release_notes || null,
-        // Auto-sync direction toggles (live-reflected by /js/sync-dashboard.js).
+        // Auto-sync toggles (live-reflected by /js/sync-dashboard.js): master
+        // switch + per-direction. RAW values for the read-only status line.
+        sync_enabled:     syncEnabled,
         push_enabled:     pushEnabled,
         pull_enabled:     pullEnabled,
     };
@@ -1315,7 +1485,8 @@ router.get('/sync-dashboard', async (req, res, next) => {
             mandatory_update: d.mandatory_update,
             auto_update:      d.auto_update,
             release_notes:    d.release_notes,
-            // Auto-sync direction toggles (Requirement 1).
+            // Auto-sync toggles (Requirement 1): master + per-direction.
+            sync_enabled:     d.sync_enabled,
             push_enabled:     d.push_enabled,
             pull_enabled:     d.pull_enabled,
         };
@@ -1445,6 +1616,49 @@ router.post('/sync-direction', async (req, res) => {
     }
     const back = req.get('Referer') || '/sync-dashboard';
     return req.session.save(() => res.redirect(back));
+});
+
+/* ── NOTIFICATIONS · Mark ONE bell item read (POST /notifications/read) ──
+ * Forwards the body { key } (a bell item id as text — a sync-log id, OR
+ * "agent-update-<version>") to the api POST /sync/notifications/read, marking it
+ * read for THIS user. Returns JSON { ok, unread } where `unread` is the fresh
+ * read-aware badge count (body.data.unread). The header bell JS POSTs here as XHR
+ * and uses `unread` to update the live badge. Authenticated like every route
+ * below requireAuth above. */
+router.post('/notifications/read', async (req, res) => {
+    const key = (req.body && req.body.key != null) ? String(req.body.key) : '';
+    if (!key) return res.status(200).json({ ok: false, unread: null, msg: 'A notification key is required.' });
+    try {
+        const result = await api.post(req, '/sync/notifications/read', { key });
+        const ok = apiOk(result);
+        const data = (result && result.body && result.body.data) || {};
+        return res.status(200).json({
+            ok: !!ok,
+            unread: (data.unread != null ? Number(data.unread) : null),
+            msg: (result && result.body && result.body.msg) || (ok ? '' : 'Could not mark read.'),
+        });
+    } catch (_) {
+        return res.status(200).json({ ok: false, unread: null, msg: 'Could not reach the API server.' });
+    }
+});
+
+/* ── NOTIFICATIONS · Mark ALL bell items read (POST /notifications/read-all) ──
+ * Forwards to the api POST /sync/notifications/read-all, marking every currently-
+ * unread item read for THIS user. Returns JSON { ok, unread } — unread is 0 on
+ * success (body.data.unread). The bell's "Mark all read" button POSTs here. */
+router.post('/notifications/read-all', async (req, res) => {
+    try {
+        const result = await api.post(req, '/sync/notifications/read-all', {});
+        const ok = apiOk(result);
+        const data = (result && result.body && result.body.data) || {};
+        return res.status(200).json({
+            ok: !!ok,
+            unread: (data.unread != null ? Number(data.unread) : 0),
+            msg: (result && result.body && result.body.msg) || (ok ? '' : 'Could not mark all read.'),
+        });
+    } catch (_) {
+        return res.status(200).json({ ok: false, unread: null, msg: 'Could not reach the API server.' });
+    }
 });
 
 /* ── TALLY SYNC · Agent auto-update toggle (POST /sync-auto-update) ──
@@ -2105,50 +2319,182 @@ router.post('/users', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-/* ── SETTINGS · Roles & Permissions (GET /roles) — REAL API ────
- * Loads the live matrix (Super-Admin only); on any non-200 (e.g. a
- * non-super-admin) it falls back to the mock so the page still renders. */
-router.get('/roles', async (req, res, next) => {
-    try {
-        let roleNames, roleUserCounts, rbacModules, rbacActions, rbacPermissions, roleIds = {};
+/* Turn a permissions array (['mod.action', …]) into a quick-lookup set for the
+ * matrix's pre-check. */
+function permsToSet(list) {
+    const out = {};
+    (Array.isArray(list) ? list : []).forEach((s) => { if (s) out[String(s)] = true; });
+    return out;
+}
 
-        const { body } = await api.get(req, '/permissions/matrix');
-        const d = (body && body.status === 200 && body.data) ? body.data : null;
-        if (d) {
-            roleNames       = d.roles.map((r) => r.name);
-            roleUserCounts  = {};
-            d.roles.forEach((r) => { roleUserCounts[r.name] = r.user_count; roleIds[r.name] = r.id; });
-            rbacModules     = d.modules;          // [{ key, label }]
-            rbacActions     = d.actions;          // ['view',...]
-            rbacPermissions = d.permissions;      // { roleName: { moduleKey: { action: true } } }
-        } else {
-            // Fallback (mock) — keeps the screen usable for non-super-admins.
-            roleNames = mock.roles; roleUserCounts = mock.roleUserCounts;
-            rbacModules = (mock.rbacModules || []).map((m) => ({ key: m, label: m }));
-            rbacActions = mock.rbacActions; rbacPermissions = mock.rbacPermissions;
-        }
+/* ── SETTINGS · Roles & Permissions — UNIFIED page (GET /roles) ─────
+ * ONE screen, backed by the REAL /account/roles API, for BOTH the
+ * super-admin and the company-admin (requireRoleManager). It merges the
+ * old /roles (matrix) and /roles-admin (CRUD) pages:
+ *   • lists every VISIBLE role (system + this license's custom) as chips,
+ *   • shows the selected role's permission matrix (modules × entitled
+ *     actions), pre-checked from its granted slugs,
+ *   • supports Add / Rename / Delete of custom roles and Save of the
+ *     selected role's permissions.
+ *
+ * The matrix is built from the license's ENTITLEMENTS (available-permissions)
+ * so only entitled modules/actions appear. EVERY visible role's granted
+ * permission set is preloaded into a JSON island so /js/rbac.js can swap the
+ * matrix instantly when a chip is clicked (no round-trip); the selected role
+ * is also server-rendered so the page works without JS and ?role= deep-links.
+ *
+ * Selected role = ?role=<id> when valid, else the first EDITABLE custom role,
+ * else the first role. */
+router.get('/roles', requireRoleManager, async (req, res, next) => {
+    try {
+        const isSuper = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
+
+        // 1) Role list (+ counts + editability) from the real management list.
+        const listRes  = await api.get(req, '/account/roles');
+        const listBody = (listRes.body && listRes.body.data) || {};
+        const rawRoles = Array.isArray(listBody) ? listBody
+            : (Array.isArray(listBody.data) ? listBody.data : []);
+        const roles = rawRoles.map((r) => ({
+            id:         r.id,
+            name:       r.name || '',
+            slug:       r.slug || '',
+            is_system:  !!r.is_system,
+            license_id: r.license_id != null ? r.license_id : null,
+            editable:   !!r.editable,
+            user_count: r.user_count != null ? Number(r.user_count) : 0,
+        }));
+
+        // 2) Resolve the selected role: ?role=<id> if visible, else first
+        //    editable custom role, else first role.
+        const wantId   = Number(req.query.role);
+        let selected   = roles.find((r) => r.id === wantId)
+            || roles.find((r) => r.editable && !r.is_system)
+            || roles[0]
+            || null;
+
+        // 3) Entitlement-scoped module/action catalogue for the matrix. For a
+        //    super-admin scope it to the SELECTED role's own license (a global
+        //    template → full catalogue); a license-admin always gets their own.
+        const licId     = (isSuper && selected && selected.license_id) ? Number(selected.license_id) : null;
+        const permsPath = '/account/roles/available-permissions' + (licId ? `?license_id=${licId}` : '');
+        const apRes     = await api.get(req, permsPath);
+        const apData    = (apRes.body && apRes.body.data) || {};
+        const modules   = Array.isArray(apData.modules) ? apData.modules : [];
+
+        // 4) Granted permission set for EVERY visible role → JSON island for
+        //    instant client-side chip switching. Each value is a set keyed by
+        //    `<module>.<action>` slug. Fetched in parallel.
+        const detailResults = await Promise.all(
+            roles.map((r) => api.get(req, `/account/roles/${r.id}`)),
+        );
+        const permsByRole = {};   // { roleId: { 'module.action': true } }
+        roles.forEach((r, i) => {
+            const d = (detailResults[i] && detailResults[i].body && detailResults[i].body.data) || {};
+            permsByRole[r.id] = permsToSet(d.permissions);
+        });
+
+        const selectedPerms = selected ? (permsByRole[selected.id] || {}) : {};
 
         res.render('roles/index', {
             title: 'Roles & Permissions',
             activeMenu: 'roles',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Roles & Permissions' }],
-            roles: roleNames, roleUserCounts, rbacModules, rbacActions, rbacPermissions, roleIds,
+            roles,
+            modules,
+            selected,
+            selectedPerms,
+            permsByRole,
             pageScript: '<script src="/js/rbac.js" defer></script>',
         });
     } catch (err) { next(err); }
 });
 
-/* ── POST /roles/:id/permissions — save a role's permission set ──
- * The matrix (rbac.js) posts the checked permission slugs as JSON. */
-router.post('/roles/:id/permissions', async (req, res, next) => {
+/* ── POST /roles — create a custom role (name only; permissions are set
+ * afterwards from the matrix). Mirrors the old /roles-admin create. */
+router.post('/roles', requireRoleManager, async (req, res, next) => {
+    try {
+        const isSuper = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
+        const payload = { name: req.body.name };
+        // Super-admin: scope the new role to the selected license (header
+        // switcher); with none selected the api makes a global TEMPLATE role.
+        if (isSuper && req.session.licenseId) payload.license_id = Number(req.session.licenseId);
+        const result = await api.post(req, '/account/roles', payload);
+        if (apiOk(result)) {
+            setFlash(req, 'success', (result.body && result.body.msg) || 'Role created successfully.');
+            // Jump straight to the new role so the admin can set its permissions.
+            const newId = result.body && result.body.data && result.body.data.id;
+            const dest  = newId ? `/roles?role=${newId}` : '/roles';
+            return req.session.save(() => res.redirect(dest));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create the role.'));
+        return req.session.save(() => res.redirect('/roles'));
+    } catch (err) { next(err); }
+});
+
+/* ── POST /roles/:id — rename a custom role, then (if slugs supplied) set its
+ * permissions. The matrix Save posts `slugs` (JSON); the Rename modal posts
+ * `name` only. Mirrors the old /roles-admin/:id handler. Browsers can't PUT
+ * from a form, so we proxy to api.put for both calls. */
+router.post('/roles/:id', requireRoleManager, async (req, res, next) => {
+    try {
+        const id   = Number(req.params.id);
+        const back = `/roles?role=${id}`;
+        const hasName  = req.body.name !== undefined && req.body.name !== null && req.body.name !== '';
+        const hasSlugs = req.body.slugs !== undefined;
+
+        // Rename (when a name is supplied).
+        if (hasName) {
+            const renameRes = await api.put(req, `/account/roles/${id}`, { name: req.body.name });
+            if (!apiOk(renameRes)) {
+                setFlash(req, 'error', apiError(renameRes, 'Could not rename the role.'));
+                return req.session.save(() => res.redirect(back));
+            }
+            if (!hasSlugs) {
+                setFlash(req, 'success', (renameRes.body && renameRes.body.msg) || 'Role renamed.');
+                return req.session.save(() => res.redirect(back));
+            }
+        }
+
+        // Set permissions (when the matrix Save supplied a slug list).
+        if (hasSlugs) {
+            let slugs = [];
+            try { slugs = JSON.parse(req.body.slugs || '[]'); } catch (_) { slugs = []; }
+            if (!Array.isArray(slugs)) slugs = [];
+            const permsRes = await api.put(req, `/account/roles/${id}/permissions`, { slugs });
+            if (apiOk(permsRes)) setFlash(req, 'success', (permsRes.body && permsRes.body.msg) || 'Permissions updated.');
+            else setFlash(req, 'error', apiError(permsRes, 'Could not update permissions.'));
+            return req.session.save(() => res.redirect(back));
+        }
+
+        setFlash(req, 'error', 'Nothing to save.');
+        return req.session.save(() => res.redirect(back));
+    } catch (err) { next(err); }
+});
+
+/* ── POST /roles/:id/permissions — save a role's permission set (matrix Save).
+ * The matrix (rbac.js) posts the checked `<module>.<action>` slugs as JSON to
+ * the REAL /account/roles/:id/permissions endpoint. */
+router.post('/roles/:id/permissions', requireRoleManager, async (req, res, next) => {
     try {
         const id = Number(req.params.id);
         let slugs = [];
         try { slugs = JSON.parse(req.body.slugs || '[]'); } catch (_) { slugs = []; }
         if (!Array.isArray(slugs)) slugs = [];
-        const result = await api.put(req, `/roles/${id}/permissions`, { slugs });
+        const result = await api.put(req, `/account/roles/${id}/permissions`, { slugs });
         if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Permissions updated.');
         else setFlash(req, 'error', apiError(result, 'Could not update permissions.'));
+        return req.session.save(() => res.redirect(`/roles?role=${id}`));
+    } catch (err) { next(err); }
+});
+
+/* ── POST /roles/:id/delete — delete a custom role (api returns 422 with a
+ * message when the role is still assigned to users; surface that message). */
+router.post('/roles/:id/delete', requireRoleManager, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const result = await api.del(req, `/account/roles/${id}`);
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Role deleted.');
+        else setFlash(req, 'error', apiError(result, 'Could not delete the role.'));
         return req.session.save(() => res.redirect('/roles'));
     } catch (err) { next(err); }
 });
@@ -2161,6 +2507,16 @@ router.get('/settings', async (req, res, next) => {
         const payload  = (body && body.data) || {};
         const companyProfile  = payload.company  || {};
         const companySettings = payload.settings || {};
+        // License-scoped SYNC flags (auto_update / push_enabled / pull_enabled /
+        // sync_enabled) — prefill the Tally Sync tab's Sync Settings switches.
+        // Default ON when absent so a pre-migration DB shows all-ON.
+        const _syncIn = payload.sync || {};
+        const syncFlags = {
+            sync_enabled:      _syncIn.sync_enabled !== false,
+            sync_push_enabled: _syncIn.push_enabled !== false,
+            sync_pull_enabled: _syncIn.pull_enabled !== false,
+            auto_update:       _syncIn.auto_update  !== false,
+        };
         const config = await fetchConfig(req, ['financial_years', 'gst_rates', 'payment_terms']);
 
         res.render('settings/index', {
@@ -2175,6 +2531,7 @@ router.get('/settings', async (req, res, next) => {
             // still need name= + prefill wiring to surface these values).
             companyProfile,            // = body.data.company  {name,email,mobile,gst_number,pan_number,financial_year,address}
             companySettings,           // = body.data.settings {arbitrary key/values}
+            syncFlags,                 // = body.data.sync, normalised for the Sync Settings switches
 
             // Config-enumeration option sources (api single source /config/options).
             ...config,
@@ -2476,16 +2833,39 @@ router.post('/locations/:id', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-/* Sales Persons */
+/* Sales Persons — edit form prefills the base record PLUS the assignments
+ * (assigned location ids, the linked login user, and the per-location customer
+ * checklists with their saved ticks) from GET /sales-persons/:id/assignments. */
 router.get('/sales-persons/:id/edit', async (req, res, next) => {
     try {
         const id = Number(req.params.id);
-        const record = await fetchRecord(req, '/sales-persons', id);
+        const [record, locationOptions, roleOptions, customersByLoc] = await Promise.all([
+            fetchRecord(req, '/sales-persons', id),
+            fetchLocationCards(req),
+            fetchRoleOptions(req),
+            fetchCustomersByLocation(req),
+        ]);
         if (!record) { setFlash(req, 'error', 'Sales person not found.'); return req.session.save(() => res.redirect('/sales-persons')); }
+
+        // Prefill: assigned location ids, linked login user, saved customer ticks.
+        let assignedLocationIds = [];
+        let linkedUser = null;
+        let assignedCustomers = {};
+        try {
+            const ar = await api.get(req, `/sales-persons/${id}/assignments`);
+            const data = (ar.body && ar.body.data) || {};
+            assignedLocationIds = Array.isArray(data.location_ids) ? data.location_ids.map(Number) : [];
+            linkedUser = data.user || null;
+            assignedCustomers = (data.customers && typeof data.customers === 'object') ? data.customers : {};
+        } catch (_) { /* non-fatal — render add-style empty assignments */ }
+
         res.render('sales-persons/form', {
             title: 'Edit Sales Person', activeMenu: 'sales',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Sales Persons', href: '/sales-persons' }, { label: 'Edit Sales Person' }],
-            record, locationOptions: mock.locationsList,
+            record, locationOptions, roleOptions,
+            assignedLocationIds, linkedUser,
+            locationCustomers: customersByLoc,
+            assignedCustomers,
         });
     } catch (err) { next(err); }
 });
@@ -2497,9 +2877,34 @@ router.post('/sales-persons/:id', async (req, res, next) => {
             email: b.email || undefined, joining_date: b.joining_date || undefined, status: b.status || 'Active',
         };
         const result = await api.put(req, `/sales-persons/${id}`, payload);
-        if (apiOk(result)) { setFlash(req, 'success', 'Sales person updated successfully.'); return req.session.save(() => res.redirect('/sales-persons')); }
-        setFlash(req, 'error', apiError(result, 'Could not update sales person.'));
-        return req.session.save(() => res.redirect(`/sales-persons/${id}/edit`));
+        if (!apiOk(result)) {
+            setFlash(req, 'error', apiError(result, 'Could not update sales person.'));
+            return req.session.save(() => res.redirect(`/sales-persons/${id}/edit`));
+        }
+
+        // Replace assigned locations FIRST (the customer assignment endpoint
+        // requires the location to already be assigned), then the per-location
+        // customers, then create/update the login. Collect warnings + the login
+        // note (seat-limit / Inactive) so the operator sees them.
+        const warnings = [];
+        let loginNote = '';
+
+        const locRes = await applySalesPersonLocations(req, id, b);
+        if (!locRes.ok) warnings.push(locRes.msg);
+
+        const custRes = await applySalesPersonCustomers(req, id, b);
+        if (!custRes.ok && custRes.msg) warnings.push(custRes.msg);
+
+        const loginRes = await applySalesPersonLogin(req, id, b);
+        if (loginRes && !loginRes.ok) warnings.push(loginRes.msg);
+        else if (loginRes && loginRes.ok && loginRes.msg) loginNote = loginRes.msg;
+
+        if (warnings.length) {
+            setFlash(req, 'error', 'Sales person updated, but: ' + warnings.join(' '));
+            return req.session.save(() => res.redirect(`/sales-persons/${id}/edit`));
+        }
+        setFlash(req, 'success', 'Sales person updated successfully.' + (loginNote ? ' ' + loginNote : ''));
+        return req.session.save(() => res.redirect('/sales-persons'));
     } catch (err) { next(err); }
 });
 
@@ -2909,10 +3314,15 @@ router.get('/licenses/:id', requireSuperAdmin, async (req, res, next) => {
         };
         const companies = (Array.isArray(d.companies) ? d.companies : []).map((c) => ({
             id: c.id, name: c.name || '', status: c.status || '',
+            // Syncing flag computed by the api (first max_companies, created_at
+            // asc); the rest are over the limit and do NOT sync.
+            syncing: c.syncing !== false,
         }));
         const users = (Array.isArray(d.users) ? d.users : []).map((u) => ({
             id: u.id, name: u.name || '', email: u.email || '',
             role: u.role || '', status: u.status || '',
+            // The license-admin is always Active and never seat-gated.
+            is_license_admin: !!u.is_license_admin,
         }));
         res.render('licenses/detail', {
             title: 'License — ' + (license.holder_name || ('#' + license.id)),
@@ -3007,222 +3417,6 @@ router.post('/licenses/:id/edit', requireSuperAdmin, async (req, res, next) => {
                 valid_until:   b.valid_until,
             },
         });
-    } catch (err) { next(err); }
-});
-
-/* ── SETTINGS · Roles (license-admin / tenant; company-admin only) ───────────
- * Custom role management, license-scoped. The permission grids are ALWAYS built
- * from the license's entitlements (GET /account/roles/available-permissions),
- * never a hardcoded module list. The api enforces can('users',*) too. WEB paths
- * use /roles-admin (NOT /roles) to avoid colliding with the Phase-1 RBAC demo. */
-
-/* Turn a permissions array (['mod.action', …]) into a quick-lookup set for the
- * grid's pre-check. */
-function permsToSet(list) {
-    const out = {};
-    (Array.isArray(list) ? list : []).forEach((s) => { if (s) out[String(s)] = true; });
-    return out;
-}
-
-/* GET /roles-admin — list this license's roles (system + custom). */
-router.get('/roles-admin', requireRoleManager, async (req, res, next) => {
-    try {
-        const { body } = await api.get(req, '/account/roles');
-        // The api wraps the list in { data:[...], meta } under body.data (the
-        // standard LIST envelope), so read body.data.data. Stay defensive in
-        // case body.data is ever a plain array.
-        const payload = (body && body.data) || {};
-        const rows = Array.isArray(payload) ? payload
-            : (Array.isArray(payload.data) ? payload.data : []);
-        const roleRows = rows.map((r) => ({
-            id:         r.id,
-            name:       r.name || '',
-            slug:       r.slug || '',
-            is_system:  !!r.is_system,
-            editable:   !!r.editable,
-            user_count: r.user_count != null ? Number(r.user_count) : 0,
-        }));
-        res.render('roles/list', {
-            title: 'Roles',
-            activeMenu: 'roles-admin',
-            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Roles' }],
-            roleRows,
-        });
-    } catch (err) { next(err); }
-});
-
-/* GET /roles-admin/new — empty create form, grid built from entitlements.
- * Super-admin: when a license is selected in the header switcher, scope the
- * permission grid to THAT license's entitlements (pass ?license_id); otherwise
- * the api returns the full catalogue for a global template role. */
-router.get('/roles-admin/new', requireRoleManager, async (req, res, next) => {
-    try {
-        const isSuper = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
-        const licId   = isSuper && req.session.licenseId ? Number(req.session.licenseId) : null;
-        const permsPath = '/account/roles/available-permissions'
-            + (licId ? `?license_id=${licId}` : '');
-        const { body } = await api.get(req, permsPath);
-        const data = (body && body.data) || {};
-        res.render('roles/form', {
-            title: 'New Role',
-            activeMenu: 'roles-admin',
-            breadcrumb: [
-                { label: 'Dashboard', href: '/' },
-                { label: 'Roles', href: '/roles-admin' },
-                { label: 'New Role' },
-            ],
-            mode: 'create',
-            editable: true,
-            role: {},
-            modules: Array.isArray(data.modules) ? data.modules : [],
-            permsSet: {},
-        });
-    } catch (err) { next(err); }
-});
-
-/* GET /roles-admin/:id — edit form (or read-only view for system roles),
- * pre-filled from the role's current permissions. Grid built from entitlements. */
-router.get('/roles-admin/:id', requireRoleManager, async (req, res, next) => {
-    try {
-        const id = Number(req.params.id);
-        // Fetch the role first so a super-admin can scope the permission grid to
-        // the role's OWN license entitlements (a license-scoped role) or the full
-        // catalogue (a global template, license_id null).
-        const roleRes  = await api.get(req, `/account/roles/${id}`);
-        const role     = (roleRes.body && roleRes.body.data) || { id };
-        const isSuper  = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
-        const licId    = (isSuper && role.license_id) ? Number(role.license_id) : null;
-        const permsPath = '/account/roles/available-permissions'
-            + (licId ? `?license_id=${licId}` : '');
-        const permsRes = await api.get(req, permsPath);
-        const permsData = (permsRes.body && permsRes.body.data) || {};
-        const editable  = !!role.editable;
-        res.render('roles/form', {
-            title: editable ? 'Edit Role' : 'View Role',
-            activeMenu: 'roles-admin',
-            breadcrumb: [
-                { label: 'Dashboard', href: '/' },
-                { label: 'Roles', href: '/roles-admin' },
-                { label: editable ? 'Edit Role' : 'View Role' },
-            ],
-            mode: 'edit',
-            editable,
-            role,
-            modules: Array.isArray(permsData.modules) ? permsData.modules : [],
-            permsSet: permsToSet(role.permissions),
-        });
-    } catch (err) { next(err); }
-});
-
-/* POST /roles-admin — create a custom role with the ticked permissions.
- * Super-admin: attach the selected license (header switcher) so the new role is
- * scoped to it; with no license selected the api creates a global TEMPLATE role
- * (license_id null). License-admins: the api uses their own license (the
- * body.license_id is ignored for non-super callers). */
-router.post('/roles-admin', requireRoleManager, async (req, res, next) => {
-    try {
-        const slugs = [].concat(req.body.perm || []);
-        const isSuper = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
-        const payload = { name: req.body.name, slugs };
-        if (isSuper && req.session.licenseId) payload.license_id = Number(req.session.licenseId);
-        const result = await api.post(req, '/account/roles', payload);
-        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Role created successfully.');
-        else setFlash(req, 'error', apiError(result, 'Could not create the role.'));
-        return req.session.save(() => res.redirect('/roles-admin'));
-    } catch (err) { next(err); }
-});
-
-/* POST /roles-admin/:id — save a custom role: rename, then set its permissions.
- * Browsers can't PUT from a form, so we proxy to api.put for both calls. If the
- * rename fails we surface that and skip the permissions update. */
-router.post('/roles-admin/:id', requireRoleManager, async (req, res, next) => {
-    try {
-        const id = Number(req.params.id);
-        const slugs = [].concat(req.body.perm || []);
-        const renameRes = await api.put(req, `/account/roles/${id}`, { name: req.body.name });
-        if (!apiOk(renameRes)) {
-            setFlash(req, 'error', apiError(renameRes, 'Could not save the role.'));
-            return req.session.save(() => res.redirect('/roles-admin'));
-        }
-        const permsRes = await api.put(req, `/account/roles/${id}/permissions`, { slugs });
-        if (apiOk(permsRes)) setFlash(req, 'success', (permsRes.body && permsRes.body.msg) || 'Role saved successfully.');
-        else setFlash(req, 'error', apiError(permsRes, 'Role renamed, but its permissions could not be saved.'));
-        return req.session.save(() => res.redirect('/roles-admin'));
-    } catch (err) { next(err); }
-});
-
-/* POST /roles-admin/:id/delete — delete a custom role (api returns 422 with a
- * message when the role is still assigned to users; surface that message). */
-router.post('/roles-admin/:id/delete', requireRoleManager, async (req, res, next) => {
-    try {
-        const id = Number(req.params.id);
-        const result = await api.del(req, `/account/roles/${id}`);
-        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Role deleted.');
-        else setFlash(req, 'error', apiError(result, 'Could not delete the role.'));
-        return req.session.save(() => res.redirect('/roles-admin'));
-    } catch (err) { next(err); }
-});
-
-/* ── PLATFORM ADMIN · User Approvals (super-admin only) ──────────
- * A company-admin creates users who are PENDING and cannot sign in until the
- * platform super-admin approves them here (approval = a paid seat, capped by
- * the license max_users) or rejects them. Every route is gated by the SAME
- * requireSuperAdmin guard the licence screens use (the api also enforces it,
- * but we block here so the routes/menu never leak). */
-
-/* GET /user-approvals — paginated cross-tenant list of PENDING users. */
-router.get('/user-approvals', requireSuperAdmin, async (req, res, next) => {
-    try {
-        const { rows, meta } = await apiList(req, '/super-admin/users/pending');
-        const approvalRows = rows.map((r) => {
-            const used = r.license_used_seats != null ? Number(r.license_used_seats) : 0;
-            const max  = r.license_max_users  != null ? Number(r.license_max_users)  : 0;
-            return {
-                id:                 r.id,
-                name:               r.name || '',
-                email:              r.email || '',
-                mobile:             r.mobile || '',
-                role:               r.role || '',
-                // company is null when the user spans all companies under the license.
-                company:            r.company || '— (all companies)',
-                license_holder:     r.license_holder || '—',
-                license_used_seats: used,
-                license_max_users:  max,
-                // Subtle warning pill when the license has no free seats left.
-                seats_full:         max > 0 && used >= max,
-                created_at:         r.created_at ? fmtDate(r.created_at) : '—',
-            };
-        });
-        res.render('users/approvals', {
-            title: 'User Approvals',
-            activeMenu: 'user-approvals',
-            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'User Approvals' }],
-            approvalRows, approvalsTotal: meta.total, page: meta.page, perPage: meta.per_page,
-        });
-    } catch (err) { next(err); }
-});
-
-/* POST /user-approvals/:id/approve — provision a paid seat (capped by the
- * license). On success flash body.msg; on the 422 seat-cap failure flash the
- * api's seat-cap message. Always return to the list. */
-router.post('/user-approvals/:id/approve', requireSuperAdmin, async (req, res, next) => {
-    try {
-        const id = Number(req.params.id);
-        const result = await api.post(req, `/super-admin/users/${id}/approve`, {});
-        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'User approved. They can now sign in.');
-        else setFlash(req, 'error', apiError(result, 'Could not approve the user.'));
-        return req.session.save(() => res.redirect('/user-approvals'));
-    } catch (err) { next(err); }
-});
-
-/* POST /user-approvals/:id/reject — reject a pending user request. */
-router.post('/user-approvals/:id/reject', requireSuperAdmin, async (req, res, next) => {
-    try {
-        const id = Number(req.params.id);
-        const result = await api.post(req, `/super-admin/users/${id}/reject`, {});
-        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'User request rejected.');
-        else setFlash(req, 'error', apiError(result, 'Could not reject the user.'));
-        return req.session.save(() => res.redirect('/user-approvals'));
     } catch (err) { next(err); }
 });
 

@@ -164,7 +164,12 @@ function _relTime(v) {
             <div class="dropdown-menu dropdown-menu-end notif-menu">
                 <div class="notif-head">
                     <span>Tally Sync Activity</span>
-                    <% if (_notif > 0) { %><span class="badge bg-danger rounded-pill"><%= _notif %> failed</span><% } %>
+                    <span class="d-flex align-items-center gap-2">
+                        <% if (_notif > 0) { %><span class="badge bg-danger rounded-pill"><%= _notif %> failed</span><% } %>
+                        <% if (_notif > 0) { %>
+                            <button type="button" id="notif-mark-all" class="btn btn-link btn-sm p-0 text-decoration-none">Mark all read</button>
+                        <% } %>
+                    </span>
                 </div>
                 <% if (_notifs.length) { %>
                     <% _notifs.forEach(function (n) {
@@ -176,8 +181,12 @@ function _relTime(v) {
                         // a 'warning' severity (mandatory) shows amber, else blue.
                         var _updWarn = _isUpdate && String(n.severity || '') === 'warning';
                         var _href    = _isUpdate ? '#' : '/sync-logs';
+                        // Per-item read state (PER USER) from the api feed. The
+                        // stable key is n.id (sync-log id, or "agent-update-<ver>").
+                        var _isRead  = !!n.read;
                     %>
-                        <a class="dropdown-item notif-item" href="<%= _href %>">
+                        <a class="dropdown-item notif-item <%= _isRead ? 'is-read' : 'is-unread' %>"
+                           href="<%= _href %>" data-notif-key="<%= n.id %>">
                             <span class="notif-item-icon">
                                 <% if (_isUpdate) { %>
                                     <i class="fa-solid fa-cloud-arrow-down <%= _updWarn ? 'text-warning' : 'text-primary' %>"></i>

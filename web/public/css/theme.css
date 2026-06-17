@@ -1122,3 +1122,11 @@ a.action-btn { text-decoration: none; }
 .notif-menu .notif-item-title { font-weight: 600; font-size: 13px; color: var(--text); }
 .notif-menu .notif-item-sub { font-size: 12px; color: var(--text-muted); }
 .notif-menu .notif-empty { padding: 26px 14px; text-align: center; color: var(--text-muted); font-size: 13px; }
+/* Per-user read state: an unread item gets a soft tint + a leading dot; a read
+   item is dimmed. Purely decorative — read-tracking works without these. */
+.notif-menu .notif-item.is-unread { background: var(--primary-soft, #EFF2FF); }
+.notif-menu .notif-item.is-unread .notif-item-title::before {
+    content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px;
+    border-radius: 50%; background: var(--primary); vertical-align: middle;
+}
+.notif-menu .notif-item.is-read { opacity: .62; }

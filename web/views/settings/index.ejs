@@ -24,6 +24,13 @@ function _cv(k) { return (_co[k] != null) ? _co[k] : ''; }
 function _sv(k, d) { return (_s[k] != null && _s[k] !== '') ? _s[k] : (d != null ? d : ''); }
 function _sChk(k, dflt) { var v = _s[k]; if (v === undefined) return dflt ? 'checked' : ''; return (v === true || v === 'true' || v === 'on' || v === '1') ? 'checked' : ''; }
 
+/* License-scoped SYNC flags (auto_update / sync_push_enabled / sync_pull_enabled
+ * / sync_enabled) — prefill the Tally Sync tab's Sync Settings switches. These do
+ * NOT live in the settings bag; they ride inside settings[...] on submit and the
+ * api routes them to the license. Default ON when absent. */
+var _sync = (typeof syncFlags !== 'undefined' && syncFlags) ? syncFlags : {};
+function _syncChk(k) { return _sync[k] !== false ? 'checked' : ''; }
+
 function _optsSel(list, selected) {
     var html = '';
     (list || []).forEach(function (v) {
@@ -143,15 +150,15 @@ var headActions =
 
         <!-- ════ TALLY SYNC ════ -->
         <div class="tab-pane fade" id="tally" role="tabpanel" aria-labelledby="tally-tab">
-            <div class="sync-conn is-connected">
-                <span class="sync-conn-icon"><i class="fa-solid fa-plug-circle-check"></i></span>
-                <div class="sync-conn-main">
-                    <div class="sync-conn-title"><span class="sync-conn-dot"></span>Local Sync Agent Connected</div>
-                    <div class="sync-conn-meta"><span>Agent <b>v1.4.2</b></span><span><b>TallyPrime 4.1</b></span><span>Heartbeat <b>12 sec ago</b></span></div>
+            <div class="alert alert-light d-flex align-items-center justify-content-between" role="alert"
+                 style="border:1px solid var(--border);border-radius:12px">
+                <div class="d-flex align-items-center gap-2">
+                    <i class="fa-solid fa-circle-info text-primary"></i>
+                    <span style="font-size:13px">Live agent connection status (heartbeat, version, last sync) is on the Sync Dashboard.</span>
                 </div>
-                <div class="sync-conn-actions">
-                    <button type="button" class="btn btn-light" data-sync-btn><i class="fa-solid fa-plug me-1"></i>Test Connection</button>
-                </div>
+                <a href="/sync-dashboard" class="btn btn-light btn-sm">
+                    <i class="fa-solid fa-gauge-high me-1"></i>Open Sync Dashboard
+                </a>
             </div>
             <h2 class="form-section-title">Sync Configuration</h2>
             <div class="form-grid">
@@ -164,45 +171,66 @@ var headActions =
                     <input type="text" class="form-control" id="set-tally-co" name="settings[tally_company]" value="<%= _sv('tally_company', '') %>">
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="set-sync-interval">Sync Interval</label>
-                    <% var _si = _sv('sync_interval', 'Every 5 minutes'); %>
-                    <select class="form-select" id="set-sync-interval" name="settings[sync_interval]">
-                        <% ['Real-time','Every 5 minutes','Every 15 minutes','Hourly','Manual only'].forEach(function (o) { %>
-                            <option <%= _si === o ? 'selected' : '' %>><%= o %></option>
-                        <% }); %>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="set-sync-dir">Sync Direction</label>
-                    <% var _sd = _sv('sync_direction', 'Two-way (Cloud ⇄ Tally)'); %>
-                    <select class="form-select" id="set-sync-dir" name="settings[sync_direction]">
-                        <% ['Two-way (Cloud ⇄ Tally)','Cloud → Tally only','Tally → Cloud only'].forEach(function (o) { %>
-                            <option <%= _sd === o ? 'selected' : '' %>><%= o %></option>
-                        <% }); %>
-                    </select>
-                </div>
-                <div class="form-group">
                     <label class="form-label" for="set-retry">Retry Attempts</label>
                     <input type="number" class="form-control" id="set-retry" name="settings[retry_attempts]" value="<%= _sv('retry_attempts', '3') %>" min="0" max="10">
                 </div>
-                <div class="form-group">
-                    <label class="form-label" for="set-conflict">Conflict Resolution</label>
-                    <% var _cr = _sv('conflict_resolution', 'Cloud wins'); %>
-                    <select class="form-select" id="set-conflict" name="settings[conflict_resolution]">
-                        <% ['Cloud wins','Tally wins','Newest wins','Ask every time'].forEach(function (o) { %>
-                            <option <%= _cr === o ? 'selected' : '' %>><%= o %></option>
-                        <% }); %>
-                    </select>
+            </div>
+
+            <hr class="form-divider">
+
+            <!-- ── Sync Settings (the LIVE per-license switches that drive the
+                 agent). Each switch posts settings[...]; the api routes these
+                 keys to the license row, NOT the settings bag. A hidden empty
+                 companion before each checkbox makes an unchecked box submit a
+                 falsy value (so turning a switch OFF actually persists OFF). -->
+            <h2 class="form-section-title">Sync Settings</h2>
+            <p class="form-hint mb-3">
+                These control the local Sync Agent. The Sync Dashboard shows their status (read-only);
+                change them here.
+            </p>
+
+            <div class="d-flex align-items-center justify-content-between py-3" style="border-bottom:1px solid var(--border)">
+                <div>
+                    <div style="font-weight:600;font-size:14px">Auto-sync (master)</div>
+                    <div class="form-hint mb-0">When OFF, nothing syncs automatically until you trigger a manual sync. Push &amp; pull below only apply when this is ON.</div>
+                </div>
+                <div class="form-check form-switch mb-0">
+                    <input type="hidden" name="settings[sync_enabled]" value="">
+                    <input class="form-check-input" type="checkbox" role="switch" id="set-sync-enabled" name="settings[sync_enabled]" value="on" <%= _syncChk('sync_enabled') %>>
                 </div>
             </div>
-            <hr class="form-divider">
-            <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" role="switch" id="set-autosync" name="settings[auto_sync]" <%= _sChk('auto_sync', true) %>>
-                <label class="form-check-label" for="set-autosync">Enable automatic background sync</label>
+
+            <div class="d-flex align-items-center justify-content-between py-3" style="border-bottom:1px solid var(--border)">
+                <div>
+                    <div style="font-weight:600;font-size:14px">Auto push (Cloud &rarr; Tally)</div>
+                    <div class="form-hint mb-0">Automatically push cloud changes to Tally. Only applies while Auto-sync is ON.</div>
+                </div>
+                <div class="form-check form-switch mb-0">
+                    <input type="hidden" name="settings[sync_push_enabled]" value="">
+                    <input class="form-check-input" type="checkbox" role="switch" id="set-sync-push" name="settings[sync_push_enabled]" value="on" <%= _syncChk('sync_push_enabled') %>>
+                </div>
             </div>
-            <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" role="switch" id="set-autostart" name="settings[auto_start]" <%= _sChk('auto_start', true) %>>
-                <label class="form-check-label" for="set-autostart">Auto-start sync agent with Windows</label>
+
+            <div class="d-flex align-items-center justify-content-between py-3" style="border-bottom:1px solid var(--border)">
+                <div>
+                    <div style="font-weight:600;font-size:14px">Auto pull (Tally &rarr; Cloud)</div>
+                    <div class="form-hint mb-0">Automatically pull Tally changes into the cloud. Only applies while Auto-sync is ON.</div>
+                </div>
+                <div class="form-check form-switch mb-0">
+                    <input type="hidden" name="settings[sync_pull_enabled]" value="">
+                    <input class="form-check-input" type="checkbox" role="switch" id="set-sync-pull" name="settings[sync_pull_enabled]" value="on" <%= _syncChk('sync_pull_enabled') %>>
+                </div>
+            </div>
+
+            <div class="d-flex align-items-center justify-content-between py-3" style="border-bottom:1px solid var(--border)">
+                <div>
+                    <div style="font-weight:600;font-size:14px">Auto-update agent</div>
+                    <div class="form-hint mb-0">Let the Sync Agent install new versions automatically. A mandatory update is applied even when this is OFF.</div>
+                </div>
+                <div class="form-check form-switch mb-0">
+                    <input type="hidden" name="settings[auto_update]" value="">
+                    <input class="form-check-input" type="checkbox" role="switch" id="set-auto-update" name="settings[auto_update]" value="on" <%= _syncChk('auto_update') %>>
+                </div>
             </div>
         </div>
 
@@ -262,6 +290,7 @@ var headActions =
         <!-- ════ NOTIFICATIONS ════ -->
         <div class="tab-pane fade" id="notify" role="tabpanel" aria-labelledby="notify-tab">
             <h2 class="form-section-title">Email &amp; SMS Alerts</h2>
+            <p class="form-hint mb-3">Your preferences are saved. Message delivery is coming soon.</p>
             <% _notifs.forEach(function (n) { %>
                 <div class="d-flex align-items-center justify-content-between py-3" style="border-bottom:1px solid var(--border)">
                     <div>

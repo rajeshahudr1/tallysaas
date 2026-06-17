@@ -104,6 +104,7 @@ function build(config) {
         fkCheck,
         buildInsert,
         buildUpdate,
+        extraScope,
     } = config;
 
     // Whitelist of sortable UI keys → SQL columns. `name`/`status`/`created_at`
@@ -130,13 +131,28 @@ function build(config) {
     // number) AND this table carries a location_id column, we also pin
     // location_id = req.locationId — company_id stays the primary tenant guard,
     // location scope is layered on top and cannot widen what company scope allows.
-    function scoped(req) {
-        const qb = baseQuery ? baseQuery(db) : db(table);
+    // Build a FRESH base query (joins/aliases via baseQuery, else the table).
+    function freshQb() {
+        return baseQuery ? baseQuery(db) : db(table);
+    }
+    // Apply the company + soft-delete (+ optional location + extraScope) guards
+    // to an existing builder IN PLACE. It MUTATES `qb` and returns NOTHING.
+    // CRITICAL: this must NOT `return qb`. Returning a Knex builder (a thenable)
+    // from an async function makes the async result ADOPT the thenable, so
+    // `await applyScope()`/`await scoped()` would EXECUTE the query early and
+    // resolve to ROWS instead of the builder — the bug that broke every crud
+    // list/get ("... not found" / empty lists). Returning undefined avoids that.
+    async function applyScope(req, qb) {
         qb.where(tenantColQualified, req.companyId).whereNull(deletedColQualified);
         if (hasLocation && req.locationId != null) {
             qb.where(locationColQualified, req.locationId);
         }
-        return qb;
+        // Optional resource-specific scope ADDED on top of company + location
+        // (e.g. a sales-person-user restricted to their assigned customers). It
+        // may run a DB lookup, so it is awaited; it can only NARROW the result.
+        if (typeof extraScope === 'function') {
+            await extraScope(qb, req, { table, idColQualified });
+        }
     }
 
     // Ownership lookup for update/destroy on the BASE table (no label joins).
@@ -170,7 +186,8 @@ function build(config) {
             const search = (req.query.search || '').trim();
             const status = (req.query.status || '').trim();
 
-            let qb = scoped(req);
+            let qb = freshQb();
+            await applyScope(req, qb);
 
             // Optional status filter (qualified to the base table).
             if (status) qb = qb.where(`${table}.status`, status);
@@ -215,7 +232,9 @@ function build(config) {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, notFound, 404);
         try {
-            const row = await scoped(req).where(idColQualified, id)
+            const qb = freshQb();
+            await applyScope(req, qb);
+            const row = await qb.where(idColQualified, id)
                 .select(...listColumns).first();
             if (!row) return R.errorResponse(res, notFound, 404);
             return R.successResponse(res, row);

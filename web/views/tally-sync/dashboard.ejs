@@ -34,9 +34,17 @@ var _updateAvailable = !!_sum.update_available;
 var _mandatoryUpdate = !!_sum.mandatory_update;
 var _autoUpdate      = _sum.auto_update !== false;   /* default ON */
 
-/* Auto-sync DIRECTION toggles (Requirement 1) — default ON when absent. */
+/* Sync settings — READ-ONLY status here; edited in Settings → Tally Sync.
+ * Default ON when absent (matches the api default). */
+var _syncEnabled = _sum.sync_enabled !== false;   /* master Auto-sync */
 var _pushEnabled = _sum.push_enabled !== false;
 var _pullEnabled = _sum.pull_enabled !== false;
+
+/* One status pill: green "ON" / grey "OFF". */
+function _onoffPill(on, id) {
+    return '<span class="sync-status-pill ' + (on ? 'is-on' : 'is-off') + '"'
+        + (id ? ' id="' + id + '"' : '') + '>' + (on ? 'ON' : 'OFF') + '</span>';
+}
 
 /* Active company (header switcher) for the "Open in Tally" connect button. */
 var _activeCompany = (typeof activeCompany !== 'undefined' && activeCompany) ? activeCompany : null;
@@ -115,7 +123,7 @@ function _statId(label) {
         <div class="sync-alert-text">
             No heartbeat from the local Sync Agent in the last few minutes. Start the
             <b>Tally Cloud Sync Agent</b> on the PC running Tally and make sure Tally is open.
-            Manual syncs you trigger now will still be queued and run as soon as the agent reconnects.
+            Sync actions are paused until it reconnects — clicking a sync button will alert you instead.
         </div>
     </div>
     <div class="sync-alert-actions">
@@ -132,62 +140,41 @@ function _statId(label) {
     </div>
 </div>
 
-<!-- ── Agent auto-update (version + ON/OFF toggle + Update now) ── -->
-<div class="card sync-update-card mb-3">
-    <div class="sync-update-info">
+<!-- ── Agent version + Sync-settings status — ONE compact row ──────
+     Left: Sync Agent vX + Update now.  Right: read-only sync switches
+     (edited in Settings). ALL JS-targeted IDs preserved for the 15s poller:
+     #sync-update-version/#sync-update-latest/#sync-update-now/#sync-update-hint
+     + the sync-status pill IDs. -->
+<div class="card sync-compact-card mb-3">
+    <div class="sync-compact-seg">
         <span class="sync-update-icon"><i class="fa-solid fa-cloud-arrow-down"></i></span>
-        <div>
-            <div class="sync-update-title">
-                Sync Agent <b id="sync-update-version"><%= _sum.agent_version ? ('v' + _sum.agent_version) : '—' %></b>
-                <span id="sync-update-latest" class="sync-update-latest"<% if (!_updateAvailable || !_latestVer) { %> style="display:none"<% } %>>
-                    → latest v<span class="sync-update-latest-ver"><%= _latestVer %></span>
-                </span>
-            </div>
-            <div class="sync-update-hint" id="sync-update-hint">
-                <% if (_updateAvailable) { %>A newer version is available.<% if (_autoUpdate) { %> It will update automatically.<% } else if (_mandatoryUpdate) { %> A mandatory update will be applied even with auto-update off.<% } else { %> Auto-update is off — use “Update now”.<% } %><% } else { %>The agent is up to date.<% } %>
-            </div>
-        </div>
+        <span class="sync-compact-text">Agent <b id="sync-update-version"><%= _sum.agent_version ? ('v' + _sum.agent_version) : '—' %></b><span id="sync-update-latest" class="sync-update-latest"<% if (!_updateAvailable || !_latestVer) { %> style="display:none"<% } %>> → v<span class="sync-update-latest-ver"><%= _latestVer %></span></span></span>
+        <span id="sync-update-hint" class="sync-compact-hint"><% if (_updateAvailable) { %>update available<% } else { %>up to date<% } %></span>
+        <button type="button" class="btn btn-primary btn-sm sync-compact-btn" id="sync-update-now"<% if (!_updateAvailable) { %> disabled<% } %>><i class="fa-solid fa-download me-1"></i>Update</button>
     </div>
-    <div class="sync-update-controls">
-        <div class="form-check form-switch mb-0" title="When ON, the agent installs new versions automatically.">
-            <input class="form-check-input" type="checkbox" role="switch" id="sync-auto-update-toggle" <%= _autoUpdate ? 'checked' : '' %>>
-            <label class="form-check-label" for="sync-auto-update-toggle">Auto-update</label>
-        </div>
-        <button type="button" class="btn btn-primary btn-sm" id="sync-update-now"<% if (!_updateAvailable) { %> disabled<% } %>>
-            <i class="fa-solid fa-download me-1"></i>Update now
-        </button>
-    </div>
-</div>
-
-<!-- ── Auto-sync DIRECTION toggles (Requirement 1) ──────────────
-     Per-license switches that gate ONLY the agent's automatic loop. The MANUAL
-     per-module buttons below are independent and always work. -->
-<div class="card sync-update-card mb-3">
-    <div class="sync-update-info">
+    <span class="sync-compact-sep" aria-hidden="true"></span>
+    <div class="sync-compact-seg sync-compact-status">
         <span class="sync-update-icon"><i class="fa-solid fa-arrows-rotate"></i></span>
-        <div>
-            <div class="sync-update-title">Automatic Sync Direction</div>
-            <div class="sync-update-hint">
-                Controls only the agent's <b>automatic</b> background sync. Manual
-                “Sync to/from Tally” buttons below always work, even when a direction is off.
-            </div>
-        </div>
-    </div>
-    <div class="sync-update-controls">
-        <div class="form-check form-switch mb-0" title="When ON, the agent automatically pushes cloud changes to Tally.">
-            <input class="form-check-input" type="checkbox" role="switch" id="sync-push-toggle" data-direction="push" <%= _pushEnabled ? 'checked' : '' %>>
-            <label class="form-check-label" for="sync-push-toggle">
-                <i class="fa-solid fa-cloud-arrow-up me-1"></i>Auto push (Cloud → Tally)
-            </label>
-        </div>
-        <div class="form-check form-switch mb-0" title="When ON, the agent automatically pulls Tally changes into the cloud.">
-            <input class="form-check-input" type="checkbox" role="switch" id="sync-pull-toggle" data-direction="pull" <%= _pullEnabled ? 'checked' : '' %>>
-            <label class="form-check-label" for="sync-pull-toggle">
-                <i class="fa-solid fa-cloud-arrow-down me-1"></i>Auto pull (Tally → Cloud)
-            </label>
-        </div>
+        <span class="sync-status-item">Auto-sync <%- _onoffPill(_syncEnabled, 'sync-status-enabled') %></span>
+        <span class="sync-status-item">Push <%- _onoffPill(_pushEnabled, 'sync-status-push') %></span>
+        <span class="sync-status-item">Pull <%- _onoffPill(_pullEnabled, 'sync-status-pull') %></span>
+        <span class="sync-status-item">Update <%- _onoffPill(_autoUpdate, 'sync-status-autoupdate') %></span>
+        <a href="/settings#tally" class="btn btn-light btn-sm sync-compact-btn sync-compact-settings"><i class="fa-solid fa-sliders me-1"></i>Settings</a>
     </div>
 </div>
+<style>
+  .sync-compact-card{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .9rem;padding:.55rem .85rem;}
+  .sync-compact-seg{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;min-width:0;}
+  .sync-compact-status{flex:1 1 auto;}
+  .sync-compact-text{font-size:.9rem;white-space:nowrap;}
+  .sync-compact-hint{font-size:.72rem;color:var(--bs-secondary-color,#6b7280);white-space:nowrap;}
+  .sync-compact-sep{width:1px;align-self:stretch;min-height:1.4rem;background:rgba(0,0,0,.10);}
+  .sync-compact-card .sync-status-item{font-size:.82rem;display:inline-flex;align-items:center;gap:.25rem;}
+  .sync-compact-card .sync-update-icon{font-size:.95rem;}
+  .sync-compact-btn{white-space:nowrap;}
+  .sync-compact-settings{margin-left:auto;}
+  @media (max-width:720px){.sync-compact-sep{display:none;}.sync-compact-settings{margin-left:0;}}
+</style>
 
 <!-- ── Headline stat cards ───────────────────────────────────── -->
 <section class="stat-grid mb-3">
@@ -338,6 +325,28 @@ function _statId(label) {
         display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
         flex-wrap: wrap; align-self: center;
     }
+
+    /* Sync settings STATUS card (read-only pills + "Change in Settings"). */
+    .sync-status-card {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; flex-wrap: wrap; padding: 14px 18px;
+    }
+    .sync-status-info { display: flex; align-items: flex-start; gap: 12px; }
+    .sync-status-line {
+        display: flex; flex-wrap: wrap; align-items: center;
+        gap: 8px 16px; margin-top: 4px;
+    }
+    .sync-status-item {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 13px; font-weight: 600; color: #374151;
+    }
+    .sync-status-pill {
+        display: inline-block; min-width: 36px; text-align: center;
+        padding: 1px 9px; font-size: 11px; font-weight: 700; line-height: 1.6;
+        border-radius: 999px; border: 1px solid transparent;
+    }
+    .sync-status-pill.is-on  { color: #166534; background: #dcfce7; border-color: #bbf7d0; }
+    .sync-status-pill.is-off { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
 
     /* Per-module 2-way buttons (Requirement 2). */
     .sync-row-actions { display: inline-flex; gap: 6px; justify-content: flex-end; }

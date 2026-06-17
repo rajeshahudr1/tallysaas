@@ -16,7 +16,7 @@
  * Bump CACHE_VERSION to invalidate the old precache on deploy.
  * ─────────────────────────────────────────────────────────── */
 
-const CACHE_VERSION = 'tallysync-v3';
+const CACHE_VERSION = 'tallysync-v4';
 
 // Core shell assets worth precaching (all same-origin / CDN-independent).
 const PRECACHE = [
@@ -91,8 +91,9 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Other same-origin static (images/icons/fonts/manifest) → cache-first.
-    if (sameOrigin) {
+    // Same-origin STATIC assets (images / icons / fonts / manifest) → cache-first.
+    const STATIC_RE = /\.(png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|webmanifest)(\?|$)/i;
+    if (sameOrigin && STATIC_RE.test(url.pathname)) {
         event.respondWith(
             caches.match(req).then((hit) => {
                 if (hit) return hit;
@@ -101,6 +102,18 @@ self.addEventListener('fetch', (event) => {
                     return res;
                 });
             })
+        );
+        return;
+    }
+
+    // Same-origin DYNAMIC data (e.g. /sync-dashboard.json poller, *.json, any
+    // non-asset GET) → NETWORK-FIRST and NEVER cached, so live data (sync status,
+    // counts, heartbeat) is always fresh online. cache-first here was serving a
+    // STALE cached /sync-dashboard.json so the 15s poller kept re-painting a fake
+    // "Connected" / old 204·28 over the fresh server render. Offline → cache fallback.
+    if (sameOrigin) {
+        event.respondWith(
+            fetch(req).catch(() => caches.match(req))
         );
         return;
     }

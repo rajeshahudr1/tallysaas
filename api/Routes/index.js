@@ -59,6 +59,9 @@ const {
     createSalesPersonSchema,
     updateSalesPersonSchema,
     listSalesPersonSchema,
+    loginSchema:           salesPersonLoginSchema,
+    assignLocationsSchema: salesPersonLocationsSchema,
+    assignCustomersSchema: salesPersonCustomersSchema,
 } = require('../Validators/salesPerson');
 const {
     createSupplierSchema,
@@ -130,7 +133,6 @@ const MyCompaniesController   = require('../Controllers/Tenant/MyCompaniesContro
 const ConfigController        = require('../Controllers/Tenant/ConfigController');
 const TenantCompanyController = require('../Controllers/Tenant/CompanyController');
 const RbacController          = require('../Controllers/SuperAdmin/RbacController');
-const UserApprovalController  = require('../Controllers/SuperAdmin/UserApprovalController');
 const JournalController       = require('../Controllers/Tenant/JournalController');
 
 // ── DB (for the /health probe) ────────────────────────────────────
@@ -244,14 +246,6 @@ router.post('/super-admin/licenses/:id/activate',
 // key ONCE; never touches machine binding / status / companies / users.
 router.post('/super-admin/licenses/:id/regenerate',
     authenticate, requireSuperAdmin, LicenseController.regenerate);
-
-// Super-Admin · per-user approval queue (each approved user = a paid seat).
-router.get('/super-admin/users/pending',
-    authenticate, requireSuperAdmin, UserApprovalController.listPending);
-router.post('/super-admin/users/:id/approve',
-    authenticate, requireSuperAdmin, UserApprovalController.approve);
-router.post('/super-admin/users/:id/reject',
-    authenticate, requireSuperAdmin, UserApprovalController.reject);
 
 // Super-Admin · Roles & Permissions matrix (roles are global → platform op).
 router.get('/permissions/matrix',
@@ -393,6 +387,34 @@ router.delete(
     '/sales-persons/:id',
     authenticate, resolveCompany, resolveLocation, can('sales-persons', 'delete'),
     SalesPersonController.destroy,
+);
+
+// Sales-person LOGIN + ASSIGNMENTS (the sales person IS a login user; per-location
+// customer assignment drives what that user can see). Reads gate on
+// sales-persons.view, writes on sales-persons.edit. POST /login is atomic
+// (create-or-update the linked user + seat reconcile).
+router.get(
+    '/sales-persons/:id/assignments',
+    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'view'),
+    SalesPersonController.getAssignments,
+);
+router.post(
+    '/sales-persons/:id/login',
+    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
+    validate(salesPersonLoginSchema),
+    SalesPersonController.setLogin,
+);
+router.put(
+    '/sales-persons/:id/locations',
+    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
+    validate(salesPersonLocationsSchema),
+    SalesPersonController.setLocations,
+);
+router.put(
+    '/sales-persons/:id/customers',
+    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
+    validate(salesPersonCustomersSchema),
+    SalesPersonController.setCustomers,
 );
 
 // ───────────────────────────────────────────────────────────────────
@@ -813,11 +835,26 @@ router.post(
     authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.pull,
 );
-// Notification-bell feed (unread failed count + recent rows w/ friendly reasons).
+// Notification-bell feed (unread failed count + recent rows w/ friendly reasons,
+// each carrying a PER-USER `read` flag). Same guard chain as the rest of /sync.
 router.get(
     '/sync/notifications',
     authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.notifications,
+);
+// Mark ONE (or a few) bell item(s) read for the caller. Body { key } or
+// { keys:[...] } — a body key (NOT a :id path param) because keys like
+// "agent-update-1.2.0" contain dots. Returns the fresh read-aware { unread }.
+router.post(
+    '/sync/notifications/read',
+    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    SyncController.markRead,
+);
+// Mark ALL currently-unread bell items read for the caller. Returns { unread:0 }.
+router.post(
+    '/sync/notifications/read-all',
+    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    SyncController.markAllRead,
 );
 
 // ───────────────────────────────────────────────────────────────────

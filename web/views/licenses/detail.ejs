@@ -177,11 +177,12 @@ var headActions =
                     <th class="data-table-idx">#</th>
                     <th class="text-start">Name</th>
                     <th class="text-start">Status</th>
+                    <th class="text-start">Sync</th>
                 </tr>
             </thead>
             <tbody>
                 <% if (!_comps.length) { %>
-                    <tr><td class="data-table-empty text-center text-muted py-4" colspan="3">
+                    <tr><td class="data-table-empty text-center text-muted py-4" colspan="4">
                         No companies under this license.
                     </td></tr>
                 <% } %>
@@ -190,6 +191,17 @@ var headActions =
                         <td class="data-table-idx text-muted"><%= i + 1 %></td>
                         <td class="text-start"><%= c.name %></td>
                         <td class="text-start"><span class="pill-status <%= _statusClass(c.status) %>"><%= c.status %></span></td>
+                        <td class="text-start">
+                            <% if (c.syncing) { %>
+                                <span class="pill-status pill-status--success" title="Within the license's max_companies — synced to the Tally agent">
+                                    <i class="fa-solid fa-rotate me-1"></i>Syncing
+                                </span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--warning" title="Over the license's max_companies — excluded from sync. Raise max companies to sync it.">
+                                    <i class="fa-solid fa-ban me-1"></i>Over limit (not syncing)
+                                </span>
+                            <% } %>
+                        </td>
                     </tr>
                 <% }); %>
             </tbody>
@@ -225,7 +237,14 @@ var headActions =
                 <% _users.forEach(function (u, i) { %>
                     <tr>
                         <td class="data-table-idx text-muted"><%= i + 1 %></td>
-                        <td class="text-start"><%= u.name %></td>
+                        <td class="text-start">
+                            <%= u.name %>
+                            <% if (u.is_license_admin) { %>
+                                <span class="pill-badge ms-1" title="License administrator — always active, never seat-gated">
+                                    <i class="fa-solid fa-crown me-1"></i>License Admin
+                                </span>
+                            <% } %>
+                        </td>
                         <td class="text-start"><%= u.email %></td>
                         <td class="text-start"><%= u.role || '—' %></td>
                         <td class="text-start"><span class="pill-status <%= _statusClass(u.status) %>"><%= u.status %></span></td>

@@ -116,11 +116,14 @@
         var latestWrap = $('#sync-update-latest');
         if (latestWrap) latestWrap.style.display = (available && latest) ? '' : 'none';
 
+        // Auto-update is now a READ-ONLY status pill (edited in Settings), so
+        // derive the hint from the data flag rather than a toggle's checked state.
+        var autoOn = d.auto_update !== false;
         var hint = $('#sync-update-hint');
         if (hint) {
             hint.textContent = available
-                ? (autoUpdateOn() ? 'A newer version is available. It will update automatically.'
-                                  : 'A newer version is available. Auto-update is off — use “Update now”.')
+                ? (autoOn ? 'A newer version is available. It will update automatically.'
+                          : 'A newer version is available. Auto-update is off — use “Update now”.')
                 : 'The agent is up to date.';
         }
 
@@ -129,23 +132,23 @@
         if (btn && !btn.dataset.busy) btn.disabled = !available;
     }
 
-    function autoUpdateOn() {
-        var t = $('#sync-auto-update-toggle');
-        return t ? !!t.checked : true;
+    /* Update one read-only ON/OFF status pill in place (green ON / grey OFF). */
+    function setStatusPill(id, on) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = on ? 'ON' : 'OFF';
+        el.classList.toggle('is-on', !!on);
+        el.classList.toggle('is-off', !on);
     }
 
-    /* Reflect the per-license AUTO push/pull toggles live (Requirement 1),
-     * WITHOUT clobbering a switch the user is mid-change on (dataset.busy is set
-     * while a PATCH is in flight). Treat a missing flag as ON (the server
-     * default). */
-    function applyDirection(d) {
-        [['push', '#sync-push-toggle'], ['pull', '#sync-pull-toggle']].forEach(function (pair) {
-            var key = pair[0] === 'push' ? 'push_enabled' : 'pull_enabled';
-            var t = $(pair[1]);
-            if (!t || t.dataset.busy) return;
-            if (d[key] === undefined) return;
-            t.checked = d[key] !== false;
-        });
+    /* Reflect the READ-ONLY sync-settings status line live (master Auto-sync,
+     * Auto push, Auto pull, Auto-update). These are edited in Settings; here we
+     * only display them. Treat a missing flag as ON (the server default). */
+    function applySyncStatus(d) {
+        setStatusPill('sync-status-enabled',    d.sync_enabled !== false);
+        setStatusPill('sync-status-push',       d.push_enabled !== false);
+        setStatusPill('sync-status-pull',       d.pull_enabled !== false);
+        setStatusPill('sync-status-autoupdate', d.auto_update  !== false);
     }
 
     function applyData(d) {
@@ -162,7 +165,7 @@
         setText($('#stat-failed'),    d.failed_fmt != null ? d.failed_fmt : '0');
 
         applyVersion(d);
-        applyDirection(d);
+        applySyncStatus(d);
 
         if (Array.isArray(d.modules)) d.modules.forEach(applyModuleRow);
     }
@@ -216,27 +219,6 @@
             credentials: 'same-origin',
             body: body,
         }).then(function (r) { return r.ok ? r.json() : null; });
-    }
-
-    /* Auto-update ON/OFF switch → PATCH the per-license cloud toggle. */
-    function wireAutoUpdateToggle() {
-        var t = document.getElementById('sync-auto-update-toggle');
-        if (!t) return;
-        t.addEventListener('change', function () {
-            var enabled = !!t.checked;
-            t.disabled = true;
-            postForm('/sync-auto-update', { enabled: enabled ? 'on' : '' })
-                .then(function (j) {
-                    if (j && j.ok) {
-                        toast(j.msg || (enabled ? 'Auto-update turned ON.' : 'Auto-update turned OFF.'), true);
-                    } else {
-                        t.checked = !enabled;   // revert on failure
-                        toast((j && j.msg) || 'Could not change auto-update.', false);
-                    }
-                })
-                .catch(function () { t.checked = !enabled; toast('Could not reach the server.', false); })
-                .then(function () { t.disabled = false; });
-        });
     }
 
     /* "Update now" → enqueue a self_update command for the agent. */
@@ -307,36 +289,6 @@
         });
     }
 
-    /* Auto-sync DIRECTION switches (Requirement 1) → PATCH the per-license
-     * push/pull toggle (proxied by POST /sync-direction). Optimistic with revert
-     * on failure; dataset.busy guards the poller from clobbering mid-change. */
-    function wireDirectionToggles() {
-        ['sync-push-toggle', 'sync-pull-toggle'].forEach(function (id) {
-            var t = document.getElementById(id);
-            if (!t) return;
-            t.addEventListener('change', function () {
-                var dir = t.getAttribute('data-direction') || (id.indexOf('push') !== -1 ? 'push' : 'pull');
-                var enabled = !!t.checked;
-                var params = {};
-                params[dir + '_enabled'] = enabled ? 'on' : '';
-                t.dataset.busy = '1';
-                t.disabled = true;
-                postForm('/sync-direction', params)
-                    .then(function (j) {
-                        if (j && j.ok) {
-                            var label = dir === 'push' ? 'Auto push' : 'Auto pull';
-                            toast(j.msg || (label + (enabled ? ' turned ON.' : ' turned OFF.')), true);
-                        } else {
-                            t.checked = !enabled;   // revert on failure
-                            toast((j && j.msg) || 'Could not change auto-sync direction.', false);
-                        }
-                    })
-                    .catch(function () { t.checked = !enabled; toast('Could not reach the server.', false); })
-                    .then(function () { delete t.dataset.busy; t.disabled = false; });
-            });
-        });
-    }
-
     /* "Test Connection" (Requirement 3) → an immediate live re-check (poll). The
      * poller hides the alert + flips the banner green the moment a heartbeat is
      * seen; we toast the outcome so the click always gives feedback. */
@@ -369,21 +321,66 @@
         });
     }
 
+    /* ── Disconnected guard ──────────────────────────────────────
+     * While the agent is DISCONNECTED, BLOCK every sync action and ALERT the
+     * user instead of silently queueing it. Covers the page-head Sync Now /
+     * Retry, the banner Sync Now, Sync All, and the per-module To-Tally /
+     * From-Tally buttons (all POST /sync-retry[/:m] or /sync-pull[/:m]). */
+    function isDisconnected() {
+        var card = $('#sync-conn-card');
+        return !!(card && card.classList.contains('is-disconnected'));
+    }
+    function warnNotConnected() {
+        toast('Tally agent is not connected — start the Tally Cloud Sync Agent and keep Tally open, then try again.', false);
+    }
+    /* Clear a button's in-progress loader so a BLOCKED / errored action never
+     * leaves a stuck "Please wait…" spinner. Mirrors app.js _unspin (restores the
+     * stored dataset._html) and also clears our own busy/syncing flags. */
+    function unspin(btn) {
+        if (!btn) return;
+        if (btn.dataset && btn.dataset._html != null) btn.innerHTML = btn.dataset._html;
+        btn.disabled = false;
+        btn.classList.remove('is-loading', 'is-syncing');
+        if (btn.dataset) { delete btn.dataset._busy; delete btn.dataset._html; delete btn.dataset.busy; }
+    }
+    /* app.js spins the button in the SAME (capture) submit phase as us, and may
+     * run just before OR after — so clear it now AND on the next tick. */
+    function unspinSoon(btn) {
+        unspin(btn);
+        setTimeout(function () { unspin(btn); }, 0);
+    }
+    function wireDisconnectGuard() {
+        // Real <form> POSTs to the sync routes. CAPTURE phase + stopPropagation
+        // so this runs BEFORE the per-module XHR submit handler and the native
+        // submit, fully blocking the action when the agent is offline. We also
+        // un-spin the form's submit button so app.js's loader doesn't get stuck.
+        document.addEventListener('submit', function (e) {
+            var form = e.target;
+            var action = (form && form.getAttribute) ? (form.getAttribute('action') || '') : '';
+            if (/\/sync-(retry|pull)(\/|\?|$)/.test(action) && isDisconnected()) {
+                e.preventDefault();
+                e.stopPropagation();
+                warnNotConnected();
+                unspinSoon(form.querySelector('button[type="submit"], input[type="submit"], button'));
+            }
+        }, true);
+    }
+
     function wireButtons() {
         ['sync-retry', 'sync-now'].forEach(function (id) {
             var btn = document.getElementById(id);
             if (!btn) return;
             btn.addEventListener('click', function (e) {
                 e.preventDefault();
+                if (isDisconnected()) { warnNotConnected(); unspinSoon(btn); return; }   // alert + block, clear loader
                 btn.disabled = true;
                 submitRetry();
             });
         });
-        wireAutoUpdateToggle();
         wireUpdateNow();
         wireModuleSyncForms();
-        wireDirectionToggles();
         wireTestConnection();
+        wireDisconnectGuard();
     }
 
     function start() {

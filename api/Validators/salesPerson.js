@@ -92,9 +92,83 @@ const listSalesPersonSchema = Joi.object({
     order:    Joi.string().trim().lowercase().valid('asc', 'desc').allow('', null),
 });
 
+// Reusable required positive-integer FK.
+const reqFkId = Joi.number().integer().positive();
+
+/**
+ * POST /api/v1/sales-persons/:id/login
+ * Create-or-update the LOGIN USER linked to this sales person. `email` + `role_id`
+ * are always required. `password` is required only when CREATING the login (the
+ * controller knows whether sales_persons.user_id is already set), so the schema
+ * keeps it optional (min 8 when present) and the controller enforces the
+ * "required on create" rule with a clear 422. `status` is optional (Active by
+ * default on create; on update it patches the linked user's status).
+ */
+const loginSchema = Joi.object({
+    email: Joi.string()
+        .email({ tlds: { allow: false } })
+        .lowercase()
+        .trim()
+        .max(191)
+        .required()
+        .messages({
+            'string.email': 'Please enter a valid login email address.',
+            'string.empty': 'Login email is required.',
+            'any.required': 'Login email is required.',
+            'string.max':   'Login email is too long.',
+        }),
+
+    // Optional here; the controller requires it when creating a brand-new login.
+    password: Joi.string().min(8).max(255).allow('', null).messages({
+        'string.min': 'Password must be at least 8 characters.',
+        'string.max': 'Password is too long.',
+    }),
+
+    role_id: reqFkId.required().messages({
+        'any.required':    'Login role is required.',
+        'number.base':     'Login role is required.',
+        'number.positive': 'Login role is required.',
+    }),
+
+    status: Joi.string().valid('Active', 'Inactive', 'Blocked'),
+});
+
+/**
+ * PUT /api/v1/sales-persons/:id/locations
+ * Replace this sales person's assigned locations. `location_ids` is an array of
+ * positive integers (may be empty to clear all assignments). The controller
+ * validates the ids belong to the caller's company.
+ */
+const assignLocationsSchema = Joi.object({
+    location_ids: Joi.array().items(reqFkId).default([]).messages({
+        'array.base': 'location_ids must be a list of location ids.',
+    }),
+});
+
+/**
+ * PUT /api/v1/sales-persons/:id/customers
+ * Replace this sales person's assigned customers FOR ONE location. `location_id`
+ * is required (must be one of the sales person's assigned locations); the
+ * `customer_ids` array (may be empty to clear) lists the customers to assign in
+ * that location. The controller validates membership of location + customers.
+ */
+const assignCustomersSchema = Joi.object({
+    location_id: reqFkId.required().messages({
+        'any.required':    'Location is required.',
+        'number.base':     'Location is required.',
+        'number.positive': 'Location is required.',
+    }),
+    customer_ids: Joi.array().items(reqFkId).default([]).messages({
+        'array.base': 'customer_ids must be a list of customer ids.',
+    }),
+});
+
 module.exports = {
     createSalesPersonSchema,
     updateSalesPersonSchema,
     listSalesPersonSchema,
+    loginSchema,
+    assignLocationsSchema,
+    assignCustomersSchema,
     STATUSES,
 };

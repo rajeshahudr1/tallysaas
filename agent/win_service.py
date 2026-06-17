@@ -36,6 +36,34 @@ SERVICE_DISPLAY_NAME = "Tally Cloud Sync"
 SERVICE_DESCRIPTION = "Background sync between TallyPrime and Tally Cloud."
 
 
+def get_version() -> str:
+    """Best-effort agent version stamped into the build (config._DEFAULT_AGENT_VERSION).
+
+    Used to put the version in the services.msc display name + description so the
+    operator can tell which build the service is at a glance. Falls back to an
+    empty string when config cannot be imported (then callers use the bare name).
+    """
+    try:
+        from config import _DEFAULT_AGENT_VERSION  # type: ignore
+        return str(_DEFAULT_AGENT_VERSION).strip()
+    except Exception:
+        return ""
+
+
+def _versioned_display_name(version: "str | None" = None) -> str:
+    """``"Tally Cloud Sync <version>"`` (or the bare name when no version)."""
+    v = (version if version is not None else get_version()).strip()
+    return (SERVICE_DISPLAY_NAME + " " + v) if v else SERVICE_DISPLAY_NAME
+
+
+def _versioned_description(version: "str | None" = None) -> str:
+    """Description text carrying the version, e.g. ``"... Version: 1.2.1."``."""
+    v = (version if version is not None else get_version()).strip()
+    if v:
+        return SERVICE_DESCRIPTION + " Version: " + v + "."
+    return SERVICE_DESCRIPTION
+
+
 def _install_dir() -> str:
     """Directory the service should treat as home (config.ini + logs/ live here).
 
@@ -145,6 +173,24 @@ class TallyCloudSyncService(_ServiceBase):
         logger = get_logger("service", cfg.log_level)
         logger.info("Service: loaded config from %s", install_dir)
 
+        # Best-effort: keep the services.msc display name + description in sync
+        # with the RUNNING build's version. After an auto-update swaps the exe in
+        # place (no reinstall), the SCM-stored name would otherwise show the old
+        # version; the service runs as LocalSystem (admin) so it can rename
+        # itself here. Never let a rename failure stop the service.
+        try:
+            version = (getattr(cfg, "agent_version", "") or "").strip()
+            win32serviceutil.ChangeServiceConfig(
+                None,
+                SERVICE_NAME,
+                displayName=_versioned_display_name(version),
+                description=_versioned_description(version),
+            )
+            logger.info("Service: display name set to '%s'.",
+                        _versioned_display_name(version))
+        except Exception as exc:
+            logger.debug("Service: display-name self-refresh skipped: %s", exc)
+
         api = sync_agent.build_api(cfg, logger)
         # The headless service has no GUI queue, so it publishes status to
         # .status.json for the Dashboard to poll.
@@ -159,18 +205,30 @@ class TallyCloudSyncService(_ServiceBase):
 # --------------------------------------------------------------------------- #
 # Service management helpers (called by gui_agent's argv verbs)
 # --------------------------------------------------------------------------- #
-def _service_binary() -> "tuple[str, str]":
+def _service_binary(exe_path: "str | None" = None) -> "tuple[str, str]":
     """Return ``(exeName, exeArgs)`` SCM should launch for the service.
 
-    ``exeName`` is the program path (the installed exe when frozen, else
-    python.exe) and ``exeArgs`` is the rest of the command line. They are kept
-    SEPARATE because pywin32 stores them in distinct SCM fields - embedding the
-    args inside ``exeName`` makes SCM treat the whole string as the binary path.
+    ``exeName`` is the program path and ``exeArgs`` is the rest of the command
+    line. They are kept SEPARATE because pywin32 stores them in distinct SCM
+    fields - embedding the args inside ``exeName`` makes SCM treat the whole
+    string as the binary path.
 
-    * Frozen : ``(<this exe>, "--run-service")`` - one exe serves GUI + service.
+    * ``exe_path`` given (an absolute, STABLE installed-exe path): register the
+      service to exactly THAT exe with ``--run-service``. This is the production
+      path - the GUI install flow passes ``<install_dir>\\TallyCloudSync.exe`` so
+      the binPath is the install-dir exe regardless of where the launcher /
+      release / temp exe that ran ``install-service`` lives. The service then
+      reads ``<install_dir>\\config.ini`` (the token) and writes logs +
+      ``.status.json`` into ``<install_dir>`` (its own folder).
+    * Frozen, no ``exe_path`` : ``(<this exe>, "--run-service")`` - fall back to
+      the running exe (the legacy behaviour) so a manual elevated
+      ``TallyCloudSync.exe install-service`` from the install dir still works.
     * Source : ``(python.exe, '"<gui_agent.py>" --run-service')`` so the service
       can still be registered while developing.
     """
+    if exe_path:
+        # Explicit, stable installed-exe path wins (production install flow).
+        return os.path.abspath(exe_path), "--run-service"
     exe = os.path.abspath(sys.executable)
     if bool(getattr(sys, "frozen", False)):
         return exe, "--run-service"
@@ -178,26 +236,38 @@ def _service_binary() -> "tuple[str, str]":
     return exe, '"%s" --run-service' % gui
 
 
-def install_service() -> int:
+def install_service(exe_path: "str | None" = None) -> int:
     """Register the service (auto-start) and (best-effort) start it.
 
-    Uses ``win32serviceutil.InstallService`` with an explicit binary path that
-    points at THIS exe's ``--run-service`` branch, ``startType=auto`` so it
-    comes up at boot, and a friendly display name + description. Returns a
-    process exit code (0 on success). Run ELEVATED (the GUI does this via a
-    UAC re-launch).
+    Uses ``win32serviceutil.InstallService`` with an explicit binary path,
+    ``startType=auto`` so it comes up at boot, and a friendly display name +
+    description. Returns a process exit code (0 on success). Run ELEVATED (the
+    GUI does this via a UAC re-launch).
+
+    ``exe_path`` is the STABLE installed-exe path the service must be registered
+    to (``<install_dir>\\TallyCloudSync.exe``). When given, the binPath is that
+    exact file - NEVER whatever exe happened to be running when this verb
+    executed (so launching the installer from a download / release / temp folder
+    no longer mis-points the service). The already-installed branch ALSO
+    re-points the binPath via ``ChangeServiceConfig`` so a re-install / repair
+    corrects a previously mis-registered service.
     """
     if not _HAVE_PYWIN32:
         print("pywin32 not available; cannot install the service.")
         return 1
-    exe_name, exe_args = _service_binary()
+    exe_name, exe_args = _service_binary(exe_path)
+    print("Service binPath:", exe_name, exe_args)
+    # Stamp the build version into the display name + description so services.msc
+    # shows "Tally Cloud Sync <version>" (falls back to the bare name if unknown).
+    display_name = _versioned_display_name()
+    description = _versioned_description()
     try:
         win32serviceutil.InstallService(
             None,
             SERVICE_NAME,
-            SERVICE_DISPLAY_NAME,
+            display_name,
             startType=win32service.SERVICE_AUTO_START,
-            description=SERVICE_DESCRIPTION,
+            description=description,
             exeName=exe_name,
             exeArgs=exe_args,
         )
@@ -208,8 +278,9 @@ def install_service() -> int:
             win32serviceutil.ChangeServiceConfig(
                 None,
                 SERVICE_NAME,
+                displayName=display_name,
                 startType=win32service.SERVICE_AUTO_START,
-                description=SERVICE_DESCRIPTION,
+                description=description,
                 exeName=exe_name,
                 exeArgs=exe_args,
             )
