@@ -19,10 +19,14 @@
  *     can be suspended instantly and nothing is trusted from the client.
  */
 
+const fs         = require('node:fs');
+const path       = require('node:path');
 const R          = require('../../Helpers/response');
 const jwt        = require('../../Helpers/jwt');
 const licenseKey = require('../../Helpers/licenseKey');
 const db         = require('../../config/db').db;
+const { recordHistory } = require('../../Helpers/history');
+const agentRelease      = require('../../Helpers/agentRelease');
 
 const AGENT_TOKEN_TTL = '7d';
 const INVALID_KEY_MSG = 'Invalid license key.';
@@ -96,6 +100,12 @@ async function activate(req, res) {
  * POST /api/v1/agent/heartbeat   (behind authenticateAgent → req.license)
  * The agent pings periodically; we refresh last_seen + version and echo the
  * live license status so the agent halts if it was suspended in the cloud.
+ *
+ * The response ALSO echoes the per-license AUTO-sync DIRECTION toggles
+ * (push_enabled / pull_enabled) so the agent loop can skip the push and/or pull
+ * pass when the cloud has them turned off (Requirement 1). Both default to true
+ * when the column is null/unreadable, so an older license / pre-migration DB
+ * behaves exactly as before (both directions ON).
  */
 async function heartbeat(req, res) {
     try {
@@ -116,10 +126,32 @@ async function heartbeat(req, res) {
             patch.last_open_companies = JSON.stringify(names);
         }
         await db('licenses').where('id', req.license.id).update(patch);
+
+        // Per-license AUTO-sync direction toggles. authenticateAgent selects a
+        // fixed column set (no sync flags), so read them here. Default ON when
+        // the column is null OR the table predates the migration (best-effort:
+        // a read error must never break a working heartbeat).
+        let pushEnabled = true;
+        let pullEnabled = true;
+        try {
+            const lic = await db('licenses').where('id', req.license.id)
+                .first('sync_push_enabled', 'sync_pull_enabled');
+            if (lic) {
+                if (lic.sync_push_enabled != null) pushEnabled = !!lic.sync_push_enabled;
+                if (lic.sync_pull_enabled != null) pullEnabled = !!lic.sync_pull_enabled;
+            }
+        } catch (e) {
+            pushEnabled = true;
+            pullEnabled = true;
+        }
+
         return R.successResponse(res, {
             status: req.license.status,
             license_id: req.license.id,
             server_time: now.toISOString(),
+            // Auto-sync direction gates the agent loop reads each cycle.
+            push_enabled: pushEnabled,
+            pull_enabled: pullEnabled,
         }, 'ok');
     } catch (err) {
         console.error('AgentController.heartbeat error:', err);
@@ -563,6 +595,14 @@ async function importFromTally(req, res) {
                 if (Object.keys(upd).length) {
                     upd.updated_at = now;
                     await db(table).where('id', existing.id).update(upd);
+                    // HISTORY (best-effort): Tally changed this master. before =
+                    // the snapshot we read; after = before + the applied changes.
+                    await recordHistory(db, {
+                        company_id: cid, module: table, record_type: ttype,
+                        record_id: existing.id, action: 'updated', source: 'tally',
+                        before: existing, after: { ...existing, ...upd },
+                        changed_by: null, note: 'Tally sync',
+                    });
                     if (!existing.tally_guid) {
                         counts[table === 'customers' ? 'customers_linked' : 'suppliers_linked'] += 1;
                         details.push({ type: ttype, name, action: 'linked' });
@@ -575,14 +615,24 @@ async function importFromTally(req, res) {
                     counts.skipped += 1;   // already in sync → no write, no log spam
                 }
             } else {
-                const [row] = await db(table).insert({
+                const insertRow = {
                     company_id: cid, name, status: 'Active', is_tally_ledger: true,
                     tally_guid: 'tally', gst_number: gstin, opening_balance: opening,
                     created_at: now, updated_at: now,
-                }).returning('id');
+                };
+                const [row] = await db(table).insert(insertRow).returning('id');
+                const newId = row.id || row;
+                const ttype = table === 'customers' ? 'customer' : 'supplier';
+                // HISTORY (best-effort): a new master pulled from Tally.
+                await recordHistory(db, {
+                    company_id: cid, module: table, record_type: ttype,
+                    record_id: newId, action: 'created', source: 'tally',
+                    before: null, after: { id: newId, ...insertRow },
+                    changed_by: null, note: 'Tally sync',
+                });
                 counts[table === 'customers' ? 'customers_new' : 'suppliers_new'] += 1;
-                details.push({ type: table === 'customers' ? 'customer' : 'supplier', name, action: 'created' });
-                await logPull(table === 'customers' ? 'customer' : 'supplier', row.id || row, name);
+                details.push({ type: ttype, name, action: 'created' });
+                await logPull(ttype, newId, name);
             }
         }
 
@@ -611,6 +661,13 @@ async function importFromTally(req, res) {
                 if (Object.keys(upd).length) {
                     upd.updated_at = now;
                     await db('products').where('id', existing.id).update(upd);
+                    // HISTORY (best-effort): Tally changed this product.
+                    await recordHistory(db, {
+                        company_id: cid, module: 'products', record_type: 'product',
+                        record_id: existing.id, action: 'updated', source: 'tally',
+                        before: existing, after: { ...existing, ...upd },
+                        changed_by: null, note: 'Tally sync',
+                    });
                     if (!existing.tally_guid) {
                         counts.products_linked += 1;
                         details.push({ type: 'product', name, action: 'linked' });
@@ -623,14 +680,23 @@ async function importFromTally(req, res) {
                     counts.skipped += 1;
                 }
             } else {
-                const [row] = await db('products').insert({
+                const insertRow = {
                     company_id: cid, name, status: 'Active', is_tally_item: true, tally_guid: 'tally',
                     unit: unit || 'Nos', hsn_code: hsn, opening_stock: closing,
                     purchase_price: 0, sales_price: 0, gst_rate: 0, created_at: now, updated_at: now,
-                }).returning('id');
+                };
+                const [row] = await db('products').insert(insertRow).returning('id');
+                const newId = row.id || row;
+                // HISTORY (best-effort): a new product pulled from Tally.
+                await recordHistory(db, {
+                    company_id: cid, module: 'products', record_type: 'product',
+                    record_id: newId, action: 'created', source: 'tally',
+                    before: null, after: { id: newId, ...insertRow },
+                    changed_by: null, note: 'Tally sync',
+                });
                 counts.products_new += 1;
                 details.push({ type: 'product', name, action: 'created' });
-                await logPull('product', row.id || row, name);
+                await logPull('product', newId, name);
             }
         }
 
@@ -646,14 +712,23 @@ async function importFromTally(req, res) {
                 .whereRaw('lower(name) = ?', [name.toLowerCase()]).first('id');
             if (existing) { counts.skipped += 1; continue; }   // already present → no dup
 
-            const [row] = await db('locations').insert({
+            const insertRow = {
                 company_id: cid, name, status: 'Active',
                 is_tally_godown: true, tally_guid: 'tally', tally_synced_at: now,
                 created_at: now, updated_at: now,
-            }).returning('id');
+            };
+            const [row] = await db('locations').insert(insertRow).returning('id');
+            const newId = row.id || row;
+            // HISTORY (best-effort): a new location (godown) pulled from Tally.
+            await recordHistory(db, {
+                company_id: cid, module: 'locations', record_type: 'location',
+                record_id: newId, action: 'created', source: 'tally',
+                before: null, after: { id: newId, ...insertRow },
+                changed_by: null, note: 'Tally sync',
+            });
             counts.locations_new += 1;
             details.push({ type: 'location', name, action: 'created' });
-            await logPull('location', row.id || row, name);
+            await logPull('location', newId, name);
         }
 
         // ── Vouchers (Day Book): receipts/payments → payments, sales/purchase
@@ -669,6 +744,11 @@ async function importFromTally(req, res) {
             const date = tdate(v.date);
             const partyName = String(v.party || '').trim();
             if (!amount || !vno) { counts.skipped += 1; continue; }
+
+            // Per-iteration history capture state (set by the payment/invoice
+            // insert branches below; read by the shared recordHistory call).
+            let newVoucherId = null;
+            let voucherAfter = null;
 
             const isReceipt = vt.indexOf('receipt') > -1;
             const isPayment = vt.indexOf('payment') > -1;
@@ -704,16 +784,25 @@ async function importFromTally(req, res) {
                              dr_ledger: partyName || '(unknown)', cr_ledger: '' })
                     .whereNull('deleted_at').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
-                const [row] = await db('journals').insert({
+                const insertRow = {
                     company_id: cid, voucher_no: vno, vch_type: 'Journal',
                     journal_date: journalDate, dr_ledger: partyName || '(unknown)', cr_ledger: '',
                     amount, narration: null, status: 'created',
                     tally_voucher_no: vno, tally_guid: 'tally',
                     created_at: now, updated_at: now,
-                }).returning('id');
+                };
+                const [row] = await db('journals').insert(insertRow).returning('id');
+                const newId = row.id || row;
+                // HISTORY (best-effort): a journal voucher created from Tally.
+                await recordHistory(db, {
+                    company_id: cid, module: 'journals', record_type: 'journal',
+                    record_id: newId, action: 'created', source: 'tally',
+                    before: null, after: { id: newId, ...insertRow },
+                    changed_by: null, note: 'Tally sync',
+                });
                 counts.journals_new += 1;
                 details.push({ type: 'journal', name: `Journal ${vno}`, action: 'created' });
-                await logPull('journal', row.id || row, `Journal ${vno}`);
+                await logPull('journal', newId, `Journal ${vno}`);
                 continue;
             }
 
@@ -747,13 +836,16 @@ async function importFromTally(req, res) {
                              [payPartyCol]: partyId })
                     .whereNull('deleted_at').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
-                await db('payments').insert({
+                const payRow = {
                     company_id: cid, type, voucher_no: vno, payment_date: date,
                     amount, mode: 'Cash', status: 'created', tally_voucher_no: vno,
                     party_type: partyId ? (isReceipt ? 'customer' : 'supplier') : null,
                     [isReceipt ? 'customer_id' : 'supplier_id']: partyId,
                     created_at: now, updated_at: now,
-                });
+                };
+                const [pr] = await db('payments').insert(payRow).returning('id');
+                newVoucherId = pr ? (pr.id || pr) : null;
+                voucherAfter = newVoucherId != null ? { id: newVoucherId, ...payRow } : payRow;
             } else {
                 const type = isSales ? 'sales' : 'purchase';
                 const dup = await db('invoices').where({ company_id: cid, type, tally_voucher_no: vno })
@@ -770,12 +862,15 @@ async function importFromTally(req, res) {
                              [invPartyCol]: partyId })
                     .whereNull('deleted_at').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
-                await db('invoices').insert({
+                const invRow = {
                     company_id: cid, type, invoice_no: vno, invoice_date: date,
                     [isSales ? 'customer_id' : 'supplier_id']: partyId,
                     taxable: amount, cgst: 0, sgst: 0, igst: 0, tax_amount: 0, total: amount,
                     status: 'created', tally_voucher_no: vno, created_at: now, updated_at: now,
-                });
+                };
+                const [ir] = await db('invoices').insert(invRow).returning('id');
+                newVoucherId = ir ? (ir.id || ir) : null;
+                voucherAfter = newVoucherId != null ? { id: newVoucherId, ...invRow } : invRow;
             }
             const label = isReceipt ? 'receipt' : isPayment ? 'payment'
                 : isCreditNote ? 'sales invoice (credit note)'
@@ -783,9 +878,21 @@ async function importFromTally(req, res) {
                 : isSales ? 'sales invoice' : 'purchase invoice';
             const logModule = isReceipt ? 'receipt' : isPayment ? 'payment'
                 : isSales ? 'sales_invoice' : 'purchase_invoice';
+            // History module slug (route-style) for this voucher kind.
+            const histModule = isReceipt ? 'receipts' : isPayment ? 'payments'
+                : isSales ? 'sales-invoices' : 'purchase-invoices';
+            const histType = isReceipt ? 'receipt' : isPayment ? 'payment'
+                : isSales ? 'sales-invoice' : 'purchase-invoice';
+            // HISTORY (best-effort): a voucher created from Tally.
+            await recordHistory(db, {
+                company_id: cid, module: histModule, record_type: histType,
+                record_id: newVoucherId, action: 'created', source: 'tally',
+                before: null, after: voucherAfter,
+                changed_by: null, note: 'Tally sync',
+            });
             counts.vouchers_new += 1;
             details.push({ type: label, name: `${v.vtype} ${vno}`, action: 'created' });
-            await logPull(logModule, null, `${v.vtype} ${vno}`);
+            await logPull(logModule, newVoucherId, `${v.vtype} ${vno}`);
         }
 
         // Advance the per-company watermark to the largest ALTERID seen this
@@ -899,4 +1006,125 @@ async function commandResult(req, res) {
     }
 }
 
-module.exports = { activate, heartbeat, pending, result, importFromTally, getCommands, commandResult };
+/**
+ * GET /api/v1/agent/version   (authenticateAgent → req.license)
+ *
+ * Tells the agent what the published-latest exe is so it can decide whether to
+ * self-update. Source of truth = the single agent_releases row with
+ * is_current=true (a super-admin publishes it). Falls back to the env
+ * AGENT_LATEST_VERSION (or null) when nothing is published yet.
+ *
+ * Response data:
+ *   { latest_version, current, download_url, sha256, mandatory, notes,
+ *     auto_update }
+ *   • latest_version — the published version string (or null = nothing to do)
+ *   • current        — true when the agent's reported version already matches
+ *                      latest (so it need not download)
+ *   • download_url   — relative path the agent GETs the exe from
+ *   • mandatory      — a security release the agent applies even if auto_update is OFF
+ *   • auto_update    — the per-LICENSE cloud toggle (Requirement 3). The agent
+ *                      treats this as the authoritative on/off when present.
+ *
+ * Never throws to the client — any error returns a safe "nothing to update"
+ * shape so a release-table hiccup can NEVER brick a working agent.
+ */
+async function getVersion(req, res) {
+    try {
+        // The agent reports its installed version via ?agent_version= (or header);
+        // used only to compute the convenience `current` flag.
+        const installed = String((req.query && req.query.agent_version) || '').trim();
+
+        let rel = null;
+        try {
+            rel = await agentRelease.currentRelease(db);
+        } catch (e) {
+            rel = null;   // table missing / DB hiccup → behave as "no release".
+        }
+
+        const latestVersion = rel ? rel.version
+            : (String(process.env.AGENT_LATEST_VERSION || '').trim() || null);
+
+        // Per-license cloud toggle (default ON when the column/row is unreadable).
+        let autoUpdate = true;
+        try {
+            const lic = await db('licenses').where('id', req.license.id).first('auto_update');
+            if (lic && lic.auto_update != null) autoUpdate = !!lic.auto_update;
+        } catch (e) {
+            autoUpdate = true;
+        }
+
+        return R.successResponse(res, {
+            latest_version: latestVersion,
+            current: !!(latestVersion && installed && installed === latestVersion),
+            download_url: '/api/v1/agent/download',
+            sha256: rel ? (rel.sha256 || null) : null,
+            mandatory: rel ? !!rel.mandatory : false,
+            notes: rel ? (rel.notes || null) : null,
+            auto_update: autoUpdate,
+        }, 'ok');
+    } catch (err) {
+        console.error('AgentController.getVersion error:', err);
+        // Safe fallback — never let this crash the agent's update check.
+        return R.successResponse(res, {
+            latest_version: null, current: true, download_url: '/api/v1/agent/download',
+            sha256: null, mandatory: false, notes: null, auto_update: true,
+        }, 'ok');
+    }
+}
+
+/**
+ * GET /api/v1/agent/download   (authenticateAgent → req.license)
+ *
+ * Streams the CURRENT release exe from AGENT_RELEASE_DIR/<filename>. 404 (in the
+ * envelope) when there is no current release or the file is missing on disk.
+ * The path is built from path.basename(stored filename) only (see
+ * agentRelease.resolveFile), so a crafted filename can never path-traverse.
+ */
+async function download(req, res) {
+    try {
+        const rel = await agentRelease.currentRelease(db);
+        if (!rel || !rel.filename) {
+            return R.errorResponse(res, 'No agent release is currently published.', 404);
+        }
+        const filePath = agentRelease.resolveFile(rel.filename);
+        if (!filePath) {
+            return R.errorResponse(res, 'Release file name is invalid.', 404);
+        }
+
+        let stat;
+        try {
+            stat = fs.statSync(filePath);
+        } catch (e) {
+            return R.errorResponse(res, 'Release file not found on the server.', 404);
+        }
+        if (!stat.isFile()) {
+            return R.errorResponse(res, 'Release file not found on the server.', 404);
+        }
+
+        const downloadName = path.basename(rel.filename);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Length', String(stat.size));
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+        if (rel.sha256) res.setHeader('X-Agent-Sha256', String(rel.sha256));
+        res.setHeader('X-Agent-Version', String(rel.version || ''));
+
+        const stream = fs.createReadStream(filePath);
+        stream.on('error', (e) => {
+            console.error('AgentController.download stream error:', e);
+            // Headers may already be sent (binary streaming); just tear down.
+            if (!res.headersSent) {
+                return R.errorResponse(res, 'Could not read the release file.', 500);
+            }
+            res.destroy(e);
+        });
+        return stream.pipe(res);
+    } catch (err) {
+        console.error('AgentController.download error:', err);
+        if (!res.headersSent) {
+            return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+        }
+        return res.end();
+    }
+}
+
+module.exports = { activate, heartbeat, pending, result, importFromTally, getCommands, commandResult, getVersion, download };

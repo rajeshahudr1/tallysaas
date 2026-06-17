@@ -77,6 +77,15 @@ async function summary(req, res) {
         const companyId   = req.companyId;
         const monthStart  = firstOfThisMonth();
 
+        // Per-user location scoping (Requirement C). A location-restricted user
+        // sees ONLY their location's figures; unrestricted (locationId null) →
+        // the whole company. `loc(qb, col)` adds the location filter when set and
+        // is a no-op otherwise. Applied to the location-bearing tables ONLY —
+        // customers, suppliers and invoices carry location_id; products, payments
+        // and tally_sync_logs do NOT, so they stay company-wide.
+        const locationId = req.locationId;
+        const loc = (qb, col) => (locationId != null ? qb.where(col, locationId) : qb);
+
         // Optional dashboard date range (from the header date-range picker).
         // When both are valid YYYY-MM-DD (from ≤ to), the date-sensitive money
         // metrics + recent invoices scope to [from, to]; otherwise their
@@ -87,13 +96,16 @@ async function summary(req, res) {
 
         const todaySalesQ = db('invoices').where('company_id', companyId)
             .whereNull('deleted_at').where('type', 'sales').whereNot('status', 'failed');
+        loc(todaySalesQ, 'location_id');
         if (hasRange) todaySalesQ.whereBetween('invoice_date', [from, to]);
         else todaySalesQ.where('invoice_date', '>=', monthStart);
 
         const invoiceAmountQ = db('invoices').where('company_id', companyId)
             .whereNull('deleted_at').where('type', 'sales');
+        loc(invoiceAmountQ, 'location_id');
         if (hasRange) invoiceAmountQ.whereBetween('invoice_date', [from, to]);
 
+        // payments has NO location_id column → never location-filtered.
         const paymentReceivedQ = db('payments').where('company_id', companyId)
             .whereNull('deleted_at').where('type', 'receipt');
         if (hasRange) paymentReceivedQ.whereBetween('payment_date', [from, to]);
@@ -103,6 +115,7 @@ async function summary(req, res) {
             .where('invoices.company_id', companyId)
             .whereNull('invoices.deleted_at')
             .where('invoices.type', 'sales');
+        loc(recentInvoicesQ, 'invoices.location_id');
         if (hasRange) recentInvoicesQ.whereBetween('invoices.invoice_date', [from, to]);
         recentInvoicesQ.orderBy('invoices.id', 'desc').limit(6).select(
             'invoices.invoice_no',
@@ -134,29 +147,30 @@ async function summary(req, res) {
             // ── counts ──────────────────────────────────────────────
             db('companies').whereNull('deleted_at').count('id as c').first(),
 
-            db('customers').where('company_id', companyId)
-                .whereNull('deleted_at').count('id as c').first(),
+            loc(db('customers').where('company_id', companyId)
+                .whereNull('deleted_at'), 'location_id').count('id as c').first(),
 
+            // products has NO location_id → company-wide count always.
             db('products').where('company_id', companyId)
                 .whereNull('deleted_at').count('id as c').first(),
 
-            db('suppliers').where('company_id', companyId)
-                .whereNull('deleted_at').count('id as c').first(),
+            loc(db('suppliers').where('company_id', companyId)
+                .whereNull('deleted_at'), 'location_id').count('id as c').first(),
 
             // today_sales — sales total for the selected range (else this month).
             todaySalesQ.sum('total as s').first(),
 
             // pending_sync parts (summed below).
-            db('customers').where('company_id', companyId)
-                .whereNull('deleted_at').whereNull('tally_guid')
+            loc(db('customers').where('company_id', companyId)
+                .whereNull('deleted_at').whereNull('tally_guid'), 'location_id')
                 .count('id as c').first(),
 
             db('products').where('company_id', companyId)
                 .whereNull('deleted_at').whereNull('tally_guid')
                 .count('id as c').first(),
 
-            db('invoices').where('company_id', companyId)
-                .whereNull('deleted_at').where('status', 'pending_tally')
+            loc(db('invoices').where('company_id', companyId)
+                .whereNull('deleted_at').where('status', 'pending_tally'), 'location_id')
                 .count('id as c').first(),
 
             db('payments').where('company_id', companyId)
@@ -175,9 +189,9 @@ async function summary(req, res) {
             paymentReceivedQ.sum('amount as s').first(),
 
             // ── sales_chart — monthly sales totals, grouped by month bucket ──
-            db('invoices').where('company_id', companyId)
+            loc(db('invoices').where('company_id', companyId)
                 .whereNull('deleted_at').where('type', 'sales')
-                .where('invoice_date', '>=', db.raw("date_trunc('month', now()) - interval '11 months'"))
+                .where('invoice_date', '>=', db.raw("date_trunc('month', now()) - interval '11 months'")), 'location_id')
                 .select(db.raw("date_trunc('month', invoice_date) as m"))
                 .sum('total as s')
                 .groupByRaw("date_trunc('month', invoice_date)"),

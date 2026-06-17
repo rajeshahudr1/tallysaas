@@ -31,6 +31,15 @@ _DEFAULT_API_URL = "http://localhost:4500/api/v1"
 _DEFAULT_SYNC_INTERVAL = 60
 _DEFAULT_LOG_LEVEL = "INFO"
 _DEFAULT_AGENT_VERSION = "1.0.0"
+# Auto-update (Requirement 2). auto_update: master on/off for self-update (the
+# CLOUD per-license toggle overrides this when the version endpoint provides it).
+# update_check_cycles: check for a new exe once at startup, then every N loop
+# cycles (~N minutes at the default 60s interval). confirm_updates: only prompts
+# when running INTERACTIVELY (a real terminal); headless/background runs always
+# apply automatically (the whole point of unattended auto-update).
+_DEFAULT_AUTO_UPDATE = True
+_DEFAULT_UPDATE_CHECK_CYCLES = 30
+_DEFAULT_CONFIRM_UPDATES = False
 _DEFAULT_TALLY_URL = "http://localhost:9000"
 _DEFAULT_TALLY_AUTO_START = True
 # tally_exe: empty → the agent auto-detects TallyPrime in the usual install
@@ -91,6 +100,11 @@ class Config:
         self.agent_version: str = _DEFAULT_AGENT_VERSION
         self.machine_id: str = ""
 
+        # Auto-update settings (the [agent] section; see defaults above).
+        self.auto_update: bool = _DEFAULT_AUTO_UPDATE
+        self.update_check_cycles: int = _DEFAULT_UPDATE_CHECK_CYCLES
+        self.confirm_updates: bool = _DEFAULT_CONFIRM_UPDATES
+
         # Tally connectivity + auto-start (the [tally] section).
         self.tally_url: str = _DEFAULT_TALLY_URL
         self.tally_exe: str = _DEFAULT_TALLY_EXE
@@ -131,6 +145,23 @@ class Config:
             cfg.sync_interval = _DEFAULT_SYNC_INTERVAL
         if cfg.sync_interval <= 0:
             cfg.sync_interval = _DEFAULT_SYNC_INTERVAL
+
+        # Auto-update settings (booleans + the check cadence). All tolerant of a
+        # bad value (fall back to the default) so a typo never stops the agent.
+        try:
+            cfg.auto_update = agent.getboolean("auto_update", _DEFAULT_AUTO_UPDATE)
+        except ValueError:
+            cfg.auto_update = _DEFAULT_AUTO_UPDATE
+        try:
+            cfg.confirm_updates = agent.getboolean("confirm_updates", _DEFAULT_CONFIRM_UPDATES)
+        except ValueError:
+            cfg.confirm_updates = _DEFAULT_CONFIRM_UPDATES
+        try:
+            cfg.update_check_cycles = agent.getint("update_check_cycles", _DEFAULT_UPDATE_CHECK_CYCLES)
+        except ValueError:
+            cfg.update_check_cycles = _DEFAULT_UPDATE_CHECK_CYCLES
+        if cfg.update_check_cycles <= 0:
+            cfg.update_check_cycles = _DEFAULT_UPDATE_CHECK_CYCLES
 
         # Tally section — connectivity + auto-start.
         tally = cfg._parser[_TALLY_SECTION]
@@ -187,6 +218,9 @@ class Config:
         agent["sync_interval"] = str(self.sync_interval)
         agent["log_level"] = self.log_level
         agent["agent_version"] = self.agent_version
+        agent["auto_update"] = "on" if self.auto_update else "off"
+        agent["update_check_cycles"] = str(self.update_check_cycles)
+        agent["confirm_updates"] = "on" if self.confirm_updates else "off"
 
         tally = self._parser[_TALLY_SECTION]
         tally["tally_url"] = self.tally_url

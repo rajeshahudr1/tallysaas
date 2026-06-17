@@ -3,16 +3,22 @@
  * views/tally-sync/dashboard.ejs — TALLY SYNC · Sync Dashboard.
  * Route: GET /sync-dashboard  ·  activeMenu: 'sync-dash'.
  *
- * The product's hub: live connection banner, 4 headline stat cards,
- * a per-module sync table (counts + per-row Sync button), and a
- * Recent Sync Activity list. Sync buttons get a demo spinner from
- * /js/app.js ([data-sync-btn]).
+ * The product's hub: LIVE connection banner (auto-refreshed by
+ * /js/sync-dashboard.js polling /sync-dashboard.json every 15s, no
+ * page reload), 4 headline stat cards, a per-module sync table (ALL
+ * modules, counts + progress + per-module Sync button), and a Recent
+ * Sync Activity list.
+ *
+ * Stable ids/data-attrs the poller updates IN PLACE:
+ *   #sync-conn-card / #sync-conn-dot / #sync-conn-text   (banner)
+ *   #stat-connection #stat-last-sync #stat-total #stat-failed (cards)
+ *   tr[data-module-key] with .js-synced/.js-pending/.js-failed/.js-bar/.js-pct/.js-lastsync
  *
  * Expected locals (routes/web.js → res.render):
  *   syncSummary { connected, agent_version, tally_version, company,
  *                 last_heartbeat, last_sync }
  *   syncStats   [{label,value,icon,tone}]              — 4 cards
- *   syncModules [{module,total,synced,pending,failed,last_sync}]
+ *   syncModules [{key,module,total,synced,pending,failed,pct,last_sync}]
  *   recentSync  [{module,record,status,time, …}]       — activity list
  * ─────────────────────────────────────────────────────────── */
 
@@ -22,6 +28,19 @@ var _modules = (typeof syncModules !== 'undefined' && syncModules) ? syncModules
 var _recent  = (typeof recentSync !== 'undefined' && recentSync) ? recentSync : [];
 var _connected = !!_sum.connected;
 
+/* Auto-update surface (Requirement 3). */
+var _latestVer       = _sum.latest_version || '';
+var _updateAvailable = !!_sum.update_available;
+var _mandatoryUpdate = !!_sum.mandatory_update;
+var _autoUpdate      = _sum.auto_update !== false;   /* default ON */
+
+/* Auto-sync DIRECTION toggles (Requirement 1) — default ON when absent. */
+var _pushEnabled = _sum.push_enabled !== false;
+var _pullEnabled = _sum.pull_enabled !== false;
+
+/* Active company (header switcher) for the "Open in Tally" connect button. */
+var _activeCompany = (typeof activeCompany !== 'undefined' && activeCompany) ? activeCompany : null;
+
 function _syncPill(v) {
     var s = String(v || '').toLowerCase();
     if (s === 'synced')  return 'pill-status--success';
@@ -30,6 +49,15 @@ function _syncPill(v) {
     return 'pill-status--muted';
 }
 function _cntCls(n) { return n > 0 ? '' : 'cnt-zero'; }
+/* Map a stat label → the id the poller targets (so values refresh in place). */
+function _statId(label) {
+    var s = String(label || '').toLowerCase();
+    if (s.indexOf('connection') === 0) return 'stat-connection';
+    if (s.indexOf('last sync')  === 0) return 'stat-last-sync';
+    if (s.indexOf('total')      === 0) return 'stat-total';
+    if (s.indexOf('failed')     === 0) return 'stat-failed';
+    return '';
+}
 %>
 
 <%- include('../partials/page-head', {
@@ -44,56 +72,151 @@ function _cntCls(n) { return n > 0 ? '' : 'cnt-zero'; }
     ],
 }) %>
 
-<!-- ── Connection banner ─────────────────────────────────────── -->
-<div class="sync-conn <%= _connected ? 'is-connected' : 'is-disconnected' %>">
+<!-- ── Connection banner (LIVE — auto-refreshed by /js/sync-dashboard.js) ── -->
+<div id="sync-conn-card" class="sync-conn <%= _connected ? 'is-connected' : 'is-disconnected' %>">
     <span class="sync-conn-icon">
         <i class="fa-solid <%= _connected ? 'fa-plug-circle-check' : 'fa-plug-circle-xmark' %>"></i>
     </span>
     <div class="sync-conn-main">
         <div class="sync-conn-title">
-            <% if (_connected) { %><span class="sync-conn-dot"></span><% } %>
-            Local Sync Agent <%= _connected ? 'Connected' : 'Disconnected' %>
+            <span id="sync-conn-dot" class="sync-conn-dot <%= _connected ? 'is-on' : 'is-off' %>"></span>
+            Local Sync Agent <span id="sync-conn-text"><%= _connected ? 'Connected' : 'Disconnected' %></span>
         </div>
         <div class="sync-conn-meta">
-            <span>Agent <b><%= _sum.agent_version || '—' %></b></span>
+            <span>Agent <b id="sync-conn-agent"><%= _sum.agent_version || '—' %></b>
+                <span id="sync-update-badge" class="sync-update-badge"<% if (!_updateAvailable) { %> style="display:none"<% } %>>
+                    Update available<% if (_latestVer) { %>: v<span id="sync-latest-ver"><%= _latestVer %></span><% } else { %><span id="sync-latest-ver" style="display:none"></span><% } %>
+                </span>
+            </span>
             <span><b><%= _sum.tally_version || 'Tally' %></b></span>
-            <span>Company <b><%= _sum.company || '—' %></b></span>
-            <span>Heartbeat <b><%= _sum.last_heartbeat || '—' %></b></span>
-            <span>Last sync <b><%= _sum.last_sync || '—' %></b></span>
+            <span>Company <b id="sync-conn-company"><%= _sum.company || '—' %></b></span>
+            <span>Heartbeat <b id="sync-conn-heartbeat"><%= _sum.last_heartbeat || '—' %></b></span>
+            <span>Last sync <b id="sync-conn-lastsync"><%= _sum.last_sync || '—' %></b></span>
         </div>
     </div>
     <div class="sync-conn-actions">
-        <button type="button" class="btn btn-light" data-sync-btn>
-            <i class="fa-solid fa-plug me-1"></i>Test Connection
+        <form method="post" action="/sync-retry" class="d-inline">
+            <button type="submit" class="btn btn-light">
+                <i class="fa-solid fa-rotate me-1"></i>Sync Now
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- ── Not-connected ALERT (Requirement 3) ──────────────────────
+     Shown only while the agent is DISCONNECTED. The 15s poller (and the
+     "Test Connection" button) toggle [hidden] the moment a heartbeat lands,
+     so it disappears automatically once connected. -->
+<div id="sync-disconnected-alert" class="sync-alert"<% if (_connected) { %> hidden<% } %>
+     data-company-id="<%= _activeCompany ? _activeCompany.id : '' %>">
+    <span class="sync-alert-icon"><i class="fa-solid fa-triangle-exclamation"></i></span>
+    <div class="sync-alert-main">
+        <div class="sync-alert-title">Tally agent not connected</div>
+        <div class="sync-alert-text">
+            No heartbeat from the local Sync Agent in the last few minutes. Start the
+            <b>Tally Cloud Sync Agent</b> on the PC running Tally and make sure Tally is open.
+            Manual syncs you trigger now will still be queued and run as soon as the agent reconnects.
+        </div>
+    </div>
+    <div class="sync-alert-actions">
+        <button type="button" class="btn btn-light btn-sm" id="sync-test-conn">
+            <i class="fa-solid fa-rotate me-1"></i>Test Connection
         </button>
+        <% if (_activeCompany && _activeCompany.id) { %>
+            <form method="post" action="/open-in-tally/<%= _activeCompany.id %>" class="d-inline">
+                <button type="submit" class="btn btn-primary btn-sm" id="sync-open-tally">
+                    <i class="fa-solid fa-up-right-from-square me-1"></i>Open in Tally
+                </button>
+            </form>
+        <% } %>
+    </div>
+</div>
+
+<!-- ── Agent auto-update (version + ON/OFF toggle + Update now) ── -->
+<div class="card sync-update-card mb-3">
+    <div class="sync-update-info">
+        <span class="sync-update-icon"><i class="fa-solid fa-cloud-arrow-down"></i></span>
+        <div>
+            <div class="sync-update-title">
+                Sync Agent <b id="sync-update-version"><%= _sum.agent_version ? ('v' + _sum.agent_version) : '—' %></b>
+                <span id="sync-update-latest" class="sync-update-latest"<% if (!_updateAvailable || !_latestVer) { %> style="display:none"<% } %>>
+                    → latest v<span class="sync-update-latest-ver"><%= _latestVer %></span>
+                </span>
+            </div>
+            <div class="sync-update-hint" id="sync-update-hint">
+                <% if (_updateAvailable) { %>A newer version is available.<% if (_autoUpdate) { %> It will update automatically.<% } else if (_mandatoryUpdate) { %> A mandatory update will be applied even with auto-update off.<% } else { %> Auto-update is off — use “Update now”.<% } %><% } else { %>The agent is up to date.<% } %>
+            </div>
+        </div>
+    </div>
+    <div class="sync-update-controls">
+        <div class="form-check form-switch mb-0" title="When ON, the agent installs new versions automatically.">
+            <input class="form-check-input" type="checkbox" role="switch" id="sync-auto-update-toggle" <%= _autoUpdate ? 'checked' : '' %>>
+            <label class="form-check-label" for="sync-auto-update-toggle">Auto-update</label>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="sync-update-now"<% if (!_updateAvailable) { %> disabled<% } %>>
+            <i class="fa-solid fa-download me-1"></i>Update now
+        </button>
+    </div>
+</div>
+
+<!-- ── Auto-sync DIRECTION toggles (Requirement 1) ──────────────
+     Per-license switches that gate ONLY the agent's automatic loop. The MANUAL
+     per-module buttons below are independent and always work. -->
+<div class="card sync-update-card mb-3">
+    <div class="sync-update-info">
+        <span class="sync-update-icon"><i class="fa-solid fa-arrows-rotate"></i></span>
+        <div>
+            <div class="sync-update-title">Automatic Sync Direction</div>
+            <div class="sync-update-hint">
+                Controls only the agent's <b>automatic</b> background sync. Manual
+                “Sync to/from Tally” buttons below always work, even when a direction is off.
+            </div>
+        </div>
+    </div>
+    <div class="sync-update-controls">
+        <div class="form-check form-switch mb-0" title="When ON, the agent automatically pushes cloud changes to Tally.">
+            <input class="form-check-input" type="checkbox" role="switch" id="sync-push-toggle" data-direction="push" <%= _pushEnabled ? 'checked' : '' %>>
+            <label class="form-check-label" for="sync-push-toggle">
+                <i class="fa-solid fa-cloud-arrow-up me-1"></i>Auto push (Cloud → Tally)
+            </label>
+        </div>
+        <div class="form-check form-switch mb-0" title="When ON, the agent automatically pulls Tally changes into the cloud.">
+            <input class="form-check-input" type="checkbox" role="switch" id="sync-pull-toggle" data-direction="pull" <%= _pullEnabled ? 'checked' : '' %>>
+            <label class="form-check-label" for="sync-pull-toggle">
+                <i class="fa-solid fa-cloud-arrow-down me-1"></i>Auto pull (Tally → Cloud)
+            </label>
+        </div>
     </div>
 </div>
 
 <!-- ── Headline stat cards ───────────────────────────────────── -->
 <section class="stat-grid mb-3">
     <% _stats.forEach(function (s) { %>
+        <% var _sid = _statId(s.label); %>
         <article class="stat-card stat-card--<%= s.tone %>">
             <div class="stat-card-top">
                 <span class="stat-icon"><i class="fa-solid <%= s.icon %>"></i></span>
             </div>
             <div>
                 <div class="stat-label"><%= s.label %></div>
-                <div class="stat-value"><%= s.value %></div>
+                <div class="stat-value"<% if (_sid) { %> id="<%= _sid %>"<% } %>><%= s.value %></div>
             </div>
         </article>
     <% }); %>
 </section>
 
-<!-- ── Module-wise sync ──────────────────────────────────────── -->
+<!-- ── Module-wise sync (ALL modules) ────────────────────────── -->
 <div class="card mb-3">
     <div class="inv-section-head">
         <h2 class="inv-section-title"><i class="fa-solid fa-layer-group me-2 text-primary"></i>Module-wise Sync</h2>
-        <button type="button" class="btn btn-primary btn-sm" data-sync-btn>
-            <i class="fa-solid fa-rotate me-1"></i>Sync All
-        </button>
+        <form method="post" action="/sync-retry" class="d-inline">
+            <button type="submit" class="btn btn-primary btn-sm">
+                <i class="fa-solid fa-rotate me-1"></i>Sync All
+            </button>
+        </form>
     </div>
     <div class="table-responsive data-table-wrap">
-        <table class="table data-table align-middle mb-0">
+        <table class="table data-table align-middle mb-0" id="sync-modules-table">
             <thead>
                 <tr>
                     <th>Module</th>
@@ -108,24 +231,33 @@ function _cntCls(n) { return n > 0 ? '' : 'cnt-zero'; }
             </thead>
             <tbody>
                 <% _modules.forEach(function (m) { %>
-                    <% var pct = m.total ? Math.round((m.synced / m.total) * 100) : 0; %>
-                    <tr>
+                    <% var pct = (m.pct != null) ? m.pct : (m.total ? Math.round((m.synced / m.total) * 100) : 0); %>
+                    <tr data-module-key="<%= m.key || '' %>">
                         <td><strong><%= m.module %></strong></td>
-                        <td class="text-center text-muted"><%= m.total.toLocaleString('en-IN') %></td>
-                        <td class="text-center"><span class="cnt cnt-ok"><%= m.synced.toLocaleString('en-IN') %></span></td>
+                        <td class="text-center text-muted js-total"><%= m.total.toLocaleString('en-IN') %></td>
+                        <td class="text-center"><span class="cnt cnt-ok js-synced"><%= m.synced.toLocaleString('en-IN') %></span></td>
                         <td>
                             <div class="d-flex align-items-center gap-2">
-                                <span class="sync-bar"><span style="width:<%= pct %>%"></span></span>
-                                <span class="text-muted" style="font-size:12px"><%= pct %>%</span>
+                                <span class="sync-bar"><span class="js-bar" style="width:<%= pct %>%"></span></span>
+                                <span class="text-muted js-pct" style="font-size:12px"><%= pct %>%</span>
                             </div>
                         </td>
-                        <td class="text-center"><span class="cnt cnt-warn <%= _cntCls(m.pending) %>"><%= m.pending %></span></td>
-                        <td class="text-center"><span class="cnt cnt-bad <%= _cntCls(m.failed) %>"><%= m.failed %></span></td>
-                        <td class="text-muted" style="font-size:13px"><%= m.last_sync %></td>
+                        <td class="text-center"><span class="cnt cnt-warn js-pending <%= _cntCls(m.pending) %>"><%= m.pending %></span></td>
+                        <td class="text-center"><span class="cnt cnt-bad js-failed <%= _cntCls(m.failed) %>"><%= m.failed %></span></td>
+                        <td class="text-muted js-lastsync" style="font-size:13px"><%= m.last_sync %></td>
                         <td class="text-end">
-                            <button type="button" class="btn-sync-row" data-sync-btn>
-                                <i class="fa-solid fa-rotate"></i> Sync
-                            </button>
+                            <div class="sync-row-actions">
+                                <form method="post" action="/sync-pull/<%= m.key || '' %>" class="d-inline js-sync-form" data-direction="pull">
+                                    <button type="submit" class="btn-sync-row btn-sync-row--pull" title="Sync from Tally (import into cloud)">
+                                        <i class="fa-solid fa-cloud-arrow-down"></i> From Tally
+                                    </button>
+                                </form>
+                                <form method="post" action="/sync-retry/<%= m.key || '' %>" class="d-inline js-sync-form" data-direction="push">
+                                    <button type="submit" class="btn-sync-row btn-sync-row--push" title="Sync to Tally (push to Tally)">
+                                        <i class="fa-solid fa-cloud-arrow-up"></i> To Tally
+                                    </button>
+                                </form>
+                            </div>
                         </td>
                     </tr>
                 <% }); %>
@@ -156,3 +288,63 @@ function _cntCls(n) { return n > 0 ? '' : 'cnt-zero'; }
         <% }); %>
     </ul>
 </div>
+
+<style>
+    /* Connection dot colour reflects the LIVE state (toggled by the poller). */
+    .sync-conn-dot.is-off { background: #9ca3af; box-shadow: none; }
+
+    /* "Update available" badge next to the agent version in the banner. */
+    .sync-update-badge {
+        display: inline-block; margin-left: 6px; padding: 1px 8px;
+        font-size: 11px; font-weight: 600; line-height: 1.6;
+        color: #92400e; background: #fef3c7; border: 1px solid #fde68a;
+        border-radius: 999px; vertical-align: middle;
+    }
+
+    /* Auto-update card: version + ON/OFF switch + Update-now button. */
+    .sync-update-card {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; flex-wrap: wrap; padding: 14px 18px;
+    }
+    .sync-update-info { display: flex; align-items: center; gap: 12px; }
+    .sync-update-icon {
+        width: 38px; height: 38px; display: inline-flex; align-items: center;
+        justify-content: center; border-radius: 10px;
+        background: #eef2ff; color: #4f46e5; font-size: 16px; flex: 0 0 auto;
+    }
+    .sync-update-title { font-size: 14px; font-weight: 600; }
+    .sync-update-latest { color: #b45309; font-weight: 600; }
+    .sync-update-hint { font-size: 12px; color: #6b7280; margin-top: 2px; }
+    .sync-update-controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .sync-update-controls .form-check-label { font-size: 13px; font-weight: 500; }
+
+    /* Not-connected alert banner (Requirement 3). */
+    .sync-alert {
+        display: flex; align-items: flex-start; gap: 14px;
+        padding: 14px 18px; margin-bottom: 16px;
+        background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid #ef4444;
+        border-radius: 12px;
+    }
+    .sync-alert[hidden] { display: none !important; }
+    .sync-alert-icon {
+        width: 38px; height: 38px; flex: 0 0 auto; display: inline-flex;
+        align-items: center; justify-content: center; border-radius: 10px;
+        background: #fee2e2; color: #dc2626; font-size: 16px;
+    }
+    .sync-alert-main { flex: 1 1 auto; min-width: 0; }
+    .sync-alert-title { font-size: 14px; font-weight: 700; color: #991b1b; }
+    .sync-alert-text { font-size: 12.5px; color: #7f1d1d; margin-top: 2px; }
+    .sync-alert-actions {
+        display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+        flex-wrap: wrap; align-self: center;
+    }
+
+    /* Per-module 2-way buttons (Requirement 2). */
+    .sync-row-actions { display: inline-flex; gap: 6px; justify-content: flex-end; }
+    .btn-sync-row--pull { color: #2563eb; }
+    .btn-sync-row--push { color: #0d9488; }
+    .btn-sync-row[disabled] { opacity: .6; cursor: default; }
+
+    /* Friendly "queued — will run when reconnected" note while disconnected. */
+    .is-disconnected-warn .btn-sync-row { box-shadow: inset 0 0 0 1px #fde68a; }
+</style>

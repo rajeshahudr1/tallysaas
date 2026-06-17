@@ -14,6 +14,9 @@ const createRoleSchema = Joi.object({
         'any.required': 'Role name is required.',
     }),
     slugs: slugList,   // optional initial permission slugs (filtered to entitled)
+    // Super-admin only: target license for the new role (omitted/null = a global
+    // TEMPLATE role). Ignored for license-admins (their own license is used).
+    license_id: Joi.number().integer().positive().allow(null),
 });
 
 const updateRoleSchema = Joi.object({

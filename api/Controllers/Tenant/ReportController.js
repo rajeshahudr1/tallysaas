@@ -57,6 +57,9 @@ function buildBase(req) {
         .where('invoices.type', 'sales')
         .whereNull('invoices.deleted_at');
 
+    // Per-user location scoping: restrict to the user's location when set.
+    if (req.locationId != null) qb = qb.where('invoices.location_id', req.locationId);
+
     const status     = (req.query.status || '').trim();
     const customerId = req.query.customer_id;
     const dateFrom   = req.query.date_from;
@@ -133,6 +136,9 @@ async function dayBook(req, res) {
             .leftJoin('customers', 'customers.id', 'invoices.customer_id')
             .leftJoin('suppliers', 'suppliers.id', 'invoices.supplier_id')
             .where('invoices.company_id', cid).whereNull('invoices.deleted_at');
+        // Location scoping: invoices carry location_id (payments do not, so the
+        // receipt/payment side of the day book stays company-wide).
+        if (req.locationId != null) invQ = invQ.where('invoices.location_id', req.locationId);
         if (df) invQ = invQ.where('invoices.invoice_date', '>=', df);
         if (dt) invQ = invQ.where('invoices.invoice_date', '<=', dt);
         const invoices = await invQ.select(
@@ -191,10 +197,16 @@ async function outstanding(req, res) {
         const invType = payable ? 'purchase' : 'sales';
         const payType = payable ? 'payment' : 'receipt';
 
-        const parties = await db(partyTable).where('company_id', cid).whereNull('deleted_at')
-            .select('id', 'name', 'gst_number', 'opening_balance');
-        const inv = await db('invoices').where({ company_id: cid, type: invType }).whereNull('deleted_at')
-            .groupBy(fkCol).select(fkCol).sum('total as t');
+        // Location scoping: customers/suppliers and invoices carry location_id;
+        // payments do not (kept company-wide).
+        const partiesQ = db(partyTable).where('company_id', cid).whereNull('deleted_at');
+        if (req.locationId != null) partiesQ.where('location_id', req.locationId);
+        const parties = await partiesQ.select('id', 'name', 'gst_number', 'opening_balance');
+
+        const invQ = db('invoices').where({ company_id: cid, type: invType }).whereNull('deleted_at');
+        if (req.locationId != null) invQ.where('location_id', req.locationId);
+        const inv = await invQ.groupBy(fkCol).select(fkCol).sum('total as t');
+
         const pay = await db('payments').where({ company_id: cid, type: payType }).whereNull('deleted_at')
             .groupBy(fkCol).select(fkCol).sum('amount as t');
 
@@ -235,6 +247,8 @@ async function gstSummary(req, res) {
         const df = req.query.date_from, dt = req.query.date_to;
         async function agg(type) {
             let q = db('invoices').where({ company_id: cid, type }).whereNull('deleted_at');
+            // Location scoping: invoices carry location_id.
+            if (req.locationId != null) q = q.where('location_id', req.locationId);
             if (df) q = q.where('invoice_date', '>=', df);
             if (dt) q = q.where('invoice_date', '<=', dt);
             const r = await q.count('id as count').sum('taxable as taxable')
@@ -305,13 +319,18 @@ async function partyLedger(req, res) {
         const table = isCustomer ? 'customers' : 'suppliers';
         const fkCol = isCustomer ? 'customer_id' : 'supplier_id';
 
-        const party = await db(table).where({ id: partyId, company_id: cid }).whereNull('deleted_at')
-            .first('name', 'gst_number', 'opening_balance');
+        // Location scoping: a restricted user may only open a party / invoices in
+        // their own location (payments carry no location_id → company-wide).
+        const partyQ = db(table).where({ id: partyId, company_id: cid }).whereNull('deleted_at');
+        if (req.locationId != null) partyQ.where('location_id', req.locationId);
+        const party = await partyQ.first('name', 'gst_number', 'opening_balance');
         if (!party) return R.errorResponse(res, 'Party not found.', 404);
 
-        const invoices = await db('invoices')
+        const invoicesQ = db('invoices')
             .where({ company_id: cid, type: isCustomer ? 'sales' : 'purchase', [fkCol]: partyId })
-            .whereNull('deleted_at').select('invoice_date as date', 'invoice_no as ref', 'total');
+            .whereNull('deleted_at');
+        if (req.locationId != null) invoicesQ.where('location_id', req.locationId);
+        const invoices = await invoicesQ.select('invoice_date as date', 'invoice_no as ref', 'total');
         const pays = await db('payments')
             .where({ company_id: cid, type: isCustomer ? 'receipt' : 'payment', [fkCol]: partyId })
             .whereNull('deleted_at').select('payment_date as date', 'voucher_no as ref', 'amount');
@@ -352,18 +371,26 @@ async function partyLedger(req, res) {
 /* Shared financial aggregates (derived from cloud transactions). These are an
  * approximation of a full ledger — Tally keeps the authoritative double entry;
  * the cloud derives the headline figures from its invoices/payments/masters. */
-async function financialBase(cid) {
+async function financialBase(cid, locationId = null) {
+    // Location scoping: invoices + customers/suppliers carry location_id, so they
+    // are filtered for a location-restricted user; payments and products have NO
+    // location_id and stay company-wide.
     const invSum = async (type, col) => {
-        const r = await db('invoices').where({ company_id: cid, type }).whereNull('deleted_at').sum(`${col} as t`).first();
+        const q = db('invoices').where({ company_id: cid, type }).whereNull('deleted_at');
+        if (locationId != null) q.where('location_id', locationId);
+        const r = await q.sum(`${col} as t`).first();
         return money(r && r.t);
     };
     const paySum = async (type) => {
         const r = await db('payments').where({ company_id: cid, type }).whereNull('deleted_at').sum('amount as t').first();
         return money(r && r.t);
     };
-    const sumExpr = async (table, expr) => {
-        const r = await db(table).where({ company_id: cid }).whereNull('deleted_at')
-            .select(db.raw(`COALESCE(SUM(${expr}),0) as t`)).first();
+    // `locationScoped` flags tables that carry location_id (customers/suppliers
+    // do; products does not).
+    const sumExpr = async (table, expr, locationScoped = false) => {
+        const q = db(table).where({ company_id: cid }).whereNull('deleted_at');
+        if (locationScoped && locationId != null) q.where('location_id', locationId);
+        const r = await q.select(db.raw(`COALESCE(SUM(${expr}),0) as t`)).first();
         return money(r && r.t);
     };
 
@@ -375,9 +402,9 @@ async function financialBase(cid) {
     const purchTotal    = await invSum('purchase', 'total');
     const receipts      = await paySum('receipt');
     const payments      = await paySum('payment');
-    const custOpen      = await sumExpr('customers', 'opening_balance');
-    const supOpen       = await sumExpr('suppliers', 'opening_balance');
-    const stockValue    = await sumExpr('products', 'sales_price * opening_stock');
+    const custOpen      = await sumExpr('customers', 'opening_balance', true);
+    const supOpen       = await sumExpr('suppliers', 'opening_balance', true);
+    const stockValue    = await sumExpr('products', 'sales_price * opening_stock');   // no location_id
 
     return {
         salesTaxable, salesTax, salesTotal, purchTaxable, purchTax, purchTotal,
@@ -392,7 +419,7 @@ async function financialBase(cid) {
 /** GET /reports/trial-balance — derived ledger-group Dr/Cr balances. */
 async function trialBalance(req, res) {
     try {
-        const f = await financialBase(req.companyId);
+        const f = await financialBase(req.companyId, req.locationId);
         const rows = [
             { ledger: 'Sundry Debtors',     debit: Math.max(0, f.receivables), credit: Math.max(0, -f.receivables) },
             { ledger: 'Sundry Creditors',   debit: 0, credit: f.payables },
@@ -425,7 +452,7 @@ async function trialBalance(req, res) {
 /** GET /reports/profit-loss — derived trading + P&L (Expenses | Income). */
 async function profitLoss(req, res) {
     try {
-        const f = await financialBase(req.companyId);
+        const f = await financialBase(req.companyId, req.locationId);
         const left = [{ label: 'Purchases', amount: f.purchTaxable }];   // Dr side
         const right = [{ label: 'Sales', amount: f.salesTaxable }];      // Cr side
         const profit = f.grossProfit;
@@ -446,7 +473,7 @@ async function profitLoss(req, res) {
 /** GET /reports/balance-sheet — derived Balance Sheet (Liabilities | Assets). */
 async function balanceSheet(req, res) {
     try {
-        const f = await financialBase(req.companyId);
+        const f = await financialBase(req.companyId, req.locationId);
         const liabilities = [
             { label: 'Sundry Creditors', amount: f.payables },
             { label: 'Profit & Loss A/c', amount: f.grossProfit },

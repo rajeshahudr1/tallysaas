@@ -44,12 +44,51 @@
 
 const R  = require('./response');
 const db = require('../config/db').db;
+const { recordHistory } = require('./history');
 
 const OOPS_MSG = 'Oops..Something went wrong. Please try again.';
+
+// table name → history `module` slug (matches the route slugs, e.g.
+// 'sales_persons' → 'sales-persons'). Falls back to the table name with
+// underscores hyphenated so any future table still gets a sensible slug.
+function moduleSlug(table) {
+    const map = {
+        customers:        'customers',
+        suppliers:        'suppliers',
+        products:         'products',
+        categories:       'categories',
+        locations:        'locations',
+        sales_persons:    'sales-persons',
+        customer_groups:  'customer-groups',
+    };
+    return map[table] || String(table).replace(/_/g, '-');
+}
 
 // Pagination bounds — keep a misbehaving client from asking for a million rows.
 const DEFAULT_PER_PAGE = 20;
 const MAX_PER_PAGE     = 100;
+
+// Tables that carry a `location_id` column (verified against the migrations:
+// 20260101000011 customers, 20260101000012 suppliers, 20260101000015 inventory,
+// 20260101000016 invoices, 20260101000006 users, 20260101000026 stock_adjustments,
+// 20260101000009 sales_person_locations). When a request is location-restricted
+// (req.locationId is a number), the factory ADDS `.where(location_id, ...)` to
+// list/get/count and DEFAULTS the column on create. Tables NOT in this set
+// (products, payments, journals, categories, …) are unaffected — the filter is
+// silently skipped so company scoping is the only guard there.
+const LOCATION_SCOPED_TABLES = new Set([
+    'customers',
+    'suppliers',
+    'invoices',
+    'inventory',
+    'users',
+    'stock_adjustments',
+    'sales_person_locations',
+]);
+
+function tableHasLocation(table) {
+    return LOCATION_SCOPED_TABLES.has(table);
+}
 
 function build(config) {
     const {
@@ -77,15 +116,43 @@ function build(config) {
     }, sortable || {});
 
     // Fully-qualified column names so they stay unambiguous once joins exist.
-    const tenantColQualified  = `${table}.${tenantCol}`;
-    const deletedColQualified = `${table}.deleted_at`;
-    const idColQualified      = `${table}.id`;
+    const tenantColQualified   = `${table}.${tenantCol}`;
+    const deletedColQualified  = `${table}.deleted_at`;
+    const idColQualified       = `${table}.id`;
+    const locationColQualified = `${table}.location_id`;
+
+    // Does this table participate in per-user location scoping?
+    const hasLocation = tableHasLocation(table);
 
     // Base, company-scoped, not-soft-deleted query. `baseQuery` lets a resource
     // add joins/aliases; we always layer the tenant + deleted_at filters on top.
-    function scoped(companyId) {
+    // ADDITIVELY: when the caller is location-restricted (req.locationId is a
+    // number) AND this table carries a location_id column, we also pin
+    // location_id = req.locationId — company_id stays the primary tenant guard,
+    // location scope is layered on top and cannot widen what company scope allows.
+    function scoped(req) {
         const qb = baseQuery ? baseQuery(db) : db(table);
-        return qb.where(tenantColQualified, companyId).whereNull(deletedColQualified);
+        qb.where(tenantColQualified, req.companyId).whereNull(deletedColQualified);
+        if (hasLocation && req.locationId != null) {
+            qb.where(locationColQualified, req.locationId);
+        }
+        return qb;
+    }
+
+    // Ownership lookup for update/destroy on the BASE table (no label joins).
+    // Mirrors `scoped`'s guards (tenant + soft-delete + location) so a
+    // location-restricted user can neither update nor delete a row that belongs
+    // to another location — even by guessing its id. Returns the existing row or
+    // undefined (treated as not-found / not-owned by the caller).
+    function ownedRowQuery(req, id) {
+        const qb = db(table)
+            .where(tenantColQualified, req.companyId)
+            .whereNull(deletedColQualified)
+            .where(idColQualified, id);
+        if (hasLocation && req.locationId != null) {
+            qb.where(locationColQualified, req.locationId);
+        }
+        return qb;
     }
 
     function parsePagination(query) {
@@ -103,7 +170,7 @@ function build(config) {
             const search = (req.query.search || '').trim();
             const status = (req.query.status || '').trim();
 
-            let qb = scoped(req.companyId);
+            let qb = scoped(req);
 
             // Optional status filter (qualified to the base table).
             if (status) qb = qb.where(`${table}.status`, status);
@@ -148,7 +215,7 @@ function build(config) {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, notFound, 404);
         try {
-            const row = await scoped(req.companyId).where(idColQualified, id)
+            const row = await scoped(req).where(idColQualified, id)
                 .select(...listColumns).first();
             if (!row) return R.errorResponse(res, notFound, 404);
             return R.successResponse(res, row);
@@ -170,7 +237,33 @@ function build(config) {
             }
             // Always stamp the tenant id, even if buildInsert forgot it.
             const row = { [tenantCol]: req.companyId, ...buildInsert(req.body, req.companyId) };
+
+            // Location scoping on create: a location-restricted creator (a user
+            // pinned to one branch) can only create rows IN that branch. Force
+            // location_id = req.locationId when the table carries the column and
+            // the request is restricted — overriding any other value in the body
+            // so a restricted user can't plant a row in another location by
+            // passing a foreign id. Unrestricted callers (location_id null) keep
+            // whatever buildInsert produced (their chosen/blank location).
+            if (hasLocation && req.locationId != null) {
+                row.location_id = req.locationId;
+            }
+
             const [created] = await db(table).insert(row).returning('*');
+
+            // HISTORY (best-effort): a create has no before snapshot.
+            await recordHistory(db, {
+                company_id:  req.companyId,
+                module:      moduleSlug(table),
+                record_type: singular(table),
+                record_id:   created ? created.id : null,
+                action:      'created',
+                source:      'cloud',
+                before:      null,
+                after:       created,
+                changed_by:  req.user ? req.user.sub : null,
+            });
+
             return R.successResponse(res, created, `${singular(table)} created.`);
         } catch (err) {
             console.error(`${table}.create error:`, err);
@@ -182,12 +275,10 @@ function build(config) {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, notFound, 404);
         try {
-            // Existence + ownership check via the scoped base query.
-            const existing = await db(table)
-                .where(tenantColQualified, req.companyId)
-                .whereNull(deletedColQualified)
-                .where(idColQualified, id)
-                .first();
+            // Existence + ownership check via the scoped base query (tenant +
+            // soft-delete + location). A location-restricted user updating a row
+            // outside their location simply gets a not-found.
+            const existing = await ownedRowQuery(req, id).first();
             if (!existing) return R.errorResponse(res, notFound, 404);
 
             if (fkCheck) {
@@ -200,7 +291,33 @@ function build(config) {
             }
 
             const patch = { ...buildUpdate(req.body), updated_at: new Date() };
+
+            // Location scoping on update: a location-restricted user owns this row
+            // (ownedRowQuery already proved it is IN their location), but must not
+            // be able to MOVE it to another location via the body. Force
+            // location_id back to req.locationId so a restricted caller can never
+            // push a row out of their own branch. Unrestricted callers (locationId
+            // null) keep whatever buildUpdate produced.
+            if (hasLocation && req.locationId != null) {
+                patch.location_id = req.locationId;
+            }
+
             const [updated] = await db(table).where('id', id).update(patch).returning('*');
+
+            // HISTORY (best-effort): `existing` is the row BEFORE the update.
+            // recordHistory skips writing when nothing actually changed.
+            await recordHistory(db, {
+                company_id:  req.companyId,
+                module:      moduleSlug(table),
+                record_type: singular(table),
+                record_id:   id,
+                action:      'updated',
+                source:      'cloud',
+                before:      existing,
+                after:       updated,
+                changed_by:  req.user ? req.user.sub : null,
+            });
+
             return R.successResponse(res, updated, `${singular(table)} updated.`);
         } catch (err) {
             console.error(`${table}.update error:`, err);
@@ -212,16 +329,27 @@ function build(config) {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, notFound, 404);
         try {
-            const existing = await db(table)
-                .where(tenantColQualified, req.companyId)
-                .whereNull(deletedColQualified)
-                .where(idColQualified, id)
-                .first();
+            // Ownership check honours the location filter too (see ownedRowQuery).
+            const existing = await ownedRowQuery(req, id).first();
             if (!existing) return R.errorResponse(res, notFound, 404);
 
             const now = new Date();
             // Soft delete — set deleted_at; row stays for audit/restore.
             await db(table).where('id', id).update({ deleted_at: now, updated_at: now });
+
+            // HISTORY (best-effort): a delete records the row as it was, no after.
+            await recordHistory(db, {
+                company_id:  req.companyId,
+                module:      moduleSlug(table),
+                record_type: singular(table),
+                record_id:   id,
+                action:      'deleted',
+                source:      'cloud',
+                before:      existing,
+                after:       null,
+                changed_by:  req.user ? req.user.sub : null,
+            });
+
             return R.successResponse(res, { id }, `${singular(table)} deleted.`);
         } catch (err) {
             console.error(`${table}.destroy error:`, err);

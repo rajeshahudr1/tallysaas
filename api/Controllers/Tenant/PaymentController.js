@@ -25,6 +25,11 @@
 
 const R  = require('../../Helpers/response');
 const db = require('../../config/db').db;
+const { recordHistory } = require('../../Helpers/history');
+
+// payments.type ('payment'|'receipt') → history module slug (matches the route
+// slugs + HistoryController MODULE_TABLE).
+const PAYMENT_MODULE_SLUG = { payment: 'payments', receipt: 'receipts' };
 
 const OOPS_MSG = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND = 'Voucher not found.';
@@ -210,6 +215,19 @@ async function createByType(req, res, { type, partyCol, partyType, successMsg })
             return inserted;
         });
 
+        // HISTORY (best-effort): a cloud-side payment/receipt create.
+        await recordHistory(db, {
+            company_id:  req.companyId,
+            module:      PAYMENT_MODULE_SLUG[type] || type,
+            record_type: type,
+            record_id:   created ? created.id : null,
+            action:      'created',
+            source:      'cloud',
+            before:      null,
+            after:       created,
+            changed_by:  req.user ? req.user.sub : null,
+        });
+
         return R.successResponse(res, created, successMsg);
     } catch (err) {
         console.error(`payments.create (${type}) error:`, err);
@@ -255,6 +273,21 @@ async function destroy(req, res) {
 
         const now = new Date();
         await db('payments').where('id', id).update({ deleted_at: now, updated_at: now });
+
+        // HISTORY (best-effort): a cloud-side payment/receipt delete.
+        const vtype = String(existing.type || 'payment');
+        await recordHistory(db, {
+            company_id:  req.companyId,
+            module:      PAYMENT_MODULE_SLUG[vtype] || vtype,
+            record_type: vtype,
+            record_id:   id,
+            action:      'deleted',
+            source:      'cloud',
+            before:      existing,
+            after:       null,
+            changed_by:  req.user ? req.user.sub : null,
+        });
+
         return R.successResponse(res, { id }, 'Voucher deleted.');
     } catch (err) {
         console.error('payments.destroy error:', err);

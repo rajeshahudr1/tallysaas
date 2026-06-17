@@ -32,6 +32,7 @@
 
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
+const { recordHistory } = require('../../Helpers/history');
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND_MSG    = 'Invoice not found.';
@@ -168,6 +169,11 @@ async function listByType(req, res, type) {
             .where('invoices.type', type)
             .whereNull('invoices.deleted_at');
 
+        // Per-user location scoping (Requirement C): a location-restricted user
+        // sees ONLY their location's invoices. Unrestricted (req.locationId null)
+        // → all locations. Company scope stays the primary guard.
+        if (req.locationId != null) qb = qb.where('invoices.location_id', req.locationId);
+
         if (status)   qb = qb.where('invoices.status', status);
         if (partyId)  qb = qb.where(partyCol, partyId);
         if (dateFrom) qb = qb.where('invoices.invoice_date', '>=', dateFrom);
@@ -214,12 +220,13 @@ async function get(req, res) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
     try {
-        const invoice = await baseQuery()
+        const invoiceQ = baseQuery()
             .where('invoices.company_id', req.companyId)
             .whereNull('invoices.deleted_at')
-            .where('invoices.id', id)
-            .select(...LIST_COLUMNS)
-            .first();
+            .where('invoices.id', id);
+        // A location-restricted user cannot read another location's invoice by id.
+        if (req.locationId != null) invoiceQ.where('invoices.location_id', req.locationId);
+        const invoice = await invoiceQ.select(...LIST_COLUMNS).first();
         if (!invoice) return R.errorResponse(res, NOT_FOUND_MSG, 404);
 
         const items = await db('invoice_items')
@@ -247,6 +254,13 @@ async function createByType(req, res, type) {
         const isSales = type === 'sales';
         const { items, totals } = computeTotals(body.items);
 
+        // Location scoping on create: a location-restricted user can only cut
+        // invoices FOR their own location — force it, ignoring any body value.
+        // Unrestricted users keep their chosen/blank location_id.
+        const effectiveLocationId = req.locationId != null
+            ? req.locationId
+            : (body.location_id || null);
+
         const created = await db.transaction(async (trx) => {
             // Sequence = all existing rows of this company+type (soft-deleted
             // included) + 1, so generated numbers never reuse a deleted one.
@@ -265,7 +279,7 @@ async function createByType(req, res, type) {
                 company_id:      req.companyId,
                 type,
                 invoice_no:      invoiceNo,
-                location_id:     body.location_id || null,
+                location_id:     effectiveLocationId,
                 customer_id:     isSales ? body.customer_id : null,
                 supplier_id:     isSales ? null : body.supplier_id,
                 sales_person_id: isSales ? (body.sales_person_id || null) : null,
@@ -298,6 +312,20 @@ async function createByType(req, res, type) {
             return { ...invoiceRow, items: insertedItems };
         });
 
+        // HISTORY (best-effort): a cloud-side invoice create. Header snapshot
+        // only (items live in their own table); never breaks the create.
+        await recordHistory(db, {
+            company_id:  req.companyId,
+            module:      isSales ? 'sales-invoices' : 'purchase-invoices',
+            record_type: isSales ? 'sales-invoice' : 'purchase-invoice',
+            record_id:   created ? created.id : null,
+            action:      'created',
+            source:      'cloud',
+            before:      null,
+            after:       created,
+            changed_by:  req.user ? req.user.sub : null,
+        });
+
         return R.successResponse(res, created, 'Invoice created.');
     } catch (err) {
         console.error(`invoices.create(${type}) error:`, err);
@@ -317,17 +345,33 @@ async function destroy(req, res) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
     try {
-        const existing = await db('invoices')
+        const existingQ = db('invoices')
             .where('company_id', req.companyId)
             .whereNull('deleted_at')
-            .where('id', id)
-            .first();
+            .where('id', id);
+        // A location-restricted user cannot delete another location's invoice.
+        if (req.locationId != null) existingQ.where('location_id', req.locationId);
+        const existing = await existingQ.first();
         if (!existing) return R.errorResponse(res, NOT_FOUND_MSG, 404);
 
         const now = new Date();
         // Soft delete the header only — items stay (FK CASCADE only fires on a
         // hard delete, which we never do here).
         await db('invoices').where('id', id).update({ deleted_at: now, updated_at: now });
+
+        // HISTORY (best-effort): a cloud-side invoice delete.
+        const wasSales = String(existing.type) === 'sales';
+        await recordHistory(db, {
+            company_id:  req.companyId,
+            module:      wasSales ? 'sales-invoices' : 'purchase-invoices',
+            record_type: wasSales ? 'sales-invoice' : 'purchase-invoice',
+            record_id:   id,
+            action:      'deleted',
+            source:      'cloud',
+            before:      existing,
+            after:       null,
+            changed_by:  req.user ? req.user.sub : null,
+        });
 
         return R.successResponse(res, { id }, 'Invoice deleted.');
     } catch (err) {

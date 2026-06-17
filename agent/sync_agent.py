@@ -359,6 +359,32 @@ def _ensure_activated(args: _Args, cfg: Config, logger, api: ApiClient) -> None:
 # --------------------------------------------------------------------------- #
 # One sync cycle
 # --------------------------------------------------------------------------- #
+def _flag(data: dict, key: str, default: bool = True) -> bool:
+    """Read a boolean direction flag from the heartbeat response.
+
+    Used for the per-license AUTO-sync toggles ``push_enabled`` / ``pull_enabled``
+    (Requirement 1). MISSING key -> ``default`` (True), so an older cloud server
+    that doesn't send the flags keeps the original behaviour (both directions ON,
+    no regression). Tolerates bool / 0-1 / "true"/"false" / "on"/"off" / None so a
+    differently-typed JSON value never crashes the loop.
+    """
+    if not isinstance(data, dict) or key not in data:
+        return default
+    val = data.get(key)
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return val != 0
+    s = str(val).strip().lower()
+    if s in ("1", "true", "on", "yes"):
+        return True
+    if s in ("0", "false", "off", "no"):
+        return False
+    return default
+
+
 def _open_company_names(cfg: Config, logger) -> Optional[list[str]]:
     """Return the names of the companies currently OPEN in Tally (or None).
 
@@ -389,7 +415,7 @@ def _tally_ini_path(cfg: Config, exe: Optional[str]) -> Optional[str]:
     return os.path.join(os.path.dirname(exe), "tally.ini")
 
 
-def _dispatch_commands(cfg: Config, logger, api: ApiClient) -> None:
+def _dispatch_commands(cfg: Config, logger, api: ApiClient) -> bool:
     """Poll the cloud command channel and run each queued command.
 
     Drains ``/agent/commands`` (the cloud flips them to 'running' server-side),
@@ -397,20 +423,26 @@ def _dispatch_commands(cfg: Config, logger, api: ApiClient) -> None:
     and reports the outcome back via ``/agent/commands/<id>/result``. Runs once
     per cycle around the normal pull/push.
 
+    Returns ``True`` when a ``pull_now`` command was seen this cycle (a MANUAL
+    "Sync from Tally"), so the caller can force a one-off ``_pull_pass`` EVEN when
+    the per-license AUTO pull toggle is OFF (a manual action must always work).
+
     Best-effort + fully isolated: EACH command is wrapped in its own try/except
     so one bad command can never kill the loop, and the internal Tally polls are
     bounded so this never blocks the loop indefinitely.
     """
     token = cfg.get_token()
     if not token:
-        return
+        return False
     try:
         commands = api.get_commands(token)
     except Exception as exc:  # get_commands already swallows, but be defensive.
         logger.debug("Command poll failed: %s", exc)
-        return
+        return False
     if not commands:
-        return
+        return False
+
+    pull_now_seen = False
 
     logger.info("Command channel: %d command(s) to process.", len(commands))
     if VERBOSE:
@@ -426,6 +458,31 @@ def _dispatch_commands(cfg: Config, logger, api: ApiClient) -> None:
         cmd_id = cmd.get("id")
         ctype = str(cmd.get("type") or "").strip()
         try:
+            if ctype == "self_update":
+                # "Update now" from the web — force an immediate update check.
+                # Report done BEFORE applying: maybe_self_update may raise
+                # SystemExit (hand-off to the updater) and the cloud row should
+                # already be closed so it is not stuck 'running' after restart.
+                echo("[cmd] Forced self-update check requested by the cloud.")
+                api.command_result(token, cmd_id, "done",
+                                   result="self-update check triggered")
+                maybe_self_update(cfg, logger, api, forced=True)
+                continue
+
+            if ctype == "pull_now":
+                # MANUAL "Sync from Tally" nudge from the web. The cloud already
+                # reset the per-company pull WATERMARK, so a _pull_pass (Tally ->
+                # cloud) re-imports everything from Tally. We FLAG it so the caller
+                # forces a pull THIS cycle even when the AUTO pull toggle is OFF
+                # (a manual action must work regardless of the auto toggle), then
+                # ack the command so the row doesn't sit 'running'.
+                pull_now_seen = True
+                echo("[cmd] Manual pull-from-Tally requested (watermark reset; "
+                     "re-importing from Tally this cycle).")
+                api.command_result(token, cmd_id, "done",
+                                   result="pull watermark reset; re-importing this cycle")
+                continue
+
             if ctype != "open_company":
                 logger.info("Command %s: unknown type '%s' - skipping.", cmd_id, ctype)
                 echo(f"[cmd] {cmd_id}: unknown command type '{ctype}' - skipped.")
@@ -469,6 +526,8 @@ def _dispatch_commands(cfg: Config, logger, api: ApiClient) -> None:
             except Exception:
                 pass
 
+    return pull_now_seen
+
 
 def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
     """Run a single heartbeat + sync cycle.
@@ -500,6 +559,14 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
         # Cloud has suspended/expired us - keep heartbeating but do not sync.
         logger.warning("license %s - pausing sync", status or "inactive")
         return True
+
+    # Per-license AUTO-sync DIRECTION toggles (Requirement 1). The heartbeat
+    # response carries push_enabled / pull_enabled; we gate the AUTO push/pull
+    # passes on them. Default ON when the key is missing (older server / pre-
+    # migration cloud) so there is no regression. These gate ONLY this automatic
+    # loop - the web Sync Dashboard's MANUAL per-module buttons are independent.
+    push_enabled = _flag(hb, "push_enabled")
+    pull_enabled = _flag(hb, "pull_enabled")
 
     # 2) Tally reachability - if it is down, optionally AUTO-START it, then
     #    re-check. Tally serves its XML API only while open, so auto-start lets
@@ -538,12 +605,43 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
     #     run BEFORE the push so a just-requested company is loaded in time to be
     #     a sync target this same cycle. Fully isolated: one bad command can never
     #     break the cycle, and the internal Tally polls are bounded.
-    _dispatch_commands(cfg, logger, api)
+    # A 'pull_now' command (MANUAL "Sync from Tally") forces a one-off pull this
+    # cycle EVEN when the AUTO pull toggle is OFF - a manual action must always
+    # work (the cloud reset the watermark; this consumes it now).
+    pull_now = _dispatch_commands(cfg, logger, api)
 
-    # 3) Push (cloud -> Tally) then Pull (Tally -> cloud). Push drives the
-    #    pass result; the pull is best-effort + never fails the cycle.
-    pushed = _sync_pass(cfg, logger, api, tally)
-    _pull_pass(cfg, logger, api, tally)
+    # 3) Push (cloud -> Tally) then Pull (Tally -> cloud), each gated by its
+    #    per-license AUTO toggle. Push drives the pass result; the pull is best-
+    #    effort + never fails the cycle. When a direction is OFF its pass is
+    #    skipped entirely (a skip is NOT a failure, so the cycle still counts ok).
+    #    If BOTH are off the cycle still heartbeated + drained commands above.
+    if push_enabled:
+        pushed = _sync_pass(cfg, logger, api, tally)
+    else:
+        pushed = True
+        logger.info("Cloud->Tally auto-sync is OFF (skipped)")
+        if VERBOSE:
+            echo("")
+            echo("STEP 3/4 - Cloud -> Tally (push)")
+            echo("  [..] Cloud->Tally auto-sync is OFF (skipped).")
+
+    # Pull runs when AUTO pull is ON, OR when a manual 'pull_now' arrived this
+    # cycle (manual overrides the auto toggle).
+    if pull_enabled or pull_now:
+        if not pull_enabled and pull_now:
+            logger.info("Tally->Cloud manual pull (AUTO pull is OFF; honouring "
+                        "the manual 'Sync from Tally' request).")
+            if VERBOSE:
+                echo("")
+                echo("STEP 4/4 - Tally -> Cloud (manual pull; auto is OFF)")
+        _pull_pass(cfg, logger, api, tally)
+    else:
+        logger.info("Tally->Cloud auto-sync is OFF (skipped)")
+        if VERBOSE:
+            echo("")
+            echo("STEP 4/4 - Tally -> Cloud (pull)")
+            echo("  [..] Tally->Cloud auto-sync is OFF (skipped).")
+
     return pushed
 
 
@@ -1211,6 +1309,261 @@ def _start_tally(cfg: Config, logger) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Self-update (Requirement 2) — Windows-safe swap of a running one-file exe.
+# --------------------------------------------------------------------------- #
+# The agent name on disk (matches build_exe.APP_NAME). The Startup VBS that
+# launches it hidden (install-autostart.ps1) uses the same base name.
+_EXE_BASENAME = "TallyCloudSyncAgent.exe"
+_NEW_EXE_BASENAME = "TallyCloudSyncAgent.new.exe"
+_UPDATER_BAT = "_agent_update.bat"
+_STARTUP_VBS = "TallyCloudSyncAgent.vbs"
+
+
+def _version_tuple(v: str) -> tuple:
+    """Parse a version string into a comparable tuple of ints.
+
+    "1.2.10" -> (1, 2, 10). Non-numeric / missing parts are treated as 0 and a
+    trailing non-numeric suffix (e.g. "1.2.0-beta") is ignored on each part, so
+    a junk value never raises (it just compares low).
+    """
+    parts = []
+    for chunk in str(v or "").strip().split("."):
+        m = re.match(r"\d+", chunk)
+        parts.append(int(m.group(0)) if m else 0)
+    return tuple(parts) if parts else (0,)
+
+
+def _is_newer(latest: str, installed: str) -> bool:
+    """Return True iff ``latest`` is a strictly newer version than ``installed``.
+
+    Tuple/semantic compare (1.10.0 > 1.9.9). Empty/None latest -> False (nothing
+    to do). A malformed value compares as (0,) so we never update toward junk.
+    """
+    if not latest:
+        return False
+    return _version_tuple(latest) > _version_tuple(installed)
+
+
+def _running_frozen() -> bool:
+    """True when running as the PyInstaller one-file exe (not as a .py)."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _exe_path() -> str:
+    """Absolute path of the currently-running executable (the frozen exe)."""
+    return os.path.abspath(sys.executable)
+
+
+def _spawn_updater_bat(exe_dir: str, logger, exe_path: Optional[str] = None) -> bool:
+    """Write + launch the detached updater batch that swaps in the new exe.
+
+    The batch (``_agent_update.bat``) waits until the live exe is no longer
+    locked (we are about to exit), moves the downloaded ``*.new.exe`` over it,
+    relaunches it HIDDEN via the Startup VBS if present (else ``start ""`` the
+    exe), and deletes itself. Launched DETACHED with no window so it survives
+    this process exiting. Returns True if the bat was launched.
+
+    ``exe_path`` is the ACTUAL running executable (``sys.executable``); the swap
+    targets that exact file so a renamed exe is still replaced in place (we fall
+    back to the conventional name only if it is not supplied).
+
+    NEVER deletes the old exe before the new one is moved into place; if the
+    move fails the old exe stays untouched and the agent keeps running.
+    """
+    exe = exe_path or os.path.join(exe_dir, _EXE_BASENAME)
+    new_exe = os.path.join(exe_dir, _NEW_EXE_BASENAME)
+    bat = os.path.join(exe_dir, _UPDATER_BAT)
+
+    # The Startup VBS (written by install-autostart.ps1) runs the exe hidden.
+    startup_dir = os.path.join(
+        os.environ.get("APPDATA", ""),
+        "Microsoft", "Windows", "Start Menu", "Programs", "Startup",
+    )
+    vbs = os.path.join(startup_dir, _STARTUP_VBS)
+
+    # Batch script. Loops (with a ping-based ~1s delay, no extra deps) until the
+    # rename of the live exe succeeds (i.e. the old process has released it),
+    # up to ~30 tries, then relaunches hidden and self-deletes. ASCII only.
+    lines = [
+        "@echo off",
+        "setlocal",
+        'set "EXE=' + exe + '"',
+        'set "NEW=' + new_exe + '"',
+        'set "VBS=' + vbs + '"',
+        "rem Wait for the running agent to exit and release its exe.",
+        "set /a tries=0",
+        ":waitloop",
+        'if not exist "%NEW%" goto done',
+        'move /Y "%NEW%" "%EXE%" >nul 2>&1',
+        "if %errorlevel%==0 goto relaunch",
+        "set /a tries+=1",
+        "if %tries% geq 30 goto giveup",
+        "ping -n 2 127.0.0.1 >nul",
+        "goto waitloop",
+        ":relaunch",
+        'if exist "%VBS%" (',
+        '  start "" wscript.exe "%VBS%"',
+        ") else (",
+        '  start "" "%EXE%"',
+        ")",
+        "goto cleanup",
+        ":giveup",
+        "rem Could not replace the exe (lock never released). Drop the staged",
+        "rem update and RELAUNCH the old exe so the agent is not left down.",
+        'if exist "%NEW%" del /F /Q "%NEW%" >nul 2>&1',
+        'if exist "%VBS%" (',
+        '  start "" wscript.exe "%VBS%"',
+        ") else (",
+        '  start "" "%EXE%"',
+        ")",
+        ":cleanup",
+        ":done",
+        'del /F /Q "%~f0" >nul 2>&1',
+    ]
+    try:
+        with open(bat, "w", encoding="ascii", errors="replace") as fh:
+            fh.write("\r\n".join(lines) + "\r\n")
+    except OSError as exc:
+        logger.error("Self-update: could not write updater batch: %s", exc)
+        return False
+
+    # Launch DETACHED with no window so it outlives this process.
+    try:
+        flags = 0
+        if os.name == "nt":
+            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            flags = 0x00000008 | 0x00000200 | 0x08000000
+        subprocess.Popen(
+            ["cmd.exe", "/c", bat],
+            cwd=exe_dir, close_fds=True, creationflags=flags,
+        )
+    except Exception as exc:  # launching the bat must not crash the agent.
+        logger.error("Self-update: could not launch updater batch: %s", exc)
+        return False
+
+    logger.info("Self-update: updater batch launched (%s).", bat)
+    return True
+
+
+def _effective_auto_update(cfg: Config, info: dict) -> bool:
+    """Decide if updating is allowed: the CLOUD toggle wins when provided.
+
+    ``info`` is the /agent/version response. When it carries ``auto_update``
+    (the per-license toggle) we honour that; otherwise fall back to the local
+    config ``auto_update``. A MANDATORY release overrides both (handled by the
+    caller) so a security fix always lands.
+    """
+    if isinstance(info, dict) and ("auto_update" in info) and (info.get("auto_update") is not None):
+        return bool(info.get("auto_update"))
+    return bool(cfg.auto_update)
+
+
+def maybe_self_update(cfg: Config, logger, api: ApiClient,
+                      *, forced: bool = False) -> None:
+    """Check for a newer published exe and, if appropriate, self-update.
+
+    BEST-EFFORT: every step is wrapped so this can NEVER crash the main loop. It
+    runs once at startup and every ``cfg.update_check_cycles`` cycles (and on a
+    forced 'self_update' command). Flow:
+
+      1. Ask the cloud (``/agent/version``) for the latest version + flags.
+      2. If latest is set and NEWER than cfg.agent_version, and updating is
+         allowed (cloud toggle if provided else config; a MANDATORY release
+         overrides the toggle), proceed — else log + return.
+      3. Interactive + confirm_updates on -> prompt; headless -> apply.
+      4. Only when FROZEN (running as the exe): download to ``*.new.exe``, verify
+         sha/size, write + launch the detached updater bat, then ``sys.exit(0)``
+         so the bat can replace the live file. Running as .py just logs.
+
+    On ANY failure before exit we abort and keep running the OLD version.
+    """
+    token = cfg.get_token()
+    if not token:
+        return
+    try:
+        info = api.get_latest_version(token, installed_version=cfg.agent_version)
+    except Exception as exc:  # get_latest_version already swallows, be defensive.
+        logger.debug("Self-update: version check failed: %s", exc)
+        return
+    if not isinstance(info, dict) or not info:
+        return
+
+    latest = str(info.get("latest_version") or "").strip()
+    mandatory = bool(info.get("mandatory"))
+    sha256 = info.get("sha256") or None
+
+    if not _is_newer(latest, cfg.agent_version):
+        logger.debug("Self-update: up to date (installed=%s, latest=%s).",
+                     cfg.agent_version, latest or "none")
+        return
+
+    allowed = _effective_auto_update(cfg, info) or mandatory or forced
+    if not allowed:
+        logger.info("Self-update: v%s available but auto-update is OFF; skipping.", latest)
+        echo(f"[update] v{latest} available (auto-update is OFF).")
+        return
+
+    logger.info("Self-update: newer version v%s available (installed v%s, mandatory=%s).",
+                latest, cfg.agent_version, mandatory)
+    echo(f"[update] New agent version v{latest} available.")
+
+    # Interactive confirm (only with a real terminal + confirm_updates on, and
+    # never for a mandatory release — security fixes always apply).
+    if (not forced) and (not mandatory) and cfg.confirm_updates and _stdin_is_tty():
+        try:
+            ans = input(f"  Update to v{latest} now? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = "n"
+        if ans in ("n", "no"):
+            logger.info("Self-update: declined by operator.")
+            echo("[update] Skipped (you can update later).")
+            return
+
+    # Only the FROZEN exe can swap itself; a .py run just reports.
+    if not _running_frozen():
+        logger.info("Self-update: running from source - rebuild the exe to v%s "
+                    "(no swap when not frozen).", latest)
+        echo(f"[update] Running from source; rebuild the exe for v{latest}.")
+        return
+
+    exe_path = _exe_path()
+    exe_dir = os.path.dirname(exe_path)
+    new_exe = os.path.join(exe_dir, _NEW_EXE_BASENAME)
+
+    echo(f"[update] Downloading v{latest} ...")
+    try:
+        ok = api.download_update(token, new_exe, expected_sha256=sha256)
+    except Exception as exc:  # download already swallows, be defensive.
+        logger.error("Self-update: download error: %s", exc)
+        ok = False
+    if not ok:
+        logger.warning("Self-update: download/verify failed; keeping current version.")
+        echo("[update] Download failed; staying on the current version.")
+        return
+
+    # Sanity: the new exe must exist + be non-empty before we hand off.
+    try:
+        if (not os.path.isfile(new_exe)) or os.path.getsize(new_exe) <= 0:
+            logger.warning("Self-update: downloaded exe missing/empty; aborting.")
+            return
+    except OSError:
+        return
+
+    logger.info("Self-update: applying v%s via detached updater.", latest)
+    echo(f"[update] Installing v{latest} (the agent will restart)...")
+    if not _spawn_updater_bat(exe_dir, logger, exe_path=exe_path):
+        logger.warning("Self-update: could not start updater; keeping current version.")
+        echo("[update] Could not start the updater; staying on the current version.")
+        return
+
+    # Hand off: exit so the bat can replace the (now-unlocked) exe and relaunch
+    # it hidden. The old exe is NEVER deleted before the new one is in place.
+    logger.info("Self-update: exiting to let the updater swap in v%s.", latest)
+    echo("[update] Restarting to finish the update...")
+    raise SystemExit(_EXIT_OK)
+
+
+# --------------------------------------------------------------------------- #
 # Loop + sub-commands
 # --------------------------------------------------------------------------- #
 def _run_loop(cfg: Config, logger, api: ApiClient) -> None:
@@ -1234,6 +1587,17 @@ def _run_loop(cfg: Config, logger, api: ApiClient) -> None:
     )
     failed_retries = 0
     cycle = 0
+
+    # Self-update: check ONCE at startup (best-effort). maybe_self_update raises
+    # SystemExit to hand off to the detached updater when it applies an update,
+    # which propagates out cleanly; otherwise it just returns.
+    try:
+        maybe_self_update(cfg, logger, api)
+    except SystemExit:
+        raise
+    except Exception as exc:  # never let the update check stop the loop starting.
+        logger.warning("Startup self-update check failed (ignored): %s", exc)
+
     try:
         while True:
             cycle += 1
@@ -1243,6 +1607,18 @@ def _run_loop(cfg: Config, logger, api: ApiClient) -> None:
                 ok = _run_cycle(cfg, logger, api)
             finally:
                 VERBOSE = False
+
+            # Periodic self-update check (every update_check_cycles cycles, after
+            # the very first which is covered by the startup check above). Best-
+            # effort; SystemExit hands off to the updater + exits cleanly.
+            if (not first) and cfg.update_check_cycles > 0 \
+                    and (cycle % cfg.update_check_cycles == 0):
+                try:
+                    maybe_self_update(cfg, logger, api)
+                except SystemExit:
+                    raise
+                except Exception as exc:
+                    logger.warning("Periodic self-update check failed (ignored): %s", exc)
 
             if first:
                 echo("")

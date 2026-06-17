@@ -189,7 +189,8 @@ function _alignClass(col) {
                         <td class="text-end data-table-actions">
                             <% if (_actions.indexOf('view') > -1) { %>
                                 <button class="action-btn action-btn--view" type="button" title="View" aria-label="View"
-                                        data-row-view data-record="<%= JSON.stringify(_details) %>" data-record-title="<%= _label %>">
+                                        data-row-view data-record-id="<%= _idVal %>"
+                                        data-record="<%= JSON.stringify(_details) %>" data-record-title="<%= _label %>">
                                     <i class="fa-regular fa-eye"></i>
                                 </button>
                             <% } %>

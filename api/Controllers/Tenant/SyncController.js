@@ -24,6 +24,7 @@
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
 const { friendlyReason } = require('../../Helpers/syncReason');
+const agentRelease = require('../../Helpers/agentRelease');
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const DEFAULT_PER_PAGE = 10;
@@ -31,10 +32,35 @@ const MAX_PER_PAGE     = 100;
 
 // Notification bell window: rows are "recent" within this lookback.
 const NOTIF_WINDOW_MS  = 24 * 60 * 60 * 1000;   // last 24h
-const NOTIF_RECENT_MAX = 15;                    // newest rows in the dropdown
+const NOTIF_RECENT_MAX = 100;                   // newest rows in the dropdown (scrolls; older via "View all")
 
-// An agent is "connected" if its license was seen within this window.
-const CONNECTED_WINDOW_MS = 5 * 60 * 1000;
+// An agent is "connected" if its license was seen within this window. The agent
+// heartbeats every 60s, so 150s = 2.5 missed beats before we call it down (snug
+// enough for the dashboard poller to flip ~live, loose enough to not flap).
+const CONNECTED_WINDOW_MS = 150 * 1000;
+
+// The full module catalogue surfaced on the Sync Dashboard. `key` is a stable
+// machine id (used by the per-module retry button + DOM ids); `label` is the
+// human heading; `kind` picks the counting strategy; `table`/`type` locate the
+// source rows. `logModules` are the record_type values the agent writes into
+// tally_sync_logs.module for this module (used for the per-module failed tally
+// + last_sync lookup). Keep this list as the SINGLE source of truth for both
+// summary() and retry().
+const MODULE_CATALOG = [
+    { key: 'customers',         label: 'Customers',         kind: 'guid',    table: 'customers', logModules: ['customer'] },
+    { key: 'suppliers',         label: 'Suppliers',         kind: 'guid',    table: 'suppliers', logModules: ['supplier'] },
+    { key: 'products',          label: 'Products',          kind: 'guid',    table: 'products',  logModules: ['product'] },
+    { key: 'categories',        label: 'Categories',        kind: 'cat',     table: 'categories', logModules: ['category'] },
+    { key: 'locations',         label: 'Locations',         kind: 'guid',    table: 'locations', logModules: ['location'] },
+    { key: 'sales_invoices',    label: 'Sales Invoices',    kind: 'voucher', table: 'invoices',  typeCol: 'type', typeVal: 'sales',    logModules: ['sales_invoice'] },
+    { key: 'purchase_invoices', label: 'Purchase Invoices', kind: 'voucher', table: 'invoices',  typeCol: 'type', typeVal: 'purchase', logModules: ['purchase_invoice'] },
+    { key: 'payments',          label: 'Payments',          kind: 'voucher', table: 'payments',  typeCol: 'type', typeVal: 'payment',  logModules: ['payment'] },
+    { key: 'receipts',          label: 'Receipts',          kind: 'voucher', table: 'payments',  typeCol: 'type', typeVal: 'receipt',  logModules: ['receipt'] },
+    { key: 'journals',          label: 'Journals',          kind: 'voucher', table: 'journals',  logModules: ['journal'] },
+];
+
+// Fast lookup by key for retry().
+const MODULE_BY_KEY = MODULE_CATALOG.reduce((acc, m) => { acc[m.key] = m; return acc; }, {});
 
 // Clamp/normalise pagination from the query string.
 function parsePagination(query) {
@@ -51,73 +77,139 @@ function asCount(row) {
     return Number(row ? row.c : 0);
 }
 
+// Parse a version string ("1.10.0") to a numeric tuple for comparison. Mirrors
+// the agent's _version_tuple so the server-side "newer" decision matches the
+// agent's (1.10.0 > 1.9.9). Non-numeric segments collapse to 0.
+function versionTuple(v) {
+    return String(v == null ? '' : v).trim().split('.').map((n) => {
+        const x = parseInt(n, 10);
+        return Number.isFinite(x) ? x : 0;
+    });
+}
+
+// True when `latest` is strictly newer than `installed` (semantic tuple
+// compare). Empty/null inputs → false (nothing to update). Shared by summary().
+function isNewer(latest, installed) {
+    const a = versionTuple(latest);
+    const b = versionTuple(installed);
+    if (!a.length || !String(latest || '').trim()) return false;
+    if (!b.length || !String(installed || '').trim()) {
+        // No installed version known → treat a published latest as available.
+        return !!String(latest || '').trim();
+    }
+    const n = Math.max(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+        const x = a[i] || 0;
+        const y = b[i] || 0;
+        if (x > y) return true;
+        if (x < y) return false;
+    }
+    return false;   // equal → not newer
+}
+
 /**
- * Best-effort latest synced_at for a module label. tally_sync_logs.module is
- * matched case-insensitively (ILIKE) so 'Sales Invoices' style labels line up
- * with whatever the agent wrote. Returns null when no log row matches.
+ * Best-effort latest synced_at across a set of tally_sync_logs.module values
+ * (the agent writes record_type-style module names). Returns a full ISO string
+ * (or null) so the web can format BOTH date AND time. Never throws — last_sync
+ * is decorative and must not sink the whole summary.
  */
-async function lastSyncFor(companyId, moduleLabel) {
+async function lastSyncForModules(companyId, logModules) {
     try {
         const row = await db('tally_sync_logs')
             .where('company_id', companyId)
-            .where('module', 'ilike', moduleLabel)
+            .whereIn('module', logModules)
             .max('synced_at as m')
             .first();
-        return row ? row.m : null;
+        const v = row ? row.m : null;
+        return v ? new Date(v).toISOString() : null;
     } catch {
-        // last_sync is decorative — never let it sink the whole summary.
         return null;
     }
 }
 
 /**
- * Count helper for a guid-based module (customers / suppliers / products).
- * synced = tally_guid NOT NULL, pending = tally_guid NULL, failed = 0.
+ * Recent failed-row count for a module from tally_sync_logs (company-scoped).
+ * Vouchers ALSO carry a failed status on their own table, but masters never do
+ * (a master that fails to push just stays tally_guid NULL = pending), so the
+ * log is the single, uniform source of "failed" across every module kind.
  */
-async function guidModule(companyId, table, label) {
-    const [totalRow, syncedRow] = await Promise.all([
-        db(table).where('company_id', companyId).whereNull('deleted_at')
-            .count('id as c').first(),
-        db(table).where('company_id', companyId).whereNull('deleted_at')
-            .whereNotNull('tally_guid').count('id as c').first(),
-    ]);
-    const total  = asCount(totalRow);
-    const synced = asCount(syncedRow);
-    return {
-        module:  label,
-        total,
-        synced,
-        pending: total - synced,
-        failed:  0,
-        last_sync: await lastSyncFor(companyId, label),
-    };
+async function failedLogCount(companyId, logModules) {
+    try {
+        const row = await db('tally_sync_logs')
+            .where('company_id', companyId)
+            .where('status', 'failed')
+            .whereIn('module', logModules)
+            .count('id as c').first();
+        return asCount(row);
+    } catch {
+        return 0;
+    }
 }
 
 /**
- * Count helper for a status-based voucher module (invoices/payments of a type).
- * synced = status 'created', pending = status IN (pending_tally,sent_to_tally),
- * failed = status 'failed'.
+ * Compute one module's {key,label,total,synced,pending,failed,last_sync_at}
+ * from the real source tables (company-scoped, deleted_at NULL). Counting
+ * strategy by kind:
+ *   guid    — masters: synced = tally_guid NOT NULL, pending = tally_guid NULL
+ *   cat     — categories have no tally_guid (always re-pushed, idempotent) →
+ *             treat all as synced, pending = 0
+ *   voucher — synced = status 'created' OR tally_voucher_no set,
+ *             pending = status IN (pending_tally,sent_to_tally),
+ *             failed   = status 'failed' (table) — the higher of this and the
+ *             recent failed-log tally is shown.
  */
-async function statusModule(companyId, table, typeVal, label) {
-    const base = () => db(table)
-        .where('company_id', companyId)
-        .whereNull('deleted_at')
-        .where('type', typeVal);
+async function moduleStats(companyId, spec) {
+    const failedLogs = await failedLogCount(companyId, spec.logModules);
+    const last_sync_at = await lastSyncForModules(companyId, spec.logModules);
 
+    if (spec.kind === 'guid') {
+        const [totalRow, syncedRow] = await Promise.all([
+            db(spec.table).where('company_id', companyId).whereNull('deleted_at')
+                .count('id as c').first(),
+            db(spec.table).where('company_id', companyId).whereNull('deleted_at')
+                .whereNotNull('tally_guid').count('id as c').first(),
+        ]);
+        const total  = asCount(totalRow);
+        const synced = asCount(syncedRow);
+        return {
+            key: spec.key, label: spec.label,
+            total, synced, pending: total - synced, failed: failedLogs, last_sync_at,
+        };
+    }
+
+    if (spec.kind === 'cat') {
+        const totalRow = await db(spec.table).where('company_id', companyId)
+            .whereNull('deleted_at').count('id as c').first();
+        const total = asCount(totalRow);
+        // No tally_guid column → categories re-push every cycle (idempotent in
+        // Tally); count them all as synced so the bar never sits at 0% forever.
+        return {
+            key: spec.key, label: spec.label,
+            total, synced: total, pending: 0, failed: failedLogs, last_sync_at,
+        };
+    }
+
+    // voucher
+    const base = () => {
+        let q = db(spec.table).where('company_id', companyId).whereNull('deleted_at');
+        if (spec.typeCol) q = q.where(spec.typeCol, spec.typeVal);
+        return q;
+    };
     const [totalRow, syncedRow, pendingRow, failedRow] = await Promise.all([
         base().count('id as c').first(),
-        base().where('status', 'created').count('id as c').first(),
+        base().where(function () {
+            this.where('status', 'created').orWhereNotNull('tally_voucher_no');
+        }).count('id as c').first(),
         base().whereIn('status', ['pending_tally', 'sent_to_tally']).count('id as c').first(),
         base().where('status', 'failed').count('id as c').first(),
     ]);
-
     return {
-        module:  label,
+        key: spec.key, label: spec.label,
         total:   asCount(totalRow),
         synced:  asCount(syncedRow),
         pending: asCount(pendingRow),
-        failed:  asCount(failedRow),
-        last_sync: await lastSyncFor(companyId, label),
+        failed:  Math.max(asCount(failedRow), failedLogs),
+        last_sync_at,
     };
 }
 
@@ -135,11 +227,25 @@ async function summary(req, res) {
             license = await db('licenses')
                 .where('id', company.license_id)
                 .first('id', 'status', 'last_seen_at', 'agent_version', 'machine_id',
-                       'last_open_companies');
+                       'last_open_companies', 'auto_update',
+                       'sync_push_enabled', 'sync_pull_enabled');
         }
 
+        // ── LIVE connectivity ── computed fresh from licenses.last_seen_at on
+        // every call (the agent heartbeats every 60s). 'connected' iff the last
+        // beat is within CONNECTED_WINDOW_MS — so the dashboard poller can flip
+        // the badge green/grey without a page reload.
         const lastSeen  = license && license.last_seen_at ? new Date(license.last_seen_at) : null;
         const connected = !!(lastSeen && (Date.now() - lastSeen.getTime()) <= CONNECTED_WINDOW_MS);
+
+        // Newest synced_at across ALL of this company's log rows = the headline
+        // "Last Sync" (full ISO so the web renders date AND time).
+        let lastSyncAt = null;
+        try {
+            const lr = await db('tally_sync_logs').where('company_id', companyId)
+                .max('synced_at as m').first();
+            lastSyncAt = lr && lr.m ? new Date(lr.m).toISOString() : null;
+        } catch { lastSyncAt = null; }
 
         // The agent reports the Tally companies currently open via heartbeat
         // (stored JSON-encoded on the license). Parse it back to an array so the
@@ -157,13 +263,61 @@ async function summary(req, res) {
             }
         }
 
+        // ── Auto-update / release info (Requirement 3) ── the published-latest
+        // exe (the single is_current agent_releases row, fallback env), whether
+        // the agent's installed version is older than it (server-side semver
+        // compare), and the per-LICENSE cloud auto-update toggle. All best-effort:
+        // a release-table hiccup must never sink the whole summary.
+        const installedVersion = license ? (license.agent_version || null) : null;
+        let latestVersion = null;
+        let mandatory = false;
+        let releaseNotes = null;
+        try {
+            const rel = await agentRelease.currentRelease(db);
+            if (rel && rel.version) {
+                latestVersion = rel.version;
+                mandatory = !!rel.mandatory;
+                releaseNotes = rel.notes || null;
+            }
+        } catch { latestVersion = null; }
+        if (!latestVersion) {
+            latestVersion = (String(process.env.AGENT_LATEST_VERSION || '').trim() || null);
+        }
+        const updateAvailable = isNewer(latestVersion, installedVersion);
+        // Default ON when the column is missing/unreadable (matches /agent/version).
+        const autoUpdate = license && license.auto_update != null ? !!license.auto_update : true;
+
+        // Per-license AUTO-sync DIRECTION toggles (Requirement 1). These gate
+        // ONLY the agent's automatic loop (the heartbeat echoes the same flags);
+        // the dashboard's MANUAL per-module buttons are independent of them.
+        // Default ON when the column is missing/unreadable, so existing licenses
+        // (and a pre-migration DB) read as both-directions-ON with no regression.
+        const pushEnabled = license && license.sync_push_enabled != null ? !!license.sync_push_enabled : true;
+        const pullEnabled = license && license.sync_pull_enabled != null ? !!license.sync_pull_enabled : true;
+
+        const heartbeatIso = lastSeen ? lastSeen.toISOString() : null;
         const summaryBlock = {
             connected,
+            // 'connected' | 'disconnected' — the LIVE connection state (kept
+            // alongside the existing boolean so consumers can read either).
+            connection:    connected ? 'connected' : 'disconnected',
             status:        license && license.status ? license.status : 'unknown',
-            agent_version: license ? (license.agent_version || null) : null,
+            agent_version: installedVersion,
             last_seen_at:  license ? (license.last_seen_at || null) : null,
+            // Full ISO timestamps the web formats to date+time.
+            heartbeat_at:  heartbeatIso,
+            last_sync_at:  lastSyncAt,
             last_open_companies: openCompanies,
             company:       company ? (company.name || null) : null,
+            // Auto-update surface for the Sync Dashboard (Requirement 3).
+            latest_version:   latestVersion,
+            update_available: updateAvailable,
+            mandatory_update: mandatory,
+            release_notes:    releaseNotes,
+            auto_update:      autoUpdate,
+            // Auto-sync direction toggles (the agent loop honours these).
+            push_enabled:     pushEnabled,
+            pull_enabled:     pullEnabled,
         };
 
         // ── Headline stats ─────────────────────────────────────────────
@@ -196,23 +350,25 @@ async function summary(req, res) {
             failed: asCount(failedRow),
         };
 
-        // ── Per-module breakdown ───────────────────────────────────────
-        const modules = await Promise.all([
-            guidModule(companyId, 'customers', 'Customers'),
-            guidModule(companyId, 'suppliers', 'Suppliers'),
-            guidModule(companyId, 'products',  'Products'),
-            statusModule(companyId, 'invoices', 'sales',    'Sales Invoices'),
-            statusModule(companyId, 'invoices', 'purchase', 'Purchase Invoices'),
-            statusModule(companyId, 'payments', 'payment',  'Payments'),
-            statusModule(companyId, 'payments', 'receipt',  'Receipts'),
-        ]);
+        // ── Per-module breakdown ── one entry per catalogued module, each
+        // {key,label,total,synced,pending,failed,last_sync_at}. `module` +
+        // `last_sync` aliases are kept so the existing web consumer (which reads
+        // m.module / m.last_sync) keeps working while it migrates to the new keys.
+        const moduleStatsList = await Promise.all(
+            MODULE_CATALOG.map((spec) => moduleStats(companyId, spec)),
+        );
+        const modules = moduleStatsList.map((m) => ({
+            ...m,
+            module:    m.label,          // back-compat alias
+            last_sync: m.last_sync_at,   // back-compat alias
+        }));
 
         // ── Recent activity feed ───────────────────────────────────────
         const recent = await db('tally_sync_logs')
             .where('company_id', companyId)
             .orderBy('id', 'desc')
             .limit(6)
-            .select('module', 'record_type', 'record_id', 'status', 'created_at');
+            .select('module', 'record_type', 'record_id', 'status', 'message', 'created_at');
 
         return R.successResponse(res, {
             summary: summaryBlock,
@@ -236,9 +392,11 @@ async function logs(req, res) {
 
         let qb = db('tally_sync_logs').where('company_id', req.companyId);
 
-        if (moduleF)    qb = qb.where('module', moduleF);
-        if (statusF)    qb = qb.where('status', statusF);
-        if (directionF) qb = qb.where('direction', directionF);
+        // Case-insensitive: the UI filter values are capitalised ("Failed",
+        // "Pull") but the rows store lower-case ("failed", "pull").
+        if (moduleF)    qb = qb.whereRaw('lower(module) = lower(?)', [moduleF]);
+        if (statusF)    qb = qb.whereRaw('lower(status) = lower(?)', [statusF]);
+        if (directionF) qb = qb.whereRaw('lower(direction) = lower(?)', [directionF]);
 
         if (search) {
             const like = `%${search}%`;
@@ -258,7 +416,7 @@ async function logs(req, res) {
             .limit(perPage)
             .orderBy('id', 'desc')
             .select(
-                'module', 'record_type', 'record_id', 'direction',
+                'id', 'module', 'record_type', 'record_id', 'direction',
                 'status', 'message', 'created_at', 'synced_at',
             );
 
@@ -371,8 +529,261 @@ async function notifications(req, res) {
     }
 }
 
+/**
+ * Parse a human RECORD NAME out of a log message. Pull rows carry
+ * "Imported from Tally: X" → "X". Otherwise fall back to record_type + id so the
+ * UI always has something to show. Shared by logDetail() and (mirrored) by the
+ * web logs list.
+ */
+function recordNameFrom(message, recordType, recordId) {
+    const raw = String(message == null ? '' : message);
+    const m = raw.match(/imported from tally:\s*(.+)$/i);
+    if (m && m[1]) return m[1].trim();
+    const rt = String(recordType || '').trim();
+    const rid = recordId != null ? String(recordId) : '';
+    if (rt && rid) return `${rt} #${rid}`;
+    return rt || (rid ? `#${rid}` : '');
+}
+
+/**
+ * retry(req,res) — POST /sync/retry   (user-auth, company-scoped)
+ * Body: { module? }  — a MODULE_CATALOG key; omitted = all modules.
+ *
+ * Re-queues this company's FAILED push records so the agent re-pushes them next
+ * cycle. Idempotent + safe:
+ *   • vouchers (invoices/payments/journals) — flip status 'failed' →
+ *     'pending_tally' (the agent's /pending selects exactly that). Only failed
+ *     rows are touched; created/pending rows are left alone.
+ *   • masters (customers/suppliers/products/locations) — a failed push already
+ *     left tally_guid NULL, so they're ALREADY re-queued every cycle. Nothing to
+ *     reset (we count the still-pending = tally_guid NULL ones as "re-queued").
+ *   • categories — always re-push (no guid column); reported as 0 reset.
+ * Returns { requeued, modules:[{key,requeued}] }.
+ */
+async function retry(req, res) {
+    try {
+        // direction=pull → re-import this module FROM Tally (reset the pull
+        // watermark). Default 'push' keeps the original re-queue behaviour.
+        // The pull path is a separate, idempotent handler (see pull()).
+        const direction = (req.body && req.body.direction
+            ? String(req.body.direction).trim().toLowerCase() : 'push');
+        if (direction === 'pull') {
+            return pull(req, res);
+        }
+
+        const companyId = req.companyId;
+        const wantKey = (req.body && req.body.module ? String(req.body.module).trim() : '');
+        let specs = MODULE_CATALOG;
+        if (wantKey) {
+            const spec = MODULE_BY_KEY[wantKey];
+            if (!spec) return R.errorResponse(res, 'Unknown module.', 422);
+            specs = [spec];
+        }
+
+        const now = new Date();
+        let requeued = 0;
+        const perModule = [];
+
+        for (const spec of specs) {
+            let n = 0;
+            if (spec.kind === 'voucher') {
+                // Reset only FAILED vouchers back to pending_tally (idempotent —
+                // re-running when nothing is failed updates 0 rows).
+                let q = db(spec.table)
+                    .where('company_id', companyId).whereNull('deleted_at')
+                    .where('status', 'failed');
+                if (spec.typeCol) q = q.where(spec.typeCol, spec.typeVal);
+                n = await q.update({ status: 'pending_tally', updated_at: now });
+            } else if (spec.kind === 'guid') {
+                // Masters with tally_guid NULL are already re-queued by /pending;
+                // report how many are still pending (informational, no write).
+                const row = await db(spec.table)
+                    .where('company_id', companyId).whereNull('deleted_at')
+                    .whereNull('tally_guid').count('id as c').first();
+                n = asCount(row);
+            } else {
+                // categories — re-push every cycle; nothing to reset.
+                n = 0;
+            }
+            requeued += n;
+            perModule.push({ key: spec.key, requeued: n });
+        }
+
+        return R.successResponse(res, { requeued, modules: perModule },
+            requeued ? `Re-queued ${requeued} record(s) for sync.`
+                     : 'Nothing to retry — everything is already queued or synced.');
+    } catch (err) {
+        console.error('sync.retry error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * pull(req,res) — POST /sync/pull  (also POST /sync/retry { direction:'pull' })
+ * Body: { module? }  — a MODULE_CATALOG key; omitted = all modules.
+ *
+ * MANUAL "Sync from Tally" (Tally → cloud) for one module (or all). The agent's
+ * PULL pass reads ALL of Tally but is gated by the per-company tally_sync_state
+ * ALTERID WATERMARK (master_alter_id / voucher_alter_id), so an already-imported
+ * master is skipped next cycle. To force a fresh re-import we RESET the relevant
+ * watermark to 0 + null last_pull_at, so the agent's next _pull_pass re-reads
+ * everything from Tally. (The pull dedupes masters by name and vouchers by
+ * content, so a re-pull updates/links existing rows rather than duplicating.)
+ *
+ * Reset strategy:
+ *   • a master module (guid/cat: customers/suppliers/products/categories/
+ *     locations) → reset master_alter_id = 0
+ *   • a voucher module (sales/purchase invoices, payments, receipts, journals)
+ *     → reset voucher_alter_id = 0 (and master_alter_id too is harmless; we
+ *     reset BOTH for a voucher module to be safe since the day-book pull also
+ *     touches party masters)
+ *   • all modules (no module key) → reset BOTH to 0
+ * last_pull_at is always nulled so the next pull is treated as a first pull.
+ *
+ * MANUAL + independent of sync_pull_enabled: a user clicking "Sync from Tally"
+ * works even when AUTO pull is OFF — it is an explicit action. (The watermark
+ * reset takes effect on the NEXT agent pull pass; if AUTO pull is off the user
+ * is expected to run a manual/once pull or re-enable it — the reset itself is
+ * always honoured.) We ALSO enqueue a lightweight 'pull_now' agent_commands row
+ * (best-effort) so the import happens promptly. Company-scoped + idempotent.
+ * Returns { reset:true, module, fields:{...} }.
+ */
+async function pull(req, res) {
+    try {
+        const companyId = req.companyId;
+        const wantKey = (req.body && req.body.module ? String(req.body.module).trim() : '');
+
+        let spec = null;
+        if (wantKey) {
+            spec = MODULE_BY_KEY[wantKey];
+            if (!spec) return R.errorResponse(res, 'Unknown module.', 422);
+        }
+
+        const now = new Date();
+
+        // Decide which watermark column(s) to reset. The master watermark is
+        // ALWAYS reset (the day-book pull touches party masters too, and only
+        // master_alter_id actually gates the pull today); the voucher watermark
+        // is reset for a voucher module or when no module is given. No module =
+        // reset both. last_pull_at is always nulled (treat next pull as a first).
+        const isVoucher = spec ? spec.kind === 'voucher' : true;
+        const resetVoucher = !spec || isVoucher;
+
+        // Ensure a state row exists, then reset the chosen watermark(s). Doing it
+        // in one UPSERT-ish path keeps it idempotent (re-clicking just re-zeros).
+        const existing = await db('tally_sync_state').where('company_id', companyId).first('id');
+        const patch = { master_alter_id: 0, last_pull_at: null, updated_at: now };
+        if (resetVoucher) patch.voucher_alter_id = 0;
+
+        if (existing) {
+            await db('tally_sync_state').where('company_id', companyId).update(patch);
+        } else {
+            await db('tally_sync_state').insert({
+                company_id: companyId,
+                master_alter_id: 0,
+                voucher_alter_id: 0,
+                last_pull_at: null,
+                created_at: now,
+                updated_at: now,
+            });
+        }
+
+        // Best-effort: nudge the agent to pull promptly via the command channel.
+        // The agent currently honours open_company/self_update; a 'pull_now' row
+        // is harmless if unhandled (the agent fail-reports unknown types) and the
+        // watermark reset already guarantees the next pull re-imports. Scoped to
+        // THIS company's license. Never let a command-insert failure sink the
+        // reset (the reset is the load-bearing part).
+        try {
+            const company = await db('companies').where('id', companyId)
+                .whereNull('deleted_at').first('id', 'name', 'license_id');
+            if (company && company.license_id) {
+                await db('agent_commands').insert({
+                    license_id: company.license_id,
+                    company_id: company.id,
+                    type: 'pull_now',
+                    payload: JSON.stringify({
+                        company_name: company.name,
+                        module: wantKey || null,
+                    }),
+                    status: 'pending',
+                    created_by: (req.user && req.user.sub) || null,
+                    created_at: now,
+                    updated_at: now,
+                });
+            }
+        } catch (e) {
+            // Command channel is a convenience; the watermark reset is enough.
+            console.error('sync.pull enqueue (ignored):', e && e.message);
+        }
+
+        return R.successResponse(res, {
+            reset: true,
+            module: wantKey || null,
+            fields: {
+                master_alter_id: 0,
+                voucher_alter_id: resetVoucher ? 0 : undefined,
+                last_pull_at: null,
+            },
+        }, wantKey
+            ? `Queued a fresh import of ${spec.label} from Tally. The agent will re-read it from Tally on its next pull.`
+            : 'Queued a fresh import of all modules from Tally. The agent will re-read everything from Tally on its next pull.',
+        { show: true });
+    } catch (err) {
+        console.error('sync.pull error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * logDetail(req,res) — GET /sync/logs/:id   (user-auth, company-scoped)
+ *
+ * The full single log row for the detail popup: module, record (type+id+name),
+ * direction, status + friendlyReason, message, BOTH timestamps, and the raw
+ * request_xml + response_xml. Company-scoped so a log id from another tenant
+ * 404s. Envelope: { data: <row> }.
+ */
+async function logDetail(req, res) {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) {
+            return R.errorResponse(res, 'Invalid log id.', 422);
+        }
+        const row = await db('tally_sync_logs')
+            .where('company_id', req.companyId)
+            .where('id', id)
+            .first('id', 'module', 'record_type', 'record_id', 'direction',
+                   'status', 'message', 'request_xml', 'response_xml',
+                   'retry_count', 'created_at', 'synced_at');
+        if (!row) return R.errorResponse(res, 'Log not found.', 404);
+
+        return R.successResponse(res, {
+            id:           row.id,
+            module:       row.module || '',
+            record_type:  row.record_type || '',
+            record_id:    row.record_id != null ? row.record_id : null,
+            record_name:  recordNameFrom(row.message, row.record_type, row.record_id),
+            direction:    row.direction || '',
+            status:       row.status || '',
+            reason:       friendlyReason(row.message, row.status),
+            message:      row.message || '',
+            request_xml:  row.request_xml || '',
+            response_xml: row.response_xml || '',
+            retry_count:  row.retry_count != null ? row.retry_count : 0,
+            created_at:   row.created_at || null,
+            synced_at:    row.synced_at || null,
+        });
+    } catch (err) {
+        console.error('sync.logDetail error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 module.exports = {
     summary,
     logs,
     notifications,
+    retry,
+    pull,
+    logDetail,
 };

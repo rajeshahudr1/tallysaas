@@ -72,6 +72,11 @@ async function list(req, res) {
             .where('users.company_id', req.companyId)
             .whereNull('users.deleted_at');
 
+        // Per-user location scoping (Requirement C): users carry location_id, so
+        // a location-restricted admin sees only the users pinned to their own
+        // location; unrestricted (req.locationId null) → all company users.
+        if (req.locationId != null) qb = qb.where('users.location_id', req.locationId);
+
         if (status) qb = qb.where('users.status', status);
         if (roleId) qb = qb.where('users.role_id', roleId);
 
@@ -148,32 +153,85 @@ async function create(req, res) {
 
         const password_hash = await hash(body.password);
 
+        // Approval policy: a user CREATED by a company-admin (or the super-admin)
+        // under their own license is AUTO-APPROVED so they can sign in right away
+        // — the creating admin is the authority for their own license. We still
+        // enforce the license's max_users seat cap before auto-approving; if the
+        // cap is reached the user is created PENDING (a super-admin can approve
+        // later by raising the cap). Any other creator path stays PENDING.
+        const creatorSlug = req.user && req.user.role_slug;
+        const adminCreated = creatorSlug === 'company-admin' || creatorSlug === 'super-admin';
+        const licenseId    = (req.user && req.user.license_id) || null;
+
+        // Seat-cap check (only relevant when we'd auto-approve under a license).
+        let autoApprove = adminCreated;
+        if (autoApprove && licenseId) {
+            const license = await db('licenses').where('id', licenseId).first('max_users', 'plan', 'valid_until');
+            if (license && license.max_users != null) {
+                const [{ used }] = await db('users')
+                    .where('license_id', licenseId)
+                    .where('approval_status', 'approved')
+                    .whereNull('deleted_at')
+                    .count({ used: 'id' });
+                if (Number(used) >= Number(license.max_users)) autoApprove = false;
+            }
+        }
+
         // Coerce optional fields away from `undefined` — knex throws "Undefined
         // binding(s)" on an undefined insert value (it does NOT substitute the
         // column DEFAULT). status defaults to 'Active' (a NOT NULL column).
+        const now = new Date();
         const row = {
             company_id:    req.companyId,
-            license_id:    (req.user && req.user.license_id) || null,
+            license_id:    licenseId,
             role_id:       body.role_id,
             name:          body.name,
             email,
             mobile:        body.mobile ?? null,
             password_hash,
             status:        body.status || 'Active',
-            location_id:   body.location_id ?? null,
-            // Per-user billing: a company-created user starts PENDING and cannot
-            // log in until the platform Super Admin approves them (which also
-            // provisions their subscription seat). See AuthController login gate.
-            approval_status: 'pending',
+            // Location scoping: a location-restricted creator can only place new
+            // users in THEIR own location (force it); an unrestricted creator
+            // keeps the chosen/blank location_id (blank = all locations).
+            location_id:   req.locationId != null ? req.locationId : (body.location_id ?? null),
+            // Auto-approved when an admin creates a user under their own license
+            // (see above); otherwise pending the Super Admin's approval queue.
+            approval_status: autoApprove ? 'approved' : 'pending',
+            approved_at:     autoApprove ? now : null,
+            approved_by:     autoApprove && req.user ? req.user.sub : null,
         };
 
-        // Return only safe columns (never the hash / session secrets).
-        const [inserted] = await db('users').insert(row).returning([
-            'id', 'company_id', 'license_id', 'role_id',
-            'name', 'email', 'mobile', 'status', 'approval_status', 'location_id', 'created_at',
-        ]);
+        // Create the user and (when auto-approved) provision the active
+        // subscription SEAT in one transaction, so the login subscription gate
+        // passes immediately. The seat mirrors UserApprovalController.approve.
+        const inserted = await db.transaction(async (trx) => {
+            const [u] = await trx('users').insert(row).returning([
+                'id', 'company_id', 'license_id', 'role_id',
+                'name', 'email', 'mobile', 'status', 'approval_status', 'location_id', 'created_at',
+            ]);
+            if (autoApprove) {
+                const today = now.toISOString().slice(0, 10);
+                let validUntil = new Date(now.getTime() + 10 * 365 * 24 * 60 * 60 * 1000)
+                    .toISOString().slice(0, 10);
+                let plan = 'standard';
+                if (licenseId) {
+                    const lic = await trx('licenses').where('id', licenseId).first('plan', 'valid_until');
+                    if (lic) {
+                        plan = lic.plan || plan;
+                        if (lic.valid_until) validUntil = new Date(lic.valid_until).toISOString().slice(0, 10);
+                    }
+                }
+                await trx('subscriptions').insert({
+                    user_id: u.id, plan, valid_from: today, valid_until: validUntil, status: 'active',
+                });
+            }
+            return u;
+        });
 
-        return R.successResponse(res, inserted, 'User created. Awaiting Super Admin approval before they can sign in.');
+        const msg = inserted.approval_status === 'approved'
+            ? 'User created. They can sign in now.'
+            : 'User created. Awaiting Super Admin approval before they can sign in (license seat limit reached).';
+        return R.successResponse(res, inserted, msg);
     } catch (err) {
         console.error('users.create error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);

@@ -107,6 +107,20 @@ function fmtDate(v) {
     return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`;
 }
 
+/* Format an ISO/Date string to "dd/mm/yyyy hh:mm AM/PM" (date AND time) for the
+ * Sync surfaces. Returns '' for empty so callers can fall back to a dash. */
+function fmtDateTime(v) {
+    if (!v) return '';
+    const d = new Date(v);
+    if (isNaN(d)) return String(v);
+    const p = (n) => String(n).padStart(2, '0');
+    let h = d.getHours();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12; if (h === 0) h = 12;
+    return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ` +
+           `${p(h)}:${p(d.getMinutes())} ${ampm}`;
+}
+
 /* Generic list fetch: forwards page/per_page/search/status query params to
  * the api and returns { rows, meta }. Each page maps `rows` to its view's
  * expected field names before rendering. */
@@ -231,6 +245,25 @@ function requireCompanyAdmin(req, res, next) {
     if (u && u.role_slug === 'company-admin') return next();
     if (req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1) {
         return res.status(403).json({ status: 403, show: true, msg: 'License-admin access required.' });
+    }
+    return res.status(403).render('errors/404', {
+        title: 'Forbidden',
+        activeMenu: '',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Forbidden' }],
+    });
+}
+
+/* Role-management gate: BOTH the super-admin (manages every role across
+ * licenses + global templates) AND the company-admin (manages their own
+ * license's custom roles) may reach the /roles-admin screens. The api enforces
+ * the finer hierarchy (super-admin vs license-scoped, PROTECTED_SLUGS); this
+ * just keeps the routes/menu from leaking to plain users. */
+function requireRoleManager(req, res, next) {
+    const u = req.session && req.session.user;
+    const slug = u && u.role_slug;
+    if (slug === 'super-admin' || slug === 'company-admin') return next();
+    if (req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1) {
+        return res.status(403).json({ status: 403, show: true, msg: 'Role-management access required.' });
     }
     return res.status(403).render('errors/404', {
         title: 'Forbidden',
@@ -1049,6 +1082,8 @@ router.get('/inventory', async (req, res, next) => {
         const qs = new URLSearchParams({ page: String(page), per_page: String(perPage) });
         if (req.query.search) qs.set('search', String(req.query.search));
         if (req.query.status) qs.set('status', String(req.query.status));
+        if (req.query.sort)   qs.set('sort',  String(req.query.sort));
+        if (req.query.order)  qs.set('order', String(req.query.order));
 
         const { body } = await api.get(req, `/inventory?${qs.toString()}`);
         const payload  = (body && body.data) || {};
@@ -1152,60 +1187,140 @@ router.post('/inventory/adjust', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* Parse a human RECORD NAME out of a log message (mirrors the api's
+ * recordNameFrom). Pull rows carry "Imported from Tally: X" → "X"; otherwise
+ * fall back to record_type + id so the column is never blank. */
+function syncRecordName(message, recordType, recordId) {
+    const raw = String(message == null ? '' : message);
+    const m = raw.match(/imported from tally:\s*(.+)$/i);
+    if (m && m[1]) return m[1].trim();
+    const rt = String(recordType || '').trim();
+    const rid = recordId != null && recordId !== '' ? String(recordId) : '';
+    if (rt && rid) return `${rt} #${rid}`;
+    return rt || (rid ? `#${rid}` : '—');
+}
+
+/* Build the FULL Sync Dashboard view-model from /sync/summary. Shared by the
+ * page render AND the JSON poller (GET /sync-dashboard.json) so the EJS-rendered
+ * page and the live DOM updates share ONE contract. Returns plain JS objects
+ * (no EJS) — the page route spreads these into res.render; the poller serialises
+ * them straight to JSON. Every value the poller updates IN PLACE is included. */
+async function buildSyncDashboardData(req) {
+    const { body } = await api.get(req, '/sync/summary');
+    const data    = (body && body.data) || {};
+    const summary = data.summary || {};
+    const stats   = data.stats   || {};
+    const modules = Array.isArray(data.modules) ? data.modules : [];
+    const recent  = Array.isArray(data.recent)  ? data.recent  : [];
+
+    const connected = !!summary.connected;
+    // Date AND time everywhere "Last Sync" / heartbeat is shown.
+    const heartbeatTxt = summary.heartbeat_at ? fmtDateTime(summary.heartbeat_at) : '—';
+    const lastSyncTxt  = summary.last_sync_at ? fmtDateTime(summary.last_sync_at) : '—';
+
+    const totalSynced = Number(stats.total_synced) || 0;
+    const failed      = Number(stats.failed) || 0;
+
+    const syncModules = modules.map((m) => {
+        const total   = Number(m.total) || 0;
+        const synced  = Number(m.synced) || 0;
+        const pct     = total ? Math.round((synced / total) * 100) : 0;
+        return {
+            key:          m.key || '',
+            module:       m.label || m.module || '',
+            total,
+            synced,
+            pending:      Number(m.pending) || 0,
+            failed:       Number(m.failed) || 0,
+            pct,
+            last_sync:    m.last_sync_at ? fmtDateTime(m.last_sync_at) : (m.last_sync ? fmtDateTime(m.last_sync) : '—'),
+        };
+    });
+
+    const recentSync = recent.map((r) => {
+        const s = String(r.status || '');
+        return {
+            module: r.module || '',
+            record: syncRecordName(r.message, r.record_type, r.record_id),
+            status: s ? s.charAt(0).toUpperCase() + s.slice(1) : '',
+            time:   r.created_at ? fmtDateTime(r.created_at) : '',
+        };
+    });
+
+    // Auto-update surface (Requirement 3). agent_version is the installed exe;
+    // latest_version the published one; update_available a server-side semver
+    // compare; auto_update the per-license cloud toggle (drives the switch).
+    const installedVer    = summary.agent_version || null;
+    const latestVer       = summary.latest_version || null;
+    const updateAvailable = !!summary.update_available;
+    const mandatoryUpdate = !!summary.mandatory_update;
+    const autoUpdate      = summary.auto_update !== false;   // default ON
+
+    // Auto-sync DIRECTION toggles (Requirement 1). Per-license push/pull flags
+    // the agent loop honours; default ON when absent (matches the api default).
+    const pushEnabled = summary.push_enabled !== false;
+    const pullEnabled = summary.pull_enabled !== false;
+
+    return {
+        connected,
+        connection:    connected ? 'Connected' : 'Disconnected',
+        agent_version: installedVer || '—',
+        company:       summary.company || '—',
+        heartbeat:     heartbeatTxt,
+        last_sync:     lastSyncTxt,
+        total_synced:  totalSynced,
+        total_synced_fmt: totalSynced.toLocaleString('en-IN'),
+        failed,
+        failed_fmt:    failed.toLocaleString('en-IN'),
+        modules:       syncModules,
+        recent:        recentSync,
+        // Version / auto-update (live-reflected by /js/sync-dashboard.js).
+        latest_version:   latestVer,
+        update_available: updateAvailable,
+        mandatory_update: mandatoryUpdate,
+        auto_update:      autoUpdate,
+        release_notes:    summary.release_notes || null,
+        // Auto-sync direction toggles (live-reflected by /js/sync-dashboard.js).
+        push_enabled:     pushEnabled,
+        pull_enabled:     pullEnabled,
+    };
+}
+
 /* ── TALLY SYNC · Sync Dashboard (GET /sync-dashboard) ──────── */
 router.get('/sync-dashboard', async (req, res, next) => {
     try {
-        const { body } = await api.get(req, '/sync/summary');
-        const data    = (body && body.data) || {};
-        const summary = data.summary || {};
-        const stats   = data.stats   || {};
-        const modules = Array.isArray(data.modules) ? data.modules : [];
-        const recent  = Array.isArray(data.recent)  ? data.recent  : [];
+        const d = await buildSyncDashboardData(req);
 
-        const connected = !!summary.connected;
-        const lastSeen  = summary.last_seen_at ? fmtDate(summary.last_seen_at) : '—';
-
-        // Connection banner state (same keys the view's _sum reads).
+        // Connection banner state (same keys the view's _sum reads). Date+time.
         const syncSummary = {
-            connected,
-            agent_version:  summary.agent_version || '—',
+            connected:      d.connected,
+            agent_version:  d.agent_version,
             tally_version:  'TallyPrime',
-            company:        summary.company || '—',
-            last_heartbeat: lastSeen,
-            last_sync:      lastSeen,
+            company:        d.company,
+            last_heartbeat: d.heartbeat,
+            last_sync:      d.last_sync,
+            // Auto-update surface (Requirement 3).
+            latest_version:   d.latest_version,
+            update_available: d.update_available,
+            mandatory_update: d.mandatory_update,
+            auto_update:      d.auto_update,
+            release_notes:    d.release_notes,
+            // Auto-sync direction toggles (Requirement 1).
+            push_enabled:     d.push_enabled,
+            pull_enabled:     d.pull_enabled,
         };
 
-        // Four headline stat cards — icon/tone preserved from mock.syncStats.
-        const totalSynced = Number(stats.total_synced) || 0;
-        const failed      = Number(stats.failed) || 0;
+        // Active company (header switcher) — drives the "Open in Tally" connect
+        // button on the not-connected alert (Requirement 3).
+        const activeCompany = res.locals.company || null;
+
+        // Four headline stat cards — icon/tone preserved; values now date+time.
         const syncStats = [
-            { label: 'Connection',           value: connected ? 'Connected' : 'Disconnected', icon: 'fa-plug-circle-check',    tone: 'green'  },
-            { label: 'Last Sync',            value: lastSeen,                                 icon: 'fa-clock-rotate-left',    tone: 'blue'   },
-            { label: 'Total Records Synced', value: totalSynced.toLocaleString('en-IN'),      icon: 'fa-circle-check',         tone: 'purple' },
-            { label: 'Failed Records',       value: failed.toLocaleString('en-IN'),           icon: 'fa-triangle-exclamation', tone: 'amber'  },
+            { label: 'Connection',           value: d.connection,       icon: 'fa-plug-circle-check',    tone: 'green'  },
+            { label: 'Last Sync',            value: d.last_sync,        icon: 'fa-clock-rotate-left',    tone: 'blue'   },
+            { label: 'Total Records Synced', value: d.total_synced_fmt, icon: 'fa-circle-check',         tone: 'purple' },
+            { label: 'Failed Records',       value: d.failed_fmt,       icon: 'fa-triangle-exclamation', tone: 'amber'  },
         ];
-
-        // Per-module sync rows (view does .toLocaleString on total/synced).
-        const syncModules = modules.map((m) => ({
-            module:    m.module || '',
-            total:     Number(m.total) || 0,
-            synced:    Number(m.synced) || 0,
-            pending:   Number(m.pending) || 0,
-            failed:    Number(m.failed) || 0,
-            last_sync: m.last_sync ? fmtDate(m.last_sync) : '—',
-        }));
-
-        // Recent activity list ({module, record, status, time}). Status is
-        // title-cased so it matches the pill labels (helper lowercases anyway).
-        const recentSync = recent.map((r) => {
-            const s = String(r.status || '');
-            return {
-                module: r.module || '',
-                record: [r.record_type, r.record_id].filter(Boolean).join(' ') || '—',
-                status: s ? s.charAt(0).toUpperCase() + s.slice(1) : '',
-                time:   r.created_at ? fmtDate(r.created_at) : '',
-            };
-        });
 
         res.render('tally-sync/dashboard', {
             title: 'Sync Dashboard',
@@ -1217,10 +1332,160 @@ router.get('/sync-dashboard', async (req, res, next) => {
 
             syncSummary,
             syncStats,
-            syncModules,
-            recentSync,
+            syncModules: d.modules,
+            recentSync:  d.recent,
+            // Active company id+name for the "Open in Tally" connect button.
+            activeCompany,
+
+            // Live auto-refresh poller (updates the badge/stats/rows in place).
+            pageScript: '<script src="/js/sync-dashboard.js" defer></script>',
         });
     } catch (err) { next(err); }
+});
+
+/* ── TALLY SYNC · Live poll JSON (GET /sync-dashboard.json) ────
+ * Lightweight JSON variant of the dashboard data for the page's 15s poller.
+ * Returns the SAME view-model the page rendered from, so the client updates the
+ * connection badge/dot, stats and every module row IN PLACE with no reload. */
+router.get('/sync-dashboard.json', async (req, res) => {
+    try {
+        const d = await buildSyncDashboardData(req);
+        return res.json({ ok: true, data: d });
+    } catch (err) {
+        return res.status(200).json({ ok: false, error: 'sync_summary_unavailable' });
+    }
+});
+
+/* ── TALLY SYNC · Retry / re-queue + 2-way manual sync (POST) ──
+ * /sync-retry            → PUSH (re-queue) ALL modules
+ * /sync-retry/:module    → PUSH one module (a MODULE_CATALOG key)
+ * /sync-pull             → PULL (re-import) ALL modules from Tally
+ * /sync-pull/:module     → PULL one module from Tally
+ *
+ * PUSH posts the api POST /sync/retry; PULL posts POST /sync/pull (which resets
+ * the company's pull watermark so the agent re-imports). Both are MANUAL and
+ * NOT gated by the per-license auto toggles. The grid's two small per-module
+ * buttons + Sync-All POST here as XHR (JSON) — the JS toasts the api's msg;
+ * a plain-form fallback flashes + redirects. */
+async function handleSyncDirection(direction, req, res) {
+    const wantJson = req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1;
+    const moduleKey = req.params.module ? String(req.params.module) : '';
+    const isPull = direction === 'pull';
+    const path   = isPull ? '/sync/pull' : '/sync/retry';
+    const body   = {};
+    if (moduleKey) body.module = moduleKey;
+    if (isPull) body.direction = 'pull';   // belt-and-braces (api /sync/pull is explicit)
+    const fallbackOk = isPull
+        ? 'Queued a fresh import from Tally.'
+        : 'Re-queued records for sync.';
+    const fallbackErr = isPull
+        ? 'Could not queue the import from Tally.'
+        : 'Could not re-queue records for sync.';
+    try {
+        const result = await api.post(req, path, body);
+        const ok  = apiOk(result);
+        const msg = (result && result.body && result.body.msg) || (ok ? fallbackOk : apiError(result, fallbackErr));
+        if (wantJson) return res.status(200).json({ ok: !!ok, direction, module: moduleKey || null, msg });
+        setFlash(req, ok ? 'success' : 'error', msg);
+    } catch (_) {
+        if (wantJson) return res.status(200).json({ ok: false, direction, module: moduleKey || null, msg: 'Could not reach the API server.' });
+        setFlash(req, 'error', 'Could not reach the API server.');
+    }
+    const back = req.get('Referer') || '/sync-dashboard';
+    return req.session.save(() => res.redirect(back));
+}
+function handleSyncRetry(req, res) { return handleSyncDirection('push', req, res); }
+function handleSyncPull(req, res)  { return handleSyncDirection('pull', req, res); }
+router.post('/sync-retry',          handleSyncRetry);
+router.post('/sync-retry/:module',  handleSyncRetry);
+router.post('/sync-pull',           handleSyncPull);
+router.post('/sync-pull/:module',   handleSyncPull);
+
+/* ── TALLY SYNC · Auto-sync DIRECTION toggles (POST /sync-direction) ──
+ * Flips the per-license push/pull AUTO toggles via the api PATCH
+ * /account/sync-direction. The dashboard's two switches submit here (a tiny JS
+ * fetch, or a plain form fallback) with `push_enabled` / `pull_enabled` = on/off.
+ * Each is optional; at least one is sent. The agent reads the new values back
+ * via its heartbeat each cycle and skips the push/pull pass when off. Returns
+ * JSON when called as XHR, else flashes + redirects back. */
+router.post('/sync-direction', async (req, res) => {
+    const wantJson = req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1;
+    const b = (req && req.body) || {};
+    const payload = {};
+    // Only forward a flag the client actually sent (so toggling one switch does
+    // not clobber the other). The api treats each flag as optional.
+    if (b.push_enabled !== undefined) payload.push_enabled = asBool(b.push_enabled);
+    if (b.pull_enabled !== undefined) payload.pull_enabled = asBool(b.pull_enabled);
+    try {
+        const result = await api.patch(req, '/account/sync-direction', payload);
+        const ok  = apiOk(result) || (result && result.body && result.body.status === 200);
+        const data = (result && result.body && result.body.data) || {};
+        const msg = (result && result.body && result.body.msg)
+            || (ok ? 'Auto-sync direction updated.' : apiError(result, 'Could not change auto-sync direction.'));
+        if (wantJson) {
+            return res.status(200).json({
+                ok: !!ok, msg,
+                push_enabled: data.push_enabled, pull_enabled: data.pull_enabled,
+            });
+        }
+        setFlash(req, ok ? 'success' : 'error', msg);
+    } catch (_) {
+        if (wantJson) return res.status(200).json({ ok: false, msg: 'Could not reach the API server.' });
+        setFlash(req, 'error', 'Could not reach the API server.');
+    }
+    const back = req.get('Referer') || '/sync-dashboard';
+    return req.session.save(() => res.redirect(back));
+});
+
+/* ── TALLY SYNC · Agent auto-update toggle (POST /sync-auto-update) ──
+ * Flips the per-license cloud auto-update toggle via the api PATCH
+ * /account/agent/auto-update. The dashboard switch submits here (a tiny JS
+ * fetch, or a plain form fallback) with `enabled` = on/off. The agent reads the
+ * new value as authoritative on its next /agent/version check. Returns JSON when
+ * called as XHR, else flashes + redirects back. */
+router.post('/sync-auto-update', async (req, res) => {
+    const wantJson = req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1;
+    const enabled = asBool(req.body && req.body.enabled);
+    try {
+        const result = await api.patch(req, '/account/agent/auto-update', { enabled });
+        const ok  = apiOk(result) || (result && result.body && result.body.status === 200);
+        const msg = (result && result.body && result.body.msg)
+            || (ok ? (enabled ? 'Auto-update turned ON.' : 'Auto-update turned OFF.')
+                   : apiError(result, 'Could not change auto-update.'));
+        if (wantJson) {
+            return res.status(200).json({ ok: !!ok, enabled, msg });
+        }
+        setFlash(req, ok ? 'success' : 'error', msg);
+    } catch (_) {
+        if (wantJson) return res.status(200).json({ ok: false, enabled, msg: 'Could not reach the API server.' });
+        setFlash(req, 'error', 'Could not reach the API server.');
+    }
+    const back = req.get('Referer') || '/sync-dashboard';
+    return req.session.save(() => res.redirect(back));
+});
+
+/* ── TALLY SYNC · Update agent now (POST /sync-update-now) ─────
+ * Enqueues a 'self_update' agent command (api POST /account/agent/self-update)
+ * so the agent forces an update check on its next poll. The agent self-updates,
+ * so this just confirms "will update within a minute". JSON for the button's
+ * fetch; flash+redirect fallback otherwise. */
+router.post('/sync-update-now', async (req, res) => {
+    const wantJson = req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1;
+    try {
+        const result = await api.post(req, '/account/agent/self-update', {});
+        const bodyStatus = result && result.body && result.body.status;
+        const ok  = bodyStatus && bodyStatus >= 200 && bodyStatus < 300;
+        const msg = (result && result.body && result.body.msg)
+            || (ok ? 'Update requested. The agent will update within a minute.'
+                   : apiError(result, 'Could not request an update.'));
+        if (wantJson) return res.status(200).json({ ok: !!ok, msg });
+        setFlash(req, ok ? 'success' : 'error', msg);
+    } catch (_) {
+        if (wantJson) return res.status(200).json({ ok: false, msg: 'Could not reach the API server.' });
+        setFlash(req, 'error', 'Could not reach the API server.');
+    }
+    const back = req.get('Referer') || '/sync-dashboard';
+    return req.session.save(() => res.redirect(back));
 });
 
 /* ── TALLY SYNC · Sync Logs (GET /sync-logs) ────────────────── */
@@ -1249,7 +1514,10 @@ router.get('/sync-logs', async (req, res, next) => {
             return {
                 id:        r.id,
                 module:    r.module || '',
-                record:    r.record_id || r.record_type || '',
+                // Clear RECORD name/description (parsed from the message, else
+                // record_type + id) so the column reads like "Acme Traders"
+                // not just a bare id.
+                record:    syncRecordName(r.message, r.record_type, r.record_id),
                 direction: r.direction || '',
                 status:    txStatusLabel(r.status),
                 // On failures show the friendly cause in the Message column;
@@ -1259,7 +1527,7 @@ router.get('/sync-logs', async (req, res, next) => {
                 fix:       fr.fix,
                 raw:       r.message || '',
                 failed:    isFailed,
-                time:      fmtDate(r.synced_at || r.created_at),
+                time:      fmtDateTime(r.synced_at || r.created_at),
             };
         });
 
@@ -1283,8 +1551,202 @@ router.get('/sync-logs', async (req, res, next) => {
             syncModuleNames: mock.syncModuleNames,
             syncDirections:  mock.syncDirections,
             syncLogStatuses: mock.syncLogStatuses,
+
+            // Log-detail popup behaviour (opens the modal on the per-row view btn).
+            pageScript: '<script src="/js/sync-logs.js" defer></script>',
         });
     } catch (err) { next(err); }
+});
+
+/* ── TALLY SYNC · Single log detail (GET /sync-logs/:id) ──────
+ * JSON consumed by /js/sync-logs.js to fill + show the detail modal. Proxies
+ * the api GET /sync/logs/:id (company-scoped) and formats the timestamps to
+ * date+time. Returns plain JSON (not an EJS render). */
+router.get('/sync-logs/:id', async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(200).json({ ok: false, error: 'bad_id' });
+        }
+        const { body } = await api.get(req, `/sync/logs/${id}`);
+        if (!apiOk({ body })) {
+            return res.status(200).json({ ok: false, error: (body && body.msg) || 'not_found' });
+        }
+        const d = (body && body.data) || {};
+        return res.json({
+            ok: true,
+            data: {
+                id:           d.id,
+                module:       d.module || '',
+                record_type:  d.record_type || '',
+                record_id:    d.record_id != null ? d.record_id : '',
+                record_name:  d.record_name || '',
+                direction:    d.direction || '',
+                status:       txStatusLabel(d.status),
+                status_raw:   d.status || '',
+                reason:       (d.reason && d.reason.cause) || '',
+                fix:          (d.reason && d.reason.fix) || '',
+                severity:     (d.reason && d.reason.severity) || '',
+                message:      d.message || '',
+                request_xml:  d.request_xml || '',
+                response_xml: d.response_xml || '',
+                retry_count:  d.retry_count != null ? d.retry_count : 0,
+                created_at:   d.created_at ? fmtDateTime(d.created_at) : '—',
+                synced_at:    d.synced_at ? fmtDateTime(d.synced_at) : '—',
+            },
+        });
+    } catch (_) {
+        return res.status(200).json({ ok: false, error: 'unavailable' });
+    }
+});
+
+/* ── CHANGE HISTORY · History page (GET /history) ───────────────
+ * Lists recent per-record changes across every module (filterable by module /
+ * action / source / search), each row showing module, record, action,
+ * who/when and a "what changed" summary, with View/Revert actions. Proxies the
+ * api GET /history (company-scoped). */
+const HISTORY_MODULE_LABELS = {
+    customers: 'Customers', suppliers: 'Suppliers', products: 'Products',
+    categories: 'Categories', locations: 'Locations', 'sales-persons': 'Sales Persons',
+    'customer-groups': 'Customer Groups', 'sales-invoices': 'Sales Invoices',
+    'purchase-invoices': 'Purchase Invoices', payments: 'Payments',
+    receipts: 'Receipts', journals: 'Journals',
+};
+function historyModuleLabel(slug) {
+    return HISTORY_MODULE_LABELS[slug] || (slug ? String(slug) : '');
+}
+/* action → human label + the pill class the table understands (created/synced
+ * → success-ish, deleted → danger, updated → info-ish, reverted → warning). */
+function historyActionLabel(a) {
+    const map = { created: 'Created', updated: 'Updated', deleted: 'Deleted',
+        synced: 'Synced', reverted: 'Reverted' };
+    return map[String(a || '').toLowerCase()] || a || '';
+}
+
+router.get('/history', async (req, res, next) => {
+    try {
+        const page    = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const perPage = parseInt(req.query.per_page, 10) || 10;
+        const qs = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+        if (req.query.module)    qs.set('module',    String(req.query.module));
+        if (req.query.action)    qs.set('action',    String(req.query.action));
+        if (req.query.source)    qs.set('source',    String(req.query.source));
+        if (req.query.record_id) qs.set('record_id', String(req.query.record_id));
+        if (req.query.search)    qs.set('search',    String(req.query.search));
+
+        const { body } = await api.get(req, `/history?${qs.toString()}`);
+        const payload  = (body && body.data) || {};
+        const rows     = Array.isArray(payload.data) ? payload.data : [];
+        const meta     = payload.meta || { total: rows.length, page, per_page: perPage };
+
+        const historyRows = rows.map((r) => ({
+            id:       r.id,
+            module:   historyModuleLabel(r.module),
+            record:   r.record_label || (r.record_id != null ? `#${r.record_id}` : '—'),
+            action:   historyActionLabel(r.action),
+            source:   r.source || '',
+            who:      r.changed_by_name || (r.source === 'tally' ? 'Tally Sync' : (r.source || 'System')),
+            changed:  r.summary || '',
+            time:     fmtDateTime(r.created_at),
+            // raw module slug + record id so the Revert form posts/back-links right.
+            module_slug: r.module || '',
+            record_id:   r.record_id != null ? r.record_id : '',
+        }));
+
+        res.render('history/index', {
+            title: 'Change History',
+            activeMenu: 'history',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Change History' }],
+            historyRows,
+            historyTotal: meta.total != null ? meta.total : historyRows.length,
+            page:    meta.page    != null ? meta.page    : page,
+            perPage: meta.per_page != null ? meta.per_page : perPage,
+            // Filter dropdown option sources.
+            historyModules: Object.keys(HISTORY_MODULE_LABELS).map((k) => ({ value: k, label: HISTORY_MODULE_LABELS[k] })),
+            historyActions: ['created', 'updated', 'deleted', 'synced', 'reverted'],
+            historySources: ['cloud', 'tally', 'agent', 'system'],
+            pageScript: '<script src="/js/history.js" defer></script>',
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── CHANGE HISTORY · Detail JSON (GET /history/:id) ────────────
+ * JSON consumed by /js/history.js to fill + show the detail modal: the full
+ * before/after objects, the changed-fields list, and the per-record compare
+ * snapshots (fetched in the same request so the modal shows the timeline). */
+router.get('/history/:id', async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(200).json({ ok: false, error: 'bad_id' });
+        }
+        const { body } = await api.get(req, `/history/${id}`);
+        if (!apiOk({ body })) {
+            return res.status(200).json({ ok: false, error: (body && body.msg) || 'not_found' });
+        }
+        const d = (body && body.data) || {};
+
+        // Pull the per-record compare timeline too (best-effort) so the modal can
+        // render "value on each date" side-by-side. Needs module + record_id.
+        let compare = null;
+        if (d.module && d.record_id != null && d.record_id !== '') {
+            try {
+                const cq = new URLSearchParams({ module: String(d.module), record_id: String(d.record_id) });
+                const cr = await api.get(req, `/history/compare?${cq.toString()}`);
+                if (apiOk(cr) && cr.body && cr.body.data) compare = cr.body.data;
+            } catch (_) { compare = null; }
+        }
+
+        return res.json({
+            ok: true,
+            data: {
+                id:             d.id,
+                module:         historyModuleLabel(d.module),
+                module_slug:    d.module || '',
+                record_type:    d.record_type || '',
+                record_id:      d.record_id != null ? d.record_id : '',
+                record_label:   d.record_label || '',
+                action:         historyActionLabel(d.action),
+                action_raw:     d.action || '',
+                source:         d.source || '',
+                who:            d.changed_by_name || (d.source === 'tally' ? 'Tally Sync' : (d.source || 'System')),
+                summary:        d.summary || '',
+                note:           d.note || '',
+                before:         d.before || null,
+                after:          d.after || null,
+                changed_fields: Array.isArray(d.changed_fields) ? d.changed_fields : [],
+                created_at:     d.created_at ? fmtDateTime(d.created_at) : '—',
+                // Can this entry be reverted? Only when it has a before snapshot.
+                revertable:     !!(d.before && typeof d.before === 'object'),
+                compare,
+            },
+        });
+    } catch (_) {
+        return res.status(200).json({ ok: false, error: 'unavailable' });
+    }
+});
+
+/* ── CHANGE HISTORY · Revert (POST /history/:id/revert) ─────────
+ * Calls the api revert (cloud-side), flashes the api's message and bounces back
+ * to the History page. */
+router.post('/history/:id/revert', async (req, res) => {
+    const id   = Number(req.params.id);
+    const back = req.get('Referer') || '/history';
+    if (!Number.isInteger(id) || id <= 0) {
+        setFlash(req, 'error', 'Invalid history entry.');
+        return req.session.save(() => res.redirect(back));
+    }
+    try {
+        const result = await api.post(req, `/history/${id}/revert`, {});
+        if (apiOk(result)) {
+            setFlash(req, 'success', (result.body && result.body.msg) || 'Record reverted (cloud copy).');
+        } else {
+            setFlash(req, 'error', apiError(result, 'Could not revert the record.'));
+        }
+    } catch (_) {
+        setFlash(req, 'error', 'Could not reach the API server.');
+    }
+    return req.session.save(() => res.redirect(back));
 });
 
 /* ── REPORTS · Reports hub (GET /reports) — real working links ── */
@@ -1497,6 +1959,8 @@ router.get('/reports/sales-register', async (req, res, next) => {
         if (req.query.date_to)     qs.set('date_to', String(req.query.date_to));
         if (req.query.status)      qs.set('status', String(req.query.status));
         if (req.query.customer_id) qs.set('customer_id', String(req.query.customer_id));
+        if (req.query.sort)        qs.set('sort',  String(req.query.sort));
+        if (req.query.order)       qs.set('order', String(req.query.order));
 
         const { body } = await api.get(req, `/reports/sales-register?${qs.toString()}`);
         const payload = (body && body.data) || {};
@@ -1580,7 +2044,14 @@ router.get('/users', async (req, res, next) => {
  * real role_id (the user-create endpoint needs it). */
 router.get('/users/add', async (req, res, next) => {
     try {
-        const roleOptions = await fetchOptions(req, '/roles');
+        // Role options = the roles VISIBLE to this admin (system company-admin
+        // role + their license custom roles like "Salesman"). Location options =
+        // the company's real locations (id+name) so the form submits a real
+        // location_id; blank = all locations (no per-user location restriction).
+        const [roleOptions, locationOptions] = await Promise.all([
+            fetchOptions(req, '/roles'),
+            fetchOptions(req, '/locations'),
+        ]);
         res.render('users/form', {
             title: 'Add User',
             activeMenu: 'users',
@@ -1590,7 +2061,7 @@ router.get('/users/add', async (req, res, next) => {
                 { label: 'Add User' },
             ],
             roleOptions,
-            locationNames: mock.locationNames,
+            locationOptions,
         });
     } catch (err) { next(err); }
 });
@@ -2353,7 +2824,7 @@ function permsToSet(list) {
 }
 
 /* GET /roles-admin — list this license's roles (system + custom). */
-router.get('/roles-admin', requireCompanyAdmin, async (req, res, next) => {
+router.get('/roles-admin', requireRoleManager, async (req, res, next) => {
     try {
         const { body } = await api.get(req, '/account/roles');
         // The api wraps the list in { data:[...], meta } under body.data (the
@@ -2379,10 +2850,17 @@ router.get('/roles-admin', requireCompanyAdmin, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-/* GET /roles-admin/new — empty create form, grid built from entitlements. */
-router.get('/roles-admin/new', requireCompanyAdmin, async (req, res, next) => {
+/* GET /roles-admin/new — empty create form, grid built from entitlements.
+ * Super-admin: when a license is selected in the header switcher, scope the
+ * permission grid to THAT license's entitlements (pass ?license_id); otherwise
+ * the api returns the full catalogue for a global template role. */
+router.get('/roles-admin/new', requireRoleManager, async (req, res, next) => {
     try {
-        const { body } = await api.get(req, '/account/roles/available-permissions');
+        const isSuper = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
+        const licId   = isSuper && req.session.licenseId ? Number(req.session.licenseId) : null;
+        const permsPath = '/account/roles/available-permissions'
+            + (licId ? `?license_id=${licId}` : '');
+        const { body } = await api.get(req, permsPath);
         const data = (body && body.data) || {};
         res.render('roles/form', {
             title: 'New Role',
@@ -2403,15 +2881,20 @@ router.get('/roles-admin/new', requireCompanyAdmin, async (req, res, next) => {
 
 /* GET /roles-admin/:id — edit form (or read-only view for system roles),
  * pre-filled from the role's current permissions. Grid built from entitlements. */
-router.get('/roles-admin/:id', requireCompanyAdmin, async (req, res, next) => {
+router.get('/roles-admin/:id', requireRoleManager, async (req, res, next) => {
     try {
         const id = Number(req.params.id);
-        const [permsRes, roleRes] = await Promise.all([
-            api.get(req, '/account/roles/available-permissions'),
-            api.get(req, `/account/roles/${id}`),
-        ]);
+        // Fetch the role first so a super-admin can scope the permission grid to
+        // the role's OWN license entitlements (a license-scoped role) or the full
+        // catalogue (a global template, license_id null).
+        const roleRes  = await api.get(req, `/account/roles/${id}`);
+        const role     = (roleRes.body && roleRes.body.data) || { id };
+        const isSuper  = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
+        const licId    = (isSuper && role.license_id) ? Number(role.license_id) : null;
+        const permsPath = '/account/roles/available-permissions'
+            + (licId ? `?license_id=${licId}` : '');
+        const permsRes = await api.get(req, permsPath);
         const permsData = (permsRes.body && permsRes.body.data) || {};
-        const role      = (roleRes.body && roleRes.body.data) || { id };
         const editable  = !!role.editable;
         res.render('roles/form', {
             title: editable ? 'Edit Role' : 'View Role',
@@ -2430,11 +2913,18 @@ router.get('/roles-admin/:id', requireCompanyAdmin, async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
-/* POST /roles-admin — create a custom role with the ticked permissions. */
-router.post('/roles-admin', requireCompanyAdmin, async (req, res, next) => {
+/* POST /roles-admin — create a custom role with the ticked permissions.
+ * Super-admin: attach the selected license (header switcher) so the new role is
+ * scoped to it; with no license selected the api creates a global TEMPLATE role
+ * (license_id null). License-admins: the api uses their own license (the
+ * body.license_id is ignored for non-super callers). */
+router.post('/roles-admin', requireRoleManager, async (req, res, next) => {
     try {
         const slugs = [].concat(req.body.perm || []);
-        const result = await api.post(req, '/account/roles', { name: req.body.name, slugs });
+        const isSuper = req.session && req.session.user && req.session.user.role_slug === 'super-admin';
+        const payload = { name: req.body.name, slugs };
+        if (isSuper && req.session.licenseId) payload.license_id = Number(req.session.licenseId);
+        const result = await api.post(req, '/account/roles', payload);
         if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Role created successfully.');
         else setFlash(req, 'error', apiError(result, 'Could not create the role.'));
         return req.session.save(() => res.redirect('/roles-admin'));
@@ -2444,7 +2934,7 @@ router.post('/roles-admin', requireCompanyAdmin, async (req, res, next) => {
 /* POST /roles-admin/:id — save a custom role: rename, then set its permissions.
  * Browsers can't PUT from a form, so we proxy to api.put for both calls. If the
  * rename fails we surface that and skip the permissions update. */
-router.post('/roles-admin/:id', requireCompanyAdmin, async (req, res, next) => {
+router.post('/roles-admin/:id', requireRoleManager, async (req, res, next) => {
     try {
         const id = Number(req.params.id);
         const slugs = [].concat(req.body.perm || []);
@@ -2462,7 +2952,7 @@ router.post('/roles-admin/:id', requireCompanyAdmin, async (req, res, next) => {
 
 /* POST /roles-admin/:id/delete — delete a custom role (api returns 422 with a
  * message when the role is still assigned to users; surface that message). */
-router.post('/roles-admin/:id/delete', requireCompanyAdmin, async (req, res, next) => {
+router.post('/roles-admin/:id/delete', requireRoleManager, async (req, res, next) => {
     try {
         const id = Number(req.params.id);
         const result = await api.del(req, `/account/roles/${id}`);

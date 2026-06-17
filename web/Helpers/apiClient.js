@@ -51,9 +51,10 @@ async function callApi(req, method, path, body) {
 }
 
 // Convenience verbs.
-const get  = (req, path)       => callApi(req, 'GET', path);
-const post = (req, path, body) => callApi(req, 'POST', path, body);
-const put  = (req, path, body) => callApi(req, 'PUT', path, body);
-const del  = (req, path)       => callApi(req, 'DELETE', path);
+const get   = (req, path)       => callApi(req, 'GET', path);
+const post  = (req, path, body) => callApi(req, 'POST', path, body);
+const put   = (req, path, body) => callApi(req, 'PUT', path, body);
+const patch = (req, path, body) => callApi(req, 'PATCH', path, body);
+const del   = (req, path)       => callApi(req, 'DELETE', path);
 
-module.exports = { callApi, get, post, put, del, API_URL };
+module.exports = { callApi, get, post, put, patch, del, API_URL };

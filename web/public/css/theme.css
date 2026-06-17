@@ -1100,10 +1100,15 @@ a.action-btn { text-decoration: none; }
 .action-btn[disabled] { opacity: .4; cursor: not-allowed; }
 
 /* ── Header notifications dropdown panel ─────────────────────────── */
-.notif-menu { width: 320px; padding: 0; }
+.notif-menu { width: 320px; padding: 0; max-height: min(78vh, 620px); overflow-y: auto; }
 .notif-menu .notif-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 600;
+    position: sticky; top: 0; background: #fff; z-index: 2;   /* stays while list scrolls */
+}
+.notif-menu .notif-foot {
+    position: sticky; bottom: 0; background: #fff; z-index: 2; /* "View all" pinned at bottom */
+    font-weight: 600; color: var(--primary); border-top: 1px solid var(--border); border-bottom: 0;
 }
 .notif-menu .notif-item {
     display: flex; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--border);

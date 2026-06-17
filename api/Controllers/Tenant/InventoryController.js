@@ -200,7 +200,13 @@ async function adjust(req, res) {
             await trx('stock_adjustments').insert({
                 company_id:      req.companyId,
                 product_id:      product.id,
-                location_id:     b.location_id || null,
+                // Location scoping: a location-restricted user's adjustment is
+                // pinned to THEIR location (overriding any body value); an
+                // unrestricted user keeps the chosen/blank location_id. (The
+                // inventory LIST is derived from products, which carry no
+                // location_id, so it is not location-filterable — only the
+                // adjustment audit row records the branch.)
+                location_id:     req.locationId != null ? req.locationId : (b.location_id || null),
                 type:            b.type,
                 quantity:        qty,
                 before_qty:      before,

@@ -17,8 +17,17 @@
  *     Recent commands for the caller's license (newest first) — backs a small
  *     status display in the UI.
  *
- * License scope: both read req.user.license_id (set by `authenticate`). A user
- * with no license can't queue/see agent commands.
+ *   setAutoUpdate PATCH /account/agent/auto-update   body { enabled }
+ *     Flip the per-LICENSE cloud auto-update toggle (licenses.auto_update). The
+ *     agent reads this as authoritative on its next /agent/version check, so the
+ *     cloud toggle wins over the agent's local config. (Requirement 3.)
+ *
+ *   selfUpdate   POST /account/agent/self-update
+ *     Enqueue a 'self_update' agent command (the agent honours it by forcing an
+ *     update check next poll) — backs the dashboard "Update now" button.
+ *
+ * License scope: all read req.user.license_id (set by `authenticate`). A user
+ * with no license can't queue/see agent commands or flip the toggle.
  */
 
 const db = require('../../config/db').db;
@@ -143,4 +152,173 @@ async function list(req, res) {
     }
 }
 
-module.exports = { openCompany, list };
+/**
+ * PATCH /account/agent/auto-update   body { enabled }
+ *
+ * Persist the per-LICENSE cloud auto-update toggle (licenses.auto_update). The
+ * agent treats /agent/version.auto_update as authoritative, so this is the
+ * single ON/OFF the dashboard switch writes. License-scoped via
+ * req.user.license_id; a super-admin may target any license via ?license_id /
+ * body.license_id (else falls back to their own, which may be null → 422).
+ */
+async function setAutoUpdate(req, res) {
+    try {
+        const isSuper       = req.user && req.user.role_slug === 'super-admin';
+        const userLicenseId = req.user && req.user.license_id;
+
+        // Coerce the toggle to a strict boolean (checkbox/string tolerant).
+        const raw = req.body && req.body.enabled;
+        const enabled = (raw === true || raw === 1 || raw === '1'
+            || raw === 'true' || raw === 'on' || raw === 'yes');
+
+        // Resolve which license to flip. A licensed user → their own license. A
+        // super-admin → an explicit license_id (body/query) or their own.
+        let licenseId = userLicenseId;
+        if (isSuper) {
+            const explicit = Number(
+                (req.body && req.body.license_id) || (req.query && req.query.license_id) || 0,
+            );
+            if (Number.isInteger(explicit) && explicit > 0) licenseId = explicit;
+        }
+        if (!licenseId) {
+            return R.errorResponse(res, 'Only a licensed account can change auto-update.', 422);
+        }
+
+        const updated = await db('licenses')
+            .where('id', licenseId)
+            .whereNull('deleted_at')
+            .update({ auto_update: enabled, updated_at: new Date() });
+        if (!updated) {
+            return R.errorResponse(res, 'License not found.', 404);
+        }
+
+        return R.successResponse(
+            res,
+            { auto_update: enabled },
+            enabled
+                ? 'Auto-update turned ON. The agent will update itself when a newer version is published.'
+                : 'Auto-update turned OFF. Only mandatory (security) releases will be applied.',
+            { show: true },
+        );
+    } catch (err) {
+        console.error('AgentCommandController.setAutoUpdate error:', err);
+        return R.errorResponse(res, OOPS, 500);
+    }
+}
+
+/**
+ * PATCH /account/sync-direction   body { push_enabled, pull_enabled }
+ *
+ * Persist the per-LICENSE AUTO-sync direction toggles (licenses
+ * .sync_push_enabled / .sync_pull_enabled — Requirement 1). The agent reads
+ * these back via its heartbeat each cycle and SKIPS the PUSH and/or PULL pass
+ * when off. These gate ONLY the agent's automatic loop; the dashboard's MANUAL
+ * per-module "Sync to Tally" / "Sync from Tally" buttons are unaffected.
+ *
+ * License-scoped via req.user.license_id (same guard pattern as
+ * setAutoUpdate); a super-admin may target any license via body/query
+ * license_id (else falls back to their own, which may be null → 422). Each flag
+ * is OPTIONAL — only the provided one(s) are written, so a caller can flip just
+ * push or just pull. At least one must be present.
+ */
+async function setSyncDirection(req, res) {
+    try {
+        const isSuper       = req.user && req.user.role_slug === 'super-admin';
+        const userLicenseId = req.user && req.user.license_id;
+
+        // Coerce a checkbox/string-tolerant boolean (matches setAutoUpdate).
+        const toBool = (raw) => (raw === true || raw === 1 || raw === '1'
+            || raw === 'true' || raw === 'on' || raw === 'yes');
+
+        const body = req.body || {};
+        const hasPush = Object.prototype.hasOwnProperty.call(body, 'push_enabled');
+        const hasPull = Object.prototype.hasOwnProperty.call(body, 'pull_enabled');
+        if (!hasPush && !hasPull) {
+            return R.errorResponse(res, 'Provide push_enabled and/or pull_enabled.', 422);
+        }
+
+        // Resolve which license to flip. A licensed user → their own license. A
+        // super-admin → an explicit license_id (body/query) or their own.
+        let licenseId = userLicenseId;
+        if (isSuper) {
+            const explicit = Number(
+                (body.license_id) || (req.query && req.query.license_id) || 0,
+            );
+            if (Number.isInteger(explicit) && explicit > 0) licenseId = explicit;
+        }
+        if (!licenseId) {
+            return R.errorResponse(res, 'Only a licensed account can change auto-sync direction.', 422);
+        }
+
+        const patch = { updated_at: new Date() };
+        if (hasPush) patch.sync_push_enabled = toBool(body.push_enabled);
+        if (hasPull) patch.sync_pull_enabled = toBool(body.pull_enabled);
+
+        const updated = await db('licenses')
+            .where('id', licenseId)
+            .whereNull('deleted_at')
+            .update(patch);
+        if (!updated) {
+            return R.errorResponse(res, 'License not found.', 404);
+        }
+
+        // Echo the resulting effective state so the dashboard can update both
+        // toggles. Re-read so a partial PATCH returns the unchanged flag too.
+        const lic = await db('licenses').where('id', licenseId)
+            .first('sync_push_enabled', 'sync_pull_enabled');
+        const pushEnabled = lic && lic.sync_push_enabled != null ? !!lic.sync_push_enabled : true;
+        const pullEnabled = lic && lic.sync_pull_enabled != null ? !!lic.sync_pull_enabled : true;
+
+        return R.successResponse(
+            res,
+            { push_enabled: pushEnabled, pull_enabled: pullEnabled },
+            'Auto-sync direction updated. The agent will apply it on its next cycle.',
+            { show: true },
+        );
+    } catch (err) {
+        console.error('AgentCommandController.setSyncDirection error:', err);
+        return R.errorResponse(res, OOPS, 500);
+    }
+}
+
+/**
+ * POST /account/agent/self-update
+ *
+ * Enqueue a 'self_update' command for the caller's license so the agent forces
+ * an update check on its next poll (the agent honours this command type by
+ * running maybe_self_update(forced=True)). Backs the dashboard "Update now"
+ * button. License-scoped via req.user.license_id.
+ */
+async function selfUpdate(req, res) {
+    try {
+        const licenseId = req.user && req.user.license_id;
+        if (!licenseId) {
+            return R.errorResponse(res, 'Only a licensed account can trigger an agent update.', 422);
+        }
+
+        const now = new Date();
+        const [row] = await db('agent_commands').insert({
+            license_id: licenseId,
+            company_id: null,
+            type: 'self_update',
+            payload: JSON.stringify({}),
+            status: 'pending',
+            created_by: (req.user && req.user.sub) || null,
+            created_at: now,
+            updated_at: now,
+        }).returning('id');
+
+        const id = row && row.id != null ? row.id : row;
+        return R.successResponse(
+            res,
+            { id },
+            'Update requested. The agent will check for and apply the latest version within a minute.',
+            { status: 201, show: true },
+        );
+    } catch (err) {
+        console.error('AgentCommandController.selfUpdate error:', err);
+        return R.errorResponse(res, OOPS, 500);
+    }
+}
+
+module.exports = { openCompany, list, setAutoUpdate, setSyncDirection, selfUpdate };

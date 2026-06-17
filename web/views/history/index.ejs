@@ -1,0 +1,205 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/history/index.ejs — CHANGE HISTORY · per-record before/after.
+ * Route: GET /history  ·  activeMenu: 'history'.
+ *
+ * Lists recent changes across every module (what it was BEFORE vs NOW),
+ * captured on both UI CRUD and Tally sync. View opens a modal with a clean
+ * field-by-field BEFORE → AFTER diff (changed fields highlighted), a Compare
+ * block (this record across its history dates), and a Revert button (cloud-side,
+ * confirm modal). Reverting re-applies an earlier snapshot to the cloud record.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   historyRows       [ rows ]
+ *   historyTotal      number
+ *   page, perPage     numbers
+ *   historyModules / historyActions / historySources — filter options
+ * ─────────────────────────────────────────────────────────── */
+var _rows     = (typeof historyRows !== 'undefined' && historyRows) ? historyRows : [];
+var _total    = (typeof historyTotal !== 'undefined') ? historyTotal : _rows.length;
+var _page     = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage  = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _modules  = (typeof historyModules !== 'undefined' && historyModules) ? historyModules : [];
+var _actions  = (typeof historyActions !== 'undefined' && historyActions) ? historyActions : [];
+var _sources  = (typeof historySources !== 'undefined' && historySources) ? historySources : [];
+
+function _selOpts(all, list) {
+    var out = [{ value: '', label: all }];
+    (list || []).forEach(function (v) {
+        if (v && typeof v === 'object') out.push({ value: v.value, label: v.label });
+        else out.push({ value: v, label: String(v).charAt(0).toUpperCase() + String(v).slice(1) });
+    });
+    return out;
+}
+
+/* ── FilterCard config ───────────────────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',    label: 'Search',  placeholder: 'Record / field / note...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'module',    label: 'Module',  options: _selOpts('All Modules', _modules), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'action',    label: 'Action',  options: _selOpts('All Actions', _actions), colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'source',    label: 'Source',  options: _selOpts('All Sources', _sources), colClass: 'filter-col-fifth' },
+    { type: 'text',   name: 'record_id', label: 'Record ID', placeholder: 'e.g. 42',                  colClass: 'filter-col-fifth' },
+];
+
+/* ── Table config ───────────────────────────────────────────── */
+var tableColumns = [
+    { key: 'module',  label: 'Module',      type: 'text'   },
+    { key: 'record',  label: 'Record',      type: 'text'   },
+    { key: 'action',  label: 'Action',      type: 'status' },
+    { key: 'who',     label: 'Changed By',  type: 'text'   },
+    { key: 'changed', label: 'What Changed',type: 'text'   },
+    { key: 'time',    label: 'When',        type: 'text'   },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Change History',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Change History' },
+    ],
+}) %>
+
+<form id="history-filters-form" autocomplete="off" method="get" action="/history">
+    <%- include('../partials/filter-card', {
+        filterId: 'history-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+    <%- include('../partials/table', {
+        tableId: 'history-table',
+        columns: tableColumns,
+        rows: _rows,
+        showIndex: true,
+        actions: ['view'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+</div>
+
+<!-- ── History detail popup ───────────────────────────────────────────────
+     Filled + shown by /js/history.js when a row's view button is clicked
+     (GET /history/:id). Shows the record meta, a field-by-field BEFORE → AFTER
+     diff (changed fields highlighted), a Compare timeline for this record, and
+     a Revert button (cloud-side; confirm modal). -->
+<div class="modal fade" id="historyModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fa-solid fa-clock-rotate-left text-primary me-2"></i>Change Detail
+                    <span class="text-muted small ms-2" id="historyId"></span>
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="historyLoading" class="text-muted py-4 text-center">
+                    <i class="fa-solid fa-spinner fa-spin me-2"></i>Loading…
+                </div>
+                <div id="historyError" class="alert alert-warning d-none" role="alert"></div>
+
+                <div id="historyContent" class="d-none">
+                    <dl class="record-detail mb-3">
+                        <div class="record-detail-row"><dt>Module</dt><dd id="h-module"></dd></div>
+                        <div class="record-detail-row"><dt>Record</dt><dd id="h-record"></dd></div>
+                        <div class="record-detail-row"><dt>Action</dt><dd><span id="h-action" class="pill-status"></span></dd></div>
+                        <div class="record-detail-row"><dt>Source</dt><dd id="h-source"></dd></div>
+                        <div class="record-detail-row"><dt>Changed By</dt><dd id="h-who"></dd></div>
+                        <div class="record-detail-row"><dt>When</dt><dd id="h-when"></dd></div>
+                        <div class="record-detail-row"><dt>Summary</dt><dd id="h-summary"></dd></div>
+                    </dl>
+
+                    <!-- BEFORE → AFTER field-by-field diff -->
+                    <h6 class="mb-2"><i class="fa-solid fa-right-left text-primary me-2"></i>Before &rarr; After</h6>
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm history-diff mb-0">
+                            <thead>
+                                <tr>
+                                    <th style="width:28%">Field</th>
+                                    <th style="width:36%">Before</th>
+                                    <th style="width:36%">After</th>
+                                </tr>
+                            </thead>
+                            <tbody id="h-diff-body"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- Compare: this record across its history dates -->
+                    <h6 class="mb-2"><i class="fa-solid fa-timeline text-primary me-2"></i>Compare across dates</h6>
+                    <div class="table-responsive" id="h-compare-wrap">
+                        <table class="table table-sm history-compare mb-0">
+                            <thead><tr id="h-compare-head"></tr></thead>
+                            <tbody id="h-compare-body"></tbody>
+                        </table>
+                    </div>
+                    <p id="h-compare-empty" class="text-muted small d-none mb-0">No earlier snapshots for this record.</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-warning d-none" id="historyRevertBtn">
+                    <i class="fa-solid fa-rotate-left me-1"></i>Revert to this
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Revert confirmation ────────────────────────────────────────────────
+     The Revert button arms this confirm; confirming submits the hidden form
+     POST /history/:id/revert. Reverts the CLOUD copy only (re-syncs to Tally on
+     the next agent cycle). -->
+<div class="modal fade" id="confirmRevertModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-body text-center p-4">
+                <div class="confirm-delete-icon mb-3"><i class="fa-solid fa-rotate-left"></i></div>
+                <h5 class="mb-2">Revert this record?</h5>
+                <p class="text-muted mb-1">This re-applies the earlier snapshot to the <strong>cloud copy</strong>.</p>
+                <p class="text-muted small mb-4">It will re-sync to Tally on the next agent cycle. A new history entry records the revert.</p>
+                <div class="d-flex justify-content-center gap-2">
+                    <button type="button" class="btn btn-light px-4" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-warning px-4" id="confirmRevertBtn">
+                        <i class="fa-solid fa-rotate-left me-1"></i>Yes, revert
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Hidden form the confirm submits (the action id is filled in by history.js). -->
+<form id="historyRevertForm" method="post" action="/history/0/revert" class="d-none"></form>
+
+<style>
+    .history-diff td, .history-compare td, .history-compare th { vertical-align: top; word-break: break-word; }
+    .history-diff tr.is-changed { background: #fff7ed; }
+    .history-diff tr.is-changed td:first-child { font-weight: 600; }
+    .history-diff .diff-old { color: #b91c1c; }
+    .history-diff .diff-new { color: #047857; }
+    .history-compare th { white-space: nowrap; }
+    .history-compare .cell-changed { background: #fff7ed; font-weight: 600; }
+</style>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

@@ -420,4 +420,46 @@
         window.addEventListener('offline', sync);
         sync();
     }
+
+    /* ── Action loaders ───────────────────────────────────────────
+     * Immediate feedback on every action: a Bootstrap spinner + disabled
+     * trigger on form submits (create/update/delete/import/filter/search)
+     * and on navigating action buttons/links (export, "Add new", or any
+     * [data-loader]). Server-rendered forms navigate away; download/in-page
+     * actions auto-restore after a moment. Opt out with data-no-loader. */
+    function _spin(el) {
+        if (!el || el.dataset._busy) return;
+        el.dataset._busy = '1';
+        el.dataset._html = el.innerHTML;
+        el.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>'
+            + (el.dataset.loadingText || 'Please wait…');
+        if (el.tagName === 'BUTTON') el.disabled = true;
+        el.classList.add('is-loading');
+    }
+    function _unspin(el) {
+        if (!el || !el.dataset._busy) return;
+        if (el.dataset._html != null) el.innerHTML = el.dataset._html;
+        el.disabled = false;
+        el.classList.remove('is-loading');
+        delete el.dataset._busy; delete el.dataset._html;
+    }
+    document.addEventListener('submit', function (e) {
+        var form = e.target;
+        if (!form || form.tagName !== 'FORM' || form.dataset.noLoader != null) return;
+        if (typeof form.checkValidity === 'function' && !form.checkValidity()) return;
+        var btn = form.querySelector('button[type="submit"], input[type="submit"]');
+        if (!btn && document.activeElement && document.activeElement.type === 'submit') btn = document.activeElement;
+        _spin(btn);
+    }, true);
+    document.addEventListener('click', function (e) {
+        var el = e.target.closest('a.btn, button[data-loader], a[data-loader]');
+        if (!el || el.matches('[data-bs-toggle], [data-bs-dismiss]')) return;
+        if (el.tagName === 'A') {
+            var href = el.getAttribute('href') || '';
+            if ((href === '' || href.charAt(0) === '#') && el.dataset.loader == null) return;
+            if (el.target === '_blank' && el.dataset.loader == null) return;
+        }
+        _spin(el);
+        setTimeout(function () { _unspin(el); }, parseInt(el.dataset.loaderMs, 10) || 2500);
+    });
 })();

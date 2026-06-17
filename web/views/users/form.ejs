@@ -7,12 +7,12 @@
  * "Assigned Location" field is relevant for Sales Manager/Person roles.
  *
  * Expected locals (routes/web.js → res.render):
- *   roles          [ … ]  — Role select options (5 roles)
- *   locationNames  [ … ]  — Assigned Location select options
+ *   roleOptions      [ { id, name } ]  — Role select options (roles visible to the admin)
+ *   locationOptions  [ { id, name } ]  — Assigned Location select options (company locations)
  * ─────────────────────────────────────────────────────────── */
 
 var _roleOpts = (typeof roleOptions !== 'undefined' && roleOptions) ? roleOptions : [];
-var _locs     = (typeof locationNames !== 'undefined' && locationNames) ? locationNames : [];
+var _locOpts  = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
 
 function _selOpts(placeholder, list) {
     var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
@@ -90,11 +90,11 @@ var headActions =
 
             <div class="form-group">
                 <label class="form-label" for="usr-location">Assigned Location</label>
-                <select class="form-select" id="usr-location" name="location">
-                    <option value="">All / Not applicable</option>
-                    <% _locs.forEach(function (l) { %><option value="<%= l %>"><%= l %></option><% }); %>
+                <select class="form-select" id="usr-location" name="location_id">
+                    <option value="">All locations</option>
+                    <% _locOpts.forEach(function (l) { %><option value="<%= l.id %>"><%= l.name %></option><% }); %>
                 </select>
-                <div class="form-hint">For Sales Manager / Sales Person roles.</div>
+                <div class="form-hint">Leave blank for all locations. Pick one to restrict this user (e.g. a Salesman) to that location's data.</div>
             </div>
 
             <div class="form-group"></div>

@@ -13,7 +13,9 @@ codes are turned into the module's own exceptions (:class:`ActivationError`,
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -378,3 +380,109 @@ class ApiClient:
             )
             return False
         return True
+
+    # ------------------------------------------------------------------ #
+    # Agent self-update (Requirement 2)
+    # ------------------------------------------------------------------ #
+    def get_latest_version(self, agent_token: str,
+                           installed_version: Optional[str] = None) -> dict[str, Any]:
+        """Ask the cloud what the published-latest agent exe is.
+
+        GETs ``{api_url}/agent/version`` (Bearer agent_token), optionally passing
+        ``?agent_version=<installed>`` so the cloud can echo a convenience
+        ``current`` flag. Returns the ``data`` dict:
+            { latest_version, current, download_url, sha256, mandatory, notes,
+              auto_update }
+
+        Best-effort: ANY failure (transport / non-200 / odd body) returns ``{}``
+        so the caller's update check can never crash the main loop.
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        path = "agent/version"
+        if installed_version:
+            # tiny manual query string (no urllib import needed for one param).
+            path = f"agent/version?agent_version={installed_version}"
+        try:
+            resp = self._get(path, headers=headers)
+        except requests.RequestException as exc:
+            self.log.warning("Version check transport error: %s", exc)
+            return {}
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            self.log.warning(
+                "Version check rejected (status=%s): %s",
+                body.get("status"), body.get("msg", "?"),
+            )
+            return {}
+        data = body.get("data")
+        return data if isinstance(data, dict) else {}
+
+    def download_update(self, agent_token: str, dest_path: str,
+                        expected_sha256: Optional[str] = None) -> bool:
+        """Stream the current release exe to ``dest_path`` (chunked).
+
+        GETs ``{api_url}/agent/download`` (Bearer agent_token) and writes the
+        body to ``dest_path`` in chunks (so a large exe never loads fully into
+        memory). When ``expected_sha256`` is given, the downloaded file's digest
+        MUST match or the partial file is removed and ``False`` is returned.
+
+        Returns ``True`` only on a fully-written, verified download. Best-effort:
+        any failure is logged and returns ``False`` (the caller then keeps
+        running the OLD exe — never bricks a working agent).
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        url = self._url("agent/download")
+        try:
+            # A longer timeout than the JSON calls: the exe is several MB.
+            with self._session.get(url, headers=headers, timeout=120, stream=True) as resp:
+                ctype = (resp.headers.get("Content-Type") or "").lower()
+                if resp.status_code != 200 or "application/json" in ctype:
+                    # A 200-envelope JSON error (e.g. "no release published")
+                    # comes back as JSON, not a binary stream — treat as no-op.
+                    self.log.warning(
+                        "Download did not return a file (status=%s, type=%s).",
+                        resp.status_code, ctype or "?")
+                    return False
+                hasher = hashlib.sha256()
+                written = 0
+                with open(dest_path, "wb") as fh:
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        if not chunk:
+                            continue
+                        fh.write(chunk)
+                        hasher.update(chunk)
+                        written += len(chunk)
+        except requests.RequestException as exc:
+            self.log.error("Download transport error: %s", exc)
+            self._remove_quietly(dest_path)
+            return False
+        except OSError as exc:
+            self.log.error("Could not write the downloaded update: %s", exc)
+            self._remove_quietly(dest_path)
+            return False
+
+        if written <= 0:
+            self.log.error("Downloaded update was empty.")
+            self._remove_quietly(dest_path)
+            return False
+
+        if expected_sha256:
+            got = hasher.hexdigest().lower()
+            want = str(expected_sha256).strip().lower()
+            if got != want:
+                self.log.error("Update sha256 mismatch (got %s, want %s).", got, want)
+                self._remove_quietly(dest_path)
+                return False
+
+        self.log.info("Downloaded update OK (%d bytes) -> %s", written, dest_path)
+        return True
+
+    @staticmethod
+    def _remove_quietly(path: str) -> None:
+        """Best-effort delete of a partial/failed download (never raises)."""
+        try:
+            if path and os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass

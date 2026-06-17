@@ -42,6 +42,7 @@ var menu = [
     { label: 'Tally Sync', items: [
         { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',     href: '/sync-dashboard' },
         { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check', href: '/sync-logs' },
+        { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history' },
     ]},
     { label: 'Reports', items: [
         { key: 'reports', label: 'Reports', icon: 'fa-chart-column', href: '/reports' },
@@ -53,9 +54,10 @@ var menu = [
     ]},
 ];
 
-// Tenant license-admin custom-role management. Appended to the Settings group
-// ONLY for the company-admin so they can create/manage license-scoped roles.
-if (_isCompanyAdmin) {
+// Custom-role management. Appended to the Settings group for the company-admin
+// (their OWN license's custom roles) AND the super-admin (every role across
+// licenses + global templates). Plain users never see it.
+if (_isCompanyAdmin || _isSuperAdmin) {
     var _settings = menu.find(function (g) { return g.label === 'Settings'; });
     if (_settings) {
         _settings.items.push({ key: 'roles-admin', label: 'Roles', icon: 'fa-user-shield', href: '/roles-admin' });
