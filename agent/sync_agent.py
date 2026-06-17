@@ -1566,25 +1566,211 @@ def maybe_self_update(cfg: Config, logger, api: ApiClient,
 # --------------------------------------------------------------------------- #
 # Loop + sub-commands
 # --------------------------------------------------------------------------- #
-def _run_loop(cfg: Config, logger, api: ApiClient) -> None:
-    """Run the continuous sync loop until interrupted.
+def build_api(cfg: Config, logger) -> ApiClient:
+    """Return an :class:`ApiClient` bound to ``cfg.api_url``.
 
-    Heartbeats and syncs every ``cfg.sync_interval`` seconds, tracking a simple
-    consecutive-failure counter so persistent problems are surfaced in the log.
-    Ctrl+C exits cleanly.
+    Tiny convenience so callers (the console ``main`` AND the GUI) construct the
+    client the same way without importing :class:`ApiClient` themselves.
+    """
+    return ApiClient(cfg.api_url, logger)
 
-    The FIRST cycle runs VERBOSE so the operator can watch the whole process
-    (Tally check -> push -> pull) on the console; afterwards VERBOSE drops to
-    False and each cycle prints just one short summary line (so the loop is
-    neither silent nor spammy). The file logger keeps its detail throughout.
+
+# --------------------------------------------------------------------------- #
+# Service <-> GUI interop files (Phase 2): a "Sync Now" trigger + a status dump.
+# --------------------------------------------------------------------------- #
+# These two tiny files live next to config.ini (the install dir). They let the
+# Dashboard control + observe a BACKGROUND service WITHOUT a second syncer:
+#   * SYNC_NOW_FILENAME - the Dashboard drops this file to ask the running loop
+#     to run one cycle immediately (instead of waiting out the interval). The
+#     loop deletes it as soon as it sees it, then runs a cycle.
+#   * STATUS_FILENAME   - the loop writes a small JSON snapshot after each cycle
+#     (and on lifecycle events) so the Dashboard can poll live status (running /
+#     last sync / last result) for a service it does not host in-process.
+SYNC_NOW_FILENAME = ".sync_now"
+STATUS_FILENAME = ".status.json"
+
+
+def _agent_dir(cfg: Config) -> str:
+    """Directory that holds config.ini (and so the trigger + status files).
+
+    For the installed exe / service this is the install folder; from source it
+    is wherever ``cfg.path`` points. Falls back to the current directory.
+    """
+    try:
+        d = os.path.dirname(os.path.abspath(cfg.path))
+        return d or os.getcwd()
+    except Exception:
+        return os.getcwd()
+
+
+def sync_now_path(cfg: Config) -> str:
+    """Absolute path of the ``.sync_now`` trigger file for this install."""
+    return os.path.join(_agent_dir(cfg), SYNC_NOW_FILENAME)
+
+
+def status_path(cfg: Config) -> str:
+    """Absolute path of the ``.status.json`` status file for this install."""
+    return os.path.join(_agent_dir(cfg), STATUS_FILENAME)
+
+
+def _consume_sync_now(cfg: Config, logger) -> bool:
+    """Return True (and delete the file) if a ``.sync_now`` trigger is present.
+
+    Best-effort: any error reading/deleting it is swallowed and treated as "no
+    trigger" so a stray permissions issue never stalls the loop.
+    """
+    path = sync_now_path(cfg)
+    try:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass  # deleting failed - still treat it as a one-shot request.
+            logger.info("Sync Now: trigger file seen; running an immediate cycle.")
+            return True
+    except Exception as exc:
+        logger.debug("Sync Now: trigger check failed (ignored): %s", exc)
+    return False
+
+
+def make_status_writer(cfg: Config, logger):
+    """Build an ``on_status`` callback that writes ``.status.json`` snapshots.
+
+    Used by the HEADLESS service (which has no GUI queue to push to) so the
+    Dashboard can poll live status for a process it does not host. The returned
+    callable matches the ``on_status(payload: dict)`` contract of
+    :func:`run_sync_loop` and is fully best-effort (never raises). It keeps a
+    little rolling state (last good sync timestamp) across cycles.
+
+    The file holds: ``running`` (bool), ``event``, ``ok`` (last cycle result),
+    ``cycle``, ``ts`` (event time), ``last_sync`` (epoch of the last ok cycle),
+    ``version`` and ``pid``. It is written atomically (temp + replace) so a
+    reader never sees a half-written file.
+    """
+    import json
+
+    state = {"last_sync": None}
+    path = status_path(cfg)
+
+    def write(payload: dict) -> None:
+        try:
+            event = payload.get("event")
+            ok = payload.get("ok")
+            if event == "cycle" and ok:
+                state["last_sync"] = payload.get("ts", time.time())
+            running = event not in ("stopped", "error")
+            snapshot = {
+                "running": bool(running),
+                "event": event,
+                "ok": bool(ok) if ok is not None else None,
+                "cycle": payload.get("cycle"),
+                "ts": payload.get("ts", time.time()),
+                "last_sync": state["last_sync"],
+                "version": getattr(cfg, "agent_version", ""),
+                "pid": os.getpid(),
+            }
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(snapshot, fh)
+            os.replace(tmp, path)
+        except Exception as exc:  # status writing must never break the loop.
+            try:
+                logger.debug("Status writer failed (ignored): %s", exc)
+            except Exception:
+                pass
+
+    return write
+
+
+def _interruptible_sleep(seconds: float, stop_event=None) -> bool:
+    """Sleep up to ``seconds``, but wake early if ``stop_event`` is set.
+
+    Returns ``True`` if the stop event fired (the caller should break the loop),
+    ``False`` if the full sleep elapsed. With no event this is a plain
+    :func:`time.sleep` so the console path is unchanged. Polls in short slices so
+    a Stop from the GUI is honoured within a fraction of a second.
+    """
+    if stop_event is None:
+        time.sleep(max(0.0, seconds))
+        return False
+    # threading.Event.wait() returns True as soon as the flag is set.
+    return bool(stop_event.wait(timeout=max(0.0, seconds)))
+
+
+def _sleep_until_next(cfg: Config, logger, stop_event=None) -> bool:
+    """Sleep ``cfg.sync_interval`` seconds, waking early on stop OR a Sync-Now.
+
+    Returns ``True`` only when ``stop_event`` fired (the caller should break the
+    loop). A ``.sync_now`` trigger landing mid-sleep ALSO ends the sleep early
+    but returns ``False`` (so the loop continues into its next, immediate cycle).
+    Polls in ~0.5s slices so both a Stop and a Sync-Now are honoured promptly
+    without busy-waiting. With no install dir / no trigger this behaves exactly
+    like the plain interval sleep.
+    """
+    total = max(0.0, float(cfg.sync_interval))
+    slice_s = 0.5
+    waited = 0.0
+    trigger = sync_now_path(cfg)
+    while waited < total:
+        remaining = total - waited
+        step = slice_s if remaining > slice_s else remaining
+        if stop_event is not None:
+            if stop_event.wait(timeout=step):
+                return True
+        else:
+            time.sleep(step)
+        waited += step
+        # A trigger file means "run now" -> end the sleep early (not a stop).
+        try:
+            if os.path.exists(trigger):
+                return False
+        except Exception:
+            pass
+    return False
+
+
+def run_sync_loop(cfg: Config, logger, api: ApiClient,
+                  on_status=None, stop_event=None) -> None:
+    """Run the continuous heartbeat + sync loop (the SHARED engine entry point).
+
+    This is the single loop body used by BOTH the console agent (``_run_loop``)
+    and the GUI (which runs it in a daemon thread). Behaviour is identical to the
+    original console loop; the only additions are two OPTIONAL hooks so a GUI can
+    observe + stop it WITHOUT the engine ever importing tkinter:
+
+    * ``on_status`` — a callback invoked with a small dict after each cycle
+      (and on lifecycle events). It MUST be cheap + thread-safe: the GUI pushes
+      the dict onto a ``queue.Queue`` and never touches widgets from here. Keys:
+      ``event`` ('started'|'cycle'|'stopped'), ``ok`` (bool, for 'cycle'),
+      ``cycle`` (int), ``ts`` (epoch float). Any exception it raises is swallowed
+      so a buggy observer can never break the loop.
+    * ``stop_event`` — a :class:`threading.Event`. When set, the loop finishes
+      the current sleep (early) and returns cleanly. ``None`` keeps the original
+      "run until KeyboardInterrupt" console behaviour.
+
+    The FIRST cycle runs VERBOSE so the console operator can watch the whole
+    process; afterwards VERBOSE drops to False. The file logger keeps its detail
+    throughout. When driven from the GUI the console echo simply goes nowhere
+    visible (no console window), which is harmless.
     """
     global VERBOSE
+
+    def _emit(**payload) -> None:
+        """Best-effort status callback — never lets an observer break the loop."""
+        if on_status is None:
+            return
+        try:
+            on_status(payload)
+        except Exception:  # a buggy GUI observer must never stop the engine.
+            pass
+
     logger.info(
         "Agent started (v=%s, interval=%ss, machine_id=%s...).",
         cfg.agent_version,
         cfg.sync_interval,
         cfg.machine_id[:12],
     )
+    _emit(event="started", ts=time.time())
     failed_retries = 0
     cycle = 0
 
@@ -1600,6 +1786,11 @@ def _run_loop(cfg: Config, logger, api: ApiClient) -> None:
 
     try:
         while True:
+            if stop_event is not None and stop_event.is_set():
+                break
+            # A "Sync Now" trigger consumed at the top of an iteration just means
+            # we run this cycle now (clear it so it is a one-shot).
+            _consume_sync_now(cfg, logger)
             cycle += 1
             first = cycle == 1
             VERBOSE = first  # show everything on the very first cycle only.
@@ -1644,11 +1835,29 @@ def _run_loop(cfg: Config, logger, api: ApiClient) -> None:
                 )
                 level("Cycle failed; consecutive failures=%d.", failed_retries)
 
-            time.sleep(cfg.sync_interval)
+            _emit(event="cycle", ok=bool(ok), cycle=cycle, ts=time.time())
+
+            # Sleep until the next cycle, waking early on a stop request OR when
+            # a ".sync_now" trigger lands (the Dashboard's "Sync Now" for a
+            # service: it drops the file, the loop wakes and runs a cycle now).
+            if _sleep_until_next(cfg, logger, stop_event):
+                break
     except KeyboardInterrupt:
         logger.info("Agent stopped.")
         echo("")
         echo("Agent stopped.")
+
+    logger.info("Sync loop ended.")
+    _emit(event="stopped", ts=time.time())
+
+
+def _run_loop(cfg: Config, logger, api: ApiClient) -> None:
+    """Console entry to the continuous sync loop (Ctrl+C to stop).
+
+    Thin wrapper around :func:`run_sync_loop` with no observer/stop event so the
+    console behaviour is byte-for-byte what it always was.
+    """
+    run_sync_loop(cfg, logger, api)
 
 
 def _run_once(cfg: Config, logger, api: ApiClient) -> int:

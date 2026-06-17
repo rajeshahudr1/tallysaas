@@ -1,0 +1,150 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/licenses/edit.ejs — PLATFORM ADMIN · Edit License.
+ * Route: GET /licenses/:id/edit  ·  activeMenu: 'licenses'  ·  super-admin only.
+ *
+ * Edits ONLY the mutable commercial fields — holder_name, plan, max_companies,
+ * max_users, valid_until. The key/prefix/hash, machine binding and status are
+ * NOT editable here (status → suspend/activate, machine → reset-machine). The
+ * caps cannot be set below the license's current companies/users counts (the
+ * api also enforces this and returns a 422 message).
+ *
+ * Mirrors form.ejs (page-head + form-card + .form-grid). POSTs to
+ * /licenses/:id/edit (browsers can't PUT a form; the route proxies to api.put).
+ * On an api error the route re-renders THIS form with `error` + `old`.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   licenseId        number
+ *   companiesCount   number  — current usage hint (min for max_companies)
+ *   usersCount       number  — current usage hint (min for max_users)
+ *   error?           string
+ *   old?             object  — prefilled / preserved values
+ * ─────────────────────────────────────────────────────────── */
+
+var _id   = (typeof licenseId !== 'undefined' && licenseId) ? licenseId : '';
+var _err  = (typeof error !== 'undefined' && error) ? error : null;
+var _old  = (typeof old !== 'undefined' && old) ? old : {};
+var _comp = (typeof companiesCount !== 'undefined' && companiesCount) ? companiesCount : 0;
+var _usr  = (typeof usersCount !== 'undefined' && usersCount) ? usersCount : 0;
+function _v(k, dflt) { return (_old && _old[k] != null && _old[k] !== '') ? _old[k] : (dflt != null ? dflt : ''); }
+
+var formTabs = [
+    { id: 'details', label: 'License Details', icon: 'fa-key', active: true },
+];
+
+var plans = ['standard', 'pro', 'enterprise'];
+function _planOpts(current) {
+    var cur = String(current || 'standard');
+    var html = '';
+    plans.forEach(function (p) {
+        var sel = (cur === p) ? ' selected' : '';
+        var label = p.charAt(0).toUpperCase() + p.slice(1);
+        html += '<option value="' + p + '"' + sel + '>' + label + '</option>';
+    });
+    return html;
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/licenses/' + _id + '">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to License' +
+    '</a>' +
+    '<button type="submit" form="license-edit-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>Save Changes' +
+    '</button>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Edit License',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Licenses', href: '/licenses' },
+        { label: _v('holder_name', 'License'), href: '/licenses/' + _id },
+        { label: 'Edit' },
+    ],
+    actions: headActions,
+}) %>
+
+<% if (_err) { %>
+    <div class="alert alert-danger alert-dismissible fade show flash-banner" role="alert">
+        <i class="fa-solid fa-circle-exclamation me-2"></i>
+        <%= _err %>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+<% } %>
+
+<form id="license-edit-form" class="card form-card" method="post"
+      action="/licenses/<%= _id %>/edit" autocomplete="off" novalidate>
+
+    <%- include('../partials/form-card', { tabs: formTabs }) %>
+
+    <div class="tab-content form-card-body">
+
+        <!-- ════ License Details (active) ════ -->
+        <div class="tab-pane fade show active" id="details" role="tabpanel" aria-labelledby="details-tab">
+
+            <h2 class="form-section-title">License</h2>
+            <div class="form-grid">
+
+                <!-- Row 1: Holder Name* · Plan -->
+                <div class="form-group">
+                    <label class="form-label" for="lic-holder">Holder Name<span class="req">*</span></label>
+                    <input type="text" class="form-control" id="lic-holder" name="holder_name"
+                           value="<%= _v('holder_name') %>"
+                           placeholder="Business / customer name" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-plan">Plan</label>
+                    <select class="form-select" id="lic-plan" name="plan">
+                        <%- _planOpts(_v('plan', 'standard')) %>
+                    </select>
+                </div>
+
+                <!-- Row 2: Max Companies · Max Users · Valid Until -->
+                <div class="form-group">
+                    <label class="form-label" for="lic-max-companies">Max Companies</label>
+                    <input type="number" class="form-control" id="lic-max-companies" name="max_companies"
+                           value="<%= _v('max_companies', 5) %>"
+                           placeholder="5" min="<%= _comp > 0 ? _comp : 1 %>" step="1">
+                    <% if (_comp > 0) { %>
+                        <div class="form-hint">Cannot be below the <%= _comp %> companies currently under this license.</div>
+                    <% } %>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-max-users">Max Users</label>
+                    <input type="number" class="form-control" id="lic-max-users" name="max_users"
+                           value="<%= _v('max_users', 10) %>"
+                           placeholder="10" min="<%= _usr > 0 ? _usr : 1 %>" step="1">
+                    <% if (_usr > 0) { %>
+                        <div class="form-hint">Cannot be below the <%= _usr %> users currently under this license.</div>
+                    <% } %>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="lic-valid-until">Valid Until</label>
+                    <input type="date" class="form-control" id="lic-valid-until" name="valid_until"
+                           value="<%= _v('valid_until') %>">
+                    <div class="form-hint">Leave blank for no expiry.</div>
+                </div>
+
+            </div><!-- /.form-grid -->
+
+            <div class="form-hint mt-2">
+                <i class="fa-solid fa-circle-info me-1"></i>
+                The license key, machine binding and status are not editable here
+                (use Suspend / Activate for status and Reset Machine to unbind).
+            </div>
+
+        </div><!-- /#details -->
+
+    </div><!-- /.tab-content -->
+
+    <div class="form-card-footer">
+        <a class="btn btn-light" href="/licenses/<%= _id %>">Cancel</a>
+        <button type="submit" class="btn btn-primary">
+            <i class="fa-solid fa-floppy-disk me-1"></i>Save Changes
+        </button>
+    </div>
+
+</form>

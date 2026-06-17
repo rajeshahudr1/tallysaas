@@ -26,9 +26,21 @@ const createLicenseSchema = Joi.object({
     admin_password: Joi.string().min(8).max(128).allow('', null),
 });
 
+// Edit (Super-Admin) — ONLY the mutable commercial fields. The key/hash, machine
+// binding and status are intentionally NOT editable here (status → suspend/
+// activate, machine → reset-machine). The controller additionally enforces that
+// max_companies / max_users may not drop below the current usage counts.
+const updateLicenseSchema = Joi.object({
+    holder_name:   Joi.string().trim().max(191).required(),
+    plan:          Joi.string().trim().max(40),
+    max_companies: Joi.number().integer().min(1).max(1000),
+    max_users:     Joi.number().integer().min(1).max(10000),
+    valid_until:   Joi.date().iso().allow('', null),
+});
+
 const listLicenseSchema = Joi.object({
     page:     Joi.number().integer().min(1).default(1),
     per_page: Joi.number().integer().min(1).max(100).default(20),
 });
 
-module.exports = { createLicenseSchema, listLicenseSchema };
+module.exports = { createLicenseSchema, updateLicenseSchema, listLicenseSchema };

@@ -90,7 +90,7 @@ const {
     createReceiptSchema,
     listPaymentSchema,
 } = require('../Validators/payment');
-const { createLicenseSchema, listLicenseSchema } = require('../Validators/license');
+const { createLicenseSchema, updateLicenseSchema, listLicenseSchema } = require('../Validators/license');
 const { activateSchema, heartbeatSchema }        = require('../Validators/agent');
 const { createUserSchema, listUserSchema }       = require('../Validators/user');
 const {
@@ -225,12 +225,25 @@ router.post('/super-admin/licenses',
     authenticate, requireSuperAdmin, validate(createLicenseSchema), LicenseController.create);
 router.get('/super-admin/licenses',
     authenticate, requireSuperAdmin, validate(listLicenseSchema, 'query'), LicenseController.list);
+// View (full detail + derived companies/users/agent), edit (mutable fields only),
+// soft-delete (refused while the license still owns companies/users).
+router.get('/super-admin/licenses/:id',
+    authenticate, requireSuperAdmin, LicenseController.get);
+router.put('/super-admin/licenses/:id',
+    authenticate, requireSuperAdmin, validate(updateLicenseSchema), LicenseController.update);
+router.delete('/super-admin/licenses/:id',
+    authenticate, requireSuperAdmin, LicenseController.remove);
 router.post('/super-admin/licenses/:id/reset-machine',
     authenticate, requireSuperAdmin, LicenseController.resetMachine);
 router.post('/super-admin/licenses/:id/suspend',
     authenticate, requireSuperAdmin, LicenseController.suspend);
 router.post('/super-admin/licenses/:id/activate',
     authenticate, requireSuperAdmin, LicenseController.activate);
+// Mint a fresh key (same format as create) for an existing license — for old
+// licenses whose clear key was never stored, or to rotate. Returns the new full
+// key ONCE; never touches machine binding / status / companies / users.
+router.post('/super-admin/licenses/:id/regenerate',
+    authenticate, requireSuperAdmin, LicenseController.regenerate);
 
 // Super-Admin · per-user approval queue (each approved user = a paid seat).
 router.get('/super-admin/users/pending',
@@ -259,6 +272,11 @@ router.get('/super-admin/agent-release',
     authenticate, requireSuperAdmin, AgentReleaseController.list);
 router.post('/super-admin/agent-release',
     authenticate, requireSuperAdmin, AgentReleaseController.publish);
+// Browser UPLOAD: receive the built exe as multipart (field "file") + version,
+// save it under a safe name in the release dir, then publish it (same core as
+// the filename-based publish above). Distinct exact path → no shadowing.
+router.post('/super-admin/agent-release/upload',
+    authenticate, requireSuperAdmin, AgentReleaseController.upload);
 
 // Super-Admin · per-company concurrent web-session cap (max_sessions_per_user).
 router.get('/super-admin/companies',

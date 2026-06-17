@@ -14,13 +14,23 @@
  * same, so the EJS views/partials never change.
  * ─────────────────────────────────────────────────────────── */
 
-const express = require('express');
-const router  = express.Router();
-const mock    = require('../data/mock');
-const api     = require('../Helpers/apiClient');
+const express  = require('express');
+const router   = express.Router();
+const multer   = require('multer');
+const FormData = require('form-data');
+const mock     = require('../data/mock');
+const api      = require('../Helpers/apiClient');
 const { requireAuth } = require('../Middlewares/sessionGuard');
 const AuthController   = require('../Controllers/AuthController');
 const { friendlyReason, RESTART_HELP } = require('../Helpers/syncReason');
+
+// Multipart receiver for the Agent-Updates upload (the exe is held in memory,
+// then streamed on to the api). 200MB cap mirrors the api's own limit; a single
+// "file" field only. The web→api forward re-streams the Buffer via form-data.
+const agentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 200 * 1024 * 1024, files: 1 },
+}).single('file');
 
 /* ── Public auth routes (NO guard) ──────────────────────────── */
 router.get('/login',  AuthController.showLogin);
@@ -2616,6 +2626,22 @@ router.post('/journals', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* POST /licenses/:id/delete — proxy to api DELETE (soft-delete). The confirm
+ * modal in _layout.ejs POSTs here. On a refusal (still has companies/users) the
+ * api's 422 message is flashed back. Returns to the list either way.
+ * MUST be registered BEFORE the generic /:resource/:id/delete handler below,
+ * otherwise that catch-all (which whitelists only tenant resources, NOT
+ * 'licenses') would shadow this route and refuse the delete. */
+router.post('/licenses/:id/delete', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const result = await api.del(req, `/super-admin/licenses/${id}`);
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'License deleted.');
+        else setFlash(req, 'error', apiError(result, 'Could not delete the license.'));
+        return req.session.save(() => res.redirect('/licenses'));
+    } catch (err) { next(err); }
+});
+
 /* ── Generic DELETE handler (POST /:resource/:id/delete) ─────────
  * Backs the custom Delete popup on every list page. Whitelisted to the
  * resources the api actually exposes a DELETE for, then forwards to
@@ -2766,6 +2792,27 @@ router.post('/licenses/:id/suspend',       requireSuperAdmin, licenseAction('sus
 router.post('/licenses/:id/activate',      requireSuperAdmin, licenseAction('activate',      'License reactivated.',      'Could not activate the license.'));
 router.post('/licenses/:id/reset-machine', requireSuperAdmin, licenseAction('reset-machine', 'Agent machine unbound.',    'Could not reset the machine.'));
 
+/* POST /licenses/:id/regenerate — mint a NEW key for this license (super-admin).
+ * Proxies to api POST /super-admin/licenses/:id/regenerate. On success we stash
+ * the returned NEW full key in a one-time session field (newLicenseKey, cleared
+ * by the detail route after it renders the prominent banner) — it is NOT written
+ * to the persistent flash/db/logs — and bounce back to the detail page. */
+router.post('/licenses/:id/regenerate', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const result = await api.post(req, `/super-admin/licenses/${id}/regenerate`, {});
+        if (apiOk(result)) {
+            const data = (result.body && result.body.data) || {};
+            // One-time reveal payload for the detail page (read + cleared there).
+            req.session.newLicenseKey = data.license_key || '';
+            setFlash(req, 'success', (result.body && result.body.msg) || 'New license key generated.');
+        } else {
+            setFlash(req, 'error', apiError(result, 'Could not regenerate the license key.'));
+        }
+        return req.session.save(() => res.redirect('/licenses/' + id));
+    } catch (err) { next(err); }
+});
+
 /* ── PLATFORM ADMIN · License Modules / entitlements (super-admin only) ──────
  * Which modules a license's roles MAY use. The api returns a module × action
  * matrix with the currently-granted cells; an empty grant set (all_granted)
@@ -2806,6 +2853,160 @@ router.post('/licenses/:id/permissions', requireSuperAdmin, async (req, res, nex
         if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Module entitlements saved.');
         else setFlash(req, 'error', apiError(result, 'Could not save module entitlements.'));
         return req.session.save(() => res.redirect('/licenses'));
+    } catch (err) { next(err); }
+});
+
+/* ── PLATFORM ADMIN · License View / Edit / Delete (super-admin only) ─────────
+ * View = a read-only detail page (all license fields + the companies + users
+ * lists + agent status + quick action links). Edit = a prefilled form that PUTs
+ * only the mutable fields. Delete = soft-delete via the api (refused while the
+ * license still owns companies/users), driven by the shared confirm-delete
+ * modal which POSTs to /licenses/:id/delete. */
+
+/* GET /licenses/:id — read-only license detail. */
+router.get('/licenses/:id', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const { body } = await api.get(req, `/super-admin/licenses/${id}`);
+        if (!body || body.status !== 200 || !body.data) {
+            setFlash(req, 'error', (body && body.msg) || 'License not found.');
+            return req.session.save(() => res.redirect('/licenses'));
+        }
+        const d     = body.data;
+        const lic   = d.license || {};
+        const agent = d.agent || {};
+        const machineId = lic.machine_id ? String(lic.machine_id) : '';
+        // Full key reveal (super-admin only; the api already gated + decrypted).
+        const keyAvailable = !!d.key_available;
+        const fullKey      = keyAvailable ? (d.license_key || '') : '';
+        // One-time NEW key from a just-completed Regenerate (read + clear it).
+        const newLicenseKey = (req.session && req.session.newLicenseKey) || '';
+        if (req.session && req.session.newLicenseKey) delete req.session.newLicenseKey;
+        const license = {
+            id:               lic.id,
+            holder_name:      lic.holder_name || '',
+            key_prefix:       lic.key_prefix ? (String(lic.key_prefix).replace(/[-\s]*$/, '') + '-…') : '—',
+            // Raw prefix (un-elided) for the "full key not stored" fallback note.
+            key_prefix_raw:   lic.key_prefix || '',
+            key_available:    keyAvailable,
+            license_key:      fullKey,
+            tally_serial:     lic.tally_serial || '',
+            plan:             lic.plan || 'standard',
+            status:           lic.status || '',
+            status_label:     lic.status === 'suspended' ? 'Suspended' : (lic.status === 'active' ? 'Active' : (lic.status || '')),
+            valid_until:      lic.valid_until ? fmtDate(lic.valid_until) : '',
+            max_companies:    lic.max_companies != null ? lic.max_companies : 0,
+            max_users:        lic.max_users != null ? lic.max_users : 0,
+            companies_count:  d.companies_count != null ? d.companies_count : 0,
+            users_count:      d.users_count != null ? d.users_count : 0,
+            machine_bound:    !!agent.machine_bound,
+            machine_short:    machineId ? (machineId.length > 12 ? machineId.slice(0, 12) + '…' : machineId) : '',
+            agent_connected:  !!agent.connected,
+            agent_version:    lic.agent_version || '',
+            last_seen_at:     lic.last_seen_at ? fmtDateTime(lic.last_seen_at) : '',
+            machine_bound_at: lic.machine_bound_at ? fmtDateTime(lic.machine_bound_at) : '',
+            created_at:       lic.created_at ? fmtDateTime(lic.created_at) : '',
+        };
+        const companies = (Array.isArray(d.companies) ? d.companies : []).map((c) => ({
+            id: c.id, name: c.name || '', status: c.status || '',
+        }));
+        const users = (Array.isArray(d.users) ? d.users : []).map((u) => ({
+            id: u.id, name: u.name || '', email: u.email || '',
+            role: u.role || '', status: u.status || '',
+        }));
+        res.render('licenses/detail', {
+            title: 'License — ' + (license.holder_name || ('#' + license.id)),
+            activeMenu: 'licenses',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Licenses', href: '/licenses' },
+                { label: license.holder_name || ('#' + license.id) },
+            ],
+            license, companies, users, newLicenseKey,
+        });
+    } catch (err) { next(err); }
+});
+
+/* GET /licenses/:id/edit — prefilled edit form (mutable fields only). */
+router.get('/licenses/:id/edit', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const { body } = await api.get(req, `/super-admin/licenses/${id}`);
+        if (!body || body.status !== 200 || !body.data) {
+            setFlash(req, 'error', (body && body.msg) || 'License not found.');
+            return req.session.save(() => res.redirect('/licenses'));
+        }
+        const lic = body.data.license || {};
+        res.render('licenses/edit', {
+            title: 'Edit License',
+            activeMenu: 'licenses',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Licenses', href: '/licenses' },
+                { label: lic.holder_name || ('#' + lic.id), href: '/licenses/' + id },
+                { label: 'Edit' },
+            ],
+            licenseId:       id,
+            companiesCount:  body.data.companies_count != null ? body.data.companies_count : 0,
+            usersCount:      body.data.users_count != null ? body.data.users_count : 0,
+            error: null,
+            old: {
+                holder_name:   lic.holder_name || '',
+                plan:          lic.plan || 'standard',
+                max_companies: lic.max_companies != null ? lic.max_companies : '',
+                max_users:     lic.max_users != null ? lic.max_users : '',
+                valid_until:   lic.valid_until ? String(lic.valid_until).slice(0, 10) : '',
+            },
+        });
+    } catch (err) { next(err); }
+});
+
+/* POST /licenses/:id/edit — proxy to api PUT (browsers can't PUT a form). On
+ * success → detail page; on error re-render the form with the message + input. */
+router.post('/licenses/:id/edit', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id  = Number(req.params.id);
+        const b   = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            holder_name:   b.holder_name,
+            plan:          b.plan || undefined,
+            max_companies: num(b.max_companies),
+            max_users:     num(b.max_users),
+            // Send the raw value (incl. '') so clearing the field nulls the
+            // expiry server-side; the date input is always present in the POST.
+            valid_until:   b.valid_until != null ? b.valid_until : '',
+        };
+        const result = await api.put(req, `/super-admin/licenses/${id}`, payload);
+        if (apiOk(result)) {
+            setFlash(req, 'success', (result.body && result.body.msg) || 'License updated.');
+            return req.session.save(() => res.redirect('/licenses/' + id));
+        }
+        // Re-render with the error + entered values (re-fetch usage hints best-effort).
+        let companiesCount = 0; let usersCount = 0;
+        try {
+            const det = await api.get(req, `/super-admin/licenses/${id}`);
+            if (det.body && det.body.data) {
+                companiesCount = det.body.data.companies_count || 0;
+                usersCount     = det.body.data.users_count || 0;
+            }
+        } catch (_) { /* non-fatal */ }
+        return res.status(200).render('licenses/edit', {
+            title: 'Edit License',
+            activeMenu: 'licenses',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Licenses', href: '/licenses' },
+                { label: 'Edit' },
+            ],
+            licenseId: id, companiesCount, usersCount,
+            error: apiError(result, 'Could not update the license.'),
+            old: {
+                holder_name:   b.holder_name, plan: b.plan,
+                max_companies: b.max_companies, max_users: b.max_users,
+                valid_until:   b.valid_until,
+            },
+        });
     } catch (err) { next(err); }
 });
 
@@ -3023,6 +3224,129 @@ router.post('/user-approvals/:id/reject', requireSuperAdmin, async (req, res, ne
         else setFlash(req, 'error', apiError(result, 'Could not reject the user.'));
         return req.session.save(() => res.redirect('/user-approvals'));
     } catch (err) { next(err); }
+});
+
+/* ── PLATFORM ADMIN · Agent Updates (super-admin only) ───────────
+ * Upload a freshly-built TallyCloudSync.exe from the browser and publish it as
+ * the current agent release. Agents with auto_update=ON self-update; agents with
+ * auto_update=OFF get a "new version available" bell notification on their sync
+ * dashboard. The list/publish/upload api endpoints are super-admin guarded; we
+ * also gate here with requireSuperAdmin so the route/menu never leaks. */
+
+/* Human-readable byte size (e.g. 48234567 → "46.0 MB"). */
+function fmtBytes(n) {
+    const b = Number(n || 0);
+    if (!b) return '—';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let i = 0; let v = b;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+/* GET /agent-releases — current release + publish history + upload form. */
+router.get('/agent-releases', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const { body } = await api.get(req, '/super-admin/agent-release');
+        const data    = (body && body.data) || {};
+        const current = data.current || null;
+        const history = Array.isArray(data.history) ? data.history : [];
+        const releaseDir = data.release_dir || '';
+
+        const mapRow = (r) => ({
+            id:          r.id,
+            version:     r.version || '',
+            filename:    r.filename || '',
+            sha256:      r.sha256 || '',
+            sha256_short: r.sha256 ? String(r.sha256).slice(0, 12) : '',
+            size:        fmtBytes(r.size_bytes),
+            notes:       r.notes || '',
+            mandatory:   !!r.mandatory,
+            is_current:  !!r.is_current,
+            created_at:  r.created_at ? fmtDateTime(r.created_at) : '',
+        });
+
+        res.render('agent-releases/index', {
+            title: 'Agent Updates',
+            activeMenu: 'agent-releases',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Agent Updates' }],
+            current:     current ? mapRow(current) : null,
+            historyRows: history.map(mapRow),
+            releaseDir,
+        });
+    } catch (err) { next(err); }
+});
+
+/* POST /agent-releases/upload — receive the multipart exe in WEB, then FORWARD
+ * it to the api POST /super-admin/agent-release/upload as multipart (form-data
+ * + the session bearer token). The binary is streamed via form-data from the
+ * in-memory Buffer so it is never corrupted. flash + redirect. */
+router.post('/agent-releases/upload', requireSuperAdmin, (req, res) => {
+    agentUpload(req, res, async (mErr) => {
+        const back = '/agent-releases';
+        if (mErr) {
+            const msg = mErr.code === 'LIMIT_FILE_SIZE'
+                ? 'The file is too large (max 200MB).'
+                : 'Could not read the uploaded file.';
+            setFlash(req, 'error', msg);
+            return req.session.save(() => res.redirect(back));
+        }
+        try {
+            const b = req.body || {};
+            const version = String(b.version || '').trim();
+            if (!req.file || !req.file.buffer) {
+                setFlash(req, 'error', 'Please choose the agent .exe file to upload.');
+                return req.session.save(() => res.redirect(back));
+            }
+            if (!/\.exe$/i.test(String(req.file.originalname || ''))) {
+                setFlash(req, 'error', 'Only a .exe agent file may be uploaded.');
+                return req.session.save(() => res.redirect(back));
+            }
+            if (!version) {
+                setFlash(req, 'error', 'A release version is required.');
+                return req.session.save(() => res.redirect(back));
+            }
+
+            // Build the multipart body for the api. The file rides as the "file"
+            // field (filename + octet-stream content-type) from the Buffer; the
+            // text fields ride alongside it.
+            const form = new FormData();
+            form.append('file', req.file.buffer, {
+                filename: req.file.originalname || `TallyCloudSync-${version}.exe`,
+                contentType: 'application/octet-stream',
+                knownLength: req.file.buffer.length,
+            });
+            form.append('version', version);
+            if (b.notes != null && String(b.notes).trim() !== '') form.append('notes', String(b.notes));
+            if (asBool(b.mandatory)) form.append('mandatory', 'true');
+
+            const headers = Object.assign({ Accept: 'application/json' }, form.getHeaders());
+            if (req.session && req.session.token) headers.Authorization = `Bearer ${req.session.token}`;
+
+            let resp; let parsed = null;
+            try {
+                resp = await fetch(`${api.API_URL}/super-admin/agent-release/upload`, {
+                    method: 'POST',
+                    headers,
+                    body: form.getBuffer(),
+                });
+                try { parsed = await resp.json(); } catch { parsed = null; }
+            } catch (e) {
+                setFlash(req, 'error', 'Cannot reach the API server.');
+                return req.session.save(() => res.redirect(back));
+            }
+
+            const ok = parsed && parsed.status === 200;
+            if (ok) {
+                setFlash(req, 'success', parsed.msg || `Published agent v${version}.`);
+            } else {
+                setFlash(req, 'error', (parsed && parsed.msg) || 'Could not publish the agent release.');
+            }
+            return req.session.save(() => res.redirect(back));
+        } catch (err) {
+            setFlash(req, 'error', 'Could not publish the agent release.');
+            return req.session.save(() => res.redirect(back));
+        }
+    });
 });
 
 module.exports = router;

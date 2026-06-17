@@ -12,9 +12,13 @@ Quick build (manual)
 …or just run this script, which does the same with sensible flags and a few
 pre-flight checks:
 
-    python build_exe.py
+    python build_exe.py            # console agent  -> dist/TallyCloudSyncAgent.exe
+    python build_exe.py --gui      # windowed GUI   -> dist/TallyCloudSync.exe
+    python build_exe.py --both     # build both exes
 
-The resulting binary lands in ``dist/TallyCloudSyncAgent.exe``.
+The console binary lands in ``dist/TallyCloudSyncAgent.exe`` (headless / debug)
+and the windowed GUI binary in ``dist/TallyCloudSync.exe`` (the new primary
+deliverable: a self-installing tkinter app with no console window).
 
 Auto-start at logon
 -------------------
@@ -39,10 +43,22 @@ The agent is meant to run whenever the customer logs in. Two common ways:
 Notes
 -----
 * ``config.ini`` and the ``logs/`` directory are created/read next to the
-  executable's working directory — ship ``config.example.ini`` alongside the
-  exe and have the customer copy + edit it (set ``api_url`` + ``license_key``).
-* For a true Windows *service* (no logged-in user), install ``pywin32`` and
-  wrap the agent in a service shim — out of scope for this one-file build.
+  executable's working directory. The server URL is BAKED into the exe
+  (``constants.API_BASE_URL``) and the license key / token are stored ENCRYPTED,
+  so the customer never edits a URL or a plaintext key - the Setup wizard asks
+  only for the license key.
+* PRODUCTION BUILD: before building the distributable GUI exe, set
+  ``constants.API_BASE_URL`` to your production domain (it is the ONLY place the
+  server URL lives). Then:  ``python build_exe.py --gui``  ->
+  ``dist/TallyCloudSync.exe``.
+* WINDOWS SERVICE (no logged-in user): the GUI build IS the service. The SAME
+  one exe serves the GUI, the service (run via ``--run-service``) and service
+  management (``install-service`` / ``remove-service`` / ``start-service`` /
+  ``stop-service``). The Setup wizard registers + starts the service
+  automatically (elevated via UAC). pywin32 is bundled via the hidden-imports
+  below, so no extra steps are needed at runtime. To run the exe AS the service
+  by hand for testing, run ``TallyCloudSync.exe install-service`` from an
+  elevated prompt (or let the installer do it).
 """
 
 from __future__ import annotations
@@ -56,6 +72,12 @@ from pathlib import Path
 
 APP_NAME = "TallyCloudSyncAgent"
 ENTRY_SCRIPT = "sync_agent.py"
+
+# The windowed (no-console) GUI build. This is the new PRIMARY deliverable: a
+# self-installing tkinter app. PyInstaller bundles tkinter automatically, so no
+# extra hidden-imports are needed for it beyond the agent's sibling modules.
+GUI_APP_NAME = "TallyCloudSync"
+GUI_ENTRY_SCRIPT = "gui_agent.py"
 
 
 def _stamp_version(version: str) -> bool:
@@ -111,21 +133,29 @@ def _ensure_pyinstaller() -> bool:
         return False
 
 
-def _ensure_entry_script() -> bool:
-    """Verify the entry script exists next to this builder."""
-    script = Path(__file__).resolve().parent / ENTRY_SCRIPT
+def _ensure_entry_script(entry: str = ENTRY_SCRIPT) -> bool:
+    """Verify the given entry script exists next to this builder."""
+    script = Path(__file__).resolve().parent / entry
     if not script.exists():
         print(f"Entry script not found: {script}")
         return False
     return True
 
 
-def build() -> int:
+def build(gui: bool = False) -> int:
     """Invoke PyInstaller to produce the one-file executable.
+
+    ``gui=False`` builds the CONSOLE agent (``sync_agent.py`` ->
+    ``TallyCloudSyncAgent.exe``). ``gui=True`` builds the WINDOWED, no-console
+    GUI (``gui_agent.py`` -> ``TallyCloudSync.exe``) with ``--windowed`` so no
+    console window appears. PyInstaller bundles tkinter automatically.
 
     Returns a process exit code (0 on success).
     """
-    if not _ensure_entry_script():
+    app_name = GUI_APP_NAME if gui else APP_NAME
+    entry = GUI_ENTRY_SCRIPT if gui else ENTRY_SCRIPT
+
+    if not _ensure_entry_script(entry):
         return 1
     if not _ensure_pyinstaller():
         return 1
@@ -137,7 +167,7 @@ def build() -> int:
         "PyInstaller",
         "--onefile",
         "--name",
-        APP_NAME,
+        app_name,
         "--clean",
         "--noconfirm",
         # The agent imports its siblings as top-level modules; ensure they are
@@ -150,8 +180,33 @@ def build() -> int:
         "api_client",
         "--hidden-import",
         "tally_connector",
-        str(here / ENTRY_SCRIPT),
     ]
+    if gui:
+        # No console window for the windowed GUI. The GUI also imports the engine
+        # entry point (sync_agent) + the new constants/win_service modules, so
+        # collect them explicitly. tkinter is bundled by PyInstaller
+        # automatically; pystray/Pillow are optional + guarded so they are NOT
+        # required (and not force-collected here).
+        cmd += [
+            "--windowed",
+            "--hidden-import", "sync_agent",
+            # constants.py is a NEW module imported by config; it is collected
+            # automatically as a direct import, but pin it for safety.
+            "--hidden-import", "constants",
+            # win_service.py + the pywin32 modules it uses. The SAME exe runs as
+            # the Windows service via --run-service, so these MUST be bundled.
+            "--hidden-import", "win_service",
+            "--hidden-import", "win32timezone",
+            "--hidden-import", "win32serviceutil",
+            "--hidden-import", "win32service",
+            "--hidden-import", "win32event",
+            "--hidden-import", "servicemanager",
+            "--hidden-import", "win32api",
+            "--hidden-import", "win32con",
+            "--hidden-import", "pywintypes",
+            "--hidden-import", "pythoncom",
+        ]
+    cmd.append(str(here / entry))
 
     print("Running:", " ".join(cmd))
     try:
@@ -164,7 +219,7 @@ def build() -> int:
         print(f"PyInstaller exited with code {result.returncode}.")
         return result.returncode
 
-    exe = here / "dist" / f"{APP_NAME}.exe"
+    exe = here / "dist" / f"{app_name}.exe"
     if exe.exists():
         print(f"\nBuild complete: {exe}")
         # Place a starter config next to the exe for convenience.
@@ -175,8 +230,12 @@ def build() -> int:
                 print(f"Copied config.example.ini next to the exe.")
             except OSError:
                 pass
-        print("\nNext: copy config.example.ini -> config.ini beside the exe,")
-        print("      set api_url + license_key, then run the exe once to activate.")
+        if gui:
+            print("\nThis is the self-installing GUI. Run TallyCloudSync.exe and")
+            print("      follow the Setup wizard (license key + install folder).")
+        else:
+            print("\nNext: copy config.example.ini -> config.ini beside the exe,")
+            print("      set api_url + license_key, then run the exe once to activate.")
     else:
         print("Build reported success but the exe was not found.")
         return 1
@@ -185,18 +244,25 @@ def build() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: optionally stamp a release version, then build the exe.
+    """CLI: optionally stamp a release version, then build the exe(s).
 
     Usage:
-        python build_exe.py                  Build with the current version.
+        python build_exe.py                  Build the CONSOLE agent exe.
+        python build_exe.py --gui            Build the WINDOWED GUI exe.
+        python build_exe.py --both           Build BOTH exes.
         python build_exe.py --version 1.0.1  Stamp v1.0.1 into config, then build.
 
-    After building, the operator drops dist/TallyCloudSyncAgent.exe into the
-    server's AGENT_RELEASE_DIR and publishes its version (POST
-    /super-admin/agent-release) so agents auto-update to it.
+    ``--gui`` produces ``dist/TallyCloudSync.exe`` (the self-installing tkinter
+    app, no console window); the default still produces
+    ``dist/TallyCloudSyncAgent.exe`` (the headless console agent). After
+    building, the operator drops the exe into the server's AGENT_RELEASE_DIR and
+    publishes its version (POST /super-admin/agent-release) so agents
+    auto-update to it.
     """
     args = list(sys.argv[1:] if argv is None else argv)
     version = None
+    gui = "--gui" in args
+    both = "--both" in args
     i = 0
     while i < len(args):
         if args[i] in ("--version", "-v") and i + 1 < len(args):
@@ -211,7 +277,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         _stamp_version(version)
 
-    return build()
+    if both:
+        rc = build(gui=False)
+        if rc != 0:
+            return rc
+        return build(gui=True)
+    return build(gui=gui)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@
         "joi": "^17",
         "jsonwebtoken": "^9",
         "knex": "^3",
+        "multer": "^2.2.0",
         "pg": "^8.13"
     },
     "devDependencies": {

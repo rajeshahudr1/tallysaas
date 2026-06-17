@@ -168,13 +168,20 @@ function _relTime(v) {
                 </div>
                 <% if (_notifs.length) { %>
                     <% _notifs.forEach(function (n) {
-                        var _failed = String(n.status || '').toLowerCase() === 'failed';
+                        var _isUpdate = String(n.type || '') === 'agent_update';
+                        var _failed = !_isUpdate && String(n.status || '').toLowerCase() === 'failed';
                         var _reason = (n.reason && n.reason.cause) ? n.reason.cause : (n.raw_message || '');
                         var _rec    = [n.module, n.record_type].filter(Boolean).join(' ');
+                        // Agent-update entries carry their own title/body/severity;
+                        // a 'warning' severity (mandatory) shows amber, else blue.
+                        var _updWarn = _isUpdate && String(n.severity || '') === 'warning';
+                        var _href    = _isUpdate ? '#' : '/sync-logs';
                     %>
-                        <a class="dropdown-item notif-item" href="/sync-logs">
+                        <a class="dropdown-item notif-item" href="<%= _href %>">
                             <span class="notif-item-icon">
-                                <% if (_failed) { %>
+                                <% if (_isUpdate) { %>
+                                    <i class="fa-solid fa-cloud-arrow-down <%= _updWarn ? 'text-warning' : 'text-primary' %>"></i>
+                                <% } else if (_failed) { %>
                                     <i class="fa-solid fa-triangle-exclamation text-danger"></i>
                                 <% } else { %>
                                     <i class="fa-solid fa-circle-check text-success"></i>
@@ -182,10 +189,12 @@ function _relTime(v) {
                             </span>
                             <span class="flex-grow-1">
                                 <span class="notif-item-title d-flex align-items-center justify-content-between">
-                                    <span><%= _rec || (n.module || 'Tally sync') %></span>
+                                    <span><%= _isUpdate ? (n.title || 'New agent version available') : (_rec || (n.module || 'Tally sync')) %></span>
                                     <span class="notif-item-time text-muted small ms-2"><%= _relTime(n.when) %></span>
                                 </span>
-                                <% if (_failed && _reason) { %>
+                                <% if (_isUpdate) { %>
+                                    <span class="notif-item-sub d-block <%= _updWarn ? 'text-warning' : 'text-primary' %>"><%= n.body || '' %></span>
+                                <% } else if (_failed && _reason) { %>
                                     <span class="notif-item-sub d-block text-danger"><%= _reason %></span>
                                 <% } else { %>
                                     <span class="notif-item-sub d-block">Synced to Tally.</span>

@@ -18,6 +18,13 @@ node_modules/
 agent/config.ini
 **/logs/
 *.log
+# Agent single-instance runtime lock
+**/tally_cloud_sync.lock
+
+# Published/uploaded agent release binaries (runtime artifacts served to agents)
+# Keep the folder (.gitkeep) but never commit the uploaded exe files.
+api/agent-releases/*
+!api/agent-releases/.gitkeep
 
 # Python
 __pycache__/

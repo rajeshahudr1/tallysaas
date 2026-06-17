@@ -1,0 +1,199 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/agent-releases/index.ejs — PLATFORM ADMIN · Agent Updates.
+ * Route: GET /agent-releases  ·  activeMenu: 'agent-releases'  ·  super-admin only.
+ *
+ * Upload a freshly-built TallyCloudSync.exe from the browser and publish it as
+ * the CURRENT agent release. Agents with auto_update=ON self-update; agents with
+ * auto_update=OFF get a "new version available" bell notification on their sync
+ * dashboard. Shows the current release, an upload/publish form, and the publish
+ * history. Reuses the SAME .card / .table.data-table / page-head classes as the
+ * other platform-admin screens so it looks identical.
+ *
+ * NOTE: publishing requires the operator to have already BUILT the exe
+ * (TallyCloudSync.exe) — this page only uploads + publishes it, it does not
+ * build it.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   current     object|null — the is_current release (already mapped for display)
+ *   historyRows [ rows ]    — publish history (newest first, mapped)
+ *   releaseDir  string      — the configured release directory (info)
+ * ─────────────────────────────────────────────────────────── */
+
+var _current = (typeof current !== 'undefined') ? current : null;
+var _history = (typeof historyRows !== 'undefined' && historyRows) ? historyRows : [];
+var _dir     = (typeof releaseDir !== 'undefined' && releaseDir) ? releaseDir : '';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Agent Updates',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Agent Updates' },
+    ],
+}) %>
+
+<div class="row g-3">
+
+    <!-- ════ Current release ════ -->
+    <div class="col-12 col-xl-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h2 class="form-section-title mb-3">
+                    <i class="fa-solid fa-cloud-arrow-down me-2 text-primary"></i>Current Release
+                </h2>
+
+                <% if (_current) { %>
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <span class="fs-4 fw-semibold">v<%= _current.version %></span>
+                        <span class="pill-status pill-status--success">Current</span>
+                        <% if (_current.mandatory) { %>
+                            <span class="pill-status pill-status--danger" title="Agents must update">Mandatory</span>
+                        <% } %>
+                    </div>
+
+                    <dl class="row mb-0 small">
+                        <dt class="col-4 text-muted">File</dt>
+                        <dd class="col-8"><code><%= _current.filename %></code></dd>
+
+                        <dt class="col-4 text-muted">Size</dt>
+                        <dd class="col-8"><%= _current.size %></dd>
+
+                        <dt class="col-4 text-muted">SHA-256</dt>
+                        <dd class="col-8"><code title="<%= _current.sha256 %>"><%= _current.sha256_short %>…</code></dd>
+
+                        <dt class="col-4 text-muted">Published</dt>
+                        <dd class="col-8"><%= _current.created_at || '—' %></dd>
+
+                        <% if (_current.notes) { %>
+                            <dt class="col-4 text-muted">Notes</dt>
+                            <dd class="col-8"><%= _current.notes %></dd>
+                        <% } %>
+                    </dl>
+                <% } else { %>
+                    <div class="text-muted py-4 text-center">
+                        <i class="fa-regular fa-circle-question d-block mb-2 fs-3"></i>
+                        No release published yet. Upload the built agent exe to publish the first one.
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════ Upload & publish ════ -->
+    <div class="col-12 col-xl-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h2 class="form-section-title mb-3">
+                    <i class="fa-solid fa-upload me-2 text-primary"></i>Upload &amp; Publish
+                </h2>
+
+                <div class="alert alert-info py-2 px-3 small mb-3" role="note">
+                    <i class="fa-solid fa-circle-info me-1"></i>
+                    Build <code>TallyCloudSync.exe</code> first, then upload it here. Publishing makes it
+                    the current release — auto-update agents pull it within a minute; the rest get a
+                    "new version available" notification.
+                </div>
+
+                <form method="post" action="/agent-releases/upload" enctype="multipart/form-data" autocomplete="off">
+                    <div class="form-group mb-3">
+                        <label class="form-label" for="ar-file">Agent file (.exe)<span class="req">*</span></label>
+                        <input type="file" class="form-control" id="ar-file" name="file" accept=".exe" required>
+                    </div>
+
+                    <div class="form-group mb-3">
+                        <label class="form-label" for="ar-version">Version<span class="req">*</span></label>
+                        <input type="text" class="form-control" id="ar-version" name="version"
+                               placeholder="e.g. 1.2.0" pattern="[A-Za-z0-9._-]+" required>
+                        <div class="form-hint">Saved as <code>TallyCloudSync-&lt;version&gt;.exe</code> in the release folder.</div>
+                    </div>
+
+                    <div class="form-group mb-3">
+                        <label class="form-label" for="ar-notes">Release notes</label>
+                        <textarea class="form-control" id="ar-notes" name="notes" rows="3"
+                                  placeholder="What changed in this build (shown to operators)"></textarea>
+                    </div>
+
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="ar-mandatory" name="mandatory" value="true">
+                        <label class="form-check-label" for="ar-mandatory">
+                            Mandatory update <span class="text-muted small">(agents are urged/forced to update)</span>
+                        </label>
+                    </div>
+
+                    <button type="submit" class="btn btn-gradient">
+                        <i class="fa-solid fa-cloud-arrow-up me-1"></i>Upload &amp; Publish
+                    </button>
+                </form>
+
+                <% if (_dir) { %>
+                    <div class="form-hint mt-3">
+                        <i class="fa-regular fa-folder-open me-1"></i>Release folder: <code><%= _dir %></code>
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /.row -->
+
+<!-- ════ Publish history ════ -->
+<div class="card mt-3">
+    <div class="card-body pb-0">
+        <h2 class="form-section-title mb-0">
+            <i class="fa-solid fa-clock-rotate-left me-2 text-muted"></i>Publish History
+        </h2>
+    </div>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="agent-releases-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th class="text-start">Version</th>
+                    <th class="text-start">File</th>
+                    <th class="text-start">Size</th>
+                    <th class="text-start">SHA-256</th>
+                    <th class="text-start">Mandatory</th>
+                    <th class="text-start">Status</th>
+                    <th class="text-start">Published</th>
+                    <th class="text-start">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_history.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="9">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            No releases published yet.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _history.forEach(function (row, i) { %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td class="text-start fw-semibold">v<%= row.version %></td>
+                        <td class="text-start"><code><%= row.filename %></code></td>
+                        <td class="text-start"><%= row.size %></td>
+                        <td class="text-start"><code title="<%= row.sha256 %>"><%= row.sha256_short %>…</code></td>
+                        <td class="text-start">
+                            <% if (row.mandatory) { %>
+                                <span class="pill-status pill-status--danger">Yes</span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--muted">No</span>
+                            <% } %>
+                        </td>
+                        <td class="text-start">
+                            <% if (row.is_current) { %>
+                                <span class="pill-status pill-status--success">Current</span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--muted">Archived</span>
+                            <% } %>
+                        </td>
+                        <td class="text-start"><%= row.created_at || '—' %></td>
+                        <td class="text-start"><%= row.notes || '—' %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>

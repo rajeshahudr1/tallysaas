@@ -431,6 +431,76 @@ async function logs(req, res) {
 }
 
 /**
+ * Build the "new agent version available" bell entry for a company, or null.
+ *
+ * Resolves the company's license (companies.license_id → licenses) for the
+ * installed agent_version, reads the published-current release, and compares
+ * with the SAME isNewer() semver helper summary() uses. When the latest is
+ * strictly newer than installed, returns ONE notification object shaped like
+ * the tally_sync_logs bell items (module/record_type/status/reason/raw_message/
+ * when) so the existing dropdown renders it, PLUS the richer
+ * { type, title, body, severity, created_at } fields. Especially relevant when
+ * auto_update is OFF (auto agents update silently), but safe for all with an
+ * update available. Best-effort: any error → null (the feed is never sunk).
+ */
+async function buildAgentUpdateNotif(companyId) {
+    try {
+        const company = await db('companies').where('id', companyId).first('id', 'license_id');
+        if (!company || !company.license_id) return null;
+
+        const license = await db('licenses')
+            .where('id', company.license_id)
+            .first('id', 'agent_version', 'auto_update');
+        const installedVersion = license ? (license.agent_version || null) : null;
+
+        let rel = null;
+        try { rel = await agentRelease.currentRelease(db); } catch { rel = null; }
+        let latestVersion = rel && rel.version ? rel.version : null;
+        if (!latestVersion) {
+            latestVersion = (String(process.env.AGENT_LATEST_VERSION || '').trim() || null);
+        }
+        if (!isNewer(latestVersion, installedVersion)) return null;
+
+        const mandatory = !!(rel && rel.mandatory);
+        const notes = rel && rel.notes ? String(rel.notes) : null;
+        const createdAt = (rel && rel.created_at) || null;
+        const autoUpdate = license && license.auto_update != null ? !!license.auto_update : true;
+
+        const title = `New agent version v${latestVersion} available`;
+        const body = notes
+            || (autoUpdate
+                ? 'The agent will update automatically on its next check.'
+                : 'Auto-update is off — update the agent to get the latest fixes.');
+
+        // Shaped BOTH as a bell item (so the existing dropdown renders it) AND
+        // with the richer agent_update fields. A synthetic, stable id keyed off
+        // the version so it's distinguishable from real log rows.
+        return {
+            id:          `agent-update-${latestVersion}`,
+            type:        'agent_update',
+            module:      'Agent Update',
+            record_type: `v${latestVersion}`,
+            // Not a sync row → keep it out of the "failed" red treatment.
+            status:      'info',
+            direction:   '',
+            severity:    mandatory ? 'warning' : 'info',
+            mandatory:   mandatory,
+            title:       title,
+            body:        body,
+            // reason/raw_message mirror the sync-item shape so the dropdown's
+            // sub-text logic has something to read.
+            reason:      { cause: body, fix: '', severity: mandatory ? 'warning' : 'info' },
+            raw_message: body,
+            created_at:  createdAt,
+            when:        createdAt,
+        };
+    } catch (err) {
+        console.error('sync.notifications agent-update build (ignored):', err && err.message);
+        return null;
+    }
+}
+
+/**
  * notifications(req,res) — GET /sync/notifications
  *
  * Drives the web/app notification BELL straight from tally_sync_logs (company-
@@ -515,13 +585,27 @@ async function notifications(req, res) {
             n:      Number(r.n) || 0,
         }));
 
+        // ── New-agent-version notification (Requirement) ──────────────────
+        // When the published-latest release is NEWER than this license's
+        // installed agent_version, surface ONE "new version available" entry in
+        // the bell feed. Auto-update=ON agents self-update silently, but
+        // auto-update=OFF agents need the operator to update — the bell is how
+        // they find out. We show it for ALL update_available licenses (harmless
+        // for auto ones; they just update before/around seeing it). Best-effort:
+        // a release/license lookup hiccup must never sink the whole feed.
+        const updateNotif = await buildAgentUpdateNotif(companyId);
+        if (updateNotif) recentOut.unshift(updateNotif);
+
         return R.successResponse(res, {
-            unread:           asCount(unreadRow),
+            // The bell badge counts failed syncs; bump it by 1 so the new-version
+            // entry is visible (and the badge isn't 0 with an item sitting there).
+            unread:           asCount(unreadRow) + (updateNotif ? 1 : 0),
             fail_count:       asCount(unreadRow),
             ok_count:         asCount(okRow),
             last_sync_at:     lastRow ? (lastRow.m || null) : null,
             recent:           recentOut,
             failed_by_module: failedOut,
+            update_available: !!updateNotif,
         });
     } catch (err) {
         console.error('sync.notifications error:', err);

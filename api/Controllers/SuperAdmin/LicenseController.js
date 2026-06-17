@@ -9,19 +9,36 @@
  *
  *   create        POST   /super-admin/licenses
  *   list          GET    /super-admin/licenses
+ *   get           GET    /super-admin/licenses/:id
+ *   update        PUT    /super-admin/licenses/:id
+ *   remove        DELETE /super-admin/licenses/:id
  *   resetMachine  POST   /super-admin/licenses/:id/reset-machine
  *   suspend       POST   /super-admin/licenses/:id/suspend
  *   activate      POST   /super-admin/licenses/:id/activate
+ *   regenerate    POST   /super-admin/licenses/:id/regenerate
  */
 
 const crypto       = require('node:crypto');
 const R            = require('../../Helpers/response');
 const licenseKey   = require('../../Helpers/licenseKey');
+const keyCrypto    = require('../../Helpers/keyCrypto');
 const passwords    = require('../../Helpers/passwords');
 const entitlements = require('../../Helpers/entitlements');
 const db           = require('../../config/db').db;
 
 const NOT_FOUND = 'License not found.';
+
+// An agent is "connected" if its license heartbeat landed within this window.
+// The agent beats every 60s, so 150s = 2.5 missed beats (matches SyncController).
+const CONNECTED_WINDOW_MS = 150 * 1000;
+
+// Columns SAFE to expose for a single license (NEVER license_key_hash).
+const PUBLIC_COLUMNS = [
+    'id', 'key_prefix', 'tally_serial', 'holder_name', 'plan',
+    'max_companies', 'max_users', 'valid_until', 'status',
+    'machine_id', 'machine_bound_at', 'last_seen_at', 'agent_version',
+    'created_by', 'created_at', 'updated_at',
+];
 
 // A readable 12-char temp password (used when the caller doesn't supply one).
 function tempPassword() {
@@ -78,6 +95,9 @@ async function create(req, res) {
         const out = await db.transaction(async (trx) => {
             const [lic] = await trx('licenses').insert({
                 license_key_hash: hash,
+                // Reversibly-encrypted full key so a super-admin can REVEAL it
+                // later (null when LICENSE_KEY_SECRET is unset → not revealable).
+                license_key_enc:  keyCrypto.encryptKey(key),
                 key_prefix:       prefix,
                 holder_name:      b.holder_name,
                 tally_serial:     b.tally_serial || null,
@@ -186,6 +206,225 @@ async function resetMachine(req, res) {
     }
 }
 
+/**
+ * GET /super-admin/licenses/:id
+ *
+ * Full license detail (NEVER the license_key_hash) plus derived info:
+ *   • companies_count + companies [{id,name,status}] under this license
+ *   • users_count + users [{id,name,email,role,status}] under this license
+ *   • agent_connected (last_seen_at within CONNECTED_WINDOW_MS), agent_version,
+ *     machine_bound flag.
+ */
+async function get(req, res) {
+    try {
+        const lic = await db('licenses')
+            .where('id', req.params.id).whereNull('deleted_at')
+            .first(PUBLIC_COLUMNS);
+        if (!lic) return R.errorResponse(res, NOT_FOUND, 404);
+
+        // Reveal the FULL key to the super-admin when we can decrypt the stored
+        // ciphertext. The encrypted blob is fetched SEPARATELY (never added to
+        // PUBLIC_COLUMNS / the `lic` payload) and the hash is NEVER exposed.
+        // Decrypt failures (missing secret / pre-encryption license / tampered
+        // blob) degrade to key_available:false — never a 500.
+        const encRow      = await db('licenses').where('id', lic.id).first('license_key_enc');
+        const clearKey    = encRow ? keyCrypto.decryptKey(encRow.license_key_enc) : null;
+        const keyAvailable = !!clearKey;
+
+        const companies = await db('companies')
+            .where('license_id', lic.id).whereNull('deleted_at')
+            .orderBy('id', 'asc')
+            .select('id', 'name', 'status');
+
+        const users = await db('users')
+            .leftJoin('roles', 'roles.id', 'users.role_id')
+            .where('users.license_id', lic.id).whereNull('users.deleted_at')
+            .orderBy('users.id', 'asc')
+            .select(
+                'users.id', 'users.name', 'users.email', 'users.status',
+                'roles.name as role',
+            );
+
+        const lastSeen  = lic.last_seen_at ? new Date(lic.last_seen_at) : null;
+        const connected = !!(lastSeen && (Date.now() - lastSeen.getTime()) <= CONNECTED_WINDOW_MS);
+
+        return R.successResponse(res, {
+            license:         lic,
+            // Full plaintext key for the super-admin View, only when decryptable.
+            key_available:   keyAvailable,
+            ...(keyAvailable ? { license_key: clearKey } : {}),
+            companies_count: companies.length,
+            companies,
+            users_count:     users.length,
+            users,
+            agent: {
+                connected,
+                agent_version: lic.agent_version || null,
+                machine_bound: !!(lic.machine_id || lic.machine_bound_at),
+                last_seen_at:  lic.last_seen_at || null,
+            },
+        });
+    } catch (err) {
+        console.error('LicenseController.get error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * PUT /super-admin/licenses/:id
+ *
+ * Edits ONLY the mutable commercial fields — holder_name, plan, max_companies,
+ * max_users, valid_until. NEVER touches the key/hash, machine binding, or status
+ * (status is changed via suspend/activate, machine via reset-machine). Caps may
+ * not drop below the license's current companies/users counts (we'd otherwise be
+ * over-subscribed). 404 when not found/deleted; 422 on bad input.
+ */
+async function update(req, res) {
+    try {
+        const lic = await db('licenses')
+            .where('id', req.params.id).whereNull('deleted_at').first();
+        if (!lic) return R.errorResponse(res, NOT_FOUND, 404);
+
+        const b = req.body || {};
+
+        // holder_name — required, non-empty.
+        const holder = (b.holder_name == null ? '' : String(b.holder_name)).trim();
+        if (!holder) return R.errorResponse(res, 'Holder name is required.', 422);
+
+        // Current usage — the caps may not be set below these.
+        const [{ count: compCount }] = await db('companies')
+            .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });
+        const [{ count: userCount }] = await db('users')
+            .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });
+        const companiesCount = Number(compCount) || 0;
+        const usersCount     = Number(userCount) || 0;
+
+        const patch = { holder_name: holder };
+
+        if (b.plan != null) {
+            const plan = String(b.plan).trim();
+            if (!plan) return R.errorResponse(res, 'Plan cannot be empty.', 422);
+            patch.plan = plan;
+        }
+
+        if (b.max_companies != null && b.max_companies !== '') {
+            const mc = Number(b.max_companies);
+            if (!Number.isInteger(mc) || mc <= 0) {
+                return R.errorResponse(res, 'Max companies must be a whole number greater than 0.', 422);
+            }
+            if (mc < companiesCount) {
+                return R.errorResponse(res, `Max companies cannot be below the ${companiesCount} companies already under this license.`, 422);
+            }
+            patch.max_companies = mc;
+        }
+
+        if (b.max_users != null && b.max_users !== '') {
+            const mu = Number(b.max_users);
+            if (!Number.isInteger(mu) || mu <= 0) {
+                return R.errorResponse(res, 'Max users must be a whole number greater than 0.', 422);
+            }
+            if (mu < usersCount) {
+                return R.errorResponse(res, `Max users cannot be below the ${usersCount} users already under this license.`, 422);
+            }
+            patch.max_users = mu;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(b, 'valid_until')) {
+            if (b.valid_until === '' || b.valid_until == null) {
+                patch.valid_until = null;
+            } else {
+                const d = new Date(b.valid_until);
+                if (isNaN(d.getTime())) return R.errorResponse(res, 'Valid until must be a valid date.', 422);
+                patch.valid_until = isoDate(b.valid_until);
+            }
+        }
+
+        patch.updated_at = new Date();
+        await db('licenses').where('id', lic.id).update(patch);
+
+        const updated = await db('licenses').where('id', lic.id).first(PUBLIC_COLUMNS);
+        return R.successResponse(res, { license: updated }, 'License updated.');
+    } catch (err) {
+        console.error('LicenseController.update error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * DELETE /super-admin/licenses/:id
+ *
+ * Soft-delete (deleted_at = now). Refuses (422) while the license still has any
+ * non-deleted companies OR users, so tenant data is never orphaned — the caller
+ * must remove/move them first. Allowed once the license is empty.
+ */
+async function remove(req, res) {
+    try {
+        const lic = await db('licenses')
+            .where('id', req.params.id).whereNull('deleted_at').first('id');
+        if (!lic) return R.errorResponse(res, NOT_FOUND, 404);
+
+        const [{ count: compCount }] = await db('companies')
+            .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });
+        const [{ count: userCount }] = await db('users')
+            .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });
+        const companiesCount = Number(compCount) || 0;
+        const usersCount     = Number(userCount) || 0;
+
+        if (companiesCount > 0 || usersCount > 0) {
+            const parts = [];
+            if (companiesCount > 0) parts.push(`${companiesCount} compan${companiesCount === 1 ? 'y' : 'ies'}`);
+            if (usersCount > 0)     parts.push(`${usersCount} user${usersCount === 1 ? '' : 's'}`);
+            return R.errorResponse(res,
+                `Cannot delete: this license still has ${parts.join(' and ')}. Remove or move them first.`, 422);
+        }
+
+        await db('licenses').where('id', lic.id).update({ deleted_at: new Date(), updated_at: new Date() });
+        return R.successResponse(res, { id: lic.id }, 'License deleted.');
+    } catch (err) {
+        console.error('LicenseController.remove error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * POST /super-admin/licenses/:id/regenerate
+ *
+ * Mints a BRAND-NEW key for an existing license — used for old licenses whose
+ * clear key was never stored (created before encryption), or to rotate a key.
+ * Uses the EXACT same generator/format as create() (licenseKey.generate), and
+ * updates ONLY the key fields: license_key_hash + key_prefix + license_key_enc
+ * (encrypted) + updated_at. Machine binding, status, companies and users are
+ * left untouched. Returns the new full key ONCE in the envelope.
+ *
+ * 404 when the license is missing/deleted. Super-admin guarded at the route.
+ */
+async function regenerate(req, res) {
+    try {
+        const lic = await db('licenses')
+            .where('id', req.params.id).whereNull('deleted_at').first('id');
+        if (!lic) return R.errorResponse(res, NOT_FOUND, 404);
+
+        // Same generator + format as create() — do not invent a new format.
+        const { key, prefix, hash } = licenseKey.generate();
+
+        await db('licenses').where('id', lic.id).update({
+            license_key_hash: hash,
+            key_prefix:       prefix,
+            license_key_enc:  keyCrypto.encryptKey(key),
+            updated_at:       new Date(),
+        });
+
+        // The new clear key is returned ONCE (it stays revealable via get()).
+        return R.successResponse(res, {
+            license_key: key,
+            key_prefix:  prefix,
+        }, 'New license key generated. Copy it now — and re-activate the agent with it.');
+    } catch (err) {
+        console.error('LicenseController.regenerate error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
 async function setStatus(req, res, status, msg) {
     try {
         const lic = await db('licenses').where('id', req.params.id).whereNull('deleted_at').first();
@@ -201,4 +440,4 @@ async function setStatus(req, res, status, msg) {
 const suspend  = (req, res) => setStatus(req, res, 'suspended', 'License suspended.');
 const activate = (req, res) => setStatus(req, res, 'active', 'License re-activated.');
 
-module.exports = { create, list, resetMachine, suspend, activate };
+module.exports = { create, list, get, update, remove, resetMachine, suspend, activate, regenerate };

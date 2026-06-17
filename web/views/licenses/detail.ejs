@@ -1,0 +1,330 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/licenses/detail.ejs — PLATFORM ADMIN · License detail (read-only).
+ * Route: GET /licenses/:id  ·  activeMenu: 'licenses'  ·  super-admin only.
+ *
+ * Full read-only view of ONE license: every (non-secret) field, the agent
+ * connection state, and the lists of companies + users under this license,
+ * with quick links to Modules / Suspend / Activate / Reset / Edit / Delete.
+ * The key/hash is NEVER shown (only the non-secret prefix).
+ *
+ * The Delete button reuses the shared confirm-delete modal (in _layout.ejs):
+ * it carries data-row-delete + data-delete-url="/licenses/:id"; app.js POSTs
+ * to {url}/delete on confirm.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   license    object  — display-mapped license fields
+ *   companies  [ { id, name, status } ]
+ *   users      [ { id, name, email, role, status } ]
+ * ─────────────────────────────────────────────────────────── */
+
+var _lic   = (typeof license !== 'undefined' && license) ? license : {};
+var _comps = (typeof companies !== 'undefined' && companies) ? companies : [];
+var _users = (typeof users !== 'undefined' && users) ? users : [];
+// Full key reveal (super-admin). _newKey is set ONCE right after Regenerate.
+var _keyAvailable = !!_lic.key_available;
+var _fullKey      = _keyAvailable ? (_lic.license_key || '') : '';
+var _newKey       = (typeof newLicenseKey !== 'undefined' && newLicenseKey) ? newLicenseKey : '';
+
+function _statusClass(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'active')    return 'pill-status--success';
+    if (s === 'suspended') return 'pill-status--danger';
+    if (s === 'inactive')  return 'pill-status--danger';
+    if (s === 'blocked')   return 'pill-status--warning';
+    return 'pill-status--muted';
+}
+
+var headActions =
+    '<a class="btn btn-light" href="/licenses">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Licenses' +
+    '</a>' +
+    '<a class="btn btn-light" href="/licenses/' + _lic.id + '/permissions">' +
+        '<i class="fa-solid fa-cubes me-1"></i>Modules' +
+    '</a>' +
+    '<a class="btn btn-primary" href="/licenses/' + _lic.id + '/edit">' +
+        '<i class="fa-solid fa-pen me-1"></i>Edit' +
+    '</a>';
+%>
+
+<%- include('../partials/page-head', {
+    title: 'License — ' + (_lic.holder_name || ('#' + _lic.id)),
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Licenses', href: '/licenses' },
+        { label: _lic.holder_name || ('#' + _lic.id) },
+    ],
+    actions: headActions,
+}) %>
+
+<% if (_newKey) { %>
+    <!-- ONE-TIME: a key was just regenerated. Shown once on this render only. -->
+    <div class="alert alert-warning flash-banner" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2"></i>
+        <strong>New license key generated — copy it now.</strong>
+        Re-activate the Tally agent with this key. It is shown prominently here only this once
+        (you can still reveal it below afterwards).
+    </div>
+    <div class="card mb-4">
+        <div class="card-body p-4">
+            <div class="form-group mb-0">
+                <label class="form-label">New Agent License Key</label>
+                <div class="input-affix">
+                    <input type="text" class="form-control" id="new-key" value="<%= _newKey %>" readonly>
+                    <button type="button" class="btn btn-light affix affix--suffix" data-copy-target="new-key" title="Copy new license key">
+                        <i class="fa-regular fa-copy me-1"></i>Copy
+                    </button>
+                </div>
+                <div class="form-hint">Used once to re-activate &amp; machine-bind the Tally agent.</div>
+            </div>
+        </div>
+    </div>
+<% } %>
+
+<div class="card mb-4">
+    <div class="card-body p-4">
+
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+            <div>
+                <h2 class="form-section-title mb-1"><%= _lic.holder_name || ('License #' + _lic.id) %></h2>
+                <p class="text-muted mb-0">
+                    Plan: <span class="pill-badge"><%= _lic.plan %></span>
+                    &nbsp;·&nbsp; Prefix: <code><%= _lic.key_prefix %></code>
+                </p>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+                <span class="pill-status <%= _statusClass(_lic.status) %>"><%= _lic.status_label %></span>
+                <% if (_lic.agent_connected) { %>
+                    <span class="pill-status pill-status--success" title="Agent heartbeat is live">
+                        <i class="fa-solid fa-circle me-1"></i>Agent Online
+                    </span>
+                <% } else { %>
+                    <span class="pill-status pill-status--muted" title="No recent agent heartbeat">
+                        <i class="fa-regular fa-circle me-1"></i>Agent Offline
+                    </span>
+                <% } %>
+            </div>
+        </div>
+
+        <hr class="form-divider">
+
+        <dl class="record-detail">
+            <div class="record-detail-row"><dt>Holder</dt><dd><%= _lic.holder_name || '—' %></dd></div>
+            <div class="record-detail-row"><dt>Key Prefix</dt><dd><code><%= _lic.key_prefix %></code></dd></div>
+            <div class="record-detail-row">
+                <dt>License Key</dt>
+                <dd>
+                    <% if (_keyAvailable) { %>
+                        <div class="input-affix" style="max-width: 28rem;">
+                            <!-- Masked by default; the Reveal toggle swaps the input type. -->
+                            <input type="password" class="form-control" id="license-key" value="<%= _fullKey %>" readonly autocomplete="off">
+                            <button type="button" class="btn btn-light affix affix--suffix" id="license-key-toggle"
+                                    data-reveal-target="license-key" title="Show / hide the full key">
+                                <i class="fa-regular fa-eye me-1"></i><span class="reveal-label">Reveal</span>
+                            </button>
+                            <button type="button" class="btn btn-light affix affix--suffix" data-copy-target="license-key" title="Copy license key">
+                                <i class="fa-regular fa-copy me-1"></i>Copy
+                            </button>
+                        </div>
+                        <div class="form-hint mt-1">Full key — visible to super-admins only.</div>
+                    <% } else { %>
+                        <code><%= _lic.key_prefix_raw || _lic.key_prefix %></code>
+                        <div class="form-hint mt-1">
+                            <i class="fa-solid fa-circle-info me-1"></i>
+                            Full key not stored (created before encryption) — use <strong>Regenerate</strong>.
+                        </div>
+                    <% } %>
+                </dd>
+            </div>
+            <div class="record-detail-row"><dt>Plan</dt><dd><span class="pill-badge"><%= _lic.plan %></span></dd></div>
+            <div class="record-detail-row"><dt>Tally Serial</dt><dd><%= _lic.tally_serial || '—' %></dd></div>
+            <div class="record-detail-row"><dt>Status</dt><dd><span class="pill-status <%= _statusClass(_lic.status) %>"><%= _lic.status_label %></span></dd></div>
+            <div class="record-detail-row"><dt>Valid Until</dt><dd><%= _lic.valid_until || 'No expiry' %></dd></div>
+            <div class="record-detail-row"><dt>Companies</dt><dd><%= _lic.companies_count %> / <%= _lic.max_companies %></dd></div>
+            <div class="record-detail-row"><dt>Users</dt><dd><%= _lic.users_count %> / <%= _lic.max_users %></dd></div>
+            <div class="record-detail-row">
+                <dt>Machine</dt>
+                <dd>
+                    <% if (_lic.machine_bound) { %>
+                        <span class="pill-status pill-status--info">Bound</span>
+                        <% if (_lic.machine_short) { %>&nbsp;<code><%= _lic.machine_short %></code><% } %>
+                        <% if (_lic.machine_bound_at) { %>&nbsp;<span class="text-muted">since <%= _lic.machine_bound_at %></span><% } %>
+                    <% } else { %>
+                        <span class="pill-status pill-status--muted">Unbound</span>
+                    <% } %>
+                </dd>
+            </div>
+            <div class="record-detail-row"><dt>Last Seen</dt><dd><%= _lic.last_seen_at || '—' %></dd></div>
+            <div class="record-detail-row"><dt>Agent Version</dt><dd><%= _lic.agent_version || '—' %></dd></div>
+            <div class="record-detail-row"><dt>Created</dt><dd><%= _lic.created_at || '—' %></dd></div>
+        </dl>
+
+    </div>
+</div>
+
+<!-- ── Companies under this license ── -->
+<div class="card mb-4">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title">
+            <i class="fa-solid fa-building me-2 text-primary"></i>Companies
+            <span class="pill-badge ms-2"><%= _comps.length %></span>
+        </h2>
+    </div>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th class="text-start">Name</th>
+                    <th class="text-start">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_comps.length) { %>
+                    <tr><td class="data-table-empty text-center text-muted py-4" colspan="3">
+                        No companies under this license.
+                    </td></tr>
+                <% } %>
+                <% _comps.forEach(function (c, i) { %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td class="text-start"><%= c.name %></td>
+                        <td class="text-start"><span class="pill-status <%= _statusClass(c.status) %>"><%= c.status %></span></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ── Users under this license ── -->
+<div class="card mb-4">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title">
+            <i class="fa-solid fa-user-group me-2 text-primary"></i>Users
+            <span class="pill-badge ms-2"><%= _users.length %></span>
+        </h2>
+    </div>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th class="text-start">Name</th>
+                    <th class="text-start">Email</th>
+                    <th class="text-start">Role</th>
+                    <th class="text-start">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_users.length) { %>
+                    <tr><td class="data-table-empty text-center text-muted py-4" colspan="5">
+                        No users under this license.
+                    </td></tr>
+                <% } %>
+                <% _users.forEach(function (u, i) { %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td class="text-start"><%= u.name %></td>
+                        <td class="text-start"><%= u.email %></td>
+                        <td class="text-start"><%= u.role || '—' %></td>
+                        <td class="text-start"><span class="pill-status <%= _statusClass(u.status) %>"><%= u.status %></span></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ── Quick actions ── -->
+<div class="card">
+    <div class="card-body p-4">
+        <h2 class="form-section-title">Actions</h2>
+        <div class="d-flex flex-wrap gap-2">
+            <a href="/licenses/<%= _lic.id %>/permissions" class="btn btn-light">
+                <i class="fa-solid fa-cubes me-1"></i>Modules
+            </a>
+            <% if (_lic.status === 'active') { %>
+                <form method="post" action="/licenses/<%= _lic.id %>/suspend" class="d-inline">
+                    <button type="submit" class="btn btn-light" title="Suspend license">
+                        <i class="fa-solid fa-ban me-1"></i>Suspend
+                    </button>
+                </form>
+            <% } else { %>
+                <form method="post" action="/licenses/<%= _lic.id %>/activate" class="d-inline">
+                    <button type="submit" class="btn btn-light" title="Reactivate license">
+                        <i class="fa-solid fa-circle-check me-1"></i>Activate
+                    </button>
+                </form>
+            <% } %>
+            <form method="post" action="/licenses/<%= _lic.id %>/reset-machine" class="d-inline">
+                <button type="submit" class="btn btn-light" title="Unbind the agent machine"
+                        <%= _lic.machine_bound ? '' : 'disabled' %>>
+                    <i class="fa-solid fa-rotate me-1"></i>Reset Machine
+                </button>
+            </form>
+            <form method="post" action="/licenses/<%= _lic.id %>/regenerate" class="d-inline"
+                  onsubmit="return confirm('Generate a NEW license key for this license? The OLD key stops working immediately and the Tally agent must be re-activated with the new key. Continue?');">
+                <button type="submit" class="btn btn-warning" title="Generate a new license key">
+                    <i class="fa-solid fa-rotate-right me-1"></i>Regenerate Key
+                </button>
+            </form>
+            <a href="/licenses/<%= _lic.id %>/edit" class="btn btn-primary">
+                <i class="fa-solid fa-pen me-1"></i>Edit
+            </a>
+            <button type="button" class="btn btn-danger" title="Delete license"
+                    data-row-delete data-delete-url="/licenses/<%= _lic.id %>"
+                    data-delete-label="<%= _lic.holder_name %>">
+                <i class="fa-regular fa-trash-can me-1"></i>Delete
+            </button>
+        </div>
+        <p class="form-hint mt-3 mb-0">
+            <i class="fa-solid fa-circle-info me-1"></i>
+            A license can only be deleted once it has no companies or users.
+            Regenerate mints a fresh key (old key stops working) without changing companies, users, machine binding or status.
+        </p>
+    </div>
+</div>
+
+<script>
+    // Reveal toggle + copy-to-clipboard for the license key fields on this page.
+    // Reads only the readonly inputs already on the page; sends nothing anywhere.
+    (function () {
+        // Reveal / hide (swap input type=password<->text).
+        document.querySelectorAll('[data-reveal-target]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var el = document.getElementById(btn.getAttribute('data-reveal-target'));
+                if (!el) return;
+                var hidden = el.getAttribute('type') === 'password';
+                el.setAttribute('type', hidden ? 'text' : 'password');
+                var label = btn.querySelector('.reveal-label');
+                var icon  = btn.querySelector('i');
+                if (label) label.textContent = hidden ? 'Hide' : 'Reveal';
+                if (icon)  icon.className = hidden ? 'fa-regular fa-eye-slash me-1' : 'fa-regular fa-eye me-1';
+            });
+        });
+        // Copy.
+        document.querySelectorAll('[data-copy-target]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var el = document.getElementById(btn.getAttribute('data-copy-target'));
+                if (!el) return;
+                var wasHidden = el.getAttribute('type') === 'password';
+                if (wasHidden) el.setAttribute('type', 'text');
+                var restore = function () { if (wasHidden) el.setAttribute('type', 'password'); };
+                var done = function () {
+                    restore();
+                    var orig = btn.innerHTML;
+                    btn.innerHTML = '<i class="fa-solid fa-check me-1"></i>Copied';
+                    setTimeout(function () { btn.innerHTML = orig; }, 1500);
+                };
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(el.value).then(done).catch(function () {
+                        el.select(); document.execCommand('copy'); done();
+                    });
+                } else {
+                    el.select(); document.execCommand('copy'); done();
+                }
+            });
+        });
+    })();
+</script>

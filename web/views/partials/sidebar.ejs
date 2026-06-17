@@ -69,8 +69,9 @@ if (_isCompanyAdmin || _isSuperAdmin) {
 // primary workflow, so PIN it to the TOP — right under Dashboard, above Masters.
 if (_isSuperAdmin) {
     menu.splice(1, 0, { label: 'Platform Admin', items: [
-        { key: 'licenses',       label: 'Licenses',       icon: 'fa-key',         href: '/licenses' },
-        { key: 'user-approvals', label: 'User Approvals', icon: 'fa-user-check',  href: '/user-approvals' },
+        { key: 'licenses',       label: 'Licenses',       icon: 'fa-key',                href: '/licenses' },
+        { key: 'user-approvals', label: 'User Approvals', icon: 'fa-user-check',         href: '/user-approvals' },
+        { key: 'agent-releases', label: 'Agent Updates',  icon: 'fa-cloud-arrow-up',     href: '/agent-releases' },
     ]});
 }
 %>
