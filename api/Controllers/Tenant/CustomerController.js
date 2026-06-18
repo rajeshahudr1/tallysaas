@@ -173,6 +173,13 @@ const controller = crud.build({
         credit_limit:    'customers.credit_limit',
         sales_person:    'sales_persons.name',
     },
+    // Filter dropdowns (?key=value) → WHERE. Names match the joined label cols.
+    filters: {
+        location:       (qb, v) => qb.where('locations.name', v),
+        sales_person:   (qb, v) => qb.where('sales_persons.name', v),
+        customer_group: (qb, v) => qb.where('customer_groups.name', v),
+        gst:            (qb, v) => qb.where('customers.gst_number', 'ilike', `%${v}%`),
+    },
     baseQuery,
     buildInsert,
     buildUpdate,

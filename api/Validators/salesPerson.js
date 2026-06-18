@@ -90,7 +90,7 @@ const listSalesPersonSchema = Joi.object({
     per_page: Joi.number().integer().min(1).max(100).default(20),
     sort:     Joi.string().trim().max(40).allow('', null),
     order:    Joi.string().trim().lowercase().valid('asc', 'desc').allow('', null),
-});
+}).unknown(true);   // allow filter params (location / created dates)
 
 // Reusable required positive-integer FK.
 const reqFkId = Joi.number().integer().positive();

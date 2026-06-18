@@ -121,7 +121,7 @@ const listCustomerSchema = Joi.object({
     per_page: Joi.number().integer().min(1).max(100).default(20),
     sort:     Joi.string().trim().max(40).allow('', null),
     order:    Joi.string().trim().lowercase().valid('asc', 'desc').allow('', null),
-});
+}).unknown(true);   // allow filter params (location/sales_person/group/gst/dates)
 
 module.exports = {
     createCustomerSchema,

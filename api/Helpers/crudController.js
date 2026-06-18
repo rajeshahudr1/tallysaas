@@ -99,6 +99,7 @@ function build(config) {
         listOrder   = [['id', 'desc']],
         searchCols  = [],
         sortable,
+        filters,
         baseQuery,
         uniqueCheck,
         fkCheck,
@@ -198,6 +199,20 @@ function build(config) {
                 qb = qb.where((b) => {
                     for (const col of searchCols) b.orWhere(col, 'ilike', like);
                 });
+            }
+
+            // Common created-at date range (?created_from / ?created_to).
+            const cFrom = (req.query.created_from || '').toString().trim();
+            const cTo   = (req.query.created_to   || '').toString().trim();
+            if (cFrom) qb = qb.where(`${table}.created_at`, '>=', cFrom);
+            if (cTo)   qb = qb.where(`${table}.created_at`, '<=', `${cTo} 23:59:59`);
+
+            // Declarative per-resource filters (?key=value → custom WHERE).
+            if (filters) {
+                for (const [key, applyFn] of Object.entries(filters)) {
+                    const v = (req.query[key] || '').toString().trim();
+                    if (v) qb = applyFn(qb, v) || qb;
+                }
             }
 
             // Count BEFORE pagination — clone so the count query isn't mutated

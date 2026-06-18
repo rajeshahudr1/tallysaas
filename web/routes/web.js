@@ -161,6 +161,11 @@ async function apiList(req, basePath) {
     if (req.query.status) qs.set('status', String(req.query.status));
     if (req.query.sort)   qs.set('sort',  String(req.query.sort));
     if (req.query.order)  qs.set('order', String(req.query.order));
+    // Forward filter dropdown params so the api can actually filter the list.
+    for (const k of ['location', 'sales_person', 'customer_group', 'gst',
+        'state', 'financial_year', 'created_from', 'created_to']) {
+        if (req.query[k]) qs.set(k, String(req.query[k]));
+    }
 
     const { body } = await api.get(req, `${basePath}?${qs.toString()}`);
     const payload  = (body && body.data) || {};
@@ -856,7 +861,8 @@ router.get('/locations', async (req, res, next) => {
             activeMenu: 'locations',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Locations' }],
             locationRows, locationsTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            states: mock.states,
+            // Real states actually present in this org's locations (was mock).
+            states: [...new Set(rows.map((r) => r.state).filter(Boolean))].sort(),
         });
     } catch (err) { next(err); }
 });
@@ -900,6 +906,7 @@ router.post('/locations', async (req, res, next) => {
 router.get('/sales-persons', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/sales-persons');
+        const locOpts = await fetchOptions(req, '/locations');   // real org locations
         const salesPersonRows = rows.map((r) => ({
             id: r.id, name: r.name, employee_code: r.employee_code, mobile: r.mobile,
             email: r.email, locations: [], customers: r.customers || '',
@@ -910,7 +917,7 @@ router.get('/sales-persons', async (req, res, next) => {
             activeMenu: 'sales',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Sales Persons' }],
             salesPersonRows, salesPersonsTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            locationNames: mock.locationNames,
+            locationNames: locOpts.map((o) => o.name),
         });
     } catch (err) { next(err); }
 });
@@ -2775,12 +2782,21 @@ router.get('/customers', async (req, res, next) => {
         if (req.query.status) qs.set('status', String(req.query.status));
         if (req.query.sort)   qs.set('sort',  String(req.query.sort));
         if (req.query.order)  qs.set('order', String(req.query.order));
+        // Forward filter dropdown params so the api can actually filter.
+        for (const k of ['location', 'sales_person', 'customer_group', 'gst', 'created_from', 'created_to']) {
+            if (req.query[k]) qs.set(k, String(req.query[k]));
+        }
 
         const { body } = await api.get(req, `/customers?${qs.toString()}`);
         const payload  = (body && body.data) || {};
         const rows     = Array.isArray(payload.data) ? payload.data : [];
         const meta     = payload.meta || { total: rows.length, page, per_page: perPage };
         const config   = await fetchConfig(req, ['customer_groups']);
+        // Real org data for the filter dropdowns (was mock).
+        const [locOpts, spOpts] = await Promise.all([
+            fetchOptions(req, '/locations'),
+            fetchOptions(req, '/sales-persons'),
+        ]);
 
         // Map api columns → the view's expected keys.
         const customers = rows.map((r) => ({
@@ -2834,9 +2850,9 @@ router.get('/customers', async (req, res, next) => {
             page:           meta.page,
             perPage:        meta.per_page,
 
-            // Filter dropdown option sources (still mock for now).
-            locations:      mock.locations,
-            salesPersons:   mock.salesPersons,
+            // Filter dropdown option sources — REAL org data.
+            locations:      locOpts.map((o) => o.name),
+            salesPersons:   spOpts.map((o) => o.name),
             ...config,
         });
     } catch (err) {

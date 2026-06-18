@@ -109,6 +109,10 @@ const controller = crud.build({
         mobile:  'locations.mobile',
         manager: 'locations.manager',
     },
+    // Filter dropdown (?state=...) → WHERE.
+    filters: {
+        state: (qb, v) => qb.where('locations.state', v),
+    },
     buildInsert,
     buildUpdate,
 });

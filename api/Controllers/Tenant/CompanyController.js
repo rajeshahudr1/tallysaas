@@ -48,6 +48,11 @@ async function list(req, res) {
             base = base.where('companies.license_id', user.license_id != null ? user.license_id : -1);
         }
         if (req.query.status) base = base.where('companies.status', req.query.status);
+        if (req.query.financial_year) base = base.where('companies.financial_year', String(req.query.financial_year));
+        const _cFrom = (req.query.created_from || '').toString().trim();
+        const _cTo   = (req.query.created_to   || '').toString().trim();
+        if (_cFrom) base = base.where('companies.created_at', '>=', _cFrom);
+        if (_cTo)   base = base.where('companies.created_at', '<=', `${_cTo} 23:59:59`);
         if (req.query.search) {
             const like = `%${String(req.query.search).trim()}%`;
             base = base.where((b) => {

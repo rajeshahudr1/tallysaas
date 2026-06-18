@@ -31,8 +31,8 @@ var filterFields = [
     { type: 'text',   name: 'search',       label: 'Search',           placeholder: 'Search by name, code, mobile...', colClass: 'filter-col-fifth' },
     { type: 'select', name: 'location',     label: 'Assigned Location', options: _opts('All Locations', _locs),         colClass: 'filter-col-fifth' },
     { type: 'select', name: 'status',       label: 'Status',           options: _opts('All Status', ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
-    { type: 'date',   name: 'created_from', label: 'Created From',      value: '2024-01-01',                            colClass: 'filter-col-fifth' },
-    { type: 'date',   name: 'created_to',   label: 'Created To',        value: '2024-12-31',                            colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_from', label: 'Created From',      value: '',                                      colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'created_to',   label: 'Created To',        value: '',                                      colClass: 'filter-col-fifth' },
 ];
 
 /* ── Table config ───────────────────────────────────────────── */
@@ -85,24 +85,14 @@ var sortOptions = ['Created At', 'Name', 'Customers', 'Status'];
             <span>entries</span>
         </label>
 
-        <div class="toolbar-sort">
-            <span>Sort By</span>
-            <select class="form-select form-select-sm" aria-label="Sort by column">
-                <% sortOptions.forEach(function (label) { %>
-                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
-                <% }); %>
-            </select>
-            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
-                <i class="fa-solid fa-arrow-down-short-wide"></i>
-            </button>
-        </div>
+        <!-- Sorting is done by clicking the table column headers. -->
     </div>
 
     <%- include('../partials/table', {
         tableId: 'sales-persons-table',
         basePath: '/sales-persons',
         editable: true,
-        sortKeys: ['name', 'status', 'created_at'],
+        sortKeys: ['name', 'employee_code', 'mobile', 'email', 'status', 'created_at'],
         columns: tableColumns,
         rows: _rows,
         selectable: true,

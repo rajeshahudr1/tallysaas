@@ -97,6 +97,12 @@ const controller = crud.build({
     listColumns: LIST_COLUMNS,
     listOrder:   [['sales_persons.id', 'desc']],
     searchCols:  SEARCH_COLS,
+    // Extra sortable UI keys (name/status/created_at sort by default).
+    sortable: {
+        employee_code: 'sales_persons.employee_code',
+        mobile:        'sales_persons.mobile',
+        email:         'sales_persons.email',
+    },
     // Email is the global login identity — unique across BOTH sales_persons AND
     // users. On update (currentId = this sales person id) exclude this row and
     // its OWN linked login user (the same person shares the email). On create

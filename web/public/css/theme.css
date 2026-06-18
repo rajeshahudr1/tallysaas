@@ -489,7 +489,12 @@ a { text-decoration: none; }
 .sort-dir-btn:hover { background: #F9FAFB; color: var(--text); }
 
 /* ── 10. Data table + pills ─────────────────────────────────────── */
-.data-table-wrap { width: 100%; }
+/* overflow:visible (not the Bootstrap .table-responsive auto) so the row ⋮
+ * action dropdown overlays the table instead of being clipped inside it. */
+.data-table-wrap { width: 100%; overflow: visible; }
+/* Row action ⋮ menu must sit ABOVE the (opaque) header + sibling rows. */
+.data-table-actions { position: relative; }
+.data-table-actions .dropdown-menu { z-index: 1060; }
 .data-table { font-size: 13px; }
 .data-table thead th {
     background: #F9FAFB;

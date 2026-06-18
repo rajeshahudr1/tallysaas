@@ -189,41 +189,41 @@ function _alignClass(col) {
                         });
                         %>
                         <td class="text-end data-table-actions">
-                            <% if (_actions.indexOf('view') > -1) { %>
-                                <button class="action-btn action-btn--view" type="button" title="View" aria-label="View"
-                                        data-row-view data-record-id="<%= _idVal %>"
-                                        data-record="<%= JSON.stringify(_details) %>" data-record-title="<%= _label %>">
-                                    <i class="fa-regular fa-eye"></i>
+                            <%# All row actions live in ONE compact ⋮ dropdown so the
+                                table keeps more width for data. %>
+                            <div class="dropdown d-inline-block">
+                                <button class="action-btn action-btn--menu" type="button"
+                                        data-bs-toggle="dropdown" aria-expanded="false" title="Actions" aria-label="Actions">
+                                    <i class="fa-solid fa-ellipsis-vertical"></i>
                                 </button>
-                            <% } %>
-                            <% if (_actions.indexOf('edit') > -1) { %>
-                                <% if (_canLink && _editable) { %>
-                                    <a class="action-btn action-btn--edit" href="<%= _base %>/<%= _idVal %>/edit" title="Edit" aria-label="Edit">
-                                        <i class="fa-solid fa-pen"></i>
-                                    </a>
-                                <% } else { %>
-                                    <button class="action-btn action-btn--edit" type="button" title="Edit (coming soon)" aria-label="Edit" disabled>
-                                        <i class="fa-solid fa-pen"></i>
-                                    </button>
-                                <% } %>
-                            <% } %>
-                            <% if (_actions.indexOf('print') > -1) { %>
-                                <% if (_canLink) { %>
-                                    <a class="action-btn action-btn--view" href="<%= _base %>/<%= _idVal %>/print" target="_blank" title="Invoice PDF / Print" aria-label="Print">
-                                        <i class="fa-solid fa-print"></i>
-                                    </a>
-                                <% } else { %>
-                                    <button class="action-btn action-btn--view" type="button" title="Print" aria-label="Print" disabled>
-                                        <i class="fa-solid fa-print"></i>
-                                    </button>
-                                <% } %>
-                            <% } %>
-                            <% if (_actions.indexOf('delete') > -1) { %>
-                                <button class="action-btn action-btn--delete" type="button" title="Delete" aria-label="Delete"
-                                        <% if (_canLink) { %>data-row-delete data-delete-url="<%= _base %>/<%= _idVal %>" data-delete-label="<%= _label %>"<% } else { %>disabled<% } %>>
-                                    <i class="fa-regular fa-trash-can"></i>
-                                </button>
-                            <% } %>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <% if (_actions.indexOf('view') > -1) { %>
+                                        <li><button class="dropdown-item" type="button"
+                                                data-row-view data-record-id="<%= _idVal %>"
+                                                data-record="<%= JSON.stringify(_details) %>" data-record-title="<%= _label %>">
+                                            <i class="fa-regular fa-eye me-2 text-muted"></i>View</button></li>
+                                    <% } %>
+                                    <% if (_actions.indexOf('edit') > -1) { %>
+                                        <% if (_canLink && _editable) { %>
+                                            <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/edit">
+                                                <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</a></li>
+                                        <% } else { %>
+                                            <li><button class="dropdown-item" type="button" disabled>
+                                                <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</button></li>
+                                        <% } %>
+                                    <% } %>
+                                    <% if (_actions.indexOf('print') > -1 && _canLink) { %>
+                                        <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/print" target="_blank">
+                                            <i class="fa-solid fa-print me-2 text-muted"></i>Print</a></li>
+                                    <% } %>
+                                    <% if (_actions.indexOf('delete') > -1) { %>
+                                        <li><hr class="dropdown-divider"></li>
+                                        <li><button class="dropdown-item text-danger" type="button"
+                                                <% if (_canLink) { %>data-row-delete data-delete-url="<%= _base %>/<%= _idVal %>" data-delete-label="<%= _label %>"<% } else { %>disabled<% } %>>
+                                            <i class="fa-regular fa-trash-can me-2"></i>Delete</button></li>
+                                    <% } %>
+                                </ul>
+                            </div>
                         </td>
                     <% } %>
                 </tr>
