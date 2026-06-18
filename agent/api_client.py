@@ -308,6 +308,8 @@ class ApiClient:
         stock_items: list[dict[str, Any]],
         vouchers: list[dict[str, Any]] | None = None,
         godowns: list[dict[str, Any]] | None = None,
+        groups: list[dict[str, Any]] | None = None,
+        company_master: dict[str, Any] | None = None,
         *,
         company_name: str | None = None,
         company_id: int | None = None,
@@ -324,12 +326,15 @@ class ApiClient:
         """
         vouchers = vouchers or []
         godowns = godowns or []
-        if not ledgers and not stock_items and not vouchers and not godowns:
+        groups = groups or []
+        if not ledgers and not stock_items and not vouchers and not godowns and not groups:
             return {}
         headers = {"Authorization": f"Bearer {agent_token}"}
         payload: dict[str, Any] = {"ledgers": ledgers,
                                    "stock_items": stock_items, "vouchers": vouchers,
-                                   "godowns": godowns}
+                                   "godowns": godowns, "groups": groups}
+        if company_master:
+            payload["company_master"] = company_master
         if company_name:
             payload["company_name"] = company_name
         if company_id:

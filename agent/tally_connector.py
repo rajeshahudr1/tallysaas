@@ -22,10 +22,24 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import xml.etree.ElementTree as ET
 from typing import Any, Optional
 
 import requests
+
+
+# A process-unique nonce for voucher-collection NAMES. Tally caches an inline TDL
+# collection by NAME for the session AND poisons it (serves empty forever) if it
+# ever returns empty during a heavy/degraded moment. A brand-new name ALWAYS
+# evaluates fresh + correct, so every voucher fetch uses a unique name.
+_vch_call_counter = 0
+
+
+def _vch_nonce() -> str:
+    global _vch_call_counter
+    _vch_call_counter += 1
+    return "%x%x" % (int(time.time()) & 0xFFFFFF, _vch_call_counter)
 
 
 class TallyUnavailable(Exception):
@@ -74,8 +88,11 @@ class TallyConnector:
             self.log.debug("Tally probe failed: %s", exc)
             return False
 
-    def send(self, xml: str) -> str:
+    def send(self, xml: str, timeout: "int | None" = None) -> str:
         """POST a Tally XML envelope and return the raw response text.
+
+        ``timeout`` overrides the module default (used by the voucher pull, whose
+        chunked collections can be a couple of MB and need longer than a master read).
 
         Raises
         ------
@@ -90,7 +107,7 @@ class TallyConnector:
                 self.url,
                 data=xml.encode("utf-8"),
                 headers={"Content-Type": "text/xml"},
-                timeout=TIMEOUT,
+                timeout=timeout or TIMEOUT,
             )
         except (requests.ConnectionError, requests.Timeout) as exc:
             self.log.error("Tally transport error: %s", exc)
@@ -162,6 +179,48 @@ class TallyConnector:
         active = unique[0]["name"] if unique else None
         return {"companies": unique, "active": active}
 
+    def company_full_info(self, company: Optional[str] = None) -> dict[str, Any]:
+        """Fetch the open company's FULL master so the cloud company record mirrors
+        Tally: address, state, pincode, country, email, phone, GSTIN, PAN, and the
+        financial-year start. Returns ``{}`` on miss. Best-effort."""
+        xml = self._collection_request_xml(
+            "TSSCmpFull", "Company",
+            ["NAME", "ADDRESS", "STATENAME", "PINCODE", "COUNTRYNAME", "EMAIL",
+             "PHONENUMBER", "MOBILENUMBERS", "CMPGSTIN", "GSTREGISTRATIONNUMBER",
+             "INCOMETAXNUMBER", "STARTINGFROM", "BOOKSFROM"], None)
+        root = self._safe_parse(self.send(xml, timeout=60))
+        if root is None:
+            return {}
+
+        def _fy(s: str) -> Optional[str]:
+            m = re.match(r"^(\d{4})(\d{2})(\d{2})$", str(s or "").strip())
+            return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else None
+
+        for el in root.iter():
+            if self._localname(el.tag).upper() != "COMPANY":
+                continue
+            nm = (el.get("NAME") or "").strip() or self._child_text(el, "NAME")
+            if not nm:
+                continue
+            lines = [a.text.strip() for a in el.iter()
+                     if self._localname(a.tag).upper() == "ADDRESS" and (a.text or "").strip()]
+            return {
+                "name": nm,
+                "email": self._child_text(el, "EMAIL") or None,
+                "pincode": self._child_text(el, "PINCODE") or None,
+                "state": self._child_text(el, "STATENAME") or None,
+                "country": self._child_text(el, "COUNTRYNAME") or None,
+                "pan": self._child_text(el, "INCOMETAXNUMBER") or None,
+                "gstin": (self._child_text(el, "CMPGSTIN")
+                          or self._child_text(el, "GSTREGISTRATIONNUMBER") or None),
+                "phone": (self._child_text(el, "PHONENUMBER")
+                          or self._child_text(el, "MOBILENUMBERS") or None),
+                "address": "\n".join(lines) or None,
+                "books_from": _fy(self._child_text(el, "STARTINGFROM")
+                                  or self._child_text(el, "BOOKSFROM")),
+            }
+        return {}
+
     def ledger_list(self, company: Optional[str] = None) -> list[dict[str, Any]]:
         """Fetch ledgers from Tally via a COLLECTION (name, parent, alterid, ...).
 
@@ -218,9 +277,22 @@ class TallyConnector:
                         "unit": self._child_text(el, "BASEUNITS") or None,
                         "hsn": self._child_text(el, "GSTHSNCODE") or None,
                         "closing": self._child_text(el, "CLOSINGBALANCE"),
+                        # Rates come as "187.96/pair" - keep just the number.
+                        "sales_price": self._rate(self._child_text(el, "STANDARDPRICE")),
+                        "purchase_price": self._rate(self._child_text(el, "STANDARDCOST")
+                                                     or self._child_text(el, "OPENINGRATE")),
                         "alterid": self._alterid(el),
                     })
         return items
+
+    @staticmethod
+    def _rate(s: str) -> float:
+        """Parse a Tally rate like '187.96/pair' or '227.85' -> 187.96 (0 if none)."""
+        m = re.search(r"-?\d+(?:\.\d+)?", str(s or "").replace(",", ""))
+        try:
+            return float(m.group(0)) if m else 0.0
+        except ValueError:
+            return 0.0
 
     def godown_list(self, company: Optional[str] = None) -> list[dict[str, Any]]:
         """Fetch godowns from Tally via a COLLECTION (name, alterid) -> locations.
@@ -248,6 +320,29 @@ class TallyConnector:
                         "alterid": self._alterid(el),
                     })
         return godowns
+
+    def group_list(self, company: Optional[str] = None) -> list[dict[str, Any]]:
+        """Fetch account GROUPS via a COLLECTION (name/parent/alterid/nature) so the
+        cloud can build the Balance Sheet / P&L hierarchy. Returns
+        ``[{name, parent, is_revenue, is_deemed_positive, alterid:int}, ...]``."""
+        root = self._safe_parse(self.send(self._group_collection_request_xml(company)))
+        out: list[dict[str, Any]] = []
+        if root is None:
+            return out
+        for el in root.iter():
+            if self._localname(el.tag).upper() != "GROUP":
+                continue
+            name = (el.get("NAME") or "").strip() or self._child_text(el, "NAME")
+            if not name:
+                continue
+            out.append({
+                "name": name,
+                "parent": self._child_text(el, "PARENT"),
+                "is_revenue": self._child_text(el, "ISREVENUE").lower() == "yes",
+                "is_deemed_positive": self._child_text(el, "ISDEEMEDPOSITIVE").lower() != "no",
+                "alterid": self._alterid(el),
+            })
+        return out
 
     def day_book(self, company: Optional[str] = None) -> list[dict[str, Any]]:
         """Fetch vouchers from Tally's Day Book → [{date, vtype, vno, party, amount}].
@@ -295,6 +390,107 @@ class TallyConnector:
 
             if vtype and (vno or party):
                 out.append({"date": date, "vtype": vtype, "vno": vno, "party": party, "amount": amount})
+        return out
+
+    def voucher_list(self, company: Optional[str] = None,
+                     after_alterid: int = 0,
+                     upto_alterid: "int | None" = None) -> list[dict[str, Any]]:
+        """Fetch vouchers via an AlterID-bounded COLLECTION (the RELIABLE way).
+
+        Returns vouchers whose AlterID is in ``(after_alterid, upto_alterid]`` so
+        each response stays small + the pull is INCREMENTAL/CHUNKED like masters
+        (a full unfiltered voucher collection chokes Tally). Each item:
+        ``{date, vtype, vno, party, amount, alterid:int, guid}``. ``guid`` is
+        Tally's stable per-voucher id - the cloud dedupes on it because voucher
+        NUMBERS repeat (purchases reuse the supplier bill no). ``alterid`` drives
+        incrementality. Best-effort + tolerant of Tally's XML quirks.
+        """
+        def _amt(s: str) -> float:
+            try:
+                return abs(float(re.sub(r"[^0-9.\-]", "", s or "") or 0))
+            except ValueError:
+                return 0.0
+
+        def _parse(root) -> list[dict[str, Any]]:
+            rows: list[dict[str, Any]] = []
+            if root is None:
+                return rows
+            for v in root.iter():
+                if self._localname(v.tag).upper() != "VOUCHER":
+                    continue
+                vtype = self._child_text(v, "VOUCHERTYPENAME") or (v.get("VCHTYPE") or "")
+                guid = self._child_text(v, "GUID")
+                if not (vtype and guid):
+                    continue   # skip the CMPINFO <VOUCHER>0</VOUCHER> + partial nodes
+                # FULL DOUBLE-ENTRY: every ledger posting of this voucher
+                # (LEDGERNAME + signed AMOUNT + Dr/Cr). Sum per ledger (+ opening)
+                # = its balance -> Trial Balance / Balance Sheet / P&L / Ledger.
+                # Ledger postings live in TWO places: top-level LEDGERENTRIES.LIST
+                # (party + tax + round-off) AND, for INVOICE vouchers, the sales/
+                # purchase ledger sits in ACCOUNTINGALLOCATIONS.LIST nested under
+                # each INVENTORYENTRIES.LIST. Both carry LEDGERNAME + AMOUNT; parse
+                # both so the double-entry sums to zero.
+                ENTRY_TAGS = ("LEDGERENTRIES.LIST", "ALLLEDGERENTRIES.LIST",
+                              "ACCOUNTINGALLOCATIONS.LIST")
+                entries = []
+                for le in v.iter():
+                    if self._localname(le.tag).upper() not in ENTRY_TAGS:
+                        continue
+                    lname = self._child_text(le, "LEDGERNAME")
+                    if not lname:
+                        continue
+                    raw = self._child_text(le, "AMOUNT")
+                    try:
+                        amt = float(re.sub(r"[^0-9.\-]", "", raw or "") or 0)
+                    except ValueError:
+                        amt = 0.0
+                    if not amt:
+                        continue
+                    entries.append({
+                        "ledger": lname,
+                        "amount": amt,   # signed as Tally stores it
+                        "is_debit": self._child_text(le, "ISDEEMEDPOSITIVE").lower() == "yes",
+                    })
+                # INVENTORY movement (item, qty, rate, amount) for Stock Summary /
+                # value. Lives in INVENTORYENTRIES.LIST of trading vouchers.
+                inventory = []
+                for ie in v.iter():
+                    if self._localname(ie.tag).upper() not in ("ALLINVENTORYENTRIES.LIST", "INVENTORYENTRIES.LIST"):
+                        continue
+                    iname = self._child_text(ie, "STOCKITEMNAME")
+                    if not iname:
+                        continue
+                    inventory.append({
+                        "item": iname,
+                        "qty": self._rate(self._child_text(ie, "BILLEDQTY")
+                                          or self._child_text(ie, "ACTUALQTY")),
+                        "rate": self._rate(self._child_text(ie, "RATE")),
+                        "amount": self._rate(self._child_text(ie, "AMOUNT")),
+                    })
+                rows.append({
+                    "date": self._child_text(v, "DATE"),
+                    "vtype": vtype,
+                    "vno": self._child_text(v, "VOUCHERNUMBER"),
+                    "party": self._child_text(v, "PARTYLEDGERNAME") or self._child_text(v, "PARTYNAME"),
+                    "amount": _amt(self._child_text(v, "AMOUNT")),
+                    "alterid": self._alterid(v),
+                    "guid": guid,
+                    "entries": entries,
+                    "inventory": inventory,
+                })
+            return rows
+
+        out: list[dict[str, Any]] = []
+        # Up to 2 attempts, each with a BRAND-NEW collection name (the request
+        # builder mints a nonce) so a transient empty isn't a poisoned name we keep
+        # re-hitting. A genuinely-empty AlterID window returns [] both times (cheap).
+        for attempt in range(2):
+            xml = self._voucher_collection_request_xml(company, after_alterid, upto_alterid)
+            out = _parse(self._safe_parse(self.send(xml, timeout=180)))
+            if out:
+                break
+            self.log.debug("voucher_list(%s,%s): empty on attempt %d",
+                           after_alterid, upto_alterid, attempt + 1)
         return out
 
     # ------------------------------------------------------------------ #
@@ -550,7 +746,8 @@ class TallyConnector:
         """EXPORT: a Collection of StockItems fetching name/alterid/units/hsn/closing."""
         return TallyConnector._collection_request_xml(
             "TSSStockColl", "StockItem",
-            ["NAME", "ALTERID", "BASEUNITS", "GSTHSNCODE", "CLOSINGBALANCE"],
+            ["NAME", "ALTERID", "BASEUNITS", "GSTHSNCODE", "CLOSINGBALANCE",
+             "STANDARDPRICE", "STANDARDCOST", "OPENINGRATE"],
             company,
         )
 
@@ -560,6 +757,60 @@ class TallyConnector:
         return TallyConnector._collection_request_xml(
             "TSSGodownColl", "Godown",
             ["NAME", "ALTERID"],
+            company,
+        )
+
+    @staticmethod
+    def _voucher_collection_request_xml(company: Optional[str] = None,
+                                        after_alterid: int = 0,
+                                        upto_alterid: "int | None" = None) -> str:
+        """EXPORT a Voucher COLLECTION FILTERED to an AlterID window (after, upto].
+
+        Tally's plain "Day Book" report is single-day (SVCURRENTDATE) and a full
+        unfiltered voucher collection chokes Tally, so we drive an inline
+        <COLLECTION TYPE=Voucher> with a <SYSTEM Formulae> AlterID filter. The
+        window keeps each response small (a couple of MB) and makes the pull
+        incremental + chunked. FETCH includes GUID (stable dedup key) + ALTERID
+        (the change counter). ``&gt;``/``&lt;`` are XML-escaped so Tally parses
+        the formula operators correctly.
+        """
+        after = int(after_alterid or 0)
+        # LITERAL AlterID filter (PROVEN on this Tally - the static-variable form
+        # returned empty). &gt;/&lt; are XML-escaped so Tally parses the operators.
+        cond = "$AlterID &gt; " + str(after)
+        if upto_alterid is not None:
+            cond += " AND $AlterID &lt;= " + str(int(upto_alterid))
+        # A BRAND-NEW collection + filter name for EVERY fetch (nonce). Tally
+        # poisons a name that ever returned empty (serves empty forever until
+        # restart); a fresh name always evaluates correctly (verified). The cost
+        # is one cached TDL def per fetch - bounded per Tally session + cleared on
+        # restart, and a sync makes few fetches per minute.
+        coll = "TSSVch" + _vch_nonce()
+        filt = coll + "F"
+        return (
+            "<ENVELOPE>"
+            "<HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
+            "<TYPE>Collection</TYPE><ID>" + coll + "</ID></HEADER>"
+            "<BODY><DESC><STATICVARIABLES>"
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+            + TallyConnector._svcompany(company) +
+            "</STATICVARIABLES><TDL><TDLMESSAGE>"
+            '<COLLECTION NAME="' + coll + '" ISMODIFY="No">'
+            "<TYPE>Voucher</TYPE>"
+            "<FETCH>DATE,VOUCHERTYPENAME,VOUCHERNUMBER,PARTYLEDGERNAME,AMOUNT,ALTERID,GUID</FETCH>"
+            "<FILTER>" + filt + "</FILTER>"
+            "</COLLECTION>"
+            '<SYSTEM TYPE="Formulae" NAME="' + filt + '">' + cond + "</SYSTEM>"
+            "</TDLMESSAGE></TDL></DESC></BODY>"
+            "</ENVELOPE>"
+        )
+
+    @staticmethod
+    def _group_collection_request_xml(company: Optional[str] = None) -> str:
+        """EXPORT: a Collection of Groups fetching name/parent/alterid/nature."""
+        return TallyConnector._collection_request_xml(
+            "TSSGroupColl", "Group",
+            ["NAME", "PARENT", "ALTERID", "ISREVENUE", "ISDEEMEDPOSITIVE"],
             company,
         )
 
@@ -1052,11 +1303,35 @@ class TallyConnector:
         """Parse Tally XML defensively; return the root or ``None`` on failure."""
         if not xml:
             return None
+        clean = self._sanitize(xml)
         try:
-            return ET.fromstring(self._sanitize(xml))
+            return ET.fromstring(clean)
         except ET.ParseError as exc:
-            self.log.warning("Tally XML parse failed: %s", exc)
-            return None
+            # Tally VOUCHER XML carries UDF / custom fields with namespace
+            # PREFIXES (e.g. <UDF:SomeField>) that are NEVER declared, so
+            # ElementTree raises "unbound prefix" and the whole voucher pull
+            # parses to nothing. Strip the prefixes from tags + drop the (unused)
+            # xmlns:*/prefixed attrs, then retry. The fields we read
+            # (DATE/VOUCHERTYPENAME/VOUCHERNUMBER/PARTYLEDGERNAME/AMOUNT/ALTERID/
+            # GUID) are unprefixed, so stripping is lossless for our purposes.
+            try:
+                return ET.fromstring(self._strip_ns_prefixes(clean))
+            except ET.ParseError as exc2:
+                self.log.warning("Tally XML parse failed: %s", exc2)
+                return None
+
+    @staticmethod
+    def _strip_ns_prefixes(xml: str) -> str:
+        """Remove undeclared namespace prefixes so ElementTree stops choking on
+        Tally's UDF voucher fields. <UDF:Tag>..</UDF:Tag> -> <Tag>..</Tag>; drops
+        xmlns:* declarations and any prefixed attributes."""
+        # Tag prefixes: <UDF:Tag ...> and </UDF:Tag>.
+        xml = re.sub(r"(</?)[A-Za-z_][\w.\-]*:", r"\1", xml)
+        # xmlns:prefix="..." declarations (now unused).
+        xml = re.sub(r'\s+xmlns:[\w.\-]+\s*=\s*"[^"]*"', "", xml)
+        # Prefixed attributes: foo:bar="...".
+        xml = re.sub(r'\s+[A-Za-z_][\w.\-]*:[\w.\-]+\s*=\s*"[^"]*"', "", xml)
+        return xml
 
     def _child_text(self, el: ET.Element, child_localname: str) -> str:
         """Return the trimmed text of the first matching child, namespace-agnostic."""

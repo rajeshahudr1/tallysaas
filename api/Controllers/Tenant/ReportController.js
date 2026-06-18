@@ -314,6 +314,41 @@ async function stockSummary(req, res) {
 async function partyLedger(req, res) {
     try {
         const cid = req.companyId;
+
+        // FULL LEDGER statement (?ledger=<name>) — ANY of the real Tally ledgers
+        // from the double-entry: opening + every posting in date order with a
+        // running balance (Tally ledger style). Sign: -ve = Debit, +ve = Credit.
+        const ledgerName = String(req.query.ledger || '').trim();
+        if (ledgerName) {
+            const led = await db('tally_ledgers').where('company_id', cid)
+                .whereRaw('lower(name)=lower(?)', [ledgerName])
+                .first('name', 'opening_balance', 'parent');
+            if (!led) return R.errorResponse(res, 'Ledger not found.', 404);
+            const posts = await db('tally_voucher_entries').where('company_id', cid)
+                .whereRaw('lower(ledger_name)=lower(?)', [ledgerName])
+                .orderBy('voucher_date', 'asc').orderBy('id', 'asc')
+                .select('voucher_date as date', 'voucher_type as vtype', 'voucher_no as ref', 'amount');
+            const opening = Number(led.opening_balance) || 0;
+            let running = opening;
+            const rows = posts.map((p) => {
+                const amt = Number(p.amount) || 0;
+                running += amt;
+                return {
+                    date: p.date, vtype: p.vtype, ref: p.ref,
+                    debit: amt < 0 ? money(-amt) : 0, credit: amt > 0 ? money(amt) : 0,
+                    balance: money(running),
+                };
+            });
+            return R.successResponse(res, {
+                party: { name: led.name, group: led.parent },
+                opening: money(opening), closing: money(running), entries: rows,
+                totals: {
+                    debit: money(rows.reduce((s, r) => s + r.debit, 0)),
+                    credit: money(rows.reduce((s, r) => s + r.credit, 0)),
+                },
+            });
+        }
+
         const isCustomer = req.query.party_type !== 'supplier';
         const partyId = Number(req.query.party_id);
         const table = isCustomer ? 'customers' : 'suppliers';
@@ -416,32 +451,43 @@ async function financialBase(cid, locationId = null) {
     };
 }
 
-/** GET /reports/trial-balance — derived ledger-group Dr/Cr balances. */
+/** GET /reports/trial-balance — REAL per-ledger Dr/Cr from the full Tally
+ *  double-entry: balance = opening_balance + Σ(voucher postings). Tally sign:
+ *  +ve balance = Credit, -ve = Debit (ISDEEMEDPOSITIVE). Total Dr must = Cr. */
 async function trialBalance(req, res) {
     try {
-        const f = await financialBase(req.companyId, req.locationId);
-        const rows = [
-            { ledger: 'Sundry Debtors',     debit: Math.max(0, f.receivables), credit: Math.max(0, -f.receivables) },
-            { ledger: 'Sundry Creditors',   debit: 0, credit: f.payables },
-            { ledger: 'Cash / Bank',        debit: Math.max(0, f.cash), credit: Math.max(0, -f.cash) },
-            { ledger: 'Closing Stock',      debit: f.stockValue, credit: 0 },
-            { ledger: 'Purchase A/c',       debit: f.purchTaxable, credit: 0 },
-            { ledger: 'Input GST',          debit: f.purchTax, credit: 0 },
-            { ledger: 'Sales A/c',          debit: 0, credit: f.salesTaxable },
-            { ledger: 'Output GST',         debit: 0, credit: f.salesTax },
-        ];
-        let totalDr = money(rows.reduce((s, r) => s + r.debit, 0));
-        let totalCr = money(rows.reduce((s, r) => s + r.credit, 0));
-        // Balancing figure (capital / profit / opening difference).
+        const cid = req.companyId;
+        const result = await db.raw(
+            `select l.name as ledger, l.parent as grp,
+                    coalesce(l.opening_balance,0) + coalesce(p.posted,0) as balance
+               from tally_ledgers l
+               left join (
+                    select lower(ledger_name) as ln, sum(amount) as posted
+                      from tally_voucher_entries where company_id = ?
+                     group by lower(ledger_name)
+               ) p on p.ln = lower(l.name)
+              where l.company_id = ?
+              order by l.parent, l.name`, [cid, cid]);
+        let totalDr = 0, totalCr = 0;
+        const data = (result.rows || []).map((r) => {
+            const bal = Number(r.balance) || 0;
+            const debit = bal < 0 ? -bal : 0;     // -ve balance = Debit side
+            const credit = bal > 0 ? bal : 0;     // +ve balance = Credit side
+            totalDr += debit; totalCr += credit;
+            return { ledger: r.ledger, group: r.grp || '', debit: money(debit), credit: money(credit) };
+        }).filter((r) => r.debit || r.credit);
+        // Opening-difference balancing row (some opening balances may be
+        // un-captured until ledgers fully refine) so the statement still ties.
         const diff = money(totalDr - totalCr);
-        if (Math.abs(diff) > 0.001) {
-            rows.push({ ledger: 'Capital / Difference', debit: diff < 0 ? -diff : 0, credit: diff > 0 ? diff : 0 });
-            totalDr = money(totalDr + (diff < 0 ? -diff : 0));
-            totalCr = money(totalCr + (diff > 0 ? diff : 0));
+        if (Math.abs(diff) > 0.01) {
+            data.push({ ledger: 'Difference in Opening Balances', group: 'Difference',
+                        debit: diff < 0 ? money(-diff) : 0, credit: diff > 0 ? money(diff) : 0 });
+            if (diff < 0) totalDr = money(totalDr - diff);
+            else totalCr = money(totalCr + diff);
         }
         return R.successResponse(res, {
-            data: rows.map((r) => ({ ledger: r.ledger, debit: money(r.debit), credit: money(r.credit) })),
-            totals: { debit: totalDr, credit: totalCr },
+            data,
+            totals: { debit: money(totalDr), credit: money(totalCr) },
         });
     } catch (err) {
         console.error('reports.trialBalance error:', err);
@@ -449,20 +495,67 @@ async function trialBalance(req, res) {
     }
 }
 
-/** GET /reports/profit-loss — derived trading + P&L (Expenses | Income). */
+/** Real per-ledger balances (opening + Σ postings) + each ledger's P&L-vs-Balance
+ *  Sheet nature, resolved by walking tally_groups up to a revenue primary group. */
+async function realLedgerBalances(cid) {
+    const groups = await db('tally_groups').where('company_id', cid)
+        .select('name', 'parent', 'is_revenue');
+    const gmap = {};
+    groups.forEach((g) => { gmap[String(g.name || '').toLowerCase()] = g; });
+    const isRev = (gname, depth = 0) => {
+        if (depth > 25) return false;
+        const g = gmap[String(gname || '').toLowerCase()];
+        if (!g) return false;
+        if (g.is_revenue) return true;
+        const p = String(g.parent || '');
+        if (!p || /primary/i.test(p) || p.toLowerCase() === String(gname).toLowerCase()) return false;
+        return isRev(p, depth + 1);
+    };
+    const result = await db.raw(
+        `select l.name as ledger, l.parent as grp,
+                coalesce(l.opening_balance,0)+coalesce(p.posted,0) as balance
+           from tally_ledgers l
+           left join (select lower(ledger_name) as ln, sum(amount) as posted
+                        from tally_voucher_entries where company_id=? group by lower(ledger_name)) p
+             on p.ln=lower(l.name)
+          where l.company_id=?`, [cid, cid]);
+    return (result.rows || []).map((r) => ({
+        name: r.ledger, group: r.grp || '', balance: Number(r.balance) || 0,
+        isRevenue: isRev(r.grp),
+    }));
+}
+
+/** Aggregate ledgers by their parent group → [{label, balance}]. */
+function aggByGroup(ledgers) {
+    const m = {};
+    ledgers.forEach((l) => {
+        const k = l.group || l.name;
+        if (!m[k]) m[k] = { label: k, balance: 0 };
+        m[k].balance += l.balance;
+    });
+    return Object.values(m).filter((g) => Math.abs(g.balance) > 0.01);
+}
+
+/** GET /reports/profit-loss — REAL P&L from revenue ledgers (Tally sign: +ve = Cr
+ *  income, -ve = Dr expense). Net = income − expense. */
 async function profitLoss(req, res) {
     try {
-        const f = await financialBase(req.companyId, req.locationId);
-        const left = [{ label: 'Purchases', amount: f.purchTaxable }];   // Dr side
-        const right = [{ label: 'Sales', amount: f.salesTaxable }];      // Cr side
-        const profit = f.grossProfit;
-        if (profit >= 0) left.push({ label: 'Gross Profit c/f', amount: profit });
-        else right.push({ label: 'Gross Loss c/f', amount: -profit });
-        const leftTotal = money(left.reduce((s, r) => s + r.amount, 0));
-        const rightTotal = money(right.reduce((s, r) => s + r.amount, 0));
+        const rev = (await realLedgerBalances(req.companyId)).filter((l) => l.isRevenue);
+        const left = [], right = [];   // left = Dr (Expenses), right = Cr (Income)
+        aggByGroup(rev).forEach((g) => {
+            if (g.balance < 0) left.push({ label: g.label, amount: money(-g.balance) });
+            else right.push({ label: g.label, amount: money(g.balance) });
+        });
+        let leftTotal = money(left.reduce((s, r) => s + r.amount, 0));
+        let rightTotal = money(right.reduce((s, r) => s + r.amount, 0));
+        const profit = money(rightTotal - leftTotal);
+        if (profit >= 0) left.push({ label: 'Net Profit', amount: profit });
+        else right.push({ label: 'Net Loss', amount: money(-profit) });
+        leftTotal = money(left.reduce((s, r) => s + r.amount, 0));
+        rightTotal = money(right.reduce((s, r) => s + r.amount, 0));
         return R.successResponse(res, {
             left, right, left_total: leftTotal, right_total: rightTotal,
-            gross_profit: profit, sales: f.salesTaxable, purchases: f.purchTaxable,
+            gross_profit: profit, sales: rightTotal, purchases: leftTotal,
         });
     } catch (err) {
         console.error('reports.profitLoss error:', err);
@@ -470,26 +563,30 @@ async function profitLoss(req, res) {
     }
 }
 
-/** GET /reports/balance-sheet — derived Balance Sheet (Liabilities | Assets). */
+/** GET /reports/balance-sheet — REAL Balance Sheet from non-revenue ledgers
+ *  (+ve = Cr liability, -ve = Dr asset), with the P&L result on the capital side. */
 async function balanceSheet(req, res) {
     try {
-        const f = await financialBase(req.companyId, req.locationId);
-        const liabilities = [
-            { label: 'Sundry Creditors', amount: f.payables },
-            { label: 'Profit & Loss A/c', amount: f.grossProfit },
-        ];
-        const assets = [
-            { label: 'Sundry Debtors', amount: f.receivables },
-            { label: 'Closing Stock', amount: f.stockValue },
-            { label: 'Cash / Bank', amount: f.cash },
-        ];
+        const all = await realLedgerBalances(req.companyId);
+        const liabilities = [], assets = [];
+        aggByGroup(all.filter((l) => !l.isRevenue)).forEach((g) => {
+            if (g.balance > 0) liabilities.push({ label: g.label, amount: money(g.balance) });
+            else assets.push({ label: g.label, amount: money(-g.balance) });
+        });
+        // Net profit (Σ revenue ledgers; +ve = profit) carries to the capital side.
+        const profit = money((all.filter((l) => l.isRevenue)).reduce((s, l) => s + l.balance, 0));
+        if (Math.abs(profit) > 0.01) {
+            if (profit > 0) liabilities.push({ label: 'Profit & Loss A/c', amount: profit });
+            else assets.push({ label: 'Profit & Loss A/c (Loss)', amount: money(-profit) });
+        }
         let liabTotal = money(liabilities.reduce((s, r) => s + r.amount, 0));
         let assetTotal = money(assets.reduce((s, r) => s + r.amount, 0));
-        // Balancing capital figure so both sides agree (derived).
         const diff = money(assetTotal - liabTotal);
-        if (Math.abs(diff) > 0.001) {
-            liabilities.unshift({ label: 'Capital A/c (balancing)', amount: diff });
-            liabTotal = money(liabTotal + diff);
+        if (Math.abs(diff) > 0.01) {
+            if (diff > 0) liabilities.unshift({ label: 'Difference / Capital', amount: diff });
+            else assets.unshift({ label: 'Difference', amount: money(-diff) });
+            liabTotal = money(liabilities.reduce((s, r) => s + r.amount, 0));
+            assetTotal = money(assets.reduce((s, r) => s + r.amount, 0));
         }
         return R.successResponse(res, { liabilities, assets, liab_total: liabTotal, asset_total: assetTotal });
     } catch (err) {

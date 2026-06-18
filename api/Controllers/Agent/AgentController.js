@@ -618,15 +618,41 @@ async function importFromTally(req, res) {
         const stockItems = Array.isArray(req.body.stock_items) ? req.body.stock_items : [];
         const vouchers   = Array.isArray(req.body.vouchers) ? req.body.vouchers : [];
         const godowns    = Array.isArray(req.body.godowns) ? req.body.godowns : [];
+        const groups     = Array.isArray(req.body.groups) ? req.body.groups : [];
         adbg(`/agent/import RECEIVED  license=${licenseId} company="${companyName}" cid=${cid} -> ` +
              `ledgers=${ledgers.length} stock=${stockItems.length} vouchers=${vouchers.length} godowns=${godowns.length}` +
              (ledgers.length ? `  sampleLedger="${(ledgers[0] && (ledgers[0].name || ledgers[0].Name)) || '?'}"` :
                                `  (0 ledgers — the agent's open Tally company is empty / wrong)`));
         const now = new Date();
+
+        // ── FULL MIRROR: sync the Tally COMPANY MASTER onto the cloud company
+        //    record. Only FILL EMPTY fields so a company-admin's manual edits are
+        //    NOT clobbered on every pull (page stays editable + both-side). ──
+        const cm = req.body.company_master;
+        if (cm && typeof cm === 'object' && cid) {
+            try {
+                const comp = await db('companies').where('id', cid)
+                    .first('email', 'mobile', 'gst_number', 'pan_number', 'address', 'financial_year');
+                const patch = {};
+                if (cm.email && !comp.email)        patch.email = String(cm.email);
+                if (cm.phone && !comp.mobile)       patch.mobile = String(cm.phone);
+                if (cm.gstin && !comp.gst_number)   patch.gst_number = String(cm.gstin);
+                if (cm.pan && !comp.pan_number)     patch.pan_number = String(cm.pan);
+                if (cm.books_from && !comp.financial_year) patch.financial_year = String(cm.books_from);
+                if (!comp.address && (cm.address || cm.state || cm.pincode)) {
+                    patch.address = [cm.address, cm.state, cm.pincode, cm.country].filter(Boolean).join(', ');
+                }
+                if (Object.keys(patch).length) {
+                    patch.updated_at = now;
+                    await db('companies').where('id', cid).update(patch);
+                }
+            } catch (e) { /* best-effort: company master never blocks the import */ }
+        }
+
         const counts = { customers_new: 0, customers_linked: 0, suppliers_new: 0,
             suppliers_linked: 0, products_new: 0, products_linked: 0,
             masters_updated: 0, vouchers_new: 0, journals_new: 0, locations_new: 0,
-            skipped: 0 };
+            skipped: 0, failed: 0 };
         // Per-record outcomes so the agent can show the pull ONE BY ONE
         // (created / linked / updated). Unchanged records are NOT listed here.
         const details = [];
@@ -670,7 +696,68 @@ async function importFromTally(req, res) {
             });
         }
 
+        // Resilience helper: ONE bad record must NEVER abort the whole import.
+        // Every record loop below is wrapped so a failure is LOGGED (a 'failed'
+        // sync log row the Dashboard shows + console + AGENT_DEBUG) and the import
+        // continues with the next record. Never throws (logging can't break sync).
+        async function logPullError(module, name, err) {
+            const detail = (err && (err.detail || err.message))
+                ? String(err.detail || err.message).slice(0, 480) : 'Import error';
+            try {
+                await db('tally_sync_logs').insert({
+                    company_id: cid, module, record_type: module, record_id: null,
+                    direction: 'pull', status: 'failed', message: `${name}: ${detail}`,
+                    retry_count: 0, synced_at: now,
+                });
+            } catch (_) { /* logging must never break the import */ }
+            try { console.error(`[import] ${module} "${name}" FAILED: ${detail}`); } catch (_) { /* noop */ }
+            adbg(`IMPORT FAILED  module=${module} name="${name}" -> ${detail}`);
+        }
+
+        // ── FULL MIRROR: account GROUPS -> tally_groups (Balance Sheet / P&L
+        //    hierarchy). Incremental on ALTERID; idempotent via (company_id, name). ──
+        for (const g of groups) {
+            try {
+                const gname = String(g.name || '').trim();
+                if (!gname) continue;
+                const galter = aid(g);
+                if (galter && galter <= watermark) continue;
+                if (galter > maxAlterId) maxAlterId = galter;
+                const grow = {
+                    company_id: cid, name: gname, parent: String(g.parent || ''),
+                    is_revenue: !!g.is_revenue, is_deemed_positive: g.is_deemed_positive !== false,
+                    tally_guid: 'tally', tally_alter_id: galter, updated_at: now,
+                };
+                await db('tally_groups').insert({ ...grow, created_at: now })
+                    .onConflict(['company_id', 'name']).merge(grow);
+            } catch (e) { /* best-effort */ }
+        }
+
+        // ── FULL MIRROR: upsert EVERY ledger (all groups, not just debtors/
+        //    creditors) into tally_ledgers with its opening balance + GSTIN. This
+        //    is the account-level data the Trial Balance / Balance Sheet / Ledger
+        //    statement are derived from. Incremental on ALTERID; idempotent via
+        //    (company_id, name). Best-effort per ledger. ──
         for (const l of ledgers) {
+            try {
+                const lname = String(l.name || '').trim();
+                if (!lname) continue;
+                const lalter = aid(l);
+                if (lalter && lalter <= watermark) continue;   // unchanged -> skip
+                if (lalter > maxAlterId) maxAlterId = lalter;
+                const opening = parseFloat(String(l.opening || '0').replace(/[^0-9.\-]/g, '')) || 0;
+                const row = {
+                    company_id: cid, name: lname, parent: String(l.parent || ''),
+                    opening_balance: opening, gstin: l.gstin || null,
+                    tally_guid: 'tally', tally_alter_id: lalter, updated_at: now,
+                };
+                await db('tally_ledgers').insert({ ...row, created_at: now })
+                    .onConflict(['company_id', 'name']).merge(row);
+            } catch (e) { /* best-effort: one bad ledger never aborts the import */ }
+        }
+
+        for (const l of ledgers) {
+          try {
             const name = String(l.name || '').trim();
             if (!name) { counts.skipped += 1; continue; }
             const parent = String(l.parent || '').toLowerCase();
@@ -742,9 +829,14 @@ async function importFromTally(req, res) {
                 details.push({ type: ttype, name, action: 'created' });
                 await logPull(ttype, newId, name);
             }
+          } catch (err) {
+            counts.failed = (counts.failed || 0) + 1;
+            await logPullError('customer/supplier', String((l && l.name) || '?'), err);
+          }
         }
 
         for (const s of stockItems) {
+          try {
             const name = String(s.name || '').trim();
             if (!name) { counts.skipped += 1; continue; }
 
@@ -755,15 +847,19 @@ async function importFromTally(req, res) {
             const closing = num(s.closing);
             const unit = s.unit ? String(s.unit).trim() : null;
             const hsn = s.hsn ? String(s.hsn).trim() : null;
+            const salesPrice = num(s.sales_price);
+            const purchasePrice = num(s.purchase_price);
 
             const existing = await db('products').where('company_id', cid).whereNull('deleted_at')
                 .whereRaw('lower(name) = ?', [name.toLowerCase()])
-                .first('id', 'tally_guid', 'unit', 'hsn_code', 'opening_stock');
+                .first('id', 'tally_guid', 'unit', 'hsn_code', 'opening_stock', 'sales_price', 'purchase_price');
             if (existing) {
                 const upd = {};
                 if (unit && unit !== (existing.unit || '')) upd.unit = unit;
                 if (hsn && hsn !== (existing.hsn_code || '')) upd.hsn_code = hsn;
                 if (Number(existing.opening_stock) !== closing) upd.opening_stock = closing;
+                if (salesPrice && Number(existing.sales_price) !== salesPrice) upd.sales_price = salesPrice;
+                if (purchasePrice && Number(existing.purchase_price) !== purchasePrice) upd.purchase_price = purchasePrice;
                 if (!existing.tally_guid) upd.tally_guid = 'tally';
 
                 if (Object.keys(upd).length) {
@@ -791,7 +887,7 @@ async function importFromTally(req, res) {
                 const insertRow = {
                     company_id: cid, name, status: 'Active', is_tally_item: true, tally_guid: 'tally',
                     unit: unit || 'Nos', hsn_code: hsn, opening_stock: closing,
-                    purchase_price: 0, sales_price: 0, gst_rate: 0, created_at: now, updated_at: now,
+                    purchase_price: purchasePrice, sales_price: salesPrice, gst_rate: 0, created_at: now, updated_at: now,
                 };
                 const [row] = await db('products').insert(insertRow).returning('id');
                 const newId = row.id || row;
@@ -806,6 +902,10 @@ async function importFromTally(req, res) {
                 details.push({ type: 'product', name, action: 'created' });
                 await logPull('product', newId, name);
             }
+          } catch (err) {
+            counts.failed = (counts.failed || 0) + 1;
+            await logPullError('product', String((s && s.name) || '?'), err);
+          }
         }
 
         // ── Godowns → locations. Each Tally godown becomes a location row
@@ -813,6 +913,7 @@ async function importFromTally(req, res) {
         //    lower(name) per company: an existing same-named location is left
         //    untouched (no duplicate); a new name is INSERTED. ──
         for (const g of godowns) {
+          try {
             const name = String(g.name || '').trim();
             if (!name) { counts.skipped += 1; continue; }
 
@@ -837,6 +938,10 @@ async function importFromTally(req, res) {
             counts.locations_new += 1;
             details.push({ type: 'location', name, action: 'created' });
             await logPull('location', newId, name);
+          } catch (err) {
+            counts.failed = (counts.failed || 0) + 1;
+            await logPullError('location', String((g && g.name) || '?'), err);
+          }
         }
 
         // ── Vouchers (Day Book): receipts/payments → payments, sales/purchase
@@ -846,12 +951,61 @@ async function importFromTally(req, res) {
         //    (the value is still recorded — cash transactions are not dropped).
         //    Idempotent via tally_voucher_no. ──
         for (const v of vouchers) {
+          // Per-voucher guard: ONE bad/duplicate voucher must never abort the whole
+          // pull (a single duplicate purchase no. was 500-ing the entire import, so
+          // masters synced but NO vouchers did). A unique-violation (23505) = already
+          // imported -> skip; any OTHER error still propagates so real bugs surface.
+          try {
             const vt = String(v.vtype || '').toLowerCase();
             const vno = String(v.vno || '').trim();
             const amount = Number(v.amount) || 0;
             const date = tdate(v.date);
             const partyName = String(v.party || '').trim();
+            const guid = String((v && v.guid) || '').trim();
+
+            // ── FULL MIRROR: store this voucher's COMPLETE double-entry (every
+            //    ledger debit/credit) into tally_voucher_entries BEFORE any skip,
+            //    so even Contra / zero-party vouchers feed the Trial Balance /
+            //    Balance Sheet / P&L / Ledger statement. Replace-by-GUID = idempotent
+            //    (re-pull overwrites, never duplicates). ──
+            if (guid && Array.isArray(v.entries) && v.entries.length) {
+                try {
+                    await db('tally_voucher_entries').where({ company_id: cid, voucher_guid: guid }).del();
+                    const erows = v.entries.map((e) => ({
+                        company_id: cid, voucher_guid: guid, voucher_type: v.vtype || null,
+                        voucher_no: vno || null, voucher_date: date || null,
+                        ledger_name: String(e.ledger || '').trim(),
+                        amount: Number(e.amount) || 0, is_debit: !!e.is_debit,
+                        tally_alter_id: Number(v.alterid) || 0, created_at: now,
+                    })).filter((r) => r.ledger_name);
+                    if (erows.length) await db('tally_voucher_entries').insert(erows);
+                } catch (e) { /* best-effort: entries never block the import */ }
+            }
+            // FULL MIRROR: inventory movement -> tally_inventory_entries (Stock value).
+            if (guid && Array.isArray(v.inventory) && v.inventory.length) {
+                try {
+                    await db('tally_inventory_entries').where({ company_id: cid, voucher_guid: guid }).del();
+                    const irows = v.inventory.map((it) => ({
+                        company_id: cid, voucher_guid: guid, voucher_date: date || null,
+                        item_name: String(it.item || '').trim(),
+                        qty: Number(it.qty) || 0, rate: Number(it.rate) || 0,
+                        amount: Number(it.amount) || 0, created_at: now,
+                    })).filter((r) => r.item_name);
+                    if (irows.length) await db('tally_inventory_entries').insert(irows);
+                } catch (e) { /* best-effort */ }
+            }
+
             if (!amount || !vno) { counts.skipped += 1; continue; }
+
+            // GUID idempotency: the Tally voucher GUID is the STABLE unique key
+            // (voucher NUMBERS repeat - purchases reuse the supplier bill no). If
+            // this exact voucher was already imported (invoices/journals carry the
+            // guid), skip it - so re-pulling an AlterID window is harmless.
+            if (guid) {
+                const already = await db('invoices').where({ company_id: cid, tally_guid: guid }).first('id')
+                             || await db('journals').where({ company_id: cid, tally_guid: guid }).first('id');
+                if (already) { counts.skipped += 1; continue; }
+            }
 
             // Per-iteration history capture state (set by the payment/invoice
             // insert branches below; read by the shared recordHistory call).
@@ -896,7 +1050,7 @@ async function importFromTally(req, res) {
                     company_id: cid, voucher_no: vno, vch_type: 'Journal',
                     journal_date: journalDate, dr_ledger: partyName || '(unknown)', cr_ledger: '',
                     amount, narration: null, status: 'created',
-                    tally_voucher_no: vno, tally_guid: 'tally',
+                    tally_voucher_no: vno, tally_guid: guid || 'tally',
                     created_at: now, updated_at: now,
                 };
                 const [row] = await db('journals').insert(insertRow).returning('id');
@@ -956,8 +1110,14 @@ async function importFromTally(req, res) {
                 voucherAfter = newVoucherId != null ? { id: newVoucherId, ...payRow } : payRow;
             } else {
                 const type = isSales ? 'sales' : 'purchase';
-                const dup = await db('invoices').where({ company_id: cid, type, tally_voucher_no: vno })
-                    .whereNull('deleted_at').first('id');
+                // Dedupe on the SAME columns as the unique constraint
+                // (company_id, type, invoice_no) and do NOT filter deleted_at —
+                // the constraint spans deleted rows too. The old check used
+                // tally_voucher_no + whereNull(deleted_at), so a duplicate slipped
+                // past it and the INSERT then 500-ed the WHOLE import.
+                const dup = await db('invoices')
+                    .where({ company_id: cid, type, invoice_no: vno })
+                    .first('id');
                 if (dup) { counts.skipped += 1; continue; }
                 // CONTENT dedupe: an invoice already pushed cloud→Tally is already
                 // a cloud row; Tally auto-numbers so its vno never matches our
@@ -974,7 +1134,8 @@ async function importFromTally(req, res) {
                     company_id: cid, type, invoice_no: vno, invoice_date: date,
                     [isSales ? 'customer_id' : 'supplier_id']: partyId,
                     taxable: amount, cgst: 0, sgst: 0, igst: 0, tax_amount: 0, total: amount,
-                    status: 'created', tally_voucher_no: vno, created_at: now, updated_at: now,
+                    status: 'created', tally_voucher_no: vno, tally_guid: guid || null,
+                    created_at: now, updated_at: now,
                 };
                 const [ir] = await db('invoices').insert(invRow).returning('id');
                 newVoucherId = ir ? (ir.id || ir) : null;
@@ -1001,6 +1162,14 @@ async function importFromTally(req, res) {
             counts.vouchers_new += 1;
             details.push({ type: label, name: `${v.vtype} ${vno}`, action: 'created' });
             await logPull(logModule, newVoucherId, `${v.vtype} ${vno}`);
+          } catch (vErr) {
+            // A duplicate (already-imported) voucher → silent skip. ANY other error
+            // is LOGGED and the pull keeps going (one bad voucher must not abort the rest).
+            if (vErr && vErr.code === '23505') { counts.skipped += 1; continue; }
+            counts.failed = (counts.failed || 0) + 1;
+            await logPullError('voucher', String((v && (String(v.vtype || '') + ' ' + (v.vno || ''))) || '?'), vErr);
+            continue;
+          }
         }
 
         // Advance the per-company watermark to the largest ALTERID seen this

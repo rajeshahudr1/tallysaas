@@ -21,6 +21,7 @@ CLI
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -1093,7 +1094,13 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             ledgers = tally.ledger_list(company=cname)
             stock = tally.stock_summary(company=cname)
             godowns = tally.godown_list(company=cname)
-            vouchers = tally.day_book(company=cname)
+            groups = tally.group_list(company=cname)
+            cmaster = tally.company_full_info(company=cname)
+            # Vouchers are NOT read here (Tally's Day Book is single-day). They are
+            # pulled below via _pull_vouchers - a chunked, AlterID-incremental
+            # Voucher COLLECTION backfill (first run = all history over a few
+            # cycles; later cycles = only new/changed).
+            vouchers = []
         except Exception as exc:
             logger.warning("Pull[%s]: reading from Tally failed: %s", cname, exc)
             if VERBOSE:
@@ -1122,6 +1129,7 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
 
         try:
             counts = api.import_from_tally(token, ledgers, stock, vouchers, godowns,
+                                           groups=groups, company_master=cmaster,
                                            company_name=cname)
             new = sum(counts.get(k, 0) for k in ("customers_new", "suppliers_new", "products_new"))
             linked = sum(counts.get(k, 0) for k in ("customers_linked", "suppliers_linked", "products_linked"))
@@ -1167,6 +1175,116 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             logger.warning("Pull[%s]: import to cloud failed: %s", cname, exc)
             if VERBOSE:
                 echo(f"  [x] '{cname}': cloud import failed ({exc})")
+
+        # ── Vouchers: chunked, AlterID-INCREMENTAL backfill (separate from the
+        #    masters import above). Best-effort - never aborts the pull. ──
+        try:
+            vsent = _pull_vouchers(cfg, logger, api, tally, token, cname)
+            if vsent and VERBOSE:
+                echo(f"  [OK] '{cname}': {vsent} voucher(s) pushed to cloud this cycle.")
+        except Exception as exc:
+            logger.warning("Voucher backfill[%s] failed: %s", cname, exc)
+
+
+VOUCHER_STATE_FILENAME = ".voucher_sync.json"
+VOUCHER_CHUNK = 50000        # AlterID window per Tally fetch
+VOUCHER_BATCH = 2000         # vouchers per cloud /agent/import POST
+VOUCHER_MAX_FETCHES = 6      # AlterID windows per cycle (keeps a cycle bounded)
+
+
+def _voucher_state_path(cfg: Config) -> str:
+    return os.path.join(_agent_dir(cfg), VOUCHER_STATE_FILENAME)
+
+
+def _load_voucher_state(cfg: Config, company: str) -> dict:
+    """Per-company voucher watermark {through, max_seen}. Never raises."""
+    try:
+        with open(_voucher_state_path(cfg), "r", encoding="utf-8") as fh:
+            allst = json.load(fh) or {}
+    except Exception:
+        allst = {}
+    st = allst.get(company) or {}
+    return {"through": int(st.get("through", 0) or 0),
+            "max_seen": int(st.get("max_seen", 0) or 0)}
+
+
+def _save_voucher_state(cfg: Config, company: str, st: dict) -> None:
+    try:
+        path = _voucher_state_path(cfg)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                allst = json.load(fh) or {}
+        except Exception:
+            allst = {}
+        allst[company] = {"through": int(st.get("through", 0) or 0),
+                          "max_seen": int(st.get("max_seen", 0) or 0)}
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(allst, fh)
+    except Exception:
+        pass
+
+
+def _pull_vouchers(cfg, logger, api, tally, token, cname) -> int:
+    """Tally -> Cloud VOUCHER backfill, chunked + AlterID-incremental.
+
+    Reads vouchers via an AlterID-windowed Voucher COLLECTION (each carries GUID +
+    ALTERID). A local per-company watermark {through, max_seen} drives it: each
+    cycle pull the next few AlterID windows above `through` and POST each window's
+    vouchers to the cloud in batches. First runs fill the whole history a few
+    windows per cycle; once we scan a window PAST the highest voucher seen
+    (caught up), `through` parks at max_seen so later cycles fetch ONLY new/changed
+    vouchers (their AlterID climbs above max_seen). Best-effort: any read/import
+    error stops THIS cycle and resumes next cycle from the saved watermark (the
+    cloud dedupes by GUID, so re-pulling a window is harmless).
+    """
+    if not token:
+        return 0
+    st = _load_voucher_state(cfg, cname)
+    through = st["through"]
+    max_seen = st["max_seen"]
+    sent = 0
+    for _ in range(VOUCHER_MAX_FETCHES):
+        lo, hi = through, through + VOUCHER_CHUNK
+        try:
+            vs = tally.voucher_list(company=cname, after_alterid=lo, upto_alterid=hi)
+        except Exception as exc:
+            logger.warning("Voucher pull[%s] %d-%d read failed: %s", cname, lo, hi, exc)
+            break
+        if vs:
+            ok = True
+            for i in range(0, len(vs), VOUCHER_BATCH):
+                batch = vs[i:i + VOUCHER_BATCH]
+                try:
+                    c = api.import_from_tally(token, [], [], batch, [], company_name=cname)
+                    sent += len(batch)
+                    logger.debug("Voucher pull[%s] %d-%d: batch %d sent (cloud new=%s)",
+                                 cname, lo, hi, len(batch), (c or {}).get("vouchers_new"))
+                except Exception as exc:
+                    logger.warning("Voucher import[%s] %d-%d failed: %s", cname, lo, hi, exc)
+                    ok = False
+                    break
+            if not ok:
+                break   # keep `through` so this window retries next cycle
+            mx = max((int(v.get("alterid") or 0) for v in vs), default=0)
+            if mx > max_seen:
+                max_seen = mx
+            logger.info("Voucher pull[%s] window %d-%d: %d vouchers -> cloud; max_seen=%d",
+                        cname, lo, hi, len(vs), max_seen)
+            through = hi
+        else:
+            # Empty window. Past the highest voucher seen => backfill complete;
+            # park `through` at max_seen so the next cycle re-checks just above it
+            # for new vouchers. Otherwise a mid-range gap / nothing yet => scan on.
+            if max_seen > 0 and lo >= max_seen:
+                _save_voucher_state(cfg, cname, {"through": max_seen, "max_seen": max_seen})
+                logger.info("Voucher pull[%s]: caught up at alterid %d (incremental now).",
+                            cname, max_seen)
+                return sent
+            through = hi
+        _save_voucher_state(cfg, cname, {"through": through, "max_seen": max_seen})
+    logger.info("Voucher pull[%s]: backfill at alterid %d (max_seen=%d); continues next cycle.",
+                cname, through, max_seen)
+    return sent
 
 
 def _tally_url(cfg: Config) -> str:
