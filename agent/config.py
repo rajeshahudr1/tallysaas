@@ -52,7 +52,7 @@ _CRED_TOKEN_NAME = "cred_t"
 _DEFAULT_API_URL = API_BASE_URL
 _DEFAULT_SYNC_INTERVAL = 60
 _DEFAULT_LOG_LEVEL = "INFO"
-_DEFAULT_AGENT_VERSION = "1.2.2"
+_DEFAULT_AGENT_VERSION = "1.2.3"
 # Auto-update (Requirement 2). auto_update: master on/off for self-update (the
 # CLOUD per-license toggle overrides this when the version endpoint provides it).
 # update_check_cycles: check for a new exe once at startup, then every N loop

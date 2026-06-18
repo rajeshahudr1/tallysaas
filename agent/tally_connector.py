@@ -122,6 +122,9 @@ class TallyConnector:
             text = resp.text
         except Exception:  # noqa: BLE001 - decode quirks
             text = resp.content.decode("utf-8", errors="replace")
+        # DEBUG diagnostic (log_level=DEBUG): the response size per request tells
+        # us at a glance whether Tally answered with data or an empty/error body.
+        self.log.debug("Tally HTTP %s, %d bytes response.", resp.status_code, len(text or ""))
         return text
 
     # ------------------------------------------------------------------ #

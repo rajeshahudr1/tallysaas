@@ -177,6 +177,22 @@
             .catch(function () { /* transient — next tick retries */ });
     }
 
+    /* Force a LIVE connection re-check, APPLY it (flips the card), THEN run
+     * `proceed`. The manual sync buttons use this so an action pressed seconds
+     * after the agent stopped is evaluated against the FRESH state — not the up
+     * to POLL_MS-stale last poll. On any fetch failure / hang we still run
+     * `proceed` (never trap the user on a transient blip). */
+    function recheckThenAct(proceed) {
+        var done = false;
+        function go() { if (done) return; done = true; try { proceed(); } catch (e) {} }
+        fetch(JSON_URL, { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (j) { if (j && j.ok && j.data) applyData(j.data); })
+            .catch(function () { /* ignore — proceed on last-known state */ })
+            .then(go);
+        setTimeout(go, 4000);   // safety: never let a hung fetch wedge the button
+    }
+
     /* The page-head Retry/Sync buttons aren't <form>s — POST them here. */
     function submitRetry() {
         var f = document.createElement('form');
@@ -350,19 +366,26 @@
         setTimeout(function () { unspin(btn); }, 0);
     }
     function wireDisconnectGuard() {
-        // Real <form> POSTs to the sync routes. CAPTURE phase + stopPropagation
-        // so this runs BEFORE the per-module XHR submit handler and the native
-        // submit, fully blocking the action when the agent is offline. We also
-        // un-spin the form's submit button so app.js's loader doesn't get stuck.
+        // Real <form> POSTs to the sync routes (per-module To/From-Tally, banner
+        // Sync Now, Sync All). CAPTURE phase + stopPropagation so this runs BEFORE
+        // the per-module XHR submit handler and the native submit. On the FIRST
+        // submit we ALWAYS intercept, force a LIVE connection re-check, then either
+        // BLOCK (offline) or RE-FIRE the form so the real action runs against the
+        // fresh state. The re-fired submit carries a flag so it passes straight
+        // through (the XHR handler / native POST then proceeds as normal).
         document.addEventListener('submit', function (e) {
             var form = e.target;
             var action = (form && form.getAttribute) ? (form.getAttribute('action') || '') : '';
-            if (/\/sync-(retry|pull)(\/|\?|$)/.test(action) && isDisconnected()) {
-                e.preventDefault();
-                e.stopPropagation();
-                warnNotConnected();
-                unspinSoon(form.querySelector('button[type="submit"], input[type="submit"], button'));
-            }
+            if (!/\/sync-(retry|pull)(\/|\?|$)/.test(action)) return;
+            if (form.dataset.rechecked === '1') { form.dataset.rechecked = ''; return; }  // re-fired → allow through
+            e.preventDefault();
+            e.stopPropagation();
+            var btn = form.querySelector('button[type="submit"], input[type="submit"], button');
+            recheckThenAct(function () {
+                if (isDisconnected()) { warnNotConnected(); unspinSoon(btn); return; }
+                form.dataset.rechecked = '1';
+                if (form.requestSubmit) form.requestSubmit(); else form.submit();
+            });
         }, true);
     }
 
@@ -372,9 +395,19 @@
             if (!btn) return;
             btn.addEventListener('click', function (e) {
                 e.preventDefault();
-                if (isDisconnected()) { warnNotConnected(); unspinSoon(btn); return; }   // alert + block, clear loader
+                if (btn.dataset.busy) return;
+                btn.dataset.busy = '1';
+                var prev = btn.innerHTML;
                 btn.disabled = true;
-                submitRetry();
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i>Checking…';
+                // LIVE re-check FIRST, then block-or-act against the fresh state.
+                recheckThenAct(function () {
+                    btn.innerHTML = prev;
+                    delete btn.dataset.busy;
+                    if (isDisconnected()) { warnNotConnected(); btn.disabled = false; unspinSoon(btn); return; }
+                    btn.disabled = true;   // keep disabled — submitRetry navigates away
+                    submitRetry();
+                });
             });
         });
         wireUpdateNow();
@@ -388,6 +421,11 @@
         // First poll soon so a stale "Disconnected" flips fast on load.
         setTimeout(poll, 2000);
         setInterval(poll, POLL_MS);
+        // Re-check the instant the user returns to this tab (e.g. right after
+        // stopping the agent in another window) so the state isn't POLL_MS stale.
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) poll();
+        });
     }
 
     if (document.readyState === 'loading') {

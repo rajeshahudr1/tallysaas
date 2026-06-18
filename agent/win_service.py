@@ -288,6 +288,11 @@ def install_service(exe_path: "str | None" = None) -> int:
         except Exception as exc2:
             print("Could not install the service:", exc, "/", exc2)
             return 1
+    # Grant the interactive user START/STOP rights on this service so the
+    # Dashboard's Start/Stop buttons work WITHOUT a UAC re-launch. The flaky
+    # elevated re-launch is the #1 cause of "Service start was cancelled or
+    # failed"; with this grant the GUI controls the service in-process. Best-effort.
+    grant_service_control_to_users()
     # Best-effort immediate start (startType=auto also brings it up on reboot).
     try:
         win32serviceutil.StartService(SERVICE_NAME)
@@ -295,6 +300,43 @@ def install_service(exe_path: "str | None" = None) -> int:
     except Exception as exc:
         print("Service installed but could not start now:", exc)
     return 0
+
+
+def grant_service_control_to_users() -> None:
+    """Best-effort: grant Authenticated Users (S-1-5-11) START/STOP/QUERY on this
+    service so the Dashboard can control it with NO elevation/UAC. Runs at install
+    (already elevated). Adds an ACE to the EXISTING DACL (keeps the SCM defaults).
+    Never raises - on any failure the GUI just falls back to elevated control.
+    """
+    if not _HAVE_PYWIN32:
+        return
+    try:
+        import win32con
+        import win32security
+        au_sid = win32security.ConvertStringSidToSid("S-1-5-11")  # Authenticated Users
+        scm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CONNECT)
+        svc = win32service.OpenService(
+            scm, SERVICE_NAME, win32con.READ_CONTROL | win32con.WRITE_DAC)
+        try:
+            sd = win32service.QueryServiceObjectSecurity(
+                svc, win32security.DACL_SECURITY_INFORMATION)
+            dacl = sd.GetSecurityDescriptorDacl()
+            if dacl is None:
+                dacl = win32security.ACL()
+            access = (win32service.SERVICE_START
+                      | win32service.SERVICE_STOP
+                      | win32service.SERVICE_QUERY_STATUS
+                      | win32con.READ_CONTROL)
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, access, au_sid)
+            sd.SetSecurityDescriptorDacl(1, dacl, 0)
+            win32service.SetServiceObjectSecurity(
+                svc, win32security.DACL_SECURITY_INFORMATION, sd)
+            print("Granted Authenticated Users start/stop on the service.")
+        finally:
+            win32service.CloseServiceHandle(svc)
+            win32service.CloseServiceHandle(scm)
+    except Exception as exc:
+        print("Could not grant user service-control (non-fatal):", exc)
 
 
 def remove_service() -> int:
@@ -316,32 +358,48 @@ def remove_service() -> int:
         return 1
 
 
+def _sprint(*args) -> None:
+    """print() that never raises. In a windowed (no-console) PyInstaller exe
+    sys.stdout is None, so a bare print() throws AttributeError - which, if it
+    happened AFTER a successful Start/StopService, would flip a real success into
+    a false failure. Service-control return values must depend ONLY on the SCM
+    call, never on logging, so we route all such prints through here."""
+    try:
+        print(*args)
+    except Exception:
+        pass
+
+
 def start_service() -> int:
-    """Start the installed service. Elevated."""
+    """Start the installed service. Works IN-PROCESS (no elevation) when this
+    account was granted start rights at install; the GUI calls it directly first
+    and only falls back to an elevated re-launch if it is denied. The return
+    depends ONLY on StartService - NOT on print (see :func:`_sprint`)."""
     if not _HAVE_PYWIN32:
-        print("pywin32 not available; cannot start the service.")
+        _sprint("pywin32 not available; cannot start the service.")
         return 1
     try:
         win32serviceutil.StartService(SERVICE_NAME)
-        print("Service started.")
-        return 0
     except Exception as exc:
-        print("Could not start the service:", exc)
+        _sprint("Could not start the service:", exc)
         return 1
+    _sprint("Service started.")
+    return 0
 
 
 def stop_service() -> int:
-    """Stop the running service. Elevated."""
+    """Stop the running service. In-process when granted; else elevated. The
+    return depends ONLY on StopService - NOT on print (see :func:`_sprint`)."""
     if not _HAVE_PYWIN32:
-        print("pywin32 not available; cannot stop the service.")
+        _sprint("pywin32 not available; cannot stop the service.")
         return 1
     try:
         win32serviceutil.StopService(SERVICE_NAME)
-        print("Service stopped.")
-        return 0
     except Exception as exc:
-        print("Could not stop the service:", exc)
+        _sprint("Could not stop the service:", exc)
         return 1
+    _sprint("Service stopped.")
+    return 0
 
 
 def service_status() -> "str | None":

@@ -1100,6 +1100,26 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
                 echo(f"  [x] '{cname}': could not read from Tally ({exc})")
             continue
 
+        # DEBUG diagnostics: EXACTLY what Tally returned for this company. With
+        # config.ini log_level=DEBUG this instantly tells real-vs-empty: all 0 =
+        # the OPEN company is blank / the wrong company is active (Tally CMPINFO
+        # shows 0 masters). Samples expose a mis-mapped group at a glance. This
+        # is the toggleable "what came from Tally" log (turn off: log_level=INFO).
+        logger.debug("Pull[%s]: Tally returned ledgers=%d stock=%d godowns=%d vouchers=%d",
+                     cname, len(ledgers), len(stock), len(godowns), len(vouchers))
+        if ledgers:
+            logger.debug("Pull[%s]: ledger sample: %s", cname,
+                         "; ".join((str(l.get("name", "?")) + "<" + str(l.get("parent") or "?") + ">")
+                                   for l in ledgers[:8]))
+        else:
+            logger.debug("Pull[%s]: 0 ledgers from Tally - the OPEN company is most likely empty/blank "
+                         "(only default Cash + P&L) or the WRONG company is active. Confirm the real "
+                         "data folder is loaded + opened in Tally.", cname)
+        if vouchers:
+            logger.debug("Pull[%s]: voucher sample: %s", cname,
+                         "; ".join((str(v.get("vtype", "?")) + " " + str(v.get("date", "?")) + " "
+                                    + str(v.get("party", "?"))[:18]) for v in vouchers[:5]))
+
         try:
             counts = api.import_from_tally(token, ledgers, stock, vouchers, godowns,
                                            company_name=cname)
@@ -1114,6 +1134,16 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
                         "%d vouchers, %d journals, %d locations",
                         cname, "CREATED in cloud" if created else "updated",
                         new, linked, updated, vnew, jnew, lnew)
+            # DEBUG: the cloud's per-type breakdown of what it accepted/skipped,
+            # so a "Tally had data but the cloud stored nothing" case is obvious
+            # (e.g. duplicates skipped, a mapping rejected). Toggle: log_level=DEBUG.
+            logger.debug("Pull[%s]: cloud /agent/import accepted: customers_new=%s suppliers_new=%s "
+                         "products_new=%s masters_updated=%s vouchers_new=%s journals_new=%s "
+                         "locations_new=%s company_created=%s",
+                         cname, counts.get("customers_new"), counts.get("suppliers_new"),
+                         counts.get("products_new"), counts.get("masters_updated"),
+                         counts.get("vouchers_new"), counts.get("journals_new"),
+                         counts.get("locations_new"), counts.get("company_created"))
             if VERBOSE:
                 tag = "company CREATED in cloud" if created else "company synced"
                 echo(f"  '{cname}' - {tag}:")
@@ -1729,6 +1759,31 @@ def _sleep_until_next(cfg: Config, logger, stop_event=None) -> bool:
     return False
 
 
+def _send_go_offline(cfg: Config, logger, api: ApiClient) -> None:
+    """Best-effort GRACEFUL "going offline" signal to the cloud.
+
+    Called ONLY on a clean ``stop_event`` exit of :func:`run_sync_loop` (a
+    deliberate stop — service Stop, GUI Stop, or an Uninstall-triggered service
+    stop). It clears ``licenses.last_seen_at`` cloud-side so the dashboard shows
+    Disconnected IMMEDIATELY instead of waiting out the ~150s connected window.
+
+    Fully wrapped + non-blocking: ``ApiClient.go_offline`` already swallows every
+    error and uses a short timeout, and this extra try/except guards even a token
+    read so a failure can NEVER delay or break the shutdown. An UNGRACEFUL
+    crash/force-kill does not reach here and falls back to the 150s window.
+    """
+    try:
+        token = cfg.get_token()
+        if not token:
+            return
+        api.go_offline(token)
+    except Exception as exc:  # shutdown must never hang/fail on the cloud.
+        try:
+            logger.debug("Go-offline signal failed (ignored): %s", exc)
+        except Exception:
+            pass
+
+
 def run_sync_loop(cfg: Config, logger, api: ApiClient,
                   on_status=None, stop_event=None) -> None:
     """Run the continuous heartbeat + sync loop (the SHARED engine entry point).
@@ -1773,6 +1828,11 @@ def run_sync_loop(cfg: Config, logger, api: ApiClient,
     _emit(event="started", ts=time.time())
     failed_retries = 0
     cycle = 0
+    # True only when the loop exits because stop_event was set (a deliberate
+    # stop). On that clean path we send a best-effort GRACEFUL go-offline so the
+    # cloud flips to Disconnected at once. A crash / KeyboardInterrupt leaves
+    # this False (crash falls back to the 150s window; Ctrl+C is handled below).
+    stopped_gracefully = False
 
     # Self-update: check ONCE at startup (best-effort). maybe_self_update raises
     # SystemExit to hand off to the detached updater when it applies an update,
@@ -1787,6 +1847,7 @@ def run_sync_loop(cfg: Config, logger, api: ApiClient,
     try:
         while True:
             if stop_event is not None and stop_event.is_set():
+                stopped_gracefully = True
                 break
             # A "Sync Now" trigger consumed at the top of an iteration just means
             # we run this cycle now (clear it so it is a one-shot).
@@ -1841,11 +1902,20 @@ def run_sync_loop(cfg: Config, logger, api: ApiClient,
             # a ".sync_now" trigger lands (the Dashboard's "Sync Now" for a
             # service: it drops the file, the loop wakes and runs a cycle now).
             if _sleep_until_next(cfg, logger, stop_event):
+                stopped_gracefully = True
                 break
     except KeyboardInterrupt:
         logger.info("Agent stopped.")
         echo("")
         echo("Agent stopped.")
+
+    # GRACEFUL stop (service Stop / GUI Stop / Uninstall-triggered service stop)
+    # exits via stop_event. On that clean path ONLY, tell the cloud we are going
+    # offline so the dashboard shows Disconnected immediately (best-effort + non-
+    # blocking — never delays/breaks shutdown; a crash skips this and relies on
+    # the ~150s connected window). Done before the 'stopped' status emit.
+    if stopped_gracefully:
+        _send_go_offline(cfg, logger, api)
 
     logger.info("Sync loop ended.")
     _emit(event="stopped", ts=time.time())

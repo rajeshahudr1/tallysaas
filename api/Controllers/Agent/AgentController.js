@@ -28,6 +28,16 @@ const db         = require('../../config/db').db;
 const { recordHistory } = require('../../Helpers/history');
 const agentRelease      = require('../../Helpers/agentRelease');
 
+// ── Toggleable agent diagnostics ────────────────────────────────
+// AGENT_DEBUG=1 in the api .env logs exactly WHAT each agent sent and WHAT the
+// cloud did with it (received counts vs accepted/skipped). Pairs with the
+// agent's own log_level=DEBUG so a "Tally had data but the cloud stored
+// nothing" gap is visible from BOTH ends. Turn OFF (AGENT_DEBUG=0) after testing.
+const AGENT_DEBUG = process.env.AGENT_DEBUG === '1';
+function adbg(...args) {
+    if (AGENT_DEBUG) { try { console.log('[AGENT_DEBUG]', new Date().toISOString(), ...args); } catch (_) { /* never break a request on a log */ } }
+}
+
 const AGENT_TOKEN_TTL = '7d';
 const INVALID_KEY_MSG = 'Invalid license key.';
 
@@ -200,6 +210,36 @@ async function heartbeat(req, res) {
         }, 'ok');
     } catch (err) {
         console.error('AgentController.heartbeat error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * POST /api/v1/agent/offline   (behind authenticateAgent → req.license)
+ *
+ * GRACEFUL SHUTDOWN signal. When the agent stops ON PURPOSE (service stop / GUI
+ * Stop / Uninstall) it sends this so the cloud flips the license to Disconnected
+ * IMMEDIATELY rather than waiting out the ~150s CONNECTED_WINDOW. We do this by
+ * CLEARING licenses.last_seen_at (and last_open_companies, since nothing is open
+ * any more) → SyncController.summary + LicenseController then compute
+ * connected=false at once because last_seen_at is null.
+ *
+ * Idempotent + safe: clearing an already-null value is a no-op. The agent calls
+ * this best-effort/non-blocking, so a failure here must never matter to it. An
+ * UNGRACEFUL crash/force-kill never reaches this path and falls back to the
+ * 150s window (unavoidable — the cloud cannot ping behind the firewall).
+ */
+async function offline(req, res) {
+    try {
+        const now = new Date();
+        await db('licenses').where('id', req.license.id).update({
+            last_seen_at: null,
+            last_open_companies: null,
+            updated_at: now,
+        });
+        return R.successResponse(res, { offline: true }, 'ok');
+    } catch (err) {
+        console.error('AgentController.offline error:', err);
         return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
     }
 }
@@ -578,6 +618,10 @@ async function importFromTally(req, res) {
         const stockItems = Array.isArray(req.body.stock_items) ? req.body.stock_items : [];
         const vouchers   = Array.isArray(req.body.vouchers) ? req.body.vouchers : [];
         const godowns    = Array.isArray(req.body.godowns) ? req.body.godowns : [];
+        adbg(`/agent/import RECEIVED  license=${licenseId} company="${companyName}" cid=${cid} -> ` +
+             `ledgers=${ledgers.length} stock=${stockItems.length} vouchers=${vouchers.length} godowns=${godowns.length}` +
+             (ledgers.length ? `  sampleLedger="${(ledgers[0] && (ledgers[0].name || ledgers[0].Name)) || '?'}"` :
+                               `  (0 ledgers — the agent's open Tally company is empty / wrong)`));
         const now = new Date();
         const counts = { customers_new: 0, customers_linked: 0, suppliers_new: 0,
             suppliers_linked: 0, products_new: 0, products_linked: 0,
@@ -969,6 +1013,10 @@ async function importFromTally(req, res) {
         counts.company_created = companyCreated;
         counts.master_alter_id = Math.max(maxAlterId, watermark);
         counts.details = details;          // per-record outcomes for one-by-one display
+        adbg(`/agent/import RESULT    company="${companyName}" cid=${cid} created=${companyCreated} -> ` +
+             `cust_new=${counts.customers_new} supp_new=${counts.suppliers_new} prod_new=${counts.products_new} ` +
+             `updated=${counts.masters_updated} vouchers_new=${counts.vouchers_new} journals_new=${counts.journals_new} ` +
+             `locations_new=${counts.locations_new} skipped=${counts.skipped}`);
         return R.successResponse(res, counts, 'Imported from Tally.');
     } catch (err) {
         console.error('AgentController.importFromTally error:', err);
@@ -1204,4 +1252,4 @@ async function download(req, res) {
     }
 }
 
-module.exports = { activate, heartbeat, pending, result, importFromTally, getCommands, commandResult, getVersion, download };
+module.exports = { activate, heartbeat, offline, pending, result, importFromTally, getCommands, commandResult, getVersion, download };

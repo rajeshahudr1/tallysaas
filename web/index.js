@@ -43,6 +43,13 @@ const PORT   = parseInt(process.env.PORT, 10) || 4600;
 
 app.disable('x-powered-by');
 
+// Trust the reverse proxy (Nginx / cPanel / Cloudflare) that sits in front of
+// Node so Express reads the real client IP + the original protocol
+// (X-Forwarded-Proto). REQUIRED for `cookie.secure` to work behind HTTPS
+// termination — without it express-session silently refuses to set a secure
+// cookie and login loops forever. `1` = trust the first hop.
+app.set('trust proxy', parseInt(process.env.TRUST_PROXY || '1', 10));
+
 /* ── View engine + layouts ──────────────────────────────────── */
 // express-ejs-layouts wraps every rendered view inside views/_layout.ejs.
 // Pages render their content into `<%- body %>`; per-page <script> blocks
@@ -89,15 +96,77 @@ app.use(express.static(path.join(__dirname, 'public'), {
 /* ── Form bodies + session ──────────────────────────────────────
  * urlencoded parses the login form POST; express-session holds the JWT
  * + signed-in user after login (see Controllers/AuthController.js).
+ *
+ * SESSION STORE — the production fix: the default in-memory MemoryStore
+ * drops EVERY session on a Node restart AND scatters sessions across PM2
+ * cluster workers. The symptom is exactly "login succeeds, then the
+ * dashboard 302s back to /login" — the login saved the session in one
+ * worker's RAM, the next request hit another worker that has no session.
+ * We persist sessions in the SAME PostgreSQL the api uses, via
+ * connect-pg-simple (a tiny dedicated pool; the `sessions` table is
+ * auto-created). Mirrors the proven TempleManagement deployment.
  * ─────────────────────────────────────────────────────────── */
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+const pgSession = require('connect-pg-simple')(session);
 app.use(session({
     name: 'tcs.sid',
     secret: process.env.SESSION_SECRET || 'tcs-dev-session-secret-change-me',
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 8 }, // 8h
+    store: new pgSession({
+        // Reuse the api's PostgreSQL (same DB_* env values). A small dedicated
+        // pool just for sessions — no second app DB layer needed in the BFF.
+        conObject: {
+            host:     process.env.DB_HOST     || '127.0.0.1',
+            port:     parseInt(process.env.DB_PORT, 10) || 5432,
+            database: process.env.DB_DATABASE || 'tallysaas',
+            user:     process.env.DB_USERNAME || 'postgres',
+            password: process.env.DB_PASSWORD || '',
+            ssl: process.env.DB_SSL === 'true'
+                ? { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false' }
+                : false,
+        },
+        tableName:            'sessions',
+        createTableIfMissing: true,      // lazily CREATE the sessions table
+        pruneSessionInterval:  60 * 60 * 24,   // prune expired rows daily (no cron)
+    }),
+    cookie: {
+        httpOnly: true,
+        // secure:true → the browser sends the cookie ONLY over HTTPS. Behind
+        // Nginx that needs trust-proxy ON + X-Forwarded-Proto:https, else
+        // express-session silently drops Set-Cookie and login loops. Default
+        // OFF; set COOKIE_SECURE=true in .env only after confirming the proxy
+        // forwards the header (watch the SESSION_DEBUG output below).
+        secure:   process.env.COOKIE_SECURE === 'true',
+        sameSite: 'lax',
+        maxAge:   parseInt(process.env.SESSION_MAX_AGE, 10) || 1000 * 60 * 60 * 8, // 8h
+    },
 }));
+
+/* ── Session diagnostics (TOGGLEABLE — set SESSION_DEBUG=1) ──────
+ * One line per request so a LIVE login problem is diagnosable from the
+ * server logs alone (send these to me and I can pinpoint it):
+ *   • cookieSent=false on a page after login → browser never stored the
+ *     cookie (secure-cookie / sameSite / proxy issue)
+ *   • cookieSent=true but hasUser=false      → cookie returned but the session
+ *     was lost in the store (MemoryStore restart / unshared workers)
+ *   • secure=false while xfproto=https        → trust-proxy / header not effective
+ * Turn OFF (SESSION_DEBUG=0) once login is stable.
+ * ─────────────────────────────────────────────────────────── */
+if (process.env.SESSION_DEBUG === '1') {
+    app.use((req, res, next) => {
+        const sid        = req.sessionID ? String(req.sessionID).slice(0, 8) : 'none';
+        const hasUser    = !!(req.session && req.session.user);
+        const hasToken   = !!(req.session && req.session.token);
+        const cookieSent = (req.headers.cookie || '').includes('tcs.sid=');
+        const xfproto    = req.headers['x-forwarded-proto'] || '-';
+        console.log('[SESSION]', (req.method + ' ' + req.url).slice(0, 38).padEnd(38),
+            'sid=' + sid, 'cookieSent=' + cookieSent, 'hasToken=' + hasToken,
+            'hasUser=' + hasUser, 'secure=' + req.secure, 'xfproto=' + xfproto);
+        next();
+    });
+}
 
 /* ── Global view locals ─────────────────────────────────────────
  * Header/identity data comes from the SESSION once logged in (the

@@ -71,15 +71,22 @@ function toBool(raw) {
 async function get(req, res) {
     try {
         // license_id is read here (not surfaced as editable) so we can prefill the
-        // license-scoped SYNC flags below.
-        const company = await db('companies')
-            .where('id', req.companyId)
-            .first(...COMPANY_FIELDS, 'license_id');
-        if (!company) return R.errorResponse(res, NOT_FOUND, 404);
+        // license-scoped SYNC flags below. The company may be ABSENT — a license-
+        // admin with no company yet (companies are created on first agent sync)
+        // resolves req.companyId === null. We must NOT 404 in that case: the
+        // company-profile/settings halves come back empty, but the Tally Sync tab
+        // still loads/edits the user's OWN license (req.user.license_id fallback).
+        const company = req.companyId
+            ? await db('companies')
+                .where('id', req.companyId)
+                .first(...COMPANY_FIELDS, 'license_id')
+            : null;
 
-        const rows = await db('settings')
-            .where('company_id', req.companyId)
-            .select('key', 'value');
+        const rows = req.companyId
+            ? await db('settings')
+                .where('company_id', req.companyId)
+                .select('key', 'value')
+            : [];
 
         const settings = {};
         for (const row of rows) {
@@ -95,9 +102,14 @@ async function get(req, res) {
             auto_update: true, push_enabled: true, pull_enabled: true, sync_enabled: true,
         };
         try {
-            if (company.license_id) {
+            // Prefer the company's license; fall back to the caller's OWN license
+            // (req.user.license_id) so a license-admin with no company still sees
+            // their real sync flags on the Tally Sync tab.
+            const licenseId = (company && company.license_id)
+                || (req.user && req.user.license_id) || null;
+            if (licenseId) {
                 const lic = await db('licenses')
-                    .where('id', company.license_id)
+                    .where('id', licenseId)
                     .first('auto_update', 'sync_push_enabled', 'sync_pull_enabled', 'sync_enabled');
                 if (lic) {
                     sync = {
@@ -113,7 +125,12 @@ async function get(req, res) {
         }
 
         // Strip the internal-only license_id from the surfaced company object.
-        const { license_id, ...companyOut } = company;
+        // company may be null (license-admin with no company yet) — surface null.
+        let companyOut = null;
+        if (company) {
+            const { license_id, ...rest } = company;
+            companyOut = rest;
+        }
         return R.successResponse(res, { company: companyOut, settings, sync });
     } catch (err) {
         console.error('settings.get error:', err);
@@ -168,16 +185,27 @@ async function update(req, res) {
         // edit settings may flip these — consistent with the rest of the save.
         let licenseId = null;
         if (hasLicense) {
-            const comp = await db('companies').where('id', req.companyId).first('license_id');
-            licenseId = comp ? comp.license_id : null;
+            // Prefer the selected company's license (typical case)…
+            if (req.companyId) {
+                const comp = await db('companies').where('id', req.companyId).first('license_id');
+                licenseId = comp ? comp.license_id : null;
+            }
+            // …else fall back to the caller's OWN license, so a license-admin with
+            // no company yet can still edit their Tally Sync settings.
+            if (!licenseId && req.user && req.user.license_id) {
+                licenseId = req.user.license_id;
+            }
             if (!licenseId) {
                 return R.errorResponse(res,
-                    'This company is not linked to a license, so sync settings cannot be changed here.', 422);
+                    'Your account is not linked to a license, so sync settings cannot be changed.', 422);
             }
         }
 
         await db.transaction(async (trx) => {
-            if (Object.keys(companyPatch).length > 0) {
+            // Profile + settings-bag writes are company-scoped: skip them when no
+            // company exists/selected (license-admin saving ONLY sync flags). The
+            // license write below still runs off licenseId.
+            if (req.companyId && Object.keys(companyPatch).length > 0) {
                 // timestamps(true,true) only defaults updated_at on INSERT — stamp
                 // it explicitly so an edit doesn't leave it stale.
                 await trx('companies')
@@ -194,7 +222,7 @@ async function update(req, res) {
                     .update({ ...licensePatch, updated_at: new Date() });
             }
 
-            if (hasSettings) {
+            if (hasSettings && req.companyId) {
                 const now = new Date();
                 for (const key of Object.keys(settingsClean)) {
                     // `value` is a jsonb column — encode explicitly so scalars

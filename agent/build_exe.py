@@ -203,6 +203,9 @@ def build(gui: bool = False) -> int:
             "--hidden-import", "servicemanager",
             "--hidden-import", "win32api",
             "--hidden-import", "win32con",
+            # win32security: needed by win_service.grant_service_control_to_users
+            # to add the no-UAC start/stop ACE to the service DACL at install.
+            "--hidden-import", "win32security",
             "--hidden-import", "pywintypes",
             "--hidden-import", "pythoncom",
         ]

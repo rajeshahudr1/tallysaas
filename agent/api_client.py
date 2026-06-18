@@ -219,6 +219,45 @@ class ApiClient:
         self.log.debug("Heartbeat ok (status=%s)", data.get("status"))
         return data
 
+    def go_offline(self, agent_token: str) -> bool:
+        """Tell the cloud the agent is stopping ON PURPOSE (graceful shutdown).
+
+        POSTs to ``{api_url}/agent/offline`` with the
+        ``Authorization: Bearer <agent_token>`` header so the cloud clears
+        ``licenses.last_seen_at`` and the dashboard flips to Disconnected
+        IMMEDIATELY (instead of waiting out the ~150s connected window).
+
+        BEST-EFFORT / NON-BLOCKING: a SHORT timeout is used and ANY failure
+        (transport / non-200 / odd body) is swallowed and turned into ``False``.
+        This NEVER raises — a graceful stop / uninstall must never hang or fail
+        because the cloud is unreachable. Returns ``True`` only when the cloud
+        accepted it (200 envelope).
+        """
+        if not agent_token:
+            return False
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        url = self._url("agent/offline")
+        try:
+            # A short, single-shot request (no retry/backoff): shutdown must be
+            # prompt, so we do not block on an unreachable cloud.
+            resp = self._session.post(url, json={}, headers=headers, timeout=5)
+        except requests.RequestException as exc:
+            self.log.debug("Go-offline transport error (ignored): %s", exc)
+            return False
+        except Exception as exc:  # never let shutdown signalling raise.
+            self.log.debug("Go-offline unexpected error (ignored): %s", exc)
+            return False
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            self.log.debug(
+                "Go-offline rejected (status=%s): %s",
+                body.get("status"), body.get("msg", "?"),
+            )
+            return False
+        self.log.info("Sent graceful go-offline to the cloud.")
+        return True
+
     def get_pending(self, agent_token: str) -> dict[str, Any]:
         """Fetch everything still needing a push to Tally for this license.
 

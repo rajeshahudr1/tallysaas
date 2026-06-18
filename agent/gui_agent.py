@@ -348,13 +348,15 @@ def _is_real_install_dir(install_dir: str) -> bool:
 
 
 def spawn_folder_cleanup(install_dir: str, elevated: bool = False) -> bool:
-    """Write + launch a DETACHED batch that deletes the whole install folder.
+    """Write + launch a DETACHED batch that removes the agent but KEEPS logs/.
 
     The running GUI exe lives INSIDE ``install_dir`` and cannot delete itself, so
     (mirroring the self-update swap) we drop a batch that: waits in a loop until
-    this exe is no longer locked (we are exiting), ``rmdir /s /q`` the folder, then
-    deletes itself. Launched DETACHED with no window so it survives our exit, and
-    from a TEMP copy so it is not sitting inside the folder it deletes.
+    this exe is no longer locked (we are exiting), deletes every file + subfolder
+    in the install dir EXCEPT ``logs/`` (so the activity logs survive the
+    uninstall for debugging), then deletes itself. Launched DETACHED with no
+    window so it survives our exit, and from a TEMP copy so it is not sitting
+    inside the folder it cleans.
 
     ``elevated`` -> launch the batch via ShellExecuteW(runas) (the folder is under
     a protected location like C:\\). Returns True if the batch was launched. Never
@@ -389,7 +391,11 @@ def spawn_folder_cleanup(install_dir: str, elevated: bool = False) -> bool:
         "goto waitloop",
         ":purge",
         "ping -n 2 127.0.0.1 >nul",
-        'rmdir /s /q "%DIR%" >nul 2>&1',
+        "rem Remove the agent itself (exe + config.ini + .status.json + any",
+        "rem service interop files) AND every subfolder EXCEPT logs/ - the user",
+        "rem wants the activity logs to survive an uninstall for debugging.",
+        'del /F /Q "%DIR%\\*.*" >nul 2>&1',
+        'for /d %%D in ("%DIR%\\*") do if /I not "%%~nxD"=="logs" rd /s /q "%%D" >nul 2>&1',
         'del /F /Q "%~f0" >nul 2>&1',
     ]
     try:
@@ -517,6 +523,27 @@ def service_state() -> Optional[str]:
         return svc.service_state()
     except Exception:
         return None
+
+
+def service_direct(verb: str) -> bool:
+    """Start/stop the service IN-PROCESS with NO elevation/UAC.
+
+    Works because the installer grants this account start/stop rights on the
+    service (win_service.grant_service_control_to_users). Returns True on
+    success; False if denied or unavailable, so the caller can fall back to the
+    elevated re-launch. Never raises.
+    """
+    svc = service_module()
+    if svc is None:
+        return False
+    try:
+        if verb == "start-service":
+            return svc.start_service() == 0
+        if verb == "stop-service":
+            return svc.stop_service() == 0
+    except Exception:
+        return False
+    return False
 
 
 def _control_target() -> str:
@@ -1481,13 +1508,28 @@ class DashboardView:
 
     # -- service control + status (Phase 2 G) ------------------------------ #
     def _service_action(self, verb: str, msg: str) -> None:
-        """Run an elevated service verb off-thread, then refresh status."""
-        self._activity("[..] " + msg + " (a UAC prompt may appear)")
+        """Control the service off-thread, then refresh status.
+
+        For start/stop we FIRST try IN-PROCESS (the installer granted this
+        account start/stop rights) - NO UAC, instant. Only if that is denied (an
+        older install without the grant) do we fall back to the elevated
+        re-launch. install/remove always elevate.
+        """
+        can_direct = verb in ("start-service", "stop-service")
+        self._activity("[..] " + msg
+                       + ("" if can_direct else " (a UAC prompt may appear)"))
 
         def worker():
             ok = False
             try:
-                ok = run_elevated_verb(verb, wait=True, timeout=60)
+                if can_direct and service_direct(verb):
+                    ok = True
+                else:
+                    if can_direct:
+                        # In-process denied -> fall back to an elevated re-launch.
+                        self.app.root.after(0, lambda: self._activity(
+                            "[..] Needs admin - a UAC prompt may appear..."))
+                    ok = run_elevated_verb(verb, wait=True, timeout=60)
             except Exception as exc:
                 self.logger.error("Service action %s failed: %s", verb, exc)
 
@@ -1842,23 +1884,24 @@ class DashboardView:
 
     def on_uninstall(self) -> None:
         """Fully uninstall: stop+remove the service, remove launcher + shortcuts,
-        AND delete the entire install folder (via a detached cleanup batch).
+        and delete the agent's files - but KEEP the logs/ folder (via a detached
+        cleanup batch).
 
         Best-effort throughout with clear messages. The service stop/remove needs
         admin (one UAC prompt via the elevated verb). The running exe lives INSIDE
-        the install folder, so it cannot delete the folder itself; instead a
-        DETACHED batch is dropped that waits for this process to exit, then
-        ``rmdir /s /q`` the whole folder and deletes itself. After spawning it we
-        close the GUI so the exe is released and the batch can finish the purge.
+        the install folder, so it cannot delete itself; instead a DETACHED batch
+        is dropped that waits for this process to exit, removes every file +
+        subfolder EXCEPT logs/, then deletes itself. After spawning it we close
+        the GUI so the exe is released and the batch can finish.
         """
         install_dir = app_dir()
         can_purge = _is_real_install_dir(install_dir)
         if can_purge:
             prompt = ("Uninstall Tally Cloud Sync?\n\nThis stops syncing, removes "
                       "the background service / auto-start launcher and shortcuts, "
-                      "and DELETES the entire install folder:\n\n  " + install_dir +
-                      "\n\nThis window will close so the folder can be removed. "
-                      "This cannot be undone.")
+                      "and deletes the agent's files from:\n\n  " + install_dir +
+                      "\n\nThe logs\\ folder is KEPT for your reference. This "
+                      "window will close to finish. This cannot be undone.")
         else:
             prompt = ("Uninstall Tally Cloud Sync?\n\nThis stops syncing and "
                       "removes the background service / auto-start launcher and "
@@ -1871,6 +1914,20 @@ class DashboardView:
         had_service = self.service_mode
 
         def worker():
+            # Best-effort GRACEFUL go-offline FIRST, so the cloud flips to
+            # Disconnected at once even if the service / loop was already stopped
+            # (a stopped service never sent its own offline signal). Fully
+            # non-blocking: a short timeout + swallowed errors mean an unreachable
+            # cloud never delays or blocks the uninstall.
+            try:
+                cfg = load_config_safe()
+                token = cfg.get_token()
+                if token:
+                    api = sync_agent.build_api(cfg, self.logger)
+                    api.go_offline(token)
+            except Exception as exc:
+                self.logger.debug("Uninstall go-offline failed (ignored): %s", exc)
+
             removed_service = False
             if had_service:
                 # Stop + remove the Windows service (elevated; one UAC prompt).
@@ -1949,12 +2006,13 @@ class DashboardView:
         except Exception as exc:
             self.logger.error("Folder cleanup spawn failed: %s", exc)
         if launched:
-            self._activity("[OK] Uninstalled. Closing now so the install folder "
-                           "can be deleted.")
+            self._activity("[OK] Uninstalled. Closing now so the agent files can "
+                           "be removed (logs\\ is kept).")
             messagebox.showinfo(
                 APP_TITLE,
-                "Tally Cloud Sync has been uninstalled. This window will now close "
-                "and the install folder will be removed in the background.")
+                "Tally Cloud Sync has been uninstalled. This window will now close; "
+                "the agent files are removed in the background and the logs\\ "
+                "folder is kept for your reference.")
             try:
                 self.app.root.after(200, self._force_quit)
             except Exception:

@@ -204,6 +204,10 @@ router.get('/config/options', authenticate, ConfigController.options);
 router.post('/agent/activate', validate(activateSchema), AgentController.activate);
 // Agent-token authenticated heartbeat (re-validates the license server-side).
 router.post('/agent/heartbeat', authenticateAgent, validate(heartbeatSchema), AgentController.heartbeat);
+// Graceful "going offline" signal — a clean agent stop (service stop / GUI Stop /
+// Uninstall) clears licenses.last_seen_at so the dashboard shows Disconnected
+// immediately instead of waiting out the ~150s connected window. Same agent auth.
+router.post('/agent/offline',   authenticateAgent, AgentController.offline);
 // Sync queue: pull everything still needing a push to Tally; report results back.
 router.get('/agent/pending',  authenticateAgent, AgentController.pending);
 router.post('/agent/result',  authenticateAgent, AgentController.result);
