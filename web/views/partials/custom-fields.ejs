@@ -1,0 +1,68 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/custom-fields.ejs — reusable Custom Fields editor.
+ * Dynamic key/value rows: ONE row by default + "Add More" to append
+ * + a per-row Remove button. Posts as cf_key[] / cf_val[] (paired by
+ * order) — the web route's assembleCustomFields() folds them to an object.
+ *
+ * Expected locals:
+ *   cf     object  — the parsed custom_fields bag (or {})
+ *   noun?  string  — "company" | "location" (label text); default "record"
+ * ─────────────────────────────────────────────────────────── */
+var _cfObj  = (typeof cf !== 'undefined' && cf && typeof cf === 'object') ? cf : {};
+var _rows   = Object.keys(_cfObj).map(function (k) { return { k: k, v: _cfObj[k] }; });
+if (!_rows.length) _rows = [{ k: '', v: '' }];   // always show at least one row
+var _noun   = (typeof noun !== 'undefined' && noun) ? noun : 'record';
+%>
+<p class="form-hint mb-3">Add custom <%= _noun %> fields (name + value). Blank rows are ignored.</p>
+
+<div id="cf-rows">
+    <% _rows.forEach(function (e) { %>
+        <div class="row g-3 align-items-end cf-row mb-2">
+            <div class="col">
+                <label class="form-label">Field Name</label>
+                <input type="text" class="form-control" name="cf_key" value="<%= e.k %>" placeholder="e.g. Branch Code">
+            </div>
+            <div class="col">
+                <label class="form-label">Value</label>
+                <input type="text" class="form-control" name="cf_val" value="<%= e.v %>" placeholder="Value">
+            </div>
+            <div class="col-auto">
+                <button type="button" class="btn btn-light cf-remove" title="Remove field" aria-label="Remove field">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+        </div>
+    <% }); %>
+</div>
+
+<button type="button" class="btn btn-light mt-2" id="cf-add">
+    <i class="fa-solid fa-plus me-1"></i>Add More
+</button>
+
+<script>
+(function () {
+    var rows = document.getElementById('cf-rows');
+    var add  = document.getElementById('cf-add');
+    if (!rows || !add) return;
+    add.addEventListener('click', function () {
+        var first = rows.querySelector('.cf-row');
+        var clone = first.cloneNode(true);
+        clone.querySelectorAll('input').forEach(function (i) { i.value = ''; });
+        rows.appendChild(clone);
+        var fn = clone.querySelector('input');
+        if (fn) fn.focus();
+    });
+    rows.addEventListener('click', function (e) {
+        var btn = e.target.closest('.cf-remove');
+        if (!btn) return;
+        var all = rows.querySelectorAll('.cf-row');
+        if (all.length > 1) {
+            btn.closest('.cf-row').remove();
+        } else {
+            // Keep one row — just clear it.
+            btn.closest('.cf-row').querySelectorAll('input').forEach(function (i) { i.value = ''; });
+        }
+    });
+})();
+</script>

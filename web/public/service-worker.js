@@ -16,7 +16,7 @@
  * Bump CACHE_VERSION to invalidate the old precache on deploy.
  * ─────────────────────────────────────────────────────────── */
 
-const CACHE_VERSION = 'tallysync-v4';
+const CACHE_VERSION = 'tallysync-v5';
 
 // Core shell assets worth precaching (all same-origin / CDN-independent).
 const PRECACHE = [
@@ -63,17 +63,16 @@ self.addEventListener('fetch', (event) => {
     const url = new URL(req.url);
     const sameOrigin = url.origin === self.location.origin;
 
-    // Navigations (page loads) → network-first with offline fallback.
+    // Navigations (page loads) → NETWORK-ONLY, NEVER cached. The app is
+    // session-driven and pages change constantly (edits, uploads, syncs); a
+    // cached HTML page is the "I changed it but the old page still shows" bug.
+    // We do NOT cachePut here, so a rendered page is never stored. Offline falls
+    // back only to a previously cached shell (best-effort).
     if (req.mode === 'navigate') {
         event.respondWith(
-            fetch(req)
-                .then((res) => {
-                    cachePut(req, res.clone());
-                    return res;
-                })
-                .catch(() =>
-                    caches.match(req).then((hit) => hit || caches.match('/'))
-                )
+            fetch(req).catch(() =>
+                caches.match(req).then((hit) => hit || caches.match('/'))
+            )
         );
         return;
     }

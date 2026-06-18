@@ -51,7 +51,7 @@ var tableColumns = [
     { key: 'created_at',     label: 'Created At',     sortable: true, type: 'date'  },
 ];
 
-var sortOptions = ['Created At', 'Company Name', 'Status', 'Financial Year'];
+var sortOptions = ['Created At', 'Company Name', 'GST No.', 'PAN No.', 'Mobile', 'Email', 'Financial Year', 'Status'];
 %>
 
 <%- include('../partials/page-head', {
@@ -61,18 +61,18 @@ var sortOptions = ['Created At', 'Company Name', 'Status', 'Financial Year'];
         { label: 'Companies' },
     ],
     actions: [
-        { label: 'Export',      icon: 'fa-upload', variant: 'light' },
+        { label: 'Export',      icon: 'fa-upload', variant: 'light', href: '/companies/export' },
         { label: 'Add Company', icon: 'fa-plus',   gradient: true, href: '/companies/add' },
     ],
 }) %>
 
-<!-- ── Advanced Filters (expanded) ─────────────────────────────── -->
+<!-- ── Advanced Filters (collapsed by default on load) ──────────── -->
 <form id="company-filters-form" autocomplete="off" method="get" action="/companies">
     <%- include('../partials/filter-card', {
         filterId: 'company-filters',
         title: 'Advanced Filters',
         fields: filterFields,
-        collapsed: false,
+        collapsed: true,
     }) %>
 </form>
 
@@ -90,27 +90,19 @@ var sortOptions = ['Created At', 'Company Name', 'Status', 'Financial Year'];
             </select>
             <span>entries</span>
         </label>
-
-        <div class="toolbar-sort">
-            <span>Sort By</span>
-            <select class="form-select form-select-sm" aria-label="Sort by column">
-                <% sortOptions.forEach(function (label) { %>
-                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
-                <% }); %>
-            </select>
-            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
-                <i class="fa-solid fa-arrow-down-short-wide"></i>
-            </button>
-        </div>
+        <!-- Sorting is done by clicking the table column headers. -->
     </div>
 
     <%- include('../partials/table', {
         tableId: 'companies-table',
+        basePath: '/companies',
+        sortKeys: ['name', 'gst', 'pan', 'mobile', 'email', 'financial_year', 'status', 'created_at'],
         columns: tableColumns,
         rows: _rows,
         selectable: true,
         showIndex: true,
         actions: ['view', 'edit', 'delete'],
+        editable: true,
     }) %>
 
     <%- include('../partials/pagination', {

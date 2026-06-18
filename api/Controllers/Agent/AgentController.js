@@ -632,15 +632,30 @@ async function importFromTally(req, res) {
         if (cm && typeof cm === 'object' && cid) {
             try {
                 const comp = await db('companies').where('id', cid)
-                    .first('email', 'mobile', 'gst_number', 'pan_number', 'address', 'financial_year');
+                    .first('email', 'mobile', 'phone', 'gst_number', 'pan_number', 'address',
+                           'mailing_name', 'state', 'country', 'pincode', 'books_from', 'financial_year');
                 const patch = {};
-                if (cm.email && !comp.email)        patch.email = String(cm.email);
-                if (cm.phone && !comp.mobile)       patch.mobile = String(cm.phone);
-                if (cm.gstin && !comp.gst_number)   patch.gst_number = String(cm.gstin);
-                if (cm.pan && !comp.pan_number)     patch.pan_number = String(cm.pan);
-                if (cm.books_from && !comp.financial_year) patch.financial_year = String(cm.books_from);
-                if (!comp.address && (cm.address || cm.state || cm.pincode)) {
-                    patch.address = [cm.address, cm.state, cm.pincode, cm.country].filter(Boolean).join(', ');
+                // Mirror Tally EXACTLY — each field in its own column (no combining),
+                // fill-empty only so manual edits + both-side sync are preserved.
+                if (cm.email && !comp.email)               patch.email = String(cm.email);
+                if (cm.mobile && !comp.mobile)             patch.mobile = String(cm.mobile);
+                if (cm.phone && !comp.phone)               patch.phone = String(cm.phone);
+                if (cm.gstin && !comp.gst_number)          patch.gst_number = String(cm.gstin);
+                if (cm.pan && !comp.pan_number)            patch.pan_number = String(cm.pan);
+                if (cm.mailing_name && !comp.mailing_name) patch.mailing_name = String(cm.mailing_name);
+                if (cm.state && !comp.state)               patch.state = String(cm.state);
+                if (cm.country && !comp.country)           patch.country = String(cm.country);
+                if (cm.pincode && !comp.pincode)           patch.pincode = String(cm.pincode);
+                if (cm.address && !comp.address)           patch.address = String(cm.address);
+                if (cm.books_from && !comp.books_from)     patch.books_from = String(cm.books_from);
+                // Derive the "YYYY-YYYY" FY label from the books-from date (Apr–Mar).
+                if (cm.books_from && !comp.financial_year) {
+                    const m = String(cm.books_from).match(/^(\d{4})-(\d{2})/);
+                    if (m) {
+                        const y = Number(m[1]), mo = Number(m[2]);
+                        const start = mo >= 4 ? y : y - 1;
+                        patch.financial_year = `${start}-${start + 1}`;
+                    }
                 }
                 if (Object.keys(patch).length) {
                     patch.updated_at = now;

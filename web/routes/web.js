@@ -558,11 +558,37 @@ router.get('/companies', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/companies');
         const config = await fetchConfig(req, ['financial_years']);
-        const companyRows = rows.map((r) => ({
-            id: r.id, name: r.name, gst: r.gst_number || '', pan: r.pan_number || '',
-            mobile: r.mobile || '', email: r.email || '', financial_year: r.financial_year || '',
-            status: r.status, created_at: fmtDate(r.created_at),
-        }));
+        const companyRows = rows.map((r) => {
+            let cf = {};
+            try { cf = (typeof r.custom_fields === 'string') ? JSON.parse(r.custom_fields || '{}') : (r.custom_fields || {}); } catch (_) { cf = {}; }
+            const cfRows = Object.keys(cf).map((k) => ({ label: k, value: String(cf[k] || '—') }));
+            return {
+                id: r.id, name: r.name, gst: r.gst_number || '', pan: r.pan_number || '',
+                mobile: r.mobile || '', email: r.email || '', financial_year: r.financial_year || '',
+                status: r.status, created_at: fmtDate(r.created_at),
+                // Full tab-wise detail for the View popup (every field, grouped by tab).
+                _detail: [
+                    { group: 'Basic Information' },
+                    { label: 'Company Name', value: r.name || '—' },
+                    { label: 'Mailing Name', value: r.mailing_name || '—' },
+                    { label: 'Email', value: r.email || '—' },
+                    { label: 'Mobile', value: r.mobile || '—' },
+                    { label: 'Phone', value: r.phone || '—' },
+                    { label: 'Status', value: r.status || '—' },
+                    { group: 'Address' },
+                    { label: 'Street Address', value: r.address || '—' },
+                    { label: 'State', value: r.state || '—' },
+                    { label: 'Pincode', value: r.pincode || '—' },
+                    { label: 'Country', value: r.country || '—' },
+                    { group: 'Tax & Statutory' },
+                    { label: 'GST Number', value: r.gst_number || '—' },
+                    { label: 'PAN Number', value: r.pan_number || '—' },
+                    { group: 'Financial Year' },
+                    { label: 'Financial Year', value: r.financial_year || '—' },
+                    { label: 'Books Beginning From', value: r.books_from || '—' },
+                ].concat(cfRows.length ? [{ group: 'Custom Fields' }].concat(cfRows) : []),
+            };
+        });
         res.render('companies/list', {
             title: 'Companies',
             activeMenu: 'companies',
@@ -623,15 +649,177 @@ router.get('/companies/add', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* Assemble Custom Fields (key/value form rows: cf_key[] + cf_val[]) -> object. */
+function assembleCustomFields(b) {
+    const keys = [].concat(b.cf_key || []);
+    const vals = [].concat(b.cf_val || []);
+    const out = {};
+    keys.forEach((k, i) => {
+        const kk = String(k || '').trim();
+        if (kk) out[kk] = String(vals[i] || '');
+    });
+    return out;
+}
+
+/* ── CSV export helpers ──────────────────────────────────────────
+ * Build a CSV (all columns, not just the visible table) for the page-head
+ * Export links. Logo is exported as a FULL URL path, custom fields flattened. */
+function csvEscape(v) {
+    v = String(v == null ? '' : v).replace(/\r?\n/g, ' ').trim();
+    if (/[",]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
+    return v;
+}
+function rowsToCsv(headers, records, mapFn) {
+    const lines = [headers.map(csvEscape).join(',')];
+    records.forEach((r) => { lines.push(mapFn(r).map(csvEscape).join(',')); });
+    return lines.join('\r\n');
+}
+function cfFlat(raw) {
+    let cf = {};
+    try { cf = (typeof raw === 'string') ? JSON.parse(raw || '{}') : (raw || {}); } catch (_) { cf = {}; }
+    return Object.keys(cf).map((k) => `${k}=${cf[k]}`).join('; ');
+}
+function fullLogoUrl(req, logo) {
+    if (!logo) return '';
+    if (/^https?:/i.test(logo)) return logo;
+    return `${req.protocol}://${req.get('host')}${logo.charAt(0) === '/' ? '' : '/'}${logo}`;
+}
+function sendCsv(res, filename, csv) {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send('﻿' + csv);   // BOM so Excel reads UTF-8 / ₹ correctly
+}
+
+/* ── MASTERS · Export Companies (GET /companies/export) ─── all columns ── */
+router.get('/companies/export', async (req, res, next) => {
+    try {
+        const result = await api.get(req, '/companies?per_page=100&page=1');
+        const records = (result.body && result.body.data && result.body.data.data) || [];
+        const headers = ['Name', 'Mailing Name', 'Email', 'Mobile', 'Phone', 'GST Number',
+            'PAN Number', 'Street Address', 'State', 'Pincode', 'Country', 'Financial Year',
+            'Books From', 'Status', 'Logo URL', 'Custom Fields', 'Created At'];
+        const csv = rowsToCsv(headers, records, (r) => [
+            r.name, r.mailing_name, r.email, r.mobile, r.phone, r.gst_number,
+            r.pan_number, r.address, r.state, r.pincode, r.country, r.financial_year,
+            r.books_from, r.status, fullLogoUrl(req, r.logo), cfFlat(r.custom_fields), r.created_at,
+        ]);
+        return sendCsv(res, 'companies.csv', csv);
+    } catch (err) { next(err); }
+});
+
+/* ── MASTERS · Export Locations (GET /locations/export) ── all columns ── */
+router.get('/locations/export', async (req, res, next) => {
+    try {
+        const result = await api.get(req, '/locations?per_page=100&page=1');
+        const records = (result.body && result.body.data && result.body.data.data) || [];
+        const headers = ['Name', 'Code', 'City', 'State', 'Pincode', 'Mobile', 'Manager',
+            'Is Tally Godown', 'Status', 'Custom Fields', 'Created At'];
+        const csv = rowsToCsv(headers, records, (r) => [
+            r.name, r.code, r.city, r.state, r.pincode, r.mobile, r.manager,
+            (r.is_tally_godown ? 'Yes' : 'No'), r.status, cfFlat(r.custom_fields), r.created_at,
+        ]);
+        return sendCsv(res, 'locations.csv', csv);
+    } catch (err) { next(err); }
+});
+
+/* ── MASTERS · Edit Company (GET /companies/:id/edit) ───────── */
+router.get('/companies/:id/edit', async (req, res, next) => {
+    try {
+        const { body } = await api.get(req, `/companies/${req.params.id}`);
+        const company = (body && body.data) || null;
+        if (!company) { setFlash(req, 'error', 'Company not found.'); return req.session.save(() => res.redirect('/companies')); }
+        const config = await fetchConfig(req, ['financial_years']);
+        res.render('companies/form', {
+            title: 'Edit Company',
+            activeMenu: 'companies',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Companies', href: '/companies' },
+                { label: 'Edit Company' },
+            ],
+            company, editId: company.id,
+            ...config,
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── MASTERS · Update Company (POST /companies/:id) ─────────── */
+router.post('/companies/:id', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const payload = {
+            name: b.name, mobile: b.mobile || null, phone: b.phone || null, email: b.email || null,
+            gst_number: b.gst_number || null, pan_number: b.pan_number || null,
+            mailing_name: b.mailing_name || null, state: b.state || null,
+            country: b.country || null, pincode: b.pincode || null,
+            financial_year: b.financial_year || null, books_from: b.books_from || null,
+            address: b.address || null, status: b.status || 'Active',
+            custom_fields: assembleCustomFields(b),
+        };
+        const result = await api.put(req, `/companies/${req.params.id}`, payload);
+        if (apiOk(result)) {
+            try {
+                const mc = await api.get(req, '/my-companies');
+                if (mc.body && mc.body.data && Array.isArray(mc.body.data.data)) {
+                    req.session.companies = mc.body.data.data.map((c) => ({ id: c.id, name: c.name }));
+                }
+            } catch (_) { /* non-fatal */ }
+            setFlash(req, 'success', 'Company updated successfully.');
+            return req.session.save(() => res.redirect('/companies'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not update the company.'));
+        return req.session.save(() => res.redirect(`/companies/${req.params.id}/edit`));
+    } catch (err) { next(err); }
+});
+
+/* ── MASTERS · Delete Company (POST /companies/:id/delete) ──── */
+router.post('/companies/:id/delete', async (req, res, next) => {
+    try {
+        const result = await api.del(req, `/companies/${req.params.id}`);
+        if (apiOk(result)) {
+            try {
+                const mc = await api.get(req, '/my-companies');
+                if (mc.body && mc.body.data && Array.isArray(mc.body.data.data)) {
+                    req.session.companies = mc.body.data.data.map((c) => ({ id: c.id, name: c.name }));
+                }
+            } catch (_) { /* non-fatal */ }
+            setFlash(req, 'success', 'Company deleted.');
+        } else {
+            setFlash(req, 'error', apiError(result, 'Could not delete the company.'));
+        }
+        return req.session.save(() => res.redirect('/companies'));
+    } catch (err) { next(err); }
+});
+
 /* ── MASTERS · Locations listing (GET /locations) ───────────── */
 router.get('/locations', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/locations');
-        const locationRows = rows.map((r) => ({
-            id: r.id, name: r.name, code: r.code, city: r.city, state: r.state,
-            mobile: r.mobile, manager: r.manager, customers: r.customers || '',
-            status: r.status, created_at: fmtDate(r.created_at),
-        }));
+        const locationRows = rows.map((r) => {
+            let cf = {};
+            try { cf = (typeof r.custom_fields === 'string') ? JSON.parse(r.custom_fields || '{}') : (r.custom_fields || {}); } catch (_) { cf = {}; }
+            const cfRows = Object.keys(cf).map((k) => ({ label: k, value: String(cf[k] || '—') }));
+            return {
+                id: r.id, name: r.name, code: r.code, city: r.city, state: r.state,
+                mobile: r.mobile, manager: r.manager, customers: r.customers || '',
+                status: r.status, created_at: fmtDate(r.created_at),
+                // Full tab-wise detail for the View popup.
+                _detail: [
+                    { group: 'Basic Information' },
+                    { label: 'Location Name', value: r.name || '—' },
+                    { label: 'Location Code', value: r.code || '—' },
+                    { label: 'Status', value: r.status || '—' },
+                    { label: 'Is Tally Godown', value: r.is_tally_godown ? 'Yes' : 'No' },
+                    { group: 'Address' },
+                    { label: 'City', value: r.city || '—' },
+                    { label: 'State', value: r.state || '—' },
+                    { label: 'Pincode', value: r.pincode || '—' },
+                    { group: 'Contact & Manager' },
+                    { label: 'Mobile', value: r.mobile || '—' },
+                    { label: 'Manager / In-charge', value: r.manager || '—' },
+                ].concat(cfRows.length ? [{ group: 'Custom Fields' }].concat(cfRows) : []),
+            };
+        });
         res.render('locations/list', {
             title: 'Locations',
             activeMenu: 'locations',
@@ -668,6 +856,7 @@ router.post('/locations', async (req, res, next) => {
             state: b.state || undefined, pincode: b.pincode || undefined,
             mobile: b.mobile || undefined, manager: b.manager || undefined,
             status: b.status || 'Active', is_tally_godown: asBool(b.is_tally_godown),
+            custom_fields: assembleCustomFields(b),
         };
         const result = await api.post(req, '/locations', payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Location created successfully.'); return req.session.save(() => res.redirect('/locations')); }
@@ -2825,6 +3014,7 @@ router.post('/locations/:id', async (req, res, next) => {
             name: b.name, code: b.code || undefined, city: b.city || undefined, state: b.state || undefined,
             pincode: b.pincode || undefined, mobile: b.mobile || undefined, manager: b.manager || undefined,
             status: b.status || 'Active', is_tally_godown: asBool(b.is_tally_godown),
+            custom_fields: assembleCustomFields(b),
         };
         const result = await api.put(req, `/locations/${id}`, payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Location updated successfully.'); return req.session.save(() => res.redirect('/locations')); }

@@ -178,8 +178,10 @@ function _alignClass(col) {
                             var _cv = row[_columns[_ci].key];
                             if (_cv !== undefined && _cv !== null && String(_cv).trim() !== '') { _label = String(_cv); break; }
                         }
-                        // Details payload (label/value pairs) for the View popup.
-                        var _details = _columns.map(function (c) {
+                        // Details payload for the View popup. A row may supply its own
+                        // `_detail` array (tab-wise groups + ALL fields) — use it when
+                        // present; otherwise fall back to the visible columns.
+                        var _details = Array.isArray(row._detail) ? row._detail : _columns.map(function (c) {
                             var v = row[c.key];
                             if (c.type === 'currency') v = _inr(v);
                             else if (Array.isArray(v)) v = v.join(', ');

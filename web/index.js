@@ -93,6 +93,23 @@ app.use(express.static(path.join(__dirname, 'public'), {
     },
 }));
 
+/* ── NO PAGE CACHE ───────────────────────────────────────────────
+ * The app is SESSION-driven and data changes constantly (edits, uploads,
+ * syncs). Every navigation/page must reflect the latest data + UI immediately,
+ * so we send no-store on every rendered HTML response (NOT static assets, which
+ * are served above). This kills the "I changed it but the old page still shows"
+ * class of problems (e.g. a stale Edit button / list). ─────────── */
+app.use((req, res, next) => {
+    if (req.method === 'GET'
+        && !/\.(css|js|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|eot|webmanifest|map)(\?|$)/i.test(req.path)) {
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+        res.set('Surrogate-Control', 'no-store');
+    }
+    next();
+});
+
 /* ── Form bodies + session ──────────────────────────────────────
  * urlencoded parses the login form POST; express-session holds the JWT
  * + signed-in user after login (see Controllers/AuthController.js).

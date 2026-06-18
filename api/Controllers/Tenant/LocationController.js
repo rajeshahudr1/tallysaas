@@ -37,6 +37,9 @@ const SEARCH_COLS = [
     'locations.code',
     'locations.city',
     'locations.state',
+    'locations.pincode',
+    'locations.mobile',
+    'locations.manager',
 ];
 
 /**
@@ -59,13 +62,15 @@ function buildInsert(body) {
         manager:         body.manager,
         status:          body.status,
         is_tally_godown: body.is_tally_godown,
+        custom_fields: (body.custom_fields && typeof body.custom_fields === 'object')
+            ? JSON.stringify(body.custom_fields) : undefined,
     };
 }
 
 // Updatable columns — the keys buildUpdate may patch.
 const UPDATABLE = [
     'name', 'code', 'city', 'state', 'pincode',
-    'mobile', 'manager', 'status', 'is_tally_godown',
+    'mobile', 'manager', 'status', 'is_tally_godown', 'custom_fields',
 ];
 
 /**
@@ -80,6 +85,10 @@ function buildUpdate(body) {
             patch[key] = body[key];
         }
     }
+    // JSONB column wants a string, not a JS object.
+    if (patch.custom_fields && typeof patch.custom_fields === 'object') {
+        patch.custom_fields = JSON.stringify(patch.custom_fields);
+    }
     return patch;
 }
 
@@ -91,6 +100,14 @@ const controller = crud.build({
     listColumns: LIST_COLUMNS,
     listOrder:   [['locations.id', 'desc']],
     searchCols:  SEARCH_COLS,
+    // Extra sortable UI keys (name/status/created_at are sortable everywhere).
+    sortable: {
+        code:    'locations.code',
+        city:    'locations.city',
+        state:   'locations.state',
+        mobile:  'locations.mobile',
+        manager: 'locations.manager',
+    },
     buildInsert,
     buildUpdate,
 });

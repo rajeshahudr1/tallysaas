@@ -709,6 +709,21 @@ router.post(
     validate(createCompanySchema),
     TenantCompanyController.create,
 );
+router.get(
+    '/companies/:id',
+    authenticate, resolveCompany, resolveLocation, can('companies', 'view'),
+    TenantCompanyController.get,
+);
+router.put(
+    '/companies/:id',
+    authenticate, resolveCompany, resolveLocation, can('companies', 'edit'),
+    TenantCompanyController.update,
+);
+router.delete(
+    '/companies/:id',
+    authenticate, resolveCompany, resolveLocation, can('companies', 'delete'),
+    TenantCompanyController.destroy,
+);
 
 // Dashboard summary — counts + charts + recent activity.
 router.get(

@@ -121,6 +121,15 @@
                 if (body) {
                     body.textContent = '';
                     rec.forEach(function (r) {
+                        // A {group:'…'} entry renders a tab-wise section header.
+                        if (r && r.group) {
+                            var h = document.createElement('div');
+                            h.className = 'record-detail-group';
+                            h.textContent = r.group;
+                            h.style.cssText = 'font-weight:600;margin:14px 0 6px;color:#2563eb;border-bottom:1px solid #e5e7eb;padding-bottom:4px;';
+                            body.appendChild(h);
+                            return;
+                        }
                         var rowEl = document.createElement('div'); rowEl.className = 'record-detail-row';
                         var dt = document.createElement('dt'); dt.textContent = r.label;
                         var dd = document.createElement('dd'); dd.textContent = r.value;

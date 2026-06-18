@@ -1,18 +1,21 @@
 <%
 /* ─────────────────────────────────────────────────────────────
- * views/locations/form.ejs — MASTERS · Add Location.
- * Route: GET /locations/add  ·  activeMenu: 'locations'.
+ * views/locations/form.ejs — MASTERS · Add / Edit Location.
+ * Routes: GET /locations/add (create) · GET /locations/:id/edit (edit).
  *
- * Same shell as the other add forms: page-head (Back + Save split
- * button) + form-card tab nav + page-owned .tab-content. Basic
- * Information is fully built; other tabs are styled placeholders.
+ * Every tab maps to a REAL editable column on the `locations` table
+ * (name, code, city, state, pincode, mobile, manager, status,
+ * is_tally_godown, custom_fields). Fields with no backing column
+ * (email, notes, free-text address) were removed; the old "coming next
+ * phase" placeholder tabs are gone — each tab now holds real inputs.
  *
  * Expected locals (routes/web.js → res.render):
  *   states        [ 'Gujarat', … ]      — State select options
  *   salesPersons  [ 'Rajesh Kumar', … ] — Manager (in-charge) options
+ *   record        the row being edited (edit mode)      — optional
  * ─────────────────────────────────────────────────────────── */
 
-var _rec   = (typeof record !== 'undefined' && record) ? record : null;
+var _rec    = (typeof record !== 'undefined' && record) ? record : null;
 var _isEdit = !!_rec;
 function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }   // scalar prefill helper
 
@@ -25,7 +28,6 @@ var formTabs = [
     { id: 'contact', label: 'Contact & Manager', icon: 'fa-headset'                        },
     { id: 'custom',  label: 'Custom Fields',     icon: 'fa-table-cells'                    },
 ];
-var placeholderPanes = formTabs.filter(function (t) { return t.id !== 'basic'; });
 
 function _selOpts(placeholder, list, selVal) {
     var phSel = (selVal == null || String(selVal) === '') ? ' selected' : '';
@@ -37,25 +39,18 @@ function _selOpts(placeholder, list, selVal) {
     return html;
 }
 
+/* Custom Fields bag → key/value rows. */
+var _cf = {};
+try { var _raw = _rec ? _rec.custom_fields : null; _cf = (typeof _raw === 'string') ? JSON.parse(_raw || '{}') : (_raw || {}); } catch (e) { _cf = {}; }
+var _cfKeys = Object.keys(_cf);
+
 var headActions =
     '<a class="btn btn-light" href="/locations">' +
         '<i class="fa-solid fa-arrow-left me-1"></i>Back to Locations' +
     '</a>' +
-    '<div class="btn-group">' +
-        '<button type="submit" form="location-form" class="btn btn-primary">' +
-            '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Location' +
-        '</button>' +
-        '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
-                'data-bs-toggle="dropdown" aria-expanded="false">' +
-            '<span class="visually-hidden">Toggle save options</span>' +
-        '</button>' +
-        '<ul class="dropdown-menu dropdown-menu-end">' +
-            '<li><button type="submit" form="location-form" class="dropdown-item">' +
-                '<i class="fa-solid fa-floppy-disk me-2 text-muted"></i>Save</button></li>' +
-            '<li><button type="submit" form="location-form" class="dropdown-item">' +
-                '<i class="fa-solid fa-plus me-2 text-muted"></i>Save &amp; Add Another</button></li>' +
-        '</ul>' +
-    '</div>';
+    '<button type="submit" form="location-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Location' +
+    '</button>';
 %>
 
 <%- include('../partials/page-head', {
@@ -74,82 +69,25 @@ var headActions =
 
     <div class="tab-content form-card-body">
 
-        <!-- ════ PANE 1 — Basic Information (active) ════ -->
+        <!-- ════ Basic Information ════ -->
         <div class="tab-pane fade show active" id="basic" role="tabpanel" aria-labelledby="basic-tab">
-
             <div class="form-grid">
-
-                <!-- Row 1: Location Name* · Location Code* · Manager -->
                 <div class="form-group">
                     <label class="form-label" for="loc-name">Location Name<span class="req">*</span></label>
                     <input type="text" class="form-control" id="loc-name" name="name"
                            placeholder="e.g. Ahmedabad" value="<%= _v('name') %>" required>
                 </div>
-
                 <div class="form-group">
-                    <label class="form-label" for="loc-code">Location Code<span class="req">*</span></label>
+                    <label class="form-label" for="loc-code">Location Code</label>
                     <input type="text" class="form-control text-uppercase" id="loc-code" name="code"
-                           placeholder="e.g. AHM" maxlength="10" value="<%= _v('code') %>" required>
+                           placeholder="e.g. AHM" maxlength="50" value="<%= _v('code') %>">
                 </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="loc-manager">Manager / In-charge</label>
-                    <select class="form-select" id="loc-manager" name="manager">
-                        <%- _selOpts('Select manager', _salesPersons, _v('manager')) %>
-                    </select>
-                </div>
-
-                <!-- Row 2: City · State · Pincode -->
-                <div class="form-group">
-                    <label class="form-label" for="loc-city">City</label>
-                    <input type="text" class="form-control" id="loc-city" name="city" placeholder="Enter city" value="<%= _v('city') %>">
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="loc-state">State</label>
-                    <select class="form-select" id="loc-state" name="state">
-                        <%- _selOpts('Select state', _states, _v('state')) %>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="loc-pincode">Pincode</label>
-                    <input type="text" class="form-control" id="loc-pincode" name="pincode"
-                           placeholder="380001" inputmode="numeric" maxlength="6" value="<%= _v('pincode') %>">
-                </div>
-
-                <!-- Row 3: Mobile (+91) · Email -->
-                <div class="form-group">
-                    <label class="form-label" for="loc-mobile">Mobile Number</label>
-                    <div class="input-affix">
-                        <select class="affix affix--prefix" name="mobile_cc" aria-label="Country code">
-                            <option value="+91" selected>🇮🇳 +91</option>
-                            <option value="+1">🇺🇸 +1</option>
-                            <option value="+44">🇬🇧 +44</option>
-                            <option value="+971">🇦🇪 +971</option>
-                        </select>
-                        <input type="tel" class="form-control" id="loc-mobile" name="mobile"
-                               placeholder="98765 43210" inputmode="numeric" maxlength="10" value="<%= _v('mobile') %>">
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="loc-email">Email</label>
-                    <div class="input-affix">
-                        <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
-                        <input type="email" class="form-control" id="loc-email" name="email"
-                               placeholder="name@company.com">
-                    </div>
-                </div>
-
-            </div><!-- /.form-grid -->
+            </div>
 
             <hr class="form-divider">
 
-            <!-- Status radios · Is-Tally-Godown toggle · Tally Sync mini-card -->
             <div class="row g-4 align-items-start">
-
-                <div class="col-12 col-md-5">
+                <div class="col-12 col-md-6">
                     <label class="form-label d-block">Status<span class="req">*</span></label>
                     <div class="status-radios">
                         <label class="status-radio is-active">
@@ -166,8 +104,7 @@ var headActions =
                         </label>
                     </div>
                 </div>
-
-                <div class="col-12 col-md-3">
+                <div class="col-12 col-md-6">
                     <label class="form-label d-block">Is Tally Godown</label>
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" role="switch"
@@ -176,57 +113,55 @@ var headActions =
                     </div>
                     <div class="form-hint">Syncs this location to Tally as a godown for location-wise stock.</div>
                 </div>
-
-                <div class="col-12 col-md-4">
-                    <div class="sync-mini-card">
-                        <div>
-                            <div class="sync-mini-label">Tally Sync Status</div>
-                            <div class="sync-mini-value">Not Synced</div>
-                        </div>
-                        <button type="button" class="btn-sync-now" id="loc-sync-now">
-                            <i class="fa-solid fa-rotate me-1"></i>Sync Now
-                        </button>
-                    </div>
-                </div>
-
-            </div><!-- /.row -->
-
-            <hr class="form-divider">
-
-            <!-- Address + Notes -->
-            <h2 class="form-section-title">Address</h2>
-            <div class="row g-4">
-                <div class="col-12 col-md-6">
-                    <label class="form-label" for="loc-address">Full Address</label>
-                    <textarea class="form-control" id="loc-address" name="address"
-                              rows="4" maxlength="300" placeholder="Building, street, area…"
-                              data-counter="loc-address-count"></textarea>
-                    <div class="char-counter"><span id="loc-address-count">0/300</span></div>
-                </div>
-
-                <div class="col-12 col-md-6">
-                    <label class="form-label" for="loc-notes">Notes</label>
-                    <textarea class="form-control" id="loc-notes" name="notes"
-                              rows="4" maxlength="300" placeholder="Any notes about this location…"
-                              data-counter="loc-notes-count"></textarea>
-                    <div class="char-counter"><span id="loc-notes-count">0/300</span></div>
-                </div>
-            </div><!-- /.row -->
-
+            </div>
         </div><!-- /#basic -->
 
-        <%
-        placeholderPanes.forEach(function (pane) { %>
-            <div class="tab-pane fade" id="<%= pane.id %>" role="tabpanel" aria-labelledby="<%= pane.id %>-tab">
-                <div class="tab-placeholder">
-                    <div class="tab-placeholder-icon">
-                        <i class="fa-solid <%= pane.icon %>"></i>
-                    </div>
-                    <div class="tab-placeholder-title"><%= pane.label %></div>
-                    <p class="mb-0">This section is coming in the next phase.</p>
+        <!-- ════ Address ════ -->
+        <div class="tab-pane fade" id="address" role="tabpanel" aria-labelledby="address-tab">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="loc-city">City</label>
+                    <input type="text" class="form-control" id="loc-city" name="city"
+                           placeholder="Enter city" value="<%= _v('city') %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="loc-state">State</label>
+                    <select class="form-select" id="loc-state" name="state">
+                        <%- _selOpts('Select state', _states, _v('state')) %>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="loc-pincode">Pincode</label>
+                    <input type="text" class="form-control" id="loc-pincode" name="pincode"
+                           placeholder="380001" inputmode="numeric" maxlength="12" value="<%= _v('pincode') %>">
                 </div>
             </div>
-        <% }); %>
+        </div><!-- /#address -->
+
+        <!-- ════ Contact & Manager ════ -->
+        <div class="tab-pane fade" id="contact" role="tabpanel" aria-labelledby="contact-tab">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="loc-mobile">Mobile Number</label>
+                    <div class="input-affix">
+                        <span class="affix affix--prefix"><i class="fa-solid fa-mobile-screen"></i></span>
+                        <input type="tel" class="form-control" id="loc-mobile" name="mobile"
+                               placeholder="98765 43210" maxlength="30" value="<%= _v('mobile') %>">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="loc-manager">Manager / In-charge</label>
+                    <select class="form-select" id="loc-manager" name="manager">
+                        <%- _selOpts('Select manager', _salesPersons, _v('manager')) %>
+                    </select>
+                </div>
+            </div>
+        </div><!-- /#contact -->
+
+        <!-- ════ Custom Fields (dynamic key/value editor) ════ -->
+        <div class="tab-pane fade" id="custom" role="tabpanel" aria-labelledby="custom-tab">
+            <%- include('../partials/custom-fields', { cf: _cf, noun: 'location' }) %>
+        </div><!-- /#custom -->
 
     </div><!-- /.tab-content -->
 

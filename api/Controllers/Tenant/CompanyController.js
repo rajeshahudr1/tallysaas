@@ -51,18 +51,35 @@ async function list(req, res) {
         if (req.query.search) {
             const like = `%${String(req.query.search).trim()}%`;
             base = base.where((b) => {
-                b.where('companies.name', 'ilike', like)
-                    .orWhere('companies.email', 'ilike', like)
-                    .orWhere('companies.gst_number', 'ilike', like);
+                // Search across EVERY user-facing column (not just name/email/gst).
+                for (const col of ['name', 'mailing_name', 'email', 'mobile', 'phone',
+                    'gst_number', 'pan_number', 'state', 'country', 'pincode',
+                    'address', 'financial_year']) {
+                    b.orWhere(`companies.${col}`, 'ilike', like);
+                }
             });
         }
 
         const [{ count }] = await base.clone().count({ count: '*' });
-        const rows = await base.clone()
-            .select('id', 'name', 'email', 'mobile', 'gst_number', 'pan_number',
-                    'financial_year', 'status', 'created_at')
-            .orderBy('id', 'desc')
+        // Sortable UI keys → DB columns (?sort=<key>&order=asc|desc). Unknown
+        // keys fall back to newest-first.
+        const SORT_MAP = {
+            name: 'name', gst: 'gst_number', pan: 'pan_number', mobile: 'mobile',
+            email: 'email', financial_year: 'financial_year', status: 'status', created_at: 'created_at',
+        };
+        const sortKey = String(req.query.sort || '').trim();
+        const order   = String(req.query.order || '').toLowerCase() === 'asc' ? 'asc' : 'desc';
+        let rowsQb = base.clone()
+            .select('id', 'name', 'mailing_name', 'email', 'mobile', 'phone',
+                    'gst_number', 'pan_number', 'state', 'country', 'pincode', 'address',
+                    'financial_year', 'books_from', 'logo', 'status', 'custom_fields', 'created_at')
             .limit(perPage).offset((page - 1) * perPage);
+        if (SORT_MAP[sortKey]) {
+            rowsQb = rowsQb.orderBy(`companies.${SORT_MAP[sortKey]}`, order).orderBy('companies.id', 'desc');
+        } else {
+            rowsQb = rowsQb.orderBy('companies.id', 'desc');
+        }
+        const rows = await rowsQb;
 
         return R.successResponse(res, {
             data: rows,
@@ -117,4 +134,71 @@ async function create(req, res) {
     }
 }
 
-module.exports = { list, create };
+/** GET /companies/:id — one company (license-scoped) for the edit form. */
+async function get(req, res) {
+    try {
+        const licenseId = req.user && req.user.license_id;
+        const company = await db('companies').where({ id: req.params.id })
+            .modify((q) => { if (licenseId != null) q.where('license_id', licenseId); })
+            .whereNull('deleted_at')
+            .first('id', 'name', 'slug', 'email', 'mobile', 'phone', 'gst_number', 'pan_number',
+                'mailing_name', 'state', 'country', 'pincode', 'financial_year', 'books_from',
+                'address', 'logo', 'status', 'custom_fields');
+        if (!company) return R.errorResponse(res, 'Company not found.', 404);
+        return R.successResponse(res, company);
+    } catch (err) {
+        console.error('CompanyController.get error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/** PUT /companies/:id — update an editable company (license-scoped). The agent
+ *  only FILLS EMPTY Tally-synced fields, so the user can override any field here
+ *  without it being clobbered on the next sync. */
+async function update(req, res) {
+    try {
+        const licenseId = req.user && req.user.license_id;
+        const id = req.params.id;
+        const owned = await db('companies').where({ id })
+            .modify((q) => { if (licenseId != null) q.where('license_id', licenseId); })
+            .whereNull('deleted_at').first('id');
+        if (!owned) return R.errorResponse(res, 'Company not found.', 404);
+        const b = req.body;
+        const patch = { updated_at: new Date() };
+        for (const f of ['name', 'email', 'mobile', 'phone', 'gst_number', 'pan_number',
+            'mailing_name', 'state', 'country', 'pincode', 'financial_year', 'books_from',
+            'address', 'logo', 'status']) {
+            if (Object.prototype.hasOwnProperty.call(b, f)) patch[f] = b[f] || null;
+        }
+        if (patch.name === null) delete patch.name;   // name stays required
+        // Custom Fields bag (key/value) → JSONB.
+        if (b.custom_fields && typeof b.custom_fields === 'object') {
+            patch.custom_fields = JSON.stringify(b.custom_fields);
+        }
+        await db('companies').where({ id }).update(patch);
+        const fresh = await db('companies').where({ id }).first('id', 'name', 'slug', 'status');
+        return R.successResponse(res, fresh, 'Company updated.');
+    } catch (err) {
+        console.error('CompanyController.update error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/** DELETE /companies/:id — soft-delete a company (license-scoped). */
+async function destroy(req, res) {
+    try {
+        const licenseId = req.user && req.user.license_id;
+        const id = req.params.id;
+        const owned = await db('companies').where({ id })
+            .modify((q) => { if (licenseId != null) q.where('license_id', licenseId); })
+            .whereNull('deleted_at').first('id');
+        if (!owned) return R.errorResponse(res, 'Company not found.', 404);
+        await db('companies').where({ id }).update({ deleted_at: new Date(), updated_at: new Date() });
+        return R.successResponse(res, { id }, 'Company deleted.');
+    } catch (err) {
+        console.error('CompanyController.destroy error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+module.exports = { list, create, get, update, destroy };

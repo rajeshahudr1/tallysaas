@@ -185,9 +185,9 @@ class TallyConnector:
         financial-year start. Returns ``{}`` on miss. Best-effort."""
         xml = self._collection_request_xml(
             "TSSCmpFull", "Company",
-            ["NAME", "ADDRESS", "STATENAME", "PINCODE", "COUNTRYNAME", "EMAIL",
-             "PHONENUMBER", "MOBILENUMBERS", "CMPGSTIN", "GSTREGISTRATIONNUMBER",
-             "INCOMETAXNUMBER", "STARTINGFROM", "BOOKSFROM"], None)
+            ["NAME", "MAILINGNAME", "ADDRESS", "STATENAME", "PINCODE", "COUNTRYNAME",
+             "EMAIL", "PHONENUMBER", "MOBILENUMBERS", "CMPGSTIN",
+             "GSTREGISTRATIONNUMBER", "INCOMETAXNUMBER", "STARTINGFROM", "BOOKSFROM"], None)
         root = self._safe_parse(self.send(xml, timeout=60))
         if root is None:
             return {}
@@ -206,6 +206,7 @@ class TallyConnector:
                      if self._localname(a.tag).upper() == "ADDRESS" and (a.text or "").strip()]
             return {
                 "name": nm,
+                "mailing_name": self._child_text(el, "MAILINGNAME") or None,
                 "email": self._child_text(el, "EMAIL") or None,
                 "pincode": self._child_text(el, "PINCODE") or None,
                 "state": self._child_text(el, "STATENAME") or None,
@@ -213,8 +214,10 @@ class TallyConnector:
                 "pan": self._child_text(el, "INCOMETAXNUMBER") or None,
                 "gstin": (self._child_text(el, "CMPGSTIN")
                           or self._child_text(el, "GSTREGISTRATIONNUMBER") or None),
-                "phone": (self._child_text(el, "PHONENUMBER")
-                          or self._child_text(el, "MOBILENUMBERS") or None),
+                # Tally keeps landline (PHONENUMBER) and mobile (MOBILENUMBERS)
+                # separately — mirror that instead of collapsing into one.
+                "phone": self._child_text(el, "PHONENUMBER") or None,
+                "mobile": self._child_text(el, "MOBILENUMBERS") or None,
                 "address": "\n".join(lines) or None,
                 "books_from": _fy(self._child_text(el, "STARTINGFROM")
                                   or self._child_text(el, "BOOKSFROM")),

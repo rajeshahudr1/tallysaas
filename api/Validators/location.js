@@ -26,10 +26,13 @@
 const Joi = require('joi');
 
 // Allowed lifecycle states — matches the locations.status default ('Active').
-const STATUSES = ['Active', 'Inactive'];
+const STATUSES = ['Active', 'Inactive', 'Blocked'];
 
 // Reusable optional short text — trimmed, blank/null allowed to clear.
 const optText = (max) => Joi.string().trim().max(max).allow('', null);
+
+// Custom Fields bag — arbitrary key/value extras (see migration 0044).
+const customFields = Joi.object().unknown(true).allow(null);
 
 /**
  * POST /api/v1/locations
@@ -53,6 +56,8 @@ const createLocationSchema = Joi.object({
     status:  Joi.string().valid(...STATUSES).default('Active'),
 
     is_tally_godown: Joi.boolean().default(true),
+
+    custom_fields: customFields,
 });
 
 /**
@@ -74,6 +79,8 @@ const updateLocationSchema = Joi.object({
     status:  Joi.string().valid(...STATUSES),
 
     is_tally_godown: Joi.boolean(),
+
+    custom_fields: customFields,
 }).min(1).messages({
     'object.min': 'Provide at least one field to update.',
 });
