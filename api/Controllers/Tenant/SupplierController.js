@@ -39,6 +39,9 @@ const SEARCH_COLS = [
     'suppliers.mobile',
     'suppliers.email',
     'suppliers.gst_number',
+    'suppliers.pan_number',
+    'suppliers.address',
+    'locations.name',
 ];
 
 /**
@@ -72,8 +75,11 @@ function buildInsert(body) {
         location_id:      body.location_id,
         opening_balance:  body.opening_balance,
         payment_terms:    body.payment_terms,
+        address:          body.address,
         status:           body.status,
         is_tally_ledger:  body.is_tally_ledger,
+        custom_fields:    (body.custom_fields && typeof body.custom_fields === 'object')
+            ? JSON.stringify(body.custom_fields) : undefined,
     };
 }
 
@@ -81,7 +87,7 @@ function buildInsert(body) {
 const UPDATABLE = [
     'name', 'mobile', 'alternate_mobile', 'email', 'gst_number', 'pan_number',
     'supplier_group', 'location_id', 'opening_balance', 'payment_terms',
-    'status', 'is_tally_ledger',
+    'address', 'status', 'is_tally_ledger', 'custom_fields',
 ];
 
 /**
@@ -96,6 +102,9 @@ function buildUpdate(body) {
             patch[key] = body[key];
         }
     }
+    if (patch.custom_fields && typeof patch.custom_fields === 'object') {
+        patch.custom_fields = JSON.stringify(patch.custom_fields);
+    }
     patch.tally_dirty = true;   // cloud edit → re-push to Tally (ALTER)
     return patch;
 }
@@ -108,6 +117,20 @@ const controller = crud.build({
     listColumns: LIST_COLUMNS,
     listOrder:   [['suppliers.id', 'desc']],
     searchCols:  SEARCH_COLS,
+    // Extra sortable UI keys (name/status/created_at sort by default).
+    sortable: {
+        location:        'locations.name',
+        mobile:          'suppliers.mobile',
+        gst:             'suppliers.gst_number',
+        opening_balance: 'suppliers.opening_balance',
+        group:           'suppliers.supplier_group',
+    },
+    // Filter dropdowns (?key=value) → WHERE.
+    filters: {
+        location:       (qb, v) => qb.where('locations.name', v),
+        supplier_group: (qb, v) => qb.where('suppliers.supplier_group', v),
+        gst:            (qb, v) => qb.where('suppliers.gst_number', 'ilike', `%${v}%`),
+    },
     baseQuery,
     buildInsert,
     buildUpdate,

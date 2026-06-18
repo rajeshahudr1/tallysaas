@@ -291,7 +291,14 @@ class TallyConnector:
                     items.append({
                         "name": name,
                         "unit": self._child_text(el, "BASEUNITS") or None,
-                        "hsn": self._child_text(el, "GSTHSNCODE") or None,
+                        # Stock group = the cloud "category".
+                        "parent": self._child_text(el, "PARENT") or None,
+                        # HSN: flat GSTHSNCODE, else the nested GST-details HSNCODE.
+                        "hsn": (self._child_text(el, "GSTHSNCODE")
+                                or self._child_text(el, "HSNCODE") or None),
+                        # GST rate lives in the nested GST details; _child_text finds
+                        # the first GSTRATE descendant. 0 when the item has no GST.
+                        "gst_rate": self._rate(self._child_text(el, "GSTRATE")),
                         "closing": self._child_text(el, "CLOSINGBALANCE"),
                         # Rates come as "187.96/pair" - keep just the number.
                         "sales_price": self._rate(self._child_text(el, "STANDARDPRICE")),
@@ -549,12 +556,14 @@ class TallyConnector:
         hsn: Optional[str] = None,
         gst_rate: Optional[float] = None,
         company: Optional[str] = None,
+        action: str = "Create",
     ) -> str:
-        """Create a stock item master in Tally; returns the raw response.
+        """Create OR alter a stock item master in Tally; returns the raw response.
 
+        ``action`` is "Create" (new) or "Alter" (cloud edit re-push, matched by NAME).
         Pass ``company`` to import the item into that specific loaded company.
         """
-        return self.send(self.create_stock_item_xml(name, unit, hsn, gst_rate, company))
+        return self.send(self.create_stock_item_xml(name, unit, hsn, gst_rate, company, action))
 
     def create_godown(self, name: str, company: Optional[str] = None) -> str:
         """Create a Godown master in Tally (cloud location -> Tally godown).
@@ -774,7 +783,8 @@ class TallyConnector:
         """EXPORT: a Collection of StockItems fetching name/alterid/units/hsn/closing."""
         return TallyConnector._collection_request_xml(
             "TSSStockColl", "StockItem",
-            ["NAME", "ALTERID", "BASEUNITS", "GSTHSNCODE", "CLOSINGBALANCE",
+            ["NAME", "ALTERID", "BASEUNITS", "PARENT", "GSTHSNCODE", "HSNCODE",
+             "GSTRATE", "GSTDETAILS", "CLOSINGBALANCE",
              "STANDARDPRICE", "STANDARDCOST", "OPENINGRATE"],
             company,
         )
@@ -966,8 +976,9 @@ class TallyConnector:
         hsn: Optional[str] = None,
         gst_rate: Optional[float] = None,
         company: Optional[str] = None,
+        action: str = "Create",
     ) -> str:
-        """IMPORT: create a Stock Item master.
+        """IMPORT: create or alter a Stock Item master.
 
         Tally tags used inside <STOCKITEM>:
             <NAME>                 - item name
@@ -994,7 +1005,7 @@ class TallyConnector:
             + self._import_requestdesc("All Masters", company) +
             "<REQUESTDATA>"
             '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
-            '<STOCKITEM NAME="' + name_e + '" ACTION="Create">'
+            '<STOCKITEM NAME="' + name_e + '" ACTION="' + (action or "Create") + '">'
             "<NAME>" + name_e + "</NAME>"
             "<BASEUNITS>" + self._esc(unit) + "</BASEUNITS>"
             + hsn_block + gst_block +

@@ -322,7 +322,7 @@ async function pending(req, res) {
             .where('is_tally_ledger', true).where(_newOrDirty)
             .limit(50)
             .select('id', 'company_id', 'name', 'gst_number', 'opening_balance',
-                    'mobile', 'email', 'pan_number', 'tally_guid');
+                    'mobile', 'email', 'pan_number', 'address', 'tally_guid');
         // FULL party record pushed to Tally (not just name/gstin/opening). Already-
         // synced rows (tally_guid set) come through dirty → ACTION 'Alter'.
         const ledgers = [
@@ -338,6 +338,7 @@ async function pending(req, res) {
                 record_type: 'supplier', id: s.id, company_id: s.company_id, name: s.name,
                 parent: 'Sundry Creditors', gstin: s.gst_number || null, opening: Number(s.opening_balance) || 0,
                 mobile: s.mobile || null, email: s.email || null, pan: s.pan_number || null,
+                address: s.address || null,
                 action: s.tally_guid ? 'Alter' : 'Create',
             })),
         ];
@@ -345,12 +346,13 @@ async function pending(req, res) {
         // ── Stock items ──
         const products = await db('products')
             .whereIn('company_id', companyIds).whereNull('deleted_at')
-            .where('is_tally_item', true).whereNull('tally_guid')
+            .where('is_tally_item', true).where(_newOrDirty)
             .limit(50)
-            .select('id', 'company_id', 'name', 'unit', 'hsn_code', 'gst_rate');
+            .select('id', 'company_id', 'name', 'unit', 'hsn_code', 'gst_rate', 'tally_guid');
         const stock_items = products.map((p) => ({
             record_type: 'product', id: p.id, company_id: p.company_id, name: p.name,
             unit: p.unit || 'Nos', hsn: p.hsn_code || null, gst_rate: Number(p.gst_rate) || 0,
+            action: p.tally_guid ? 'Alter' : 'Create',
         }));
 
         // ── Locations → Tally godowns ──
@@ -490,7 +492,7 @@ async function result(req, res) {
             } else if (r.record_type === 'product') {
                 if (synced) {
                     await db('products').where({ id: r.record_id, company_id: cid })
-                        .update({ tally_guid: r.tally_guid || 'synced', tally_synced_at: now, updated_at: now });
+                        .update({ tally_guid: r.tally_guid || 'synced', tally_synced_at: now, tally_dirty: false, updated_at: now });
                 }
             } else if (r.record_type === 'sales_invoice' || r.record_type === 'purchase_invoice') {
                 // invoices track sync via status + tally_voucher_no (no synced_at column).
@@ -825,6 +827,7 @@ async function importFromTally(req, res) {
 
             const _selCols = ['id', 'tally_guid', 'gst_number', 'opening_balance', 'mobile', 'email', 'pan_number'];
             if (table === 'customers') _selCols.push('billing_address', 'credit_limit', 'location_id');
+            else if (table === 'suppliers') _selCols.push('address', 'location_id');
             const existing = await db(table).where('company_id', cid).whereNull('deleted_at')
                 .whereRaw('lower(name) = ?', [name.toLowerCase()])
                 .first(..._selCols);
@@ -844,6 +847,9 @@ async function importFromTally(req, res) {
                 if (table === 'customers') {
                     if (l.address && !existing.billing_address) upd.billing_address = String(l.address);
                     if (l.credit_limit && !existing.credit_limit) upd.credit_limit = num(l.credit_limit);
+                    if (mainLocationId && !existing.location_id) upd.location_id = mainLocationId;
+                } else if (table === 'suppliers') {
+                    if (l.address && !existing.address) upd.address = String(l.address);
                     if (mainLocationId && !existing.location_id) upd.location_id = mainLocationId;
                 }
 
@@ -880,11 +886,14 @@ async function importFromTally(req, res) {
                 if (l.mobile) insertRow.mobile = String(l.mobile);
                 if (l.email)  insertRow.email = String(l.email);
                 if (l.pan)    insertRow.pan_number = String(l.pan);
-                // Customer-only: location (Tally ledgers carry none) + billing + credit.
+                // Location (Tally ledgers carry none) + address into the right column.
                 if (table === 'customers') {
                     if (mainLocationId)  insertRow.location_id = mainLocationId;
                     if (l.address)       insertRow.billing_address = String(l.address);
                     if (l.credit_limit)  insertRow.credit_limit = num(l.credit_limit);
+                } else if (table === 'suppliers') {
+                    if (mainLocationId)  insertRow.location_id = mainLocationId;
+                    if (l.address)       insertRow.address = String(l.address);
                 }
                 const [row] = await db(table).insert(insertRow).returning('id');
                 const newId = row.id || row;
@@ -906,6 +915,26 @@ async function importFromTally(req, res) {
           }
         }
 
+        // Resolve a Tally stock group (PARENT) → cloud category, find-or-create,
+        // cached per pass. Skip Tally's default top group "Primary".
+        const _catCache = new Map();
+        const resolveCategoryId = async (parentName) => {
+            const nm = String(parentName || '').trim();
+            if (!nm || nm.toLowerCase() === 'primary') return null;
+            const key = nm.toLowerCase();
+            if (_catCache.has(key)) return _catCache.get(key);
+            let cat = await db('categories').where('company_id', cid).whereNull('deleted_at')
+                .whereRaw('lower(name) = ?', [key]).first('id');
+            if (!cat) {
+                const [r] = await db('categories')
+                    .insert({ company_id: cid, name: nm, created_at: now, updated_at: now })
+                    .returning('id');
+                cat = { id: r.id || r };
+            }
+            _catCache.set(key, cat.id);
+            return cat.id;
+        };
+
         for (const s of stockItems) {
           try {
             const name = String(s.name || '').trim();
@@ -920,10 +949,12 @@ async function importFromTally(req, res) {
             const hsn = s.hsn ? String(s.hsn).trim() : null;
             const salesPrice = num(s.sales_price);
             const purchasePrice = num(s.purchase_price);
+            const gstRate = num(s.gst_rate);
+            const categoryId = await resolveCategoryId(s.parent);
 
             const existing = await db('products').where('company_id', cid).whereNull('deleted_at')
                 .whereRaw('lower(name) = ?', [name.toLowerCase()])
-                .first('id', 'tally_guid', 'unit', 'hsn_code', 'opening_stock', 'sales_price', 'purchase_price');
+                .first('id', 'tally_guid', 'unit', 'hsn_code', 'opening_stock', 'sales_price', 'purchase_price', 'gst_rate', 'category_id');
             if (existing) {
                 const upd = {};
                 if (unit && unit !== (existing.unit || '')) upd.unit = unit;
@@ -931,6 +962,8 @@ async function importFromTally(req, res) {
                 if (Number(existing.opening_stock) !== closing) upd.opening_stock = closing;
                 if (salesPrice && Number(existing.sales_price) !== salesPrice) upd.sales_price = salesPrice;
                 if (purchasePrice && Number(existing.purchase_price) !== purchasePrice) upd.purchase_price = purchasePrice;
+                if (gstRate && Number(existing.gst_rate) !== gstRate) upd.gst_rate = gstRate;
+                if (categoryId && !existing.category_id) upd.category_id = categoryId;
                 if (!existing.tally_guid) upd.tally_guid = 'tally';
 
                 if (Object.keys(upd).length) {
@@ -958,7 +991,8 @@ async function importFromTally(req, res) {
                 const insertRow = {
                     company_id: cid, name, status: 'Active', is_tally_item: true, tally_guid: 'tally',
                     unit: unit || 'Nos', hsn_code: hsn, opening_stock: closing,
-                    purchase_price: purchasePrice, sales_price: salesPrice, gst_rate: 0, created_at: now, updated_at: now,
+                    purchase_price: purchasePrice, sales_price: salesPrice, gst_rate: gstRate,
+                    category_id: categoryId || null, created_at: now, updated_at: now,
                 };
                 const [row] = await db('products').insert(insertRow).returning('id');
                 const newId = row.id || row;

@@ -66,6 +66,7 @@ const createProductSchema = Joi.object({
     is_tally_item:  Joi.boolean().default(true),
 
     description:    optText(5000),
+    custom_fields:  Joi.object().unknown(true).allow(null),
 });
 
 /**
@@ -95,6 +96,7 @@ const updateProductSchema = Joi.object({
     is_tally_item:  Joi.boolean(),
 
     description:    optText(5000),
+    custom_fields:  Joi.object().unknown(true).allow(null),
 }).min(1).messages({
     'object.min': 'Provide at least one field to update.',
 });
@@ -112,7 +114,7 @@ const listProductSchema = Joi.object({
     per_page: Joi.number().integer().min(1).max(100).default(20),
     sort:     Joi.string().trim().max(40).allow('', null),
     order:    Joi.string().trim().lowercase().valid('asc', 'desc').allow('', null),
-});
+}).unknown(true);   // allow filter params (category / gst_rate / hsn / dates)
 
 module.exports = {
     createProductSchema,

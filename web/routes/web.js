@@ -162,8 +162,8 @@ async function apiList(req, basePath) {
     if (req.query.sort)   qs.set('sort',  String(req.query.sort));
     if (req.query.order)  qs.set('order', String(req.query.order));
     // Forward filter dropdown params so the api can actually filter the list.
-    for (const k of ['location', 'sales_person', 'customer_group', 'gst',
-        'state', 'financial_year', 'created_from', 'created_to']) {
+    for (const k of ['location', 'sales_person', 'customer_group', 'supplier_group', 'gst',
+        'category', 'gst_rate', 'hsn', 'parent', 'state', 'financial_year', 'created_from', 'created_to']) {
         if (req.query[k]) qs.set(k, String(req.query[k]));
     }
 
@@ -758,6 +758,50 @@ router.get('/customers/export', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── MASTERS · Export Suppliers (GET /suppliers/export) ── all columns ── */
+router.get('/suppliers/export', async (req, res, next) => {
+    try {
+        const records = await fetchAllRows(req, '/suppliers');
+        const headers = ['Name', 'Location', 'Mobile', 'Alternate Mobile', 'Email', 'GST Number',
+            'PAN Number', 'Supplier Group', 'Address', 'Opening Balance', 'Payment Terms',
+            'Status', 'Custom Fields', 'Created At'];
+        const csv = rowsToCsv(headers, records, (r) => [
+            r.name, r.location, r.mobile, r.alternate_mobile, r.email, r.gst_number,
+            r.pan_number, r.supplier_group, r.address, r.opening_balance, r.payment_terms,
+            r.status, cfFlat(r.custom_fields), r.created_at,
+        ]);
+        return sendCsv(res, 'suppliers.csv', csv);
+    } catch (err) { next(err); }
+});
+
+/* ── MASTERS · Export Products (GET /products/export) ── all columns ── */
+router.get('/products/export', async (req, res, next) => {
+    try {
+        const records = await fetchAllRows(req, '/products');
+        const headers = ['Name', 'SKU', 'Category', 'Unit', 'HSN Code', 'GST Rate',
+            'Purchase Price', 'Sales Price', 'Opening Stock', 'Status', 'Description',
+            'Custom Fields', 'Created At'];
+        const csv = rowsToCsv(headers, records, (r) => [
+            r.name, r.sku, r.category, r.unit, r.hsn_code, r.gst_rate,
+            r.purchase_price, r.sales_price, r.opening_stock, r.status, r.description,
+            cfFlat(r.custom_fields), r.created_at,
+        ]);
+        return sendCsv(res, 'products.csv', csv);
+    } catch (err) { next(err); }
+});
+
+/* ── MASTERS · Export Categories (GET /categories/export) ── all columns ── */
+router.get('/categories/export', async (req, res, next) => {
+    try {
+        const records = await fetchAllRows(req, '/categories');
+        const headers = ['Name', 'Parent Category', 'Status', 'Created At'];
+        const csv = rowsToCsv(headers, records, (r) => [
+            r.name, r.parent, r.status, r.created_at,
+        ]);
+        return sendCsv(res, 'categories.csv', csv);
+    } catch (err) { next(err); }
+});
+
 /* ── MASTERS · Edit Company (GET /companies/:id/edit) ───────── */
 router.get('/companies/:id/edit', async (req, res, next) => {
     try {
@@ -995,18 +1039,42 @@ router.get('/suppliers', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/suppliers');
         const config = await fetchConfig(req, ['supplier_groups']);
-        const supplierRows = rows.map((r) => ({
-            id: r.id, name: r.name, location: r.location || '', mobile: r.mobile,
-            gst: r.gst_number || '', group: r.supplier_group || '',
-            opening_balance: r.opening_balance, payment_terms: r.payment_terms || '',
-            status: r.status, created_at: fmtDate(r.created_at),
-        }));
+        const locOpts = await fetchOptions(req, '/locations');   // real org locations
+        const supplierRows = rows.map((r) => {
+            let cf = {};
+            try { cf = (typeof r.custom_fields === 'string') ? JSON.parse(r.custom_fields || '{}') : (r.custom_fields || {}); } catch (_) { cf = {}; }
+            const cfRows = Object.keys(cf).map((k) => ({ label: k, value: String(cf[k] || '—') }));
+            return {
+                id: r.id, name: r.name, location: r.location || '', mobile: r.mobile,
+                gst: r.gst_number || '', group: r.supplier_group || '',
+                opening_balance: r.opening_balance, payment_terms: r.payment_terms || '',
+                status: r.status, created_at: fmtDate(r.created_at),
+                _detail: [
+                    { group: 'Basic Information' },
+                    { label: 'Supplier Name', value: r.name || '—' },
+                    { label: 'Mobile', value: r.mobile || '—' },
+                    { label: 'Alternate Mobile', value: r.alternate_mobile || '—' },
+                    { label: 'Email', value: r.email || '—' },
+                    { label: 'Supplier Group', value: r.supplier_group || '—' },
+                    { label: 'Status', value: r.status || '—' },
+                    { group: 'Tax & Statutory' },
+                    { label: 'GST Number', value: r.gst_number || '—' },
+                    { label: 'PAN Number', value: r.pan_number || '—' },
+                    { group: 'Address' },
+                    { label: 'Address', value: r.address || '—' },
+                    { group: 'Other' },
+                    { label: 'Opening Balance', value: (r.opening_balance != null ? String(r.opening_balance) : '—') },
+                    { label: 'Payment Terms', value: r.payment_terms || '—' },
+                    { label: 'Location', value: r.location || '—' },
+                ].concat(cfRows.length ? [{ group: 'Custom Fields' }].concat(cfRows) : []),
+            };
+        });
         res.render('suppliers/list', {
             title: 'Suppliers',
             activeMenu: 'suppliers',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Suppliers' }],
             supplierRows, suppliersTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            locationNames: mock.locationNames, ...config,
+            locationNames: locOpts.map((o) => o.name), ...config,
         });
     } catch (err) { next(err); }
 });
@@ -1037,10 +1105,12 @@ router.post('/suppliers', async (req, res, next) => {
         const num = (v) => (v === '' || v == null ? undefined : Number(v));
         const payload = {
             name: b.name, mobile: b.mobile || undefined, alternate_mobile: b.alternate_mobile || undefined,
-            email: b.email || undefined, gst_number: b.gst_number || undefined,
+            email: b.email || undefined, gst_number: b.gst_number || undefined, pan_number: b.pan_number || undefined,
             supplier_group: b.supplier_group || undefined, location_id: num(b.location_id),
             opening_balance: num(b.opening_balance), payment_terms: b.payment_terms || undefined,
+            address: b.address || undefined,
             status: b.status || 'Active', is_tally_ledger: asBool(b.is_tally_ledger),
+            custom_fields: assembleCustomFields(b),
         };
         const result = await api.post(req, '/suppliers', payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Supplier created successfully.'); return req.session.save(() => res.redirect('/suppliers')); }
@@ -1054,19 +1124,42 @@ router.get('/products', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/products');
         const config = await fetchConfig(req, ['gst_rates']);
-        const productRows = rows.map((r) => ({
-            id: r.id, name: r.name, sku: r.sku || '', category: r.category || '',
-            hsn: r.hsn_code || '', gst_rate: (r.gst_rate != null ? parseFloat(r.gst_rate) + '%' : ''),
-            purchase_price: r.purchase_price, sales_price: r.sales_price,
-            stock: r.opening_stock != null ? parseFloat(r.opening_stock) : '',
-            status: r.status, created_at: fmtDate(r.created_at),
-        }));
+        const catOpts = await fetchOptions(req, '/categories');   // real org categories
+        const productRows = rows.map((r) => {
+            let cf = {};
+            try { cf = (typeof r.custom_fields === 'string') ? JSON.parse(r.custom_fields || '{}') : (r.custom_fields || {}); } catch (_) { cf = {}; }
+            const cfRows = Object.keys(cf).map((k) => ({ label: k, value: String(cf[k] || '—') }));
+            return {
+                id: r.id, name: r.name, sku: r.sku || '', category: r.category || '',
+                hsn: r.hsn_code || '', gst_rate: (r.gst_rate != null ? parseFloat(r.gst_rate) + '%' : ''),
+                purchase_price: r.purchase_price, sales_price: r.sales_price,
+                stock: r.opening_stock != null ? parseFloat(r.opening_stock) : '',
+                status: r.status, created_at: fmtDate(r.created_at),
+                _detail: [
+                    { group: 'Basic Information' },
+                    { label: 'Product Name', value: r.name || '—' },
+                    { label: 'SKU / Item Code', value: r.sku || '—' },
+                    { label: 'Category', value: r.category || '—' },
+                    { label: 'Unit', value: r.unit || '—' },
+                    { label: 'Status', value: r.status || '—' },
+                    { group: 'Pricing & Tax' },
+                    { label: 'HSN / SAC Code', value: r.hsn_code || '—' },
+                    { label: 'GST Rate', value: (r.gst_rate != null ? parseFloat(r.gst_rate) + '%' : '—') },
+                    { label: 'Purchase Price', value: (r.purchase_price != null ? String(r.purchase_price) : '—') },
+                    { label: 'Sales Price', value: (r.sales_price != null ? String(r.sales_price) : '—') },
+                    { group: 'Stock & Inventory' },
+                    { label: 'Opening Stock', value: (r.opening_stock != null ? String(r.opening_stock) : '—') },
+                    { group: 'Description' },
+                    { label: 'Description', value: r.description || '—' },
+                ].concat(cfRows.length ? [{ group: 'Custom Fields' }].concat(cfRows) : []),
+            };
+        });
         res.render('products/list', {
             title: 'Products',
             activeMenu: 'products',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Products' }],
             productRows, productsTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            categoryNames: mock.categoryNames, ...config,
+            categoryNames: catOpts.map((o) => o.name), ...config,
         });
     } catch (err) { next(err); }
 });
@@ -1102,6 +1195,7 @@ router.post('/products', async (req, res, next) => {
             purchase_price: num(b.purchase_price), sales_price: num(b.sales_price),
             opening_stock: num(b.opening_stock), status: b.status || 'Active',
             is_tally_item: asBool(b.is_tally_item), description: b.description || undefined,
+            custom_fields: assembleCustomFields(b),
         };
         const result = await api.post(req, '/products', payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Product created successfully.'); return req.session.save(() => res.redirect('/products')); }
@@ -1114,16 +1208,23 @@ router.post('/products', async (req, res, next) => {
 router.get('/categories', async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/categories');
+        const catOpts = await fetchOptions(req, '/categories');   // real org categories (for Parent filter)
         const categoryRows = rows.map((r) => ({
             id: r.id, name: r.name, parent: r.parent || '—', products: r.products || '',
             status: r.status, created_at: fmtDate(r.created_at),
+            _detail: [
+                { group: 'Basic Information' },
+                { label: 'Category Name', value: r.name || '—' },
+                { label: 'Parent Category', value: r.parent || '—' },
+                { label: 'Status', value: r.status || '—' },
+            ],
         }));
         res.render('categories/list', {
             title: 'Categories',
             activeMenu: 'categories',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Categories' }],
             categoryRows, categoriesTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            categoryNames: mock.categoryNames,
+            categoryNames: catOpts.map((o) => o.name),
         });
     } catch (err) { next(err); }
 });
@@ -3006,9 +3107,12 @@ router.post('/suppliers/:id', async (req, res, next) => {
         const id = Number(req.params.id); const b = req.body;
         const payload = {
             name: b.name, mobile: b.mobile || undefined, alternate_mobile: b.alternate_mobile || undefined,
-            email: b.email || undefined, gst_number: b.gst_number || undefined, supplier_group: b.supplier_group || undefined,
+            email: b.email || undefined, gst_number: b.gst_number || undefined, pan_number: b.pan_number || undefined,
+            supplier_group: b.supplier_group || undefined,
             location_id: _num(b.location_id), opening_balance: _num(b.opening_balance), payment_terms: b.payment_terms || undefined,
+            address: b.address || undefined,
             status: b.status || 'Active', is_tally_ledger: asBool(b.is_tally_ledger),
+            custom_fields: assembleCustomFields(b),
         };
         const result = await api.put(req, `/suppliers/${id}`, payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Supplier updated successfully.'); return req.session.save(() => res.redirect('/suppliers')); }
@@ -3039,6 +3143,7 @@ router.post('/products/:id', async (req, res, next) => {
             hsn_code: b.hsn_code || undefined, gst_rate: b.gst_rate ? parseFloat(String(b.gst_rate)) : undefined,
             purchase_price: _num(b.purchase_price), sales_price: _num(b.sales_price), opening_stock: _num(b.opening_stock),
             status: b.status || 'Active', is_tally_item: asBool(b.is_tally_item), description: b.description || undefined,
+            custom_fields: assembleCustomFields(b),
         };
         const result = await api.put(req, `/products/${id}`, payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Product updated successfully.'); return req.session.save(() => res.redirect('/products')); }

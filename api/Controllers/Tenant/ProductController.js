@@ -39,6 +39,7 @@ const SEARCH_COLS = [
     'products.name',
     'products.sku',
     'products.hsn_code',
+    'categories.name',
 ];
 
 /**
@@ -75,6 +76,8 @@ function buildInsert(body) {
         status:         body.status,
         is_tally_item:  body.is_tally_item,
         description:    body.description,
+        custom_fields:  (body.custom_fields && typeof body.custom_fields === 'object')
+            ? JSON.stringify(body.custom_fields) : undefined,
     };
 }
 
@@ -82,7 +85,7 @@ function buildInsert(body) {
 const UPDATABLE = [
     'name', 'sku', 'unit', 'hsn_code', 'gst_rate',
     'purchase_price', 'sales_price', 'opening_stock',
-    'category_id', 'status', 'is_tally_item', 'description',
+    'category_id', 'status', 'is_tally_item', 'description', 'custom_fields',
 ];
 
 /**
@@ -97,6 +100,10 @@ function buildUpdate(body) {
             patch[key] = body[key];
         }
     }
+    if (patch.custom_fields && typeof patch.custom_fields === 'object') {
+        patch.custom_fields = JSON.stringify(patch.custom_fields);
+    }
+    patch.tally_dirty = true;   // cloud edit → re-push to Tally (ALTER)
     return patch;
 }
 
@@ -108,6 +115,22 @@ const controller = crud.build({
     listColumns: LIST_COLUMNS,
     listOrder:   [['products.id', 'desc']],
     searchCols:  SEARCH_COLS,
+    // Extra sortable UI keys (name/status/created_at sort by default).
+    sortable: {
+        sku:            'products.sku',
+        category:       'categories.name',
+        hsn:            'products.hsn_code',
+        gst_rate:       'products.gst_rate',
+        purchase_price: 'products.purchase_price',
+        sales_price:    'products.sales_price',
+        stock:          'products.opening_stock',
+    },
+    // Filter dropdowns (?key=value) → WHERE.
+    filters: {
+        category: (qb, v) => qb.where('categories.name', v),
+        gst_rate: (qb, v) => qb.where('products.gst_rate', v),
+        hsn:      (qb, v) => qb.where('products.hsn_code', 'ilike', `%${v}%`),
+    },
     baseQuery,
     buildInsert,
     buildUpdate,

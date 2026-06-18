@@ -59,7 +59,7 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
         { label: 'Products' },
     ],
     actions: [
-        { label: 'Export',      icon: 'fa-upload', variant: 'light' },
+        { label: 'Export',      icon: 'fa-upload', variant: 'light', href: '/products/export' },
         { label: 'Add Product', icon: 'fa-plus',   gradient: true, href: '/products/add' },
     ],
 }) %>
@@ -69,7 +69,7 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
         filterId: 'product-filters',
         title: 'Advanced Filters',
         fields: filterFields,
-        collapsed: false,
+        collapsed: true,
     }) %>
 </form>
 
@@ -87,24 +87,14 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
             <span>entries</span>
         </label>
 
-        <div class="toolbar-sort">
-            <span>Sort By</span>
-            <select class="form-select form-select-sm" aria-label="Sort by column">
-                <% sortOptions.forEach(function (label) { %>
-                    <option value="<%= label %>" <%= label === 'Created At' ? 'selected' : '' %>><%= label %></option>
-                <% }); %>
-            </select>
-            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
-                <i class="fa-solid fa-arrow-down-short-wide"></i>
-            </button>
-        </div>
+        <!-- Sorting is done by clicking the table column headers. -->
     </div>
 
     <%- include('../partials/table', {
         tableId: 'products-table',
         basePath: '/products',
         editable: true,
-        sortKeys: ['name', 'status', 'created_at'],
+        sortKeys: ['name', 'sku', 'category', 'hsn', 'gst_rate', 'purchase_price', 'sales_price', 'stock', 'status', 'created_at'],
         columns: tableColumns,
         rows: _rows,
         selectable: true,

@@ -691,7 +691,7 @@ def _push_master(tally: TallyConnector, item: dict, kind: str,
         resp = tally.create_stock_item(
             item["name"], unit=item.get("unit", "Nos"),
             hsn=item.get("hsn"), gst_rate=item.get("gst_rate"),
-            company=company,
+            company=company, action=item.get("action", "Create"),
         )
     ok, info = _interpret_tally(resp)
     res = {"record_type": item["record_type"], "record_id": item["id"],

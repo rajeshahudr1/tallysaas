@@ -56,6 +56,8 @@ const createSupplierSchema = Joi.object({
     supplier_group:   optText(100),
     location_id:      fkId,
 
+    address:          optText(2000),
+    custom_fields:    Joi.object().unknown(true).allow(null),
     opening_balance:  Joi.number().min(0).precision(2).default(0),
     payment_terms:    optText(100),
 
@@ -82,6 +84,8 @@ const updateSupplierSchema = Joi.object({
     supplier_group:   optText(100),
     location_id:      fkId,
 
+    address:          optText(2000),
+    custom_fields:    Joi.object().unknown(true).allow(null),
     opening_balance:  Joi.number().min(0).precision(2),
     payment_terms:    optText(100),
 
@@ -105,7 +109,7 @@ const listSupplierSchema = Joi.object({
     per_page: Joi.number().integer().min(1).max(100).default(20),
     sort:     Joi.string().trim().max(40).allow('', null),
     order:    Joi.string().trim().lowercase().valid('asc', 'desc').allow('', null),
-});
+}).unknown(true);   // allow filter params (location / supplier_group / gst / dates)
 
 module.exports = {
     createSupplierSchema,

@@ -79,8 +79,6 @@ var filterFields = [
 var tableColumns = [
     { key: 'name',            label: 'Customer Name',   sortable: true, type: 'text'     },
     { key: 'location',        label: 'Location',        sortable: true, type: 'location' },
-    { key: 'mobile',          label: 'Mobile',          sortable: true, type: 'text'     },
-    { key: 'gst',             label: 'GST No.',         sortable: true, type: 'text'     },
     { key: 'opening_balance', label: 'Opening Balance', sortable: true, type: 'currency' },
     { key: 'credit_limit',    label: 'Credit Limit',    sortable: true, type: 'currency' },
     { key: 'sales_person',    label: 'Sales Person',    sortable: true, type: 'text'     },
@@ -150,7 +148,7 @@ var sortOptions = [
         tableId: 'customers-table',
         basePath: '/customers',
         editable: true,
-        sortKeys: ['name', 'location', 'mobile', 'gst', 'opening_balance', 'credit_limit', 'sales_person', 'status', 'created_at'],
+        sortKeys: ['name', 'location', 'opening_balance', 'credit_limit', 'sales_person', 'status', 'created_at'],
         columns: tableColumns,
         rows: _customers,
         selectable: true,

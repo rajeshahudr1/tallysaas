@@ -94,6 +94,10 @@ const controller = crud.build({
     listColumns: LIST_COLUMNS,
     listOrder:   [['categories.id', 'desc']],
     searchCols:  SEARCH_COLS,
+    // Extra sortable UI key (name/status/created_at sort by default).
+    sortable: { parent: 'parent.name' },
+    // Filter dropdown (?parent=...) → WHERE.
+    filters: { parent: (qb, v) => qb.where('parent.name', v) },
     baseQuery,
     buildInsert,
     buildUpdate,
