@@ -89,6 +89,7 @@ function buildUpdate(body) {
     if (patch.custom_fields && typeof patch.custom_fields === 'object') {
         patch.custom_fields = JSON.stringify(patch.custom_fields);
     }
+    patch.tally_dirty = true;   // cloud edit → re-push to Tally (ALTER)
     return patch;
 }
 

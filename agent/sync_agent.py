@@ -682,6 +682,10 @@ def _push_master(tally: TallyConnector, item: dict, kind: str,
             item["name"], parent=item.get("parent", "Sundry Debtors"),
             gstin=item.get("gstin"), opening=item.get("opening", 0),
             company=company,
+            mobile=item.get("mobile"), email=item.get("email"), pan=item.get("pan"),
+            address=item.get("address"), state=item.get("state"),
+            pincode=item.get("pincode"), credit_limit=item.get("credit_limit"),
+            action=item.get("action", "Create"),
         )
     else:  # stock item
         resp = tally.create_stock_item(
@@ -789,7 +793,15 @@ def _create_companies_in_tally(token, logger, api: ApiClient, tally: TallyConnec
         if not cid or not cname:
             continue
         try:
-            resp = tally.create_company(cname)
+            resp = tally.create_company(
+                cname,
+                books_from=c.get("books_from"),
+                mailing_name=c.get("mailing_name"), email=c.get("email"),
+                phone=c.get("phone"), mobile=c.get("mobile"),
+                gst=c.get("gst"), pan=c.get("pan"), state=c.get("state"),
+                pincode=c.get("pincode"), country=c.get("country"), address=c.get("address"),
+                action=c.get("action", "Create"),
+            )
             ok, info = _interpret_tally(resp)
         except TallyUnavailable as exc:
             # Tally went away - stop trying companies this pass.

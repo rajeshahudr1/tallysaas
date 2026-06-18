@@ -1,87 +1,34 @@
 <%
 /* ─────────────────────────────────────────────────────────────
- * views/customers/form.ejs — PAGE 2: Add Customer (spec §5).
- * Route: GET /customers/add  ·  activeMenu: 'customers'.
+ * views/customers/form.ejs — Add / Edit Customer.
+ * Routes: GET /customers/add · GET /customers/:id/edit.
  *
- * Structure (matches the screenshot exactly):
- *   1. page-head — "Add Customer" + Dashboard › Customers › Add
- *                  Customer breadcrumb + right actions: a light
- *                  "← Back to Customers" link and a primary "Save
- *                  Customer" SPLIT button (caret opens save options).
- *   2. form-card — the reusable tabbed-form SHELL (6 tabs). Per its
- *                  contract (partials/form-card.ejs §2.5) THIS PAGE
- *                  owns the `.tab-content` panes that follow the
- *                  include, inside the SAME `.card.form-card`.
+ * Every tab maps to REAL editable columns on the `customers` table —
+ * the old "coming next phase" placeholders are gone and the Bank Details
+ * tab (no backing columns) was removed. Synced Tally values pre-fill.
  *
- * Panes:
- *   • #basic  — the full Basic Information form (3-col responsive
- *               grid, required *, +91 prefixes, ₹ suffixes, Status
- *               radios, Is-Tally-Ledger toggle, Tally Sync mini-card,
- *               Shipping/Billing addresses with "Same as Shipping" +
- *               char counters, Notes + Internal Remarks, footer
- *               Cancel + Save).
- *   • #address / #gst / #other / #bank / #custom — styled
- *               "coming next phase" placeholders so the Bootstrap
- *               tabs switch cleanly without render errors.
- *
- * Behaviour is wired by the EXISTING /js/app.js via data-* contracts:
- *   • char counters:  <textarea data-counter="<spanId>" maxlength>
- *                     paired with <span id="<spanId>">0/300</span>.
- *   • same-as-shipping: a checkbox [data-same-as-shipping] carrying
- *                     data-source / data-target textarea ids.
- * No page JS is needed — the markup ids/classes drive app.js.
- *
- * Pure theme.css styling: every class used here is defined in
- * public/css/theme.css §12 (form card / grid / counters / status
- * radios / sync mini-card / footer / placeholder). No bespoke CSS.
- *
- * Expected locals (from routes/web.js → res.render):
- *   locations       [ 'Ahmedabad', … ] — Location select options
- *   salesPersons    [ 'Rajesh Kumar', …] — Sales Person select options
- *   customerGroups  [ 'Retail', … ]      — Customer Group select options
- * (title / breadcrumb / activeMenu are consumed by the layout +
- *  page-head.)
+ * Expected locals (routes/web.js → res.render):
+ *   locationOptions / salesPersonOptions / customerGroupOptions — [{id,name}]
+ *   record  — the row being edited (edit mode)  — optional
  * ─────────────────────────────────────────────────────────── */
 
-/* Defensive reads — the page must never crash on a missing local
- * (spec §10 quality bar). Empty fallbacks keep every <select> happy. */
-/* FK option sources — now arrays of { id, name } fetched from the api
- * (so the selects submit real foreign-key ids on create). */
 var _locations      = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
 var _salesPersons   = (typeof salesPersonOptions !== 'undefined' && salesPersonOptions) ? salesPersonOptions : [];
 var _customerGroups = (typeof customerGroupOptions !== 'undefined' && customerGroupOptions) ? customerGroupOptions : [];
 
-/* ── Dual-mode (Add / Edit) ──────────────────────────────────────
- * When a `record` local is passed the page acts as Edit (prefilled);
- * with no record it renders exactly as the original Add form. */
-var _rec   = (typeof record !== 'undefined' && record) ? record : null;
+var _rec    = (typeof record !== 'undefined' && record) ? record : null;
 var _isEdit = !!_rec;
-function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }   // scalar prefill helper
+function _v(k){ return (_rec && _rec[k] != null) ? _rec[k] : ''; }
 
-/* ── FormCard tabs (spec §5) ─────────────────────────────────────
- * id === the pane id this page renders below; Basic Information is
- * the active tab. icon = Font Awesome 6 solid glyph per the spec. */
 var formTabs = [
     { id: 'basic',   label: 'Basic Information', icon: 'fa-id-card',          active: true },
-    { id: 'address', label: 'Address',          icon: 'fa-map-location-dot'                },
-    { id: 'gst',     label: 'GST & Tax Details', icon: 'fa-percent'                        },
-    { id: 'other',   label: 'Other Details',    icon: 'fa-circle-info'                     },
-    { id: 'bank',    label: 'Bank Details',     icon: 'fa-building-columns'                },
-    { id: 'custom',  label: 'Custom Fields',    icon: 'fa-table-cells'                     },
+    { id: 'address', label: 'Address',           icon: 'fa-map-location-dot'               },
+    { id: 'gst',     label: 'GST & Tax Details',  icon: 'fa-percent'                        },
+    { id: 'other',   label: 'Other Details',      icon: 'fa-circle-info'                    },
+    { id: 'custom',  label: 'Custom Fields',      icon: 'fa-table-cells'                    },
 ];
 
-/* The five not-yet-built panes, rendered as identical styled
- * placeholders (centered muted icon + "coming next phase" note).
- * Mirrors the tab id/label/icon so each pane is self-describing. */
-var placeholderPanes = formTabs.filter(function (t) { return t.id !== 'basic'; });
-
-/* Helper: render a flat string list as <option>s with a leading
- * "Select …" sentinel (value '' = nothing chosen). DRY — each select
- * below is one include-like line and mirrors the mock data source. */
-/* Build <option>s from an [{id,name}] FK option list (value = id). */
 function _selOpts(placeholder, list, selectedId) {
-    /* Placeholder is pre-selected only in Add mode (no record); in Edit
-     * mode the matching FK option below carries the `selected` instead. */
     var html = '<option value=""' + (_isEdit ? '' : ' selected') + ' disabled hidden>' + placeholder + '</option>';
     (list || []).forEach(function (o) {
         var sel = (selectedId != null && selectedId !== '' && String(selectedId) === String(o.id)) ? ' selected' : '';
@@ -90,32 +37,17 @@ function _selOpts(placeholder, list, selectedId) {
     return html;
 }
 
-/* page-head "actions" as a raw HTML string. page-head supports a
- * string OR an array; we use a STRING here because the spec's "Save
- * Customer" control is a Bootstrap SPLIT button (a btn + a separate
- * dropdown-toggle caret) — a shape the array form can't express. The
- * "Back to Customers" link sits to its left. */
+/* Custom Fields bag → key/value rows. */
+var _cf = {};
+try { var _raw = _rec ? _rec.custom_fields : null; _cf = (typeof _raw === 'string') ? JSON.parse(_raw || '{}') : (_raw || {}); } catch (e) { _cf = {}; }
+
 var headActions =
     '<a class="btn btn-light" href="/customers">' +
         '<i class="fa-solid fa-arrow-left me-1"></i>Back to Customers' +
     '</a>' +
-    '<div class="btn-group">' +
-        '<button type="submit" form="customer-form" class="btn btn-primary">' +
-            '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Customer' +
-        '</button>' +
-        '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
-                'data-bs-toggle="dropdown" aria-expanded="false">' +
-            '<span class="visually-hidden">Toggle save options</span>' +
-        '</button>' +
-        '<ul class="dropdown-menu dropdown-menu-end">' +
-            '<li><button type="submit" form="customer-form" class="dropdown-item">' +
-                '<i class="fa-solid fa-floppy-disk me-2 text-muted"></i>Save</button></li>' +
-            '<li><button type="submit" form="customer-form" class="dropdown-item">' +
-                '<i class="fa-solid fa-plus me-2 text-muted"></i>Save &amp; Add Another</button></li>' +
-            '<li><button type="submit" form="customer-form" class="dropdown-item">' +
-                '<i class="fa-solid fa-eye me-2 text-muted"></i>Save &amp; View</button></li>' +
-        '</ul>' +
-    '</div>';
+    '<button type="submit" form="customer-form" class="btn btn-primary">' +
+        '<i class="fa-solid fa-floppy-disk me-1"></i>' + (_isEdit ? 'Update' : 'Save') + ' Customer' +
+    '</button>';
 %>
 
 <%- include('../partials/page-head', {
@@ -128,70 +60,42 @@ var headActions =
     actions: headActions,
 }) %>
 
-<!-- ── The whole form is one <form>; the page-head Save buttons target
-     it via form="customer-form" so they live OUTSIDE the card but still
-     submit it. (Visual only in Phase 1 — no real submit handler.) ──── -->
 <form id="customer-form" class="card form-card" method="post" action="<%= _isEdit ? '/customers/' + _rec.id : '/customers' %>" autocomplete="off" novalidate>
 
-    <!-- FormCard SHELL — renders the .form-card-head tab navigation.
-         Per the partial's contract, the .tab-content panes BELOW are
-         owned by this page (same card, after the header). -->
     <%- include('../partials/form-card', { tabs: formTabs }) %>
 
     <div class="tab-content form-card-body">
 
-        <!-- ════════════════════════════════════════════════════════
-             PANE 1 — Basic Information (active)
-             ════════════════════════════════════════════════════════ -->
+        <!-- ════ Basic Information ════ -->
         <div class="tab-pane fade show active" id="basic" role="tabpanel" aria-labelledby="basic-tab">
-
-            <!-- 3-column responsive grid (collapses to 1 col < 768px). -->
             <div class="form-grid">
-
-                <!-- Row 1: Customer Name* · Mobile* (+91) · Alt Mobile (+91) -->
                 <div class="form-group">
                     <label class="form-label" for="cust-name">Customer Name<span class="req">*</span></label>
                     <input type="text" class="form-control" id="cust-name" name="name"
                            placeholder="Enter customer name" value="<%= _v('name') %>" required>
                 </div>
-
                 <div class="form-group">
-                    <label class="form-label" for="cust-mobile">Mobile Number<span class="req">*</span></label>
+                    <label class="form-label" for="cust-mobile">Mobile Number</label>
                     <div class="input-affix">
-                        <!-- Country-code chooser (spec §5: "+91 country-flag prefix select"). -->
-                        <select class="affix affix--prefix" name="mobile_cc" aria-label="Country code">
-                            <option value="+91" selected>🇮🇳 +91</option>
-                            <option value="+1">🇺🇸 +1</option>
-                            <option value="+44">🇬🇧 +44</option>
-                            <option value="+971">🇦🇪 +971</option>
-                        </select>
+                        <span class="affix affix--prefix"><i class="fa-solid fa-mobile-screen"></i></span>
                         <input type="tel" class="form-control" id="cust-mobile" name="mobile"
-                               placeholder="98765 43210" value="<%= _v('mobile') %>" inputmode="numeric" maxlength="10" required>
+                               placeholder="98765 43210" value="<%= _v('mobile') %>" maxlength="30">
                     </div>
                 </div>
-
                 <div class="form-group">
                     <label class="form-label" for="cust-alt-mobile">Alternate Mobile</label>
                     <div class="input-affix">
-                        <select class="affix affix--prefix" name="alternate_mobile_cc" aria-label="Country code">
-                            <option value="+91" selected>🇮🇳 +91</option>
-                            <option value="+1">🇺🇸 +1</option>
-                            <option value="+44">🇬🇧 +44</option>
-                            <option value="+971">🇦🇪 +971</option>
-                        </select>
+                        <span class="affix affix--prefix"><i class="fa-solid fa-phone"></i></span>
                         <input type="tel" class="form-control" id="cust-alt-mobile" name="alternate_mobile"
-                               placeholder="Optional" value="<%= _v('alternate_mobile') %>" inputmode="numeric" maxlength="10">
+                               placeholder="Optional" value="<%= _v('alternate_mobile') %>" maxlength="30">
                     </div>
                 </div>
-
-                <!-- Row 2: Customer Group · Email · Location* -->
                 <div class="form-group">
                     <label class="form-label" for="cust-group">Customer Group</label>
                     <select class="form-select" id="cust-group" name="customer_group_id">
                         <%- _selOpts('Select group', _customerGroups, _v('customer_group_id')) %>
                     </select>
                 </div>
-
                 <div class="form-group">
                     <label class="form-label" for="cust-email">Email</label>
                     <div class="input-affix">
@@ -200,51 +104,24 @@ var headActions =
                                placeholder="name@company.com" value="<%= _v('email') %>">
                     </div>
                 </div>
-
                 <div class="form-group">
                     <label class="form-label" for="cust-location">Location<span class="req">*</span></label>
                     <select class="form-select" id="cust-location" name="location_id" required>
                         <%- _selOpts('Select location', _locations, _v('location_id')) %>
                     </select>
                 </div>
-
-                <!-- Row 3: Sales Person · Credit Limit (₹) · Opening Balance (₹) -->
                 <div class="form-group">
                     <label class="form-label" for="cust-sales-person">Sales Person</label>
                     <select class="form-select" id="cust-sales-person" name="sales_person_id">
                         <%- _selOpts('Select sales person', _salesPersons, _v('sales_person_id')) %>
                     </select>
                 </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="cust-credit-limit">Credit Limit</label>
-                    <div class="input-affix">
-                        <input type="number" class="form-control has-suffix" id="cust-credit-limit" name="credit_limit"
-                               placeholder="0" value="<%= _v('credit_limit') %>" min="0" step="1">
-                        <span class="affix affix--suffix">₹</span>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="cust-opening-balance">Opening Balance</label>
-                    <div class="input-affix">
-                        <input type="number" class="form-control has-suffix" id="cust-opening-balance" name="opening_balance"
-                               placeholder="0" value="<%= _v('opening_balance') %>" min="0" step="1">
-                        <span class="affix affix--suffix">₹</span>
-                    </div>
-                </div>
-
-            </div><!-- /.form-grid -->
+            </div>
 
             <hr class="form-divider">
 
-            <!-- Status* radios · Is-Tally-Ledger toggle · Tally Sync mini-card.
-                 Three columns on ≥768px, stacking on mobile. The Status
-                 pill chips colour-change to match the chosen state. -->
             <div class="row g-4 align-items-start">
-
-                <!-- Status radio group -->
-                <div class="col-12 col-md-5">
+                <div class="col-12 col-md-7">
                     <label class="form-label d-block">Status<span class="req">*</span></label>
                     <div class="status-radios">
                         <label class="status-radio is-active">
@@ -261,127 +138,100 @@ var headActions =
                         </label>
                     </div>
                 </div>
-
-                <!-- Is Tally Ledger toggle (on by default) -->
-                <div class="col-12 col-md-3">
+                <div class="col-12 col-md-5">
                     <label class="form-label d-block">Is Tally Ledger</label>
                     <div class="form-check form-switch">
                         <input class="form-check-input" type="checkbox" role="switch"
                                id="cust-tally-ledger" name="is_tally_ledger" <%= _isEdit ? (_v('is_tally_ledger') ? 'checked' : '') : 'checked' %>>
-                        <label class="form-check-label" for="cust-tally-ledger">
-                            Create as Tally ledger
-                        </label>
+                        <label class="form-check-label" for="cust-tally-ledger">Create as Tally ledger</label>
                     </div>
                     <div class="form-hint">Syncs this customer to Tally as a ledger account.</div>
                 </div>
+            </div>
+        </div><!-- /#basic -->
 
-                <!-- Tally Sync Status mini-card -->
-                <div class="col-12 col-md-4">
-                    <div class="sync-mini-card">
-                        <div>
-                            <div class="sync-mini-label">Tally Sync Status</div>
-                            <div class="sync-mini-value">Not Synced</div>
-                        </div>
-                        <button type="button" class="btn-sync-now" id="cust-sync-now">
-                            <i class="fa-solid fa-rotate me-1"></i>Sync Now
-                        </button>
-                    </div>
-                </div>
-
-            </div><!-- /.row -->
-
-            <hr class="form-divider">
-
-            <!-- Address section: Shipping (left) + Billing (right) with a
-                 "Same as Shipping Address" checkbox beside the Billing
-                 label and a live char counter under each textarea.
-                 app.js reads data-counter (counter) and
-                 data-same-as-shipping/data-source/data-target (mirror+lock). -->
-            <h2 class="form-section-title">Address</h2>
+        <!-- ════ Address ════ -->
+        <div class="tab-pane fade" id="address" role="tabpanel" aria-labelledby="address-tab">
             <div class="row g-4">
-
-                <!-- Shipping Address -->
                 <div class="col-12 col-md-6">
                     <label class="form-label" for="shipping-address">Shipping Address</label>
                     <textarea class="form-control" id="shipping-address" name="shipping_address"
-                              rows="4" maxlength="300" placeholder="Building, street, area, city, state, pincode…"
-                              data-counter="shipping-address-count"><%= _v('shipping_address') %></textarea>
-                    <div class="char-counter"><span id="shipping-address-count">0/300</span></div>
+                              rows="4" maxlength="2000" placeholder="Building, street, area, city, state, pincode…"><%= _v('shipping_address') %></textarea>
                 </div>
-
-                <!-- Billing Address (+ "Same as Shipping" toggle on its label row) -->
                 <div class="col-12 col-md-6">
                     <div class="d-flex align-items-center justify-content-between mb-1">
                         <label class="form-label mb-0" for="billing-address">Billing Address</label>
                         <label class="same-as-label" for="same-as-shipping">
-                            <input class="form-check-input mt-0" type="checkbox"
-                                   id="same-as-shipping"
-                                   data-same-as-shipping
-                                   data-source="shipping-address"
-                                   data-target="billing-address">
+                            <input class="form-check-input mt-0" type="checkbox" id="same-as-shipping"
+                                   data-same-as-shipping data-source="shipping-address" data-target="billing-address">
                             Same as Shipping Address
                         </label>
                     </div>
                     <textarea class="form-control" id="billing-address" name="billing_address"
-                              rows="4" maxlength="300" placeholder="Building, street, area, city, state, pincode…"
-                              data-counter="billing-address-count"><%= _v('billing_address') %></textarea>
-                    <div class="char-counter"><span id="billing-address-count">0/300</span></div>
+                              rows="4" maxlength="2000" placeholder="Building, street, area, city, state, pincode…"><%= _v('billing_address') %></textarea>
                 </div>
+            </div>
+        </div><!-- /#address -->
 
-            </div><!-- /.row -->
+        <!-- ════ GST & Tax Details ════ -->
+        <div class="tab-pane fade" id="gst" role="tabpanel" aria-labelledby="gst-tab">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="cust-gst">GST Number</label>
+                    <input type="text" class="form-control text-uppercase" id="cust-gst" name="gst_number"
+                           value="<%= _v('gst_number') %>" placeholder="24ABCDE1234F1Z5" maxlength="30">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cust-pan">PAN Number</label>
+                    <input type="text" class="form-control text-uppercase" id="cust-pan" name="pan_number"
+                           value="<%= _v('pan_number') %>" placeholder="ABCDE1234F" maxlength="30">
+                </div>
+            </div>
+        </div><!-- /#gst -->
 
+        <!-- ════ Other Details ════ -->
+        <div class="tab-pane fade" id="other" role="tabpanel" aria-labelledby="other-tab">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="cust-credit-limit">Credit Limit</label>
+                    <div class="input-affix">
+                        <input type="number" class="form-control has-suffix" id="cust-credit-limit" name="credit_limit"
+                               placeholder="0" value="<%= _v('credit_limit') %>" min="0" step="1">
+                        <span class="affix affix--suffix">₹</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cust-opening-balance">Opening Balance</label>
+                    <div class="input-affix">
+                        <input type="number" class="form-control has-suffix" id="cust-opening-balance" name="opening_balance"
+                               placeholder="0" value="<%= _v('opening_balance') %>" min="0" step="1">
+                        <span class="affix affix--suffix">₹</span>
+                    </div>
+                </div>
+            </div>
             <hr class="form-divider">
-
-            <!-- Notes (left) + Internal Remarks (right, team-only helper). -->
             <div class="row g-4">
-
                 <div class="col-12 col-md-6">
                     <label class="form-label" for="cust-notes">Notes</label>
                     <textarea class="form-control" id="cust-notes" name="notes"
-                              rows="3" maxlength="300" placeholder="Any notes about this customer…"
-                              data-counter="cust-notes-count"><%= _v('notes') %></textarea>
-                    <div class="char-counter"><span id="cust-notes-count">0/300</span></div>
+                              rows="3" maxlength="2000" placeholder="Any notes about this customer…"><%= _v('notes') %></textarea>
                 </div>
-
                 <div class="col-12 col-md-6">
                     <label class="form-label" for="cust-remarks">Internal Remarks</label>
                     <textarea class="form-control" id="cust-remarks" name="internal_remarks"
-                              rows="3" maxlength="300" placeholder="Notes for your team…"
-                              data-counter="cust-remarks-count"><%= _v('internal_remarks') %></textarea>
-                    <div class="d-flex justify-content-between">
-                        <span class="form-hint"><i class="fa-solid fa-lock me-1"></i>Visible to your team only</span>
-                        <span class="char-counter"><span id="cust-remarks-count">0/300</span></span>
-                    </div>
-                </div>
-
-            </div><!-- /.row -->
-
-        </div><!-- /#basic -->
-
-        <%
-        /* ════════════════════════════════════════════════════════════
-         * PANES 2–6 — "coming in next phase" placeholders.
-         * Rendered from `placeholderPanes` so each pane carries the same
-         * id/label/icon as its tab and the Bootstrap tabs switch cleanly
-         * (id === tab.id). Markup is minimal but styled (.tab-placeholder
-         * in theme.css §12). The Basic pane above is the only built form.
-         * ════════════════════════════════════════════════════════════ */
-        placeholderPanes.forEach(function (pane) { %>
-            <div class="tab-pane fade" id="<%= pane.id %>" role="tabpanel" aria-labelledby="<%= pane.id %>-tab">
-                <div class="tab-placeholder">
-                    <div class="tab-placeholder-icon">
-                        <i class="fa-solid <%= pane.icon %>"></i>
-                    </div>
-                    <div class="tab-placeholder-title"><%= pane.label %></div>
-                    <p class="mb-0">This section is coming in the next phase.</p>
+                              rows="3" maxlength="2000" placeholder="Notes for your team…"><%= _v('internal_remarks') %></textarea>
+                    <div class="form-hint"><i class="fa-solid fa-lock me-1"></i>Visible to your team only</div>
                 </div>
             </div>
-        <% }); %>
+        </div><!-- /#other -->
+
+        <!-- ════ Custom Fields (dynamic key/value editor) ════ -->
+        <div class="tab-pane fade" id="custom" role="tabpanel" aria-labelledby="custom-tab">
+            <%- include('../partials/custom-fields', { cf: _cf, noun: 'customer' }) %>
+        </div><!-- /#custom -->
 
     </div><!-- /.tab-content -->
 
-    <!-- Footer actions: Cancel (light → /customers) + Save Customer (primary).
-         Inside the card, after the panes, so they persist across all tabs. -->
     <div class="form-card-footer">
         <a class="btn btn-light" href="/customers">Cancel</a>
         <button type="submit" class="btn btn-primary">

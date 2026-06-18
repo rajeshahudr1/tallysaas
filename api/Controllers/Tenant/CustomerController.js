@@ -42,6 +42,9 @@ const SEARCH_COLS = [
     'customers.mobile',
     'customers.email',
     'customers.gst_number',
+    'customers.pan_number',
+    'customers.billing_address',
+    'locations.name',
 ];
 
 /**
@@ -69,8 +72,10 @@ function buildInsert(body) {
     return {
         name:              body.name,
         mobile:            body.mobile,
+        alternate_mobile:  body.alternate_mobile,
         email:             body.email,
         gst_number:        body.gst_number,
+        pan_number:        body.pan_number,
         location_id:       body.location_id,
         sales_person_id:   body.sales_person_id,
         customer_group_id: body.customer_group_id,
@@ -82,16 +87,18 @@ function buildInsert(body) {
         is_tally_ledger:   body.is_tally_ledger,
         notes:             body.notes,
         internal_remarks:  body.internal_remarks,
+        custom_fields:     (body.custom_fields && typeof body.custom_fields === 'object')
+            ? JSON.stringify(body.custom_fields) : undefined,
     };
 }
 
 // Updatable columns — the keys buildUpdate may patch.
 const UPDATABLE = [
-    'name', 'mobile', 'email', 'gst_number',
+    'name', 'mobile', 'alternate_mobile', 'email', 'gst_number', 'pan_number',
     'location_id', 'sales_person_id', 'customer_group_id',
     'opening_balance', 'credit_limit', 'status',
     'billing_address', 'shipping_address', 'is_tally_ledger',
-    'notes', 'internal_remarks',
+    'notes', 'internal_remarks', 'custom_fields',
 ];
 
 /**
@@ -106,6 +113,11 @@ function buildUpdate(body) {
             patch[key] = body[key];
         }
     }
+    // JSONB column wants a string, not a JS object.
+    if (patch.custom_fields && typeof patch.custom_fields === 'object') {
+        patch.custom_fields = JSON.stringify(patch.custom_fields);
+    }
+    patch.tally_dirty = true;   // cloud edit → re-push to Tally (ALTER)
     return patch;
 }
 
@@ -152,6 +164,15 @@ const controller = crud.build({
     listColumns: LIST_COLUMNS,
     listOrder:   [['customers.id', 'desc']],
     searchCols:  SEARCH_COLS,
+    // Extra sortable UI keys (name/status/created_at sort by default).
+    sortable: {
+        location:        'locations.name',
+        mobile:          'customers.mobile',
+        gst:             'customers.gst_number',
+        opening_balance: 'customers.opening_balance',
+        credit_limit:    'customers.credit_limit',
+        sales_person:    'sales_persons.name',
+    },
     baseQuery,
     buildInsert,
     buildUpdate,

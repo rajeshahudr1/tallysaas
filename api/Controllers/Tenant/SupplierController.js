@@ -96,6 +96,7 @@ function buildUpdate(body) {
             patch[key] = body[key];
         }
     }
+    patch.tally_dirty = true;   // cloud edit → re-push to Tally (ALTER)
     return patch;
 }
 

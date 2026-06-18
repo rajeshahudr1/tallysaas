@@ -175,6 +175,7 @@ async function update(req, res) {
         if (b.custom_fields && typeof b.custom_fields === 'object') {
             patch.custom_fields = JSON.stringify(b.custom_fields);
         }
+        patch.tally_dirty = true;   // cloud edit → re-push to Tally (ALTER)
         await db('companies').where({ id }).update(patch);
         const fresh = await db('companies').where({ id }).first('id', 'name', 'slug', 'status');
         return R.successResponse(res, fresh, 'Company updated.');

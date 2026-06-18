@@ -722,6 +722,37 @@ router.get('/locations/export', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* Fetch ALL rows of a list endpoint by paging (per_page is capped at 100). */
+async function fetchAllRows(req, basePath) {
+    let all = [];
+    for (let page = 1; page <= 100; page += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await api.get(req, `${basePath}?per_page=100&page=${page}`);
+        const payload = (result.body && result.body.data) || {};
+        const batch   = Array.isArray(payload.data) ? payload.data : [];
+        all = all.concat(batch);
+        const total = (payload.meta && payload.meta.total) || all.length;
+        if (batch.length === 0 || all.length >= total) break;
+    }
+    return all;
+}
+
+/* ── MASTERS · Export Customers (GET /customers/export) ── all columns ── */
+router.get('/customers/export', async (req, res, next) => {
+    try {
+        const records = await fetchAllRows(req, '/customers');
+        const headers = ['Name', 'Location', 'Mobile', 'Alternate Mobile', 'Email', 'GST Number',
+            'PAN Number', 'Billing Address', 'Shipping Address', 'Opening Balance', 'Credit Limit',
+            'Sales Person', 'Customer Group', 'Status', 'Created At'];
+        const csv = rowsToCsv(headers, records, (r) => [
+            r.name, r.location, r.mobile, r.alternate_mobile, r.email, r.gst_number,
+            r.pan_number, r.billing_address, r.shipping_address, r.opening_balance, r.credit_limit,
+            r.sales_person, r.customer_group, r.status, r.created_at,
+        ]);
+        return sendCsv(res, 'customers.csv', csv);
+    } catch (err) { next(err); }
+});
+
 /* ── MASTERS · Edit Company (GET /companies/:id/edit) ───────── */
 router.get('/companies/:id/edit', async (req, res, next) => {
     try {
@@ -2763,6 +2794,31 @@ router.get('/customers', async (req, res, next) => {
             sales_person:    r.sales_person || '',
             status:          r.status,
             created_at:      fmtDate(r.created_at),
+            // Full tab-wise detail for the View popup (every field, grouped).
+            _detail: [
+                { group: 'Basic Information' },
+                { label: 'Customer Name', value: r.name || '—' },
+                { label: 'Mobile', value: r.mobile || '—' },
+                { label: 'Alternate Mobile', value: r.alternate_mobile || '—' },
+                { label: 'Email', value: r.email || '—' },
+                { label: 'Status', value: r.status || '—' },
+                { group: 'Tax & Statutory' },
+                { label: 'GST Number', value: r.gst_number || '—' },
+                { label: 'PAN Number', value: r.pan_number || '—' },
+                { group: 'Address' },
+                { label: 'Billing Address', value: r.billing_address || '—' },
+                { label: 'Shipping Address', value: r.shipping_address || '—' },
+                { group: 'Financial' },
+                { label: 'Opening Balance', value: (r.opening_balance != null ? String(r.opening_balance) : '—') },
+                { label: 'Credit Limit', value: (r.credit_limit != null ? String(r.credit_limit) : '—') },
+                { group: 'Assignment' },
+                { label: 'Location', value: r.location || '—' },
+                { label: 'Sales Person', value: r.sales_person || '—' },
+                { label: 'Customer Group', value: r.customer_group || '—' },
+                { group: 'Notes' },
+                { label: 'Notes', value: r.notes || '—' },
+                { label: 'Internal Remarks', value: r.internal_remarks || '—' },
+            ],
         }));
 
         res.render('customers/list', {
@@ -2824,6 +2880,8 @@ router.post('/customers', async (req, res, next) => {
             mobile:            b.mobile || undefined,
             alternate_mobile:  b.alternate_mobile || undefined,
             email:             b.email || undefined,
+            gst_number:        b.gst_number || undefined,
+            pan_number:        b.pan_number || undefined,
             location_id:       num(b.location_id),
             sales_person_id:   num(b.sales_person_id),
             customer_group_id: num(b.customer_group_id),
@@ -2835,6 +2893,7 @@ router.post('/customers', async (req, res, next) => {
             is_tally_ledger:   asBool(b.is_tally_ledger),
             notes:             b.notes || undefined,
             internal_remarks:  b.internal_remarks || undefined,
+            custom_fields:     assembleCustomFields(b),
         };
         const result = await api.post(req, '/customers', payload);
         if (apiOk(result)) {
@@ -2897,11 +2956,13 @@ router.post('/customers/:id', async (req, res, next) => {
         const id = Number(req.params.id); const b = req.body;
         const payload = {
             name: b.name, mobile: b.mobile || undefined, alternate_mobile: b.alternate_mobile || undefined,
-            email: b.email || undefined, location_id: _num(b.location_id), sales_person_id: _num(b.sales_person_id),
+            email: b.email || undefined, gst_number: b.gst_number || undefined, pan_number: b.pan_number || undefined,
+            location_id: _num(b.location_id), sales_person_id: _num(b.sales_person_id),
             customer_group_id: _num(b.customer_group_id), opening_balance: _num(b.opening_balance),
             credit_limit: _num(b.credit_limit), status: b.status || 'Active',
             billing_address: b.billing_address || undefined, shipping_address: b.shipping_address || undefined,
             is_tally_ledger: asBool(b.is_tally_ledger), notes: b.notes || undefined, internal_remarks: b.internal_remarks || undefined,
+            custom_fields: assembleCustomFields(b),
         };
         const result = await api.put(req, `/customers/${id}`, payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Customer updated successfully.'); return req.session.save(() => res.redirect('/customers')); }

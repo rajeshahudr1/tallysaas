@@ -279,7 +279,9 @@ async function pending(req, res) {
         const licRow = await db('licenses').where('id', req.license.id).first('max_companies');
         const maxCompanies = licRow ? licRow.max_companies : null;
         const companies = await syncingCompanies(
-            req.license.id, maxCompanies, ['id', 'name', 'slug', 'tally_guid'],
+            req.license.id, maxCompanies,
+            ['id', 'name', 'slug', 'tally_guid', 'tally_dirty', 'mailing_name', 'email', 'phone', 'mobile',
+             'gst_number', 'pan_number', 'state', 'pincode', 'country', 'address', 'books_from'],
         );
         const companyIds = companies.map((c) => c.id);
         if (!companyIds.length) {
@@ -292,28 +294,51 @@ async function pending(req, res) {
         // Web-made companies not yet created in Tally (tally_guid NULL) — the
         // agent creates each in Tally then reports back so result() stamps the guid.
         const companiesToCreate = companies
-            .filter((c) => !c.tally_guid)
-            .map((c) => ({ id: c.id, name: c.name }));
+            .filter((c) => !c.tally_guid || c.tally_dirty)
+            .map((c) => ({
+                id: c.id, name: c.name,
+                action: c.tally_guid ? 'Alter' : 'Create',
+                mailing_name: c.mailing_name || null, email: c.email || null,
+                phone: c.phone || null, mobile: c.mobile || null,
+                gst: c.gst_number || null, pan: c.pan_number || null,
+                state: c.state || null, pincode: c.pincode || null,
+                country: c.country || null, address: c.address || null,
+                // Cloud stores "YYYY-MM-DD"; Tally wants "YYYYMMDD".
+                books_from: c.books_from ? String(c.books_from).replace(/-/g, '').slice(0, 8) : null,
+            }));
 
         // ── Ledgers ──
+        // New (tally_guid NULL) OR edited-after-sync (tally_dirty) records — the
+        // latter re-push as an ALTER so cloud edits reach Tally (bidirectional).
+        const _newOrDirty = (q) => q.whereNull('tally_guid').orWhere('tally_dirty', true);
         const customers = await db('customers')
             .whereIn('company_id', companyIds).whereNull('deleted_at')
-            .where('is_tally_ledger', true).whereNull('tally_guid')
+            .where('is_tally_ledger', true).where(_newOrDirty)
             .limit(50)
-            .select('id', 'company_id', 'name', 'gst_number', 'opening_balance');
+            .select('id', 'company_id', 'name', 'gst_number', 'opening_balance',
+                    'mobile', 'email', 'pan_number', 'billing_address', 'credit_limit', 'tally_guid');
         const suppliers = await db('suppliers')
             .whereIn('company_id', companyIds).whereNull('deleted_at')
-            .where('is_tally_ledger', true).whereNull('tally_guid')
+            .where('is_tally_ledger', true).where(_newOrDirty)
             .limit(50)
-            .select('id', 'company_id', 'name', 'gst_number', 'opening_balance');
+            .select('id', 'company_id', 'name', 'gst_number', 'opening_balance',
+                    'mobile', 'email', 'pan_number', 'tally_guid');
+        // FULL party record pushed to Tally (not just name/gstin/opening). Already-
+        // synced rows (tally_guid set) come through dirty → ACTION 'Alter'.
         const ledgers = [
             ...customers.map((c) => ({
                 record_type: 'customer', id: c.id, company_id: c.company_id, name: c.name,
                 parent: 'Sundry Debtors', gstin: c.gst_number || null, opening: Number(c.opening_balance) || 0,
+                mobile: c.mobile || null, email: c.email || null, pan: c.pan_number || null,
+                address: c.billing_address || null,
+                credit_limit: (c.credit_limit != null ? Number(c.credit_limit) : null),
+                action: c.tally_guid ? 'Alter' : 'Create',
             })),
             ...suppliers.map((s) => ({
                 record_type: 'supplier', id: s.id, company_id: s.company_id, name: s.name,
                 parent: 'Sundry Creditors', gstin: s.gst_number || null, opening: Number(s.opening_balance) || 0,
+                mobile: s.mobile || null, email: s.email || null, pan: s.pan_number || null,
+                action: s.tally_guid ? 'Alter' : 'Create',
             })),
         ];
 
@@ -458,8 +483,9 @@ async function result(req, res) {
             if (r.record_type === 'customer' || r.record_type === 'supplier') {
                 if (synced) {
                     const table = r.record_type === 'customer' ? 'customers' : 'suppliers';
+                    // tally_dirty:false — the cloud edit has now reached Tally.
                     await db(table).where({ id: r.record_id, company_id: cid })
-                        .update({ tally_guid: r.tally_guid || 'synced', tally_synced_at: now, updated_at: now });
+                        .update({ tally_guid: r.tally_guid || 'synced', tally_synced_at: now, tally_dirty: false, updated_at: now });
                 }
             } else if (r.record_type === 'product') {
                 if (synced) {
@@ -484,20 +510,20 @@ async function result(req, res) {
                     tally_voucher_no: r.tally_voucher_no || null, updated_at: now,
                 });
             } else if (r.record_type === 'company') {
-                // Web-made company now created in Tally → stamp its guid so
-                // /pending stops listing it under companies_to_create.
+                // Web-made company created/altered in Tally → stamp guid + clear
+                // dirty so /pending stops listing it.
                 if (synced) {
                     await db('companies').where({ id: r.record_id, license_id: req.license.id })
                         .whereNull('deleted_at')
-                        .update({ tally_guid: r.tally_guid || 'tally', updated_at: now });
+                        .update({ tally_guid: r.tally_guid || 'tally', tally_dirty: false, updated_at: now });
                 }
             } else if (r.record_type === 'location') {
                 // Location pushed as a Tally godown → stamp tally_guid +
-                // tally_synced_at so /pending stops returning it.
+                // tally_synced_at + clear dirty so /pending stops returning it.
                 if (synced) {
                     await db('locations').where({ id: r.record_id, company_id: cid })
                         .whereNull('deleted_at')
-                        .update({ tally_guid: r.tally_guid || 'tally', tally_synced_at: now, updated_at: now });
+                        .update({ tally_guid: r.tally_guid || 'tally', tally_synced_at: now, tally_dirty: false, updated_at: now });
                 }
             } else if (r.record_type === 'category') {
                 // Category pushed as a Tally stock group. The categories table
@@ -771,6 +797,14 @@ async function importFromTally(req, res) {
             } catch (e) { /* best-effort: one bad ledger never aborts the import */ }
         }
 
+        // Resolve the company's primary location ONCE so every customer pulled
+        // from Tally gets assigned to it (Tally ledgers carry no location/godown,
+        // but the cloud needs one for location-wise filtering). Prefer the Tally
+        // godown, else the oldest location.
+        const _mainLoc = await db('locations').where('company_id', cid).whereNull('deleted_at')
+            .orderByRaw('is_tally_godown desc, id asc').first('id');
+        const mainLocationId = _mainLoc ? _mainLoc.id : null;
+
         for (const l of ledgers) {
           try {
             const name = String(l.name || '').trim();
@@ -789,9 +823,11 @@ async function importFromTally(req, res) {
             const gstin = l.gstin ? String(l.gstin).trim() : null;
             const opening = num(l.opening);
 
+            const _selCols = ['id', 'tally_guid', 'gst_number', 'opening_balance', 'mobile', 'email', 'pan_number'];
+            if (table === 'customers') _selCols.push('billing_address', 'credit_limit', 'location_id');
             const existing = await db(table).where('company_id', cid).whereNull('deleted_at')
                 .whereRaw('lower(name) = ?', [name.toLowerCase()])
-                .first('id', 'tally_guid', 'gst_number', 'opening_balance');
+                .first(..._selCols);
             if (existing) {
                 // UPDATE the synced fields when Tally's value actually differs
                 // (so a GST/opening change in Tally reaches the cloud). Always
@@ -800,6 +836,16 @@ async function importFromTally(req, res) {
                 if (gstin && gstin !== (existing.gst_number || '')) upd.gst_number = gstin;
                 if (Number(existing.opening_balance) !== opening) upd.opening_balance = opening;
                 if (!existing.tally_guid) upd.tally_guid = 'tally';
+                // Fill-empty the party fields Tally now sends (mobile/email/PAN +
+                // customer billing address / credit limit / location).
+                if (l.mobile && !existing.mobile) upd.mobile = String(l.mobile);
+                if (l.email && !existing.email)   upd.email = String(l.email);
+                if (l.pan && !existing.pan_number) upd.pan_number = String(l.pan);
+                if (table === 'customers') {
+                    if (l.address && !existing.billing_address) upd.billing_address = String(l.address);
+                    if (l.credit_limit && !existing.credit_limit) upd.credit_limit = num(l.credit_limit);
+                    if (mainLocationId && !existing.location_id) upd.location_id = mainLocationId;
+                }
 
                 const ttype = table === 'customers' ? 'customer' : 'supplier';
                 if (Object.keys(upd).length) {
@@ -830,6 +876,16 @@ async function importFromTally(req, res) {
                     tally_guid: 'tally', gst_number: gstin, opening_balance: opening,
                     created_at: now, updated_at: now,
                 };
+                // Common party fields Tally now sends.
+                if (l.mobile) insertRow.mobile = String(l.mobile);
+                if (l.email)  insertRow.email = String(l.email);
+                if (l.pan)    insertRow.pan_number = String(l.pan);
+                // Customer-only: location (Tally ledgers carry none) + billing + credit.
+                if (table === 'customers') {
+                    if (mainLocationId)  insertRow.location_id = mainLocationId;
+                    if (l.address)       insertRow.billing_address = String(l.address);
+                    if (l.credit_limit)  insertRow.credit_limit = num(l.credit_limit);
+                }
                 const [row] = await db(table).insert(insertRow).returning('id');
                 const newId = row.id || row;
                 const ttype = table === 'customers' ? 'customer' : 'supplier';

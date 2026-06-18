@@ -48,8 +48,10 @@ const createCustomerSchema = Joi.object({
     }),
 
     mobile:           optText(30),
+    alternate_mobile: optText(30),
     email:            Joi.string().email({ tlds: { allow: false } }).lowercase().trim().max(191).allow('', null),
     gst_number:       optText(30),
+    pan_number:       optText(30),
 
     location_id:       fkId,
     sales_person_id:   fkId,
@@ -67,6 +69,7 @@ const createCustomerSchema = Joi.object({
 
     notes:            optText(2000),
     internal_remarks: optText(2000),
+    custom_fields:    Joi.object().unknown(true).allow(null),
 });
 
 /**
@@ -79,8 +82,10 @@ const createCustomerSchema = Joi.object({
 const updateCustomerSchema = Joi.object({
     name:             Joi.string().trim().min(1).max(191),
     mobile:           optText(30),
+    alternate_mobile: optText(30),
     email:            Joi.string().email({ tlds: { allow: false } }).lowercase().trim().max(191).allow('', null),
     gst_number:       optText(30),
+    pan_number:       optText(30),
 
     location_id:       fkId,
     sales_person_id:   fkId,
@@ -98,6 +103,7 @@ const updateCustomerSchema = Joi.object({
 
     notes:            optText(2000),
     internal_remarks: optText(2000),
+    custom_fields:    Joi.object().unknown(true).allow(null),
 }).min(1).messages({
     'object.min': 'Provide at least one field to update.',
 });

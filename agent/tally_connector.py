@@ -246,11 +246,24 @@ class TallyConnector:
                         or self._child_text(el, "NAME")
                     if not name:
                         continue
+                    # Mailing address can arrive as multiple nested <ADDRESS> lines.
+                    addr_lines = [a.text.strip() for a in el.iter()
+                                  if self._localname(a.tag).upper() == "ADDRESS" and (a.text or "").strip()]
                     ledgers.append({
                         "name": name,
                         "parent": self._child_text(el, "PARENT"),
                         "gstin": self._child_text(el, "PARTYGSTIN") or None,
                         "opening": self._child_text(el, "OPENINGBALANCE"),
+                        "mobile": (self._child_text(el, "LEDGERMOBILE")
+                                   or self._child_text(el, "LEDGERPHONE") or None),
+                        "email": self._child_text(el, "EMAIL") or None,
+                        "pan": self._child_text(el, "INCOMETAXNUMBER") or None,
+                        "address": "\n".join(addr_lines) or None,
+                        "state": (self._child_text(el, "LEDSTATENAME")
+                                  or self._child_text(el, "STATENAME") or None),
+                        "pincode": self._child_text(el, "PINCODE") or None,
+                        "country": self._child_text(el, "COUNTRYNAME") or None,
+                        "credit_limit": self._child_text(el, "CREDITLIMIT") or None,
                         "alterid": self._alterid(el),
                     })
         return ledgers
@@ -506,13 +519,18 @@ class TallyConnector:
         gstin: Optional[str] = None,
         opening: float = 0,
         company: Optional[str] = None,
+        **fields: Any,
     ) -> str:
         """Create a ledger master in Tally; returns the raw Tally response.
+
+        ``fields`` carries the extra party columns (mobile/email/pan/address/
+        state/pincode/credit_limit) so the cloud customer/supplier pushes its
+        FULL record, not just name/gstin/opening.
 
         Pass ``company`` to import the ledger into that SPECIFIC loaded company
         (SVCURRENTCOMPANY); omit it to import into whichever company is active.
         """
-        return self.send(self.create_ledger_xml(name, parent, gstin, opening, company))
+        return self.send(self.create_ledger_xml(name, parent, gstin, opening, company, **fields))
 
     def create_unit(self, name: str, company: Optional[str] = None) -> str:
         """Create a simple Unit of Measure master in Tally (e.g. Nos, Kg, Box).
@@ -622,14 +640,17 @@ class TallyConnector:
         name: str,
         books_from: Optional[str] = None,
         fy_from: Optional[str] = None,
+        **fields: Any,
     ) -> str:
         """Create a COMPANY in Tally (web-made company -> Tally); raw response.
 
         ``books_from`` / ``fy_from`` are Tally YYYYMMDD dates; both default to
-        the 1st April of the current (or previous, before April) financial year
-        — the usual Indian FY start. Returns the raw Tally response.
+        the 1st April of the current (or previous, before April) financial year.
+        ``fields`` carries the rest of the cloud company record (mailing_name,
+        email, phone, mobile, gst, pan, state, pincode, country, address) so the
+        FULL company is created, not just the name. Returns the raw response.
         """
-        return self.send(self.create_company_xml(name, books_from, fy_from))
+        return self.send(self.create_company_xml(name, books_from, fy_from, **fields))
 
     # ------------------------------------------------------------------ #
     # XML BUILDERS — request envelopes (Tally ENVELOPE/TALLYREQUEST format)
@@ -737,10 +758,14 @@ class TallyConnector:
 
     @staticmethod
     def _ledger_collection_request_xml(company: Optional[str] = None) -> str:
-        """EXPORT: a Collection of Ledgers fetching name/parent/alterid/gstin/opening."""
+        """EXPORT: a Collection of Ledgers fetching name/parent/alterid + every
+        party field the cloud customer/supplier record can store (gstin, opening,
+        mobile, email, PAN, address, credit limit)."""
         return TallyConnector._collection_request_xml(
             "TSSLedgerColl", "Ledger",
-            ["NAME", "PARENT", "ALTERID", "PARTYGSTIN", "OPENINGBALANCE"],
+            ["NAME", "PARENT", "ALTERID", "PARTYGSTIN", "OPENINGBALANCE",
+             "LEDGERMOBILE", "LEDGERPHONE", "EMAIL", "INCOMETAXNUMBER",
+             "ADDRESS", "LEDSTATENAME", "PINCODE", "COUNTRYNAME", "CREDITLIMIT"],
             company,
         )
 
@@ -842,26 +867,47 @@ class TallyConnector:
         gstin: Optional[str] = None,
         opening: float = 0,
         company: Optional[str] = None,
+        mobile: Optional[str] = None,
+        email: Optional[str] = None,
+        pan: Optional[str] = None,
+        address: Optional[str] = None,
+        state: Optional[str] = None,
+        pincode: Optional[str] = None,
+        credit_limit: Optional[float] = None,
+        action: str = "Create",
     ) -> str:
-        """IMPORT: create a Ledger master.
+        """IMPORT: create OR alter a Ledger master with the FULL party record.
+
+        ``action`` is "Create" for a new ledger or "Alter" to update an existing
+        one (cloud edit re-push) — Tally matches the existing master by NAME.
 
         Tally tags used inside <LEDGER>:
-            <NAME>                 - ledger name
-            <PARENT>               - group it belongs to (e.g. Sundry Debtors)
-            <OPENINGBALANCE>       - opening balance amount
-            <PARTYGSTIN>           - GSTIN/UIN of the party (optional)
-            <GSTREGISTRATIONTYPE>  - Regular/Composition (set when GSTIN given)
+            <NAME> <PARENT> <OPENINGBALANCE> <PARTYGSTIN> <GSTREGISTRATIONTYPE>
+            <LEDGERMOBILE> <EMAIL> <INCOMETAXNUMBER> (PAN) <LEDSTATENAME>
+            <PINCODE> <CREDITLIMIT> + <ADDRESS.LIST><ADDRESS> lines.
 
-        Pass ``company`` to import the ledger into that specific loaded company
+        Pass ``company`` to import into that specific loaded company
         (SVCURRENTCOMPANY inside REQUESTDESC); omit it for the active company.
         """
         name_e = self._esc(name)
+
+        def _tag(tag: str, val: Any) -> str:
+            return ("<" + tag + ">" + self._esc(val) + "</" + tag + ">") if (val not in (None, "")) else ""
+
         gstin_block = ""
         if gstin:
             gstin_block = (
                 "<PARTYGSTIN>" + self._esc(gstin) + "</PARTYGSTIN>"
                 "<GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>"
             )
+        # Multi-line address → <ADDRESS.LIST> of <ADDRESS> entries.
+        addr_block = ""
+        if address:
+            lines = [ln for ln in str(address).replace("\r", "").split("\n") if ln.strip()]
+            if lines:
+                addr_block = ("<ADDRESS.LIST TYPE=\"String\">"
+                              + "".join("<ADDRESS>" + self._esc(ln) + "</ADDRESS>" for ln in lines)
+                              + "</ADDRESS.LIST>")
         return (
             "<ENVELOPE>"
             "<HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>"
@@ -869,11 +915,18 @@ class TallyConnector:
             + self._import_requestdesc("All Masters", company) +
             "<REQUESTDATA>"
             '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
-            '<LEDGER NAME="' + name_e + '" ACTION="Create">'
+            '<LEDGER NAME="' + name_e + '" ACTION="' + (action or "Create") + '">'
             "<NAME>" + name_e + "</NAME>"
             "<PARENT>" + self._esc(parent) + "</PARENT>"
             "<OPENINGBALANCE>" + self._esc(opening) + "</OPENINGBALANCE>"
-            + gstin_block +
+            + gstin_block
+            + _tag("LEDGERMOBILE", mobile)
+            + _tag("EMAIL", email)
+            + _tag("INCOMETAXNUMBER", pan)
+            + _tag("LEDSTATENAME", state)
+            + _tag("PINCODE", pincode)
+            + (_tag("CREDITLIMIT", credit_limit) if credit_limit not in (None, "", 0) else "")
+            + addr_block +
             "</LEDGER>"
             "</TALLYMESSAGE>"
             "</REQUESTDATA></IMPORTDATA></BODY>"
@@ -1249,23 +1302,41 @@ class TallyConnector:
         name: str,
         books_from: Optional[str] = None,
         fy_from: Optional[str] = None,
+        mailing_name: Optional[str] = None,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        mobile: Optional[str] = None,
+        gst: Optional[str] = None,
+        pan: Optional[str] = None,
+        state: Optional[str] = None,
+        pincode: Optional[str] = None,
+        country: Optional[str] = None,
+        address: Optional[str] = None,
+        action: str = "Create",
     ) -> str:
-        """IMPORT: create a COMPANY master in Tally.
+        """IMPORT: create OR alter a COMPANY master in Tally with the FULL record.
 
-        Tally tags used inside <COMPANY>:
-            <NAME>              - company name
-            <STARTINGFROM>      - financial-year start (YYYYMMDD)
-            <BOOKSFROM>         - books-beginning date (YYYYMMDD)
-            <ISACCOUNTSONLY>    - "No" so inventory is enabled too
+        Tags inside <COMPANY>: <NAME> <MAILINGNAME> <STARTINGFROM> <BOOKSFROM>
+        <ISACCOUNTSONLY> <EMAIL> <PHONENUMBER> <MOBILENUMBERS> <STATENAME>
+        <PINCODE> <COUNTRYNAME> <CMPGSTIN> <INCOMETAXNUMBER> + <ADDRESS.LIST>.
 
-        NOTE: Company-creation XML varies across Tally releases (some builds want
-        the company under a different REPORTNAME, or require additional GST/state
-        tags). This uses the common "All Masters" import shape with sensible FY
-        defaults; it may need field tweaks against a live Tally.
+        NOTE: Company-creation XML varies across Tally releases; this uses the
+        common "All Masters" import shape and may need field tweaks on a live Tally.
         """
         name_e = self._esc(name)
         start = self._esc(fy_from or self._default_fy_start())
         books = self._esc(books_from or fy_from or self._default_fy_start())
+
+        def _tag(tag: str, val: Any) -> str:
+            return ("<" + tag + ">" + self._esc(val) + "</" + tag + ">") if (val not in (None, "")) else ""
+
+        addr_block = ""
+        if address:
+            lines = [ln for ln in str(address).replace("\r", "").split("\n") if ln.strip()]
+            if lines:
+                addr_block = ("<ADDRESS.LIST TYPE=\"String\">"
+                              + "".join("<ADDRESS>" + self._esc(ln) + "</ADDRESS>" for ln in lines)
+                              + "</ADDRESS.LIST>")
         return (
             "<ENVELOPE>"
             "<HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>"
@@ -1273,11 +1344,21 @@ class TallyConnector:
             "<REQUESTDESC><REPORTNAME>All Masters</REPORTNAME></REQUESTDESC>"
             "<REQUESTDATA>"
             '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
-            '<COMPANY NAME="' + name_e + '" ACTION="Create">'
+            '<COMPANY NAME="' + name_e + '" ACTION="' + (action or "Create") + '">'
             "<NAME>" + name_e + "</NAME>"
+            + _tag("MAILINGNAME", mailing_name) +
             "<STARTINGFROM>" + start + "</STARTINGFROM>"
             "<BOOKSFROM>" + books + "</BOOKSFROM>"
             "<ISACCOUNTSONLY>No</ISACCOUNTSONLY>"
+            + _tag("EMAIL", email)
+            + _tag("PHONENUMBER", phone)
+            + _tag("MOBILENUMBERS", mobile)
+            + _tag("STATENAME", state)
+            + _tag("PINCODE", pincode)
+            + _tag("COUNTRYNAME", country)
+            + _tag("CMPGSTIN", gst)
+            + _tag("INCOMETAXNUMBER", pan)
+            + addr_block +
             "</COMPANY>"
             "</TALLYMESSAGE>"
             "</REQUESTDATA></IMPORTDATA></BODY>"
