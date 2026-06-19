@@ -1164,12 +1164,19 @@ async function importFromTally(req, res) {
                         .sort((a, b) => Math.abs(Number(b.amount) || 0) - Math.abs(Number(a.amount) || 0));
                     return arr.length ? arr[0].ledger : '';
                 };
+                const journalAmount = _vEntries.length ? _debitSum : Math.abs(amount);
+                // CONTENT dedupe — cloud-PUSHED journals only (no guid): link a
+                // pushed journal to its re-pulled Tally twin instead of duplicating.
+                const contentDup = await db('journals')
+                    .where({ company_id: cid, journal_date: journalDate, amount: journalAmount })
+                    .whereNull('deleted_at').whereNull('tally_guid').first('id');
+                if (contentDup) { counts.skipped += 1; continue; }
                 const insertRow = {
                     company_id: cid, voucher_no: journalNo, vch_type: 'Journal',
                     journal_date: journalDate,
                     dr_ledger: _topLedger(true) || partyName || '(unknown)',
                     cr_ledger: _topLedger(false) || '',
-                    amount: _vEntries.length ? _debitSum : Math.abs(amount),
+                    amount: journalAmount,
                     narration: null, status: 'created',
                     tally_voucher_no: vno, tally_guid: guid || null,
                     created_at: now, updated_at: now,
@@ -1220,14 +1227,15 @@ async function importFromTally(req, res) {
                 // party id-or-null, date, amount) payment already exists so it is
                 // not re-imported as a duplicate.
                 const payPartyCol = isReceipt ? 'customer_id' : 'supplier_id';
-                // Same guard as invoices: only dedupe against a cloud-PUSHED
-                // payment (no tally_voucher_no) — never against another imported
-                // Tally voucher, so distinct cash receipts sharing (date, amount,
-                // party) all import.
+                // Guard on tally_guid IS NULL: only dedupe against a cloud-PUSHED
+                // payment (which has a cloud voucher_no + tally_voucher_no but NO
+                // guid). NEVER against another imported Tally voucher, so distinct
+                // cash receipts sharing (date, amount, party) all import. This
+                // links a pushed payment back to its Tally twin on re-pull (no dup).
                 const contentDup = await db('payments')
-                    .where({ company_id: cid, type, payment_date: date, amount,
+                    .where({ company_id: cid, type, payment_date: date, amount: payAmount,
                              [payPartyCol]: partyId })
-                    .whereNull('deleted_at').whereNull('tally_voucher_no').first('id');
+                    .whereNull('deleted_at').whereNull('tally_guid').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
                 const payRow = {
                     company_id: cid, type, voucher_no: payVoucherNo, payment_date: date,
