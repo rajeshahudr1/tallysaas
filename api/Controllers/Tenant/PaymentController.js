@@ -107,8 +107,9 @@ async function listByType(req, res, type) {
         const search    = (req.query.search || '').trim();
         const status    = (req.query.status || '').trim();
         const mode      = (req.query.mode || '').trim();
-        const dateFrom  = (req.query.date_from || '').trim();
-        const dateTo    = (req.query.date_to || '').trim();
+        // Joi may coerce date_from/date_to to Date objects — don't .trim() them.
+        const dateFrom  = req.query.date_from || null;
+        const dateTo    = req.query.date_to || null;
 
         let qb = scoped(req.companyId, type);
 

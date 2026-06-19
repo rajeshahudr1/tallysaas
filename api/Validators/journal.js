@@ -18,10 +18,12 @@ const createJournalSchema = Joi.object({
 });
 
 const listJournalSchema = Joi.object({
-    search:   Joi.string().trim().max(191).allow('', null),
-    status:   Joi.string().valid(...STATUSES),
-    page:     Joi.number().integer().min(1).default(1),
-    per_page: Joi.number().integer().min(1).max(100).default(20),
-});
+    search:    Joi.string().trim().max(191).allow('', null),
+    status:    Joi.string().valid(...STATUSES),
+    date_from: Joi.string().trim().allow('', null),
+    date_to:   Joi.string().trim().allow('', null),
+    page:      Joi.number().integer().min(1).default(1),
+    per_page:  Joi.number().integer().min(1).max(100).default(20),
+}).unknown(true);
 
 module.exports = { createJournalSchema, listJournalSchema, STATUSES, VCH_TYPES };

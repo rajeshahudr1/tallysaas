@@ -1148,31 +1148,30 @@ async function importFromTally(req, res) {
             const isPurchase = vt.indexOf('purchase') > -1 || isDebitNote;
 
             if (isJournal) {
-                // Journal voucher → journals table. The day_book voucher only
-                // gives party/amount/date, so set dr_ledger=party (best-effort).
-                // cr_ledger is NOT NULL in the schema, so use '' when unknown.
-                const dup = await db('journals').where({ company_id: cid, tally_voucher_no: vno })
-                    .whereNull('deleted_at').first('id');
+                // Journal voucher → journals table. DEDUP BY GUID (Tally reuses
+                // numbers). dr_ledger / cr_ledger = the largest debit / credit
+                // posting; amount = party-side debit sum (excl round-off).
+                const dup = guid
+                    ? await db('journals').where({ company_id: cid, tally_guid: guid }).whereNull('deleted_at').first('id')
+                    : await db('journals').where({ company_id: cid, tally_voucher_no: vno }).whereNull('deleted_at').first('id');
                 if (dup) { counts.skipped += 1; continue; }
-                // journal_date is NOT NULL in the schema; tdate() returns null
-                // for an unparseable Tally date, so fall back to today rather
-                // than letting one bad date abort the whole import pass.
+                // journal_date is NOT NULL; tdate() returns null for an unparseable
+                // Tally date, so fall back to today rather than aborting the import.
                 const journalDate = date || now.toISOString().slice(0, 10);
-                // CONTENT dedupe: a journal already pushed cloud→Tally exists in
-                // the cloud (Tally auto-numbers, so its vno never matches our
-                // voucher_no). Skip if a non-deleted journal with the same
-                // (company_id, amount, date, dr_ledger, cr_ledger) already exists
-                // so a pushed journal is not re-imported as a duplicate row.
-                const contentDup = await db('journals')
-                    .where({ company_id: cid, journal_date: journalDate, amount,
-                             dr_ledger: partyName || '(unknown)', cr_ledger: '' })
-                    .whereNull('deleted_at').first('id');
-                if (contentDup) { counts.skipped += 1; continue; }
+                const journalNo = (vno && vno.trim()) ? vno : (guid ? `JV/${guid.slice(-8)}` : vno);
+                const _topLedger = (wantDebit) => {
+                    const arr = _vEntries.filter((e) => !!e.is_debit === wantDebit && !_isRound(e))
+                        .sort((a, b) => Math.abs(Number(b.amount) || 0) - Math.abs(Number(a.amount) || 0));
+                    return arr.length ? arr[0].ledger : '';
+                };
                 const insertRow = {
-                    company_id: cid, voucher_no: vno, vch_type: 'Journal',
-                    journal_date: journalDate, dr_ledger: partyName || '(unknown)', cr_ledger: '',
-                    amount, narration: null, status: 'created',
-                    tally_voucher_no: vno, tally_guid: guid || 'tally',
+                    company_id: cid, voucher_no: journalNo, vch_type: 'Journal',
+                    journal_date: journalDate,
+                    dr_ledger: _topLedger(true) || partyName || '(unknown)',
+                    cr_ledger: _topLedger(false) || '',
+                    amount: _vEntries.length ? _debitSum : Math.abs(amount),
+                    narration: null, status: 'created',
+                    tally_voucher_no: vno, tally_guid: guid || null,
                     created_at: now, updated_at: now,
                 };
                 const [row] = await db('journals').insert(insertRow).returning('id');

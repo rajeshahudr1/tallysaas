@@ -1,19 +1,19 @@
 <%
-/* views/journals/list.ejs — TRANSACTIONS · Journals listing. */
+/* views/journals/list.ejs — TRANSACTIONS · Journals (a month's voucher list). */
 var _rows    = (typeof journalRows !== 'undefined' && journalRows) ? journalRows : [];
 var _total   = (typeof journalsTotal !== 'undefined') ? journalsTotal : _rows.length;
 var _page    = (typeof page !== 'undefined' && page) ? page : 1;
 var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
 
+/* Columns ordered like Tally's Journal/Voucher Register. */
 var tableColumns = [
-    { key: 'voucher_no', label: 'Voucher No', sortable: true, type: 'text' },
-    { key: 'vch_type',   label: 'Type',       sortable: true, type: 'badge' },
-    { key: 'date',       label: 'Date',       sortable: true, type: 'date' },
-    { key: 'dr_ledger',  label: 'Debit (Dr)', sortable: true, type: 'text' },
-    { key: 'cr_ledger',  label: 'Credit (Cr)',sortable: true, type: 'text' },
-    { key: 'narration',  label: 'Narration',  type: 'text' },
-    { key: 'amount',     label: 'Amount',     sortable: true, type: 'currency' },
-    { key: 'status',     label: 'Status',     type: 'status' },
+    { key: 'date',       label: 'Date',        sortable: true,  type: 'date' },
+    { key: 'dr_ledger',  label: 'Debit (Dr)',  sortable: true,  type: 'text' },
+    { key: 'cr_ledger',  label: 'Credit (Cr)', sortable: true,  type: 'text' },
+    { key: 'voucher_no', label: 'Vch No.',     sortable: true,  type: 'text' },
+    { key: 'amount',     label: 'Amount',      sortable: true,  type: 'currency' },
+    { key: 'narration',  label: 'Narration',   sortable: false, type: 'text' },
+    { key: 'status',     label: 'Status',      sortable: false, type: 'status' },
 ];
 %>
 
@@ -21,10 +21,35 @@ var tableColumns = [
     title: 'Journals',
     breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Journals' }],
     actions: [
-        { label: 'Export', icon: 'fa-upload', variant: 'light' },
+        { label: 'Export', icon: 'fa-upload', variant: 'light',
+          href: (typeof monthValue !== 'undefined' && monthValue) ? '/journals/export?month=' + monthValue : '/journals/export' },
         { label: 'Add Journal', icon: 'fa-plus', gradient: true, href: '/journals/add' },
     ],
 }) %>
+
+<% if (typeof monthMode !== 'undefined' && monthMode) { %>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+    <a href="/journals" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:7px 14px;color:#334155;text-decoration:none;font-weight:600;font-size:13px">
+        <i class="fa-solid fa-arrow-left"></i> Journal Register
+    </a>
+    <span style="font-size:15px;font-weight:700;color:#111"><%= typeof monthLabel !== 'undefined' ? monthLabel : '' %></span>
+</div>
+<% } %>
+
+<%# ── Total amount on top ── %>
+<% var _gt  = (typeof grandTotal !== 'undefined') ? Number(grandTotal) : 0;
+   var _cnt = (typeof journalsTotal !== 'undefined') ? journalsTotal : 0;
+   function _inrG(v){ return Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); } %>
+<div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 18px;min-width:170px">
+        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
+        <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _cnt %></div>
+    </div>
+    <div style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
+        <div style="font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.4px">Total (Journals)</div>
+        <div style="font-size:20px;font-weight:700;margin-top:2px">₹ <%= _inrG(_gt) %></div>
+    </div>
+</div>
 
 <div class="card">
     <%- include('../partials/table', {

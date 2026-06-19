@@ -44,13 +44,41 @@ async function list(req, res) {
                     .orWhere('narration', 'ilike', like);
             });
         }
+        if (req.query.date_from) qb = qb.where('journal_date', '>=', req.query.date_from);
+        if (req.query.date_to)   qb = qb.where('journal_date', '<=', req.query.date_to);
         const [{ count }] = await qb.clone().clearSelect().clearOrder().count({ count: '*' });
+        const sumRow = await qb.clone().clearSelect().clearOrder().sum({ t: 'amount' }).first();
+        const grandTotal = Number(sumRow ? sumRow.t : 0) || 0;
         const rows = await qb
             .orderBy('id', 'desc').limit(perPage).offset((page - 1) * perPage)
             .select('id', 'voucher_no', 'vch_type', 'journal_date', 'dr_ledger', 'cr_ledger', 'amount', 'narration', 'status', 'created_at');
-        return R.successResponse(res, { data: rows, meta: { total: Number(count), page, per_page: perPage } });
+        return R.successResponse(res, { data: rows, meta: { total: Number(count), page, per_page: perPage, grand_total: grandTotal } });
     } catch (err) {
         console.error('journals.list error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/** GET /api/v1/journals/monthly — month-wise Journal Register summary. */
+async function monthly(req, res) {
+    try {
+        const money = (x) => Number(Number(x || 0).toFixed(2));
+        let qb = db('journals').where('company_id', req.companyId).whereNull('deleted_at');
+        if (req.query.date_from) qb = qb.where('journal_date', '>=', req.query.date_from);
+        if (req.query.date_to)   qb = qb.where('journal_date', '<=', req.query.date_to);
+        const rows = await qb
+            .select(db.raw("to_char(journal_date, 'YYYY-MM') as month"))
+            .sum('amount as total').count('id as count')
+            .groupByRaw("to_char(journal_date, 'YYYY-MM')")
+            .orderByRaw("to_char(journal_date, 'YYYY-MM')");
+        let running = 0;
+        const months = rows.map((r) => {
+            running += Number(r.total) || 0;
+            return { month: r.month, total: money(r.total), count: Number(r.count) || 0, closing: money(running) };
+        });
+        return R.successResponse(res, { data: months, meta: { grand_total: money(running), months: months.length } });
+    } catch (err) {
+        console.error('journals.monthly error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);
     }
 }
@@ -121,4 +149,4 @@ async function destroy(req, res) {
     }
 }
 
-module.exports = { list, create, destroy };
+module.exports = { list, monthly, create, destroy };

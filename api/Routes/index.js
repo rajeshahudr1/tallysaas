@@ -934,6 +934,11 @@ router.get(
     validate(listJournalSchema, 'query'),
     JournalController.list,
 );
+router.get(
+    '/journals/monthly',
+    authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
+    JournalController.monthly,
+);
 router.post(
     '/journals',
     authenticate, resolveCompany, resolveLocation, can('payments', 'create'),
