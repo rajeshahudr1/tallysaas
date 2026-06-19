@@ -583,6 +583,12 @@ router.get(
 );
 
 router.get(
+    '/sales-invoices/monthly',
+    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    InvoiceController.monthlySales,
+);
+
+router.get(
     '/sales-invoices/:id',
     authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
     InvoiceController.get,
@@ -610,6 +616,12 @@ router.get(
     authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
     validate(listInvoiceSchema, 'query'),
     InvoiceController.listPurchase,
+);
+
+router.get(
+    '/purchase-invoices/monthly',
+    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
+    InvoiceController.monthlyPurchase,
 );
 
 router.get(

@@ -32,8 +32,8 @@ var filterFields = [
     { type: 'text',   name: 'search',       label: 'Search',       placeholder: 'Invoice no / customer...', colClass: 'filter-col-fifth' },
     { type: 'select', name: 'customer',     label: 'Customer',     options: _opts('All Customers', _custs),  colClass: 'filter-col-fifth' },
     { type: 'select', name: 'status',       label: 'Status',       options: _opts('All Status', _statuses),  colClass: 'filter-col-fifth' },
-    { type: 'date',   name: 'date_from',    label: 'Date From',    value: '2024-05-01',                      colClass: 'filter-col-fifth' },
-    { type: 'date',   name: 'date_to',      label: 'Date To',      value: '2024-05-31',                      colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from',    label: 'Date From',                                              colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_to',      label: 'Date To',                                                colClass: 'filter-col-fifth' },
 ];
 
 /* ── Table config ───────────────────────────────────────────── */
@@ -59,17 +59,27 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
         { label: 'Sales Invoices' },
     ],
     actions: [
-        { label: 'Export',         icon: 'fa-upload', variant: 'light' },
+        { label: 'Export',         icon: 'fa-upload', variant: 'light',
+          href: (typeof monthValue !== 'undefined' && monthValue) ? '/sales-invoices/export?month=' + monthValue : '/sales-invoices/export' },
         { label: 'Create Invoice', icon: 'fa-plus',   gradient: true, href: '/sales-invoices/create' },
     ],
 }) %>
+
+<% if (typeof monthMode !== 'undefined' && monthMode) { %>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+    <a href="/sales-invoices" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:7px 14px;color:#334155;text-decoration:none;font-weight:600;font-size:13px">
+        <i class="fa-solid fa-arrow-left"></i> Sales Register
+    </a>
+    <span style="font-size:15px;font-weight:700;color:#111"><%= typeof monthLabel !== 'undefined' ? monthLabel : '' %></span>
+</div>
+<% } %>
 
 <form id="invoice-filters-form" autocomplete="off" method="get" action="/sales-invoices">
     <%- include('../partials/filter-card', {
         filterId: 'invoice-filters',
         title: 'Advanced Filters',
         fields: filterFields,
-        collapsed: false,
+        collapsed: true,
     }) %>
 </form>
 
@@ -101,18 +111,6 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
             </select>
             <span>entries</span>
         </label>
-
-        <div class="toolbar-sort">
-            <span>Sort By</span>
-            <select class="form-select form-select-sm" aria-label="Sort by column">
-                <% sortOptions.forEach(function (label) { %>
-                    <option value="<%= label %>" <%= label === 'Date' ? 'selected' : '' %>><%= label %></option>
-                <% }); %>
-            </select>
-            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
-                <i class="fa-solid fa-arrow-down-short-wide"></i>
-            </button>
-        </div>
     </div>
 
     <%- include('../partials/table', {

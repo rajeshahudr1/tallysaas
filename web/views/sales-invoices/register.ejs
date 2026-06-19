@@ -1,0 +1,143 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/sales-invoices/register.ejs — Tally "Sales Register".
+ * Month-wise summary (April…March) with a running Closing Balance and
+ * a Grand Total, exactly like Tally's Sales Register. Each month row
+ * drills into that month's voucher list (?month=YYYY-MM).
+ *
+ * Locals:
+ *   months     [ { month:'2022-04', total, count, closing } ]
+ *   grandTotal number
+ *   periodLabel string (e.g. "1-Apr-2022 to 28-Feb-2023")
+ * ─────────────────────────────────────────────────────────── */
+var _months = (typeof months !== 'undefined' && months) ? months : [];
+var _grand  = (typeof grandTotal !== 'undefined') ? Number(grandTotal) : 0;
+var _vchTot = 0; _months.forEach(function (m) { _vchTot += Number(m.count) || 0; });
+var MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+          'July', 'August', 'September', 'October', 'November', 'December'];
+function _inr(v) { return Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _mlabel(ym) { var p = String(ym).split('-'); return (MN[Number(p[1])] || ym) + ' ' + p[0]; }
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Sales Register',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Sales Invoices' },
+    ],
+    actions: [
+        { label: 'Export', icon: 'fa-upload', variant: 'light', href: '/sales-invoices/register/export' },
+        { label: 'Create Invoice', icon: 'fa-plus', gradient: true, href: '/sales-invoices/create' },
+    ],
+}) %>
+
+<%# ── Summary strip (Tally-style totals on top) ── %>
+<div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 18px;min-width:170px">
+        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
+        <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _vchTot %></div>
+    </div>
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 18px;min-width:150px">
+        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Months</div>
+        <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _months.length %></div>
+    </div>
+    <div style="background:linear-gradient(135deg,#2563EB,#7c3aed);color:#fff;border-radius:10px;padding:12px 18px;min-width:220px">
+        <div style="font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.4px">Grand Total (Sales)</div>
+        <div style="font-size:22px;font-weight:800;margin-top:2px">₹ <%= _inr(_grand) %></div>
+    </div>
+</div>
+
+<div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 6px;flex-wrap:wrap;gap:10px">
+        <div style="font-size:13px;color:#475569;font-weight:600">
+            Month-wise Sales &nbsp;·&nbsp; <span style="color:#94a3b8;font-weight:500">click a month to see its vouchers</span>
+        </div>
+        <%# ── Table / Chart toggle (Tally's monthly bar view) ── %>
+        <div class="view-toggle" style="display:inline-flex;background:#f1f5f9;border-radius:8px;padding:3px">
+            <button type="button" id="btn-table" onclick="regView('table')" style="border:0;background:#fff;color:#111;font-weight:600;font-size:12px;padding:6px 14px;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.08)">
+                <i class="fa-solid fa-table-list"></i> Table
+            </button>
+            <button type="button" id="btn-chart" onclick="regView('chart')" style="border:0;background:transparent;color:#64748b;font-weight:600;font-size:12px;padding:6px 14px;border-radius:6px;cursor:pointer">
+                <i class="fa-solid fa-chart-column"></i> Chart
+            </button>
+        </div>
+    </div>
+
+    <%# ── CHART VIEW (bar chart of monthly sales, like Tally) ── %>
+    <div id="reg-chart" style="display:none;padding:20px 22px 26px">
+        <% var _max = Math.max.apply(null, _months.map(function (m) { return Number(m.total) || 0; }).concat([1])); %>
+        <div style="display:flex;align-items:flex-end;gap:8px;height:300px;border-bottom:2px solid #e5e7eb">
+            <% _months.forEach(function (m) { var _h = Math.max(2, Math.round((Number(m.total) / _max) * 100)); %>
+                <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;cursor:pointer"
+                     onclick="location.href='/sales-invoices?month=<%= m.month %>'"
+                     title="<%= _mlabel(m.month) %> — ₹<%= _inr(m.total) %> (<%= m.count %> vouchers)">
+                    <div style="font-size:9.5px;color:#64748b;margin-bottom:3px;white-space:nowrap;font-weight:600"><%= (Number(m.total) / 100000).toFixed(1) %>L</div>
+                    <div style="width:78%;background:linear-gradient(180deg,#3b82f6,#7c3aed);height:<%= _h %>%;border-radius:5px 5px 0 0;transition:opacity .15s"
+                         onmouseover="this.style.opacity=.78" onmouseout="this.style.opacity=1"></div>
+                </div>
+            <% }); %>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+            <% _months.forEach(function (m) { var _p = String(m.month).split('-'); %>
+                <div style="flex:1;text-align:center;font-size:11px;color:#475569;font-weight:600"><%= (MN[Number(_p[1])] || '').slice(0, 3) %></div>
+            <% }); %>
+        </div>
+    </div>
+
+    <div id="reg-table" class="data-table-wrap">
+        <table class="data-table" style="width:100%">
+            <thead>
+                <tr>
+                    <th style="text-align:left">Particulars (Month)</th>
+                    <th style="text-align:right">No. of Vouchers</th>
+                    <th style="text-align:right">Sales Amount</th>
+                    <th style="text-align:right">Closing Balance</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_months.length) { %>
+                    <tr><td colspan="4" style="text-align:center;padding:26px;color:#94a3b8">No sales vouchers found.</td></tr>
+                <% } %>
+                <% _months.forEach(function (m) { %>
+                    <tr class="reg-row" style="cursor:pointer" onclick="location.href='/sales-invoices?month=<%= m.month %>'">
+                        <td style="font-weight:600">
+                            <a href="/sales-invoices?month=<%= m.month %>" style="color:#2563EB;text-decoration:none"><%= _mlabel(m.month) %></a>
+                        </td>
+                        <td style="text-align:right"><%= m.count %></td>
+                        <td style="text-align:right"><%= _inr(m.total) %></td>
+                        <td style="text-align:right;color:#475569"><%= _inr(m.closing) %> <span style="color:#94a3b8;font-size:11px">Cr</span></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+            <% if (_months.length) { %>
+            <tfoot>
+                <tr style="font-weight:800;border-top:2px solid #cbd5e1;background:#f8fafc">
+                    <td>Grand Total</td>
+                    <td style="text-align:right"><%= _vchTot %></td>
+                    <td style="text-align:right">₹ <%= _inr(_grand) %></td>
+                    <td style="text-align:right"><%= _inr(_grand) %> <span style="color:#94a3b8;font-size:11px">Cr</span></td>
+                </tr>
+            </tfoot>
+            <% } %>
+        </table>
+    </div>
+</div>
+
+<style>
+    .reg-row:hover { background: #f1f5f9; }
+    .data-table th { padding: 10px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: #6b7280; border-bottom: 1px solid #e5e7eb; }
+    .data-table td { padding: 11px 14px; font-size: 13.5px; border-bottom: 1px solid #f1f5f9; }
+</style>
+
+<script>
+function regView(v) {
+    var t = document.getElementById('reg-table'), c = document.getElementById('reg-chart');
+    var bt = document.getElementById('btn-table'), bc = document.getElementById('btn-chart');
+    var on = { background: '#fff', color: '#111', boxShadow: '0 1px 2px rgba(0,0,0,.08)' };
+    var off = { background: 'transparent', color: '#64748b', boxShadow: 'none' };
+    if (v === 'chart') { t.style.display = 'none'; c.style.display = 'block'; Object.assign(bc.style, on); Object.assign(bt.style, off); }
+    else { c.style.display = 'none'; t.style.display = 'block'; Object.assign(bt.style, on); Object.assign(bc.style, off); }
+    try { localStorage.setItem('salesRegView', v); } catch (e) {}
+}
+try { if (localStorage.getItem('salesRegView') === 'chart') regView('chart'); } catch (e) {}
+</script>

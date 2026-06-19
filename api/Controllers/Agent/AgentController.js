@@ -1067,13 +1067,18 @@ async function importFromTally(req, res) {
             const date = tdate(v.date);
             const partyName = String(v.party || '').trim();
             const guid = String((v && v.guid) || '').trim();
-            // The agent's v.amount can be a SUB-ledger value for some vouchers (e.g.
-            // retail cash sales where it captured the GST line). The true voucher
-            // grand total is the LARGEST absolute ledger posting (the party/cash
-            // line, which always equals the bill total). Fall back to |v.amount|.
-            const voucherTotal = (Array.isArray(v.entries) && v.entries.length)
-                ? (v.entries.reduce((mx, e) => Math.max(mx, Math.abs(Number(e.amount) || 0)), 0) || Math.abs(amount))
-                : Math.abs(amount);
+            // Voucher total = the SUM of the PARTY side (a sale DEBITS the customer/
+            // cash, a purchase CREDITS the supplier). This equals Tally's Sales/
+            // Purchase-Register value EXACTLY (verified to the rupee): a split
+            // payment sums its Cash+Bank legs, a discounted bill gives the net the
+            // party owes (the gross sale is a credit, excluded), and a cancelled
+            // net-zero voucher correctly totals 0. The party side is chosen by
+            // isSales below; compute both sums here. (Unreliable: v.amount — a
+            // sub-ledger value for some vouchers; max-abs — misses split payments.)
+            const _vEntries = Array.isArray(v.entries) ? v.entries : [];
+            const _sumAbs = (arr) => arr.reduce((s, e) => s + Math.abs(Number(e.amount) || 0), 0);
+            const _debitSum  = _sumAbs(_vEntries.filter((e) => e.is_debit));
+            const _creditSum = _sumAbs(_vEntries.filter((e) => !e.is_debit));
 
             // ── FULL MIRROR: store this voucher's COMPLETE double-entry (every
             //    ledger debit/credit) into tally_voucher_entries BEFORE any skip,
@@ -1205,10 +1210,14 @@ async function importFromTally(req, res) {
                 // party id-or-null, date, amount) payment already exists so it is
                 // not re-imported as a duplicate.
                 const payPartyCol = isReceipt ? 'customer_id' : 'supplier_id';
+                // Same guard as invoices: only dedupe against a cloud-PUSHED
+                // payment (no tally_voucher_no) — never against another imported
+                // Tally voucher, so distinct cash receipts sharing (date, amount,
+                // party) all import.
                 const contentDup = await db('payments')
                     .where({ company_id: cid, type, payment_date: date, amount,
                              [payPartyCol]: partyId })
-                    .whereNull('deleted_at').first('id');
+                    .whereNull('deleted_at').whereNull('tally_voucher_no').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
                 const payRow = {
                     company_id: cid, type, voucher_no: vno, payment_date: date,
@@ -1222,6 +1231,11 @@ async function importFromTally(req, res) {
                 voucherAfter = newVoucherId != null ? { id: newVoucherId, ...payRow } : payRow;
             } else {
                 const type = isSales ? 'sales' : 'purchase';
+                // PARTY-side total: sales → sum of debits (customer/cash), purchase
+                // → sum of credits (supplier). A net-zero (cancelled) voucher totals
+                // 0 — keep it. Fall back to |v.amount| only when the voucher carries
+                // NO postings at all.
+                const voucherTotal = _vEntries.length ? (isSales ? _debitSum : _creditSum) : Math.abs(amount);
                 // Dedupe on the SAME columns as the unique constraint
                 // (company_id, type, invoice_no) and do NOT filter deleted_at —
                 // the constraint spans deleted rows too. The old check used
@@ -1237,16 +1251,28 @@ async function importFromTally(req, res) {
                 // id-or-null, date, total) invoice already exists so it is not
                 // re-imported as a duplicate.
                 const invPartyCol = isSales ? 'customer_id' : 'supplier_id';
+                // CONTENT dedupe applies ONLY to a cloud-PUSHED invoice (no
+                // tally_guid yet) — that is the one case where Tally auto-numbers
+                // so the vno never matches our invoice_no. It must NOT fire against
+                // another already-imported TALLY voucher: distinct retail cash
+                // sales legitimately share (date, total, party=Cash), and matching
+                // them would silently drop every duplicate-looking bill (this lost
+                // ~471 RETAIL CASH SALES). Guarding on tally_guid IS NULL keeps the
+                // push-dedupe but lets every distinct Tally voucher import.
                 const contentDup = await db('invoices')
                     .where({ company_id: cid, type, invoice_date: date, total: voucherTotal,
                              [invPartyCol]: partyId })
-                    .whereNull('deleted_at').first('id');
+                    .whereNull('deleted_at').whereNull('tally_guid').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
                 const invRow = {
                     company_id: cid, type, invoice_no: vno, invoice_date: date,
                     [isSales ? 'customer_id' : 'supplier_id']: partyId,
                     taxable: voucherTotal, cgst: 0, sgst: 0, igst: 0, tax_amount: 0, total: voucherTotal,
                     status: 'created', tally_voucher_no: vno, tally_guid: guid || null,
+                    tally_voucher_type: v.vtype || null,
+                    // OPTIONAL drafts / CANCELLED vouchers are excluded from Tally's
+                    // registers — flag them so the cloud register matches exactly.
+                    tally_optional: !!(v.is_optional || v.is_cancelled),
                     created_at: now, updated_at: now,
                 };
                 const [ir] = await db('invoices').insert(invRow).returning('id');

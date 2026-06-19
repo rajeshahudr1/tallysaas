@@ -163,7 +163,8 @@ async function apiList(req, basePath) {
     if (req.query.order)  qs.set('order', String(req.query.order));
     // Forward filter dropdown params so the api can actually filter the list.
     for (const k of ['location', 'sales_person', 'customer_group', 'supplier_group', 'gst',
-        'category', 'gst_rate', 'hsn', 'parent', 'state', 'financial_year', 'created_from', 'created_to']) {
+        'category', 'gst_rate', 'hsn', 'parent', 'state', 'financial_year', 'created_from', 'created_to',
+        'date_from', 'date_to']) {
         if (req.query[k]) qs.set(k, String(req.query[k]));
     }
 
@@ -802,6 +803,56 @@ router.get('/categories/export', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Export Sales Register (month-wise, as shown) ── */
+router.get('/sales-invoices/register/export', async (req, res, next) => {
+    try {
+        const { rows: months, meta } = await apiList(req, '/sales-invoices/monthly');
+        const grand = (meta && meta.grand_total) || 0;
+        const MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'];
+        const mlabel = (ym) => { const p = String(ym).split('-'); return (MN[Number(p[1])] || ym) + ' ' + p[0]; };
+        const headers = ['Month', 'No. of Vouchers', 'Sales Amount', 'Closing Balance'];
+        let totalVch = 0;
+        const records = (months || []).map((m) => {
+            totalVch += Number(m.count) || 0;
+            return [mlabel(m.month), m.count, Number(m.total).toFixed(2), Number(m.closing).toFixed(2)];
+        });
+        records.push(['Grand Total', totalVch, Number(grand).toFixed(2), Number(grand).toFixed(2)]);
+        const csv = rowsToCsv(headers, records, (r) => r);
+        return sendCsv(res, 'sales-register.csv', csv);
+    } catch (err) { next(err); }
+});
+
+/* ── TRANSACTIONS · Export a month's Sales vouchers (drill-down, as shown) ── */
+router.get('/sales-invoices/export', async (req, res, next) => {
+    try {
+        const month = String(req.query.month || '').trim();
+        let dateQs = '';
+        if (/^\d{4}-\d{2}$/.test(month)) {
+            const [yy, mm] = month.split('-').map(Number);
+            const lastDay = new Date(yy, mm, 0).getDate();
+            dateQs = `&date_from=${month}-01&date_to=${month}-${String(lastDay).padStart(2, '0')}`;
+        }
+        let all = [];
+        for (let page = 1; page <= 200; page += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            const result = await api.get(req, `/sales-invoices?per_page=100&page=${page}${dateQs}`);
+            const payload = (result.body && result.body.data) || {};
+            const batch = Array.isArray(payload.data) ? payload.data : [];
+            all = all.concat(batch);
+            const total = (payload.meta && payload.meta.total) || all.length;
+            if (batch.length === 0 || all.length >= total) break;
+        }
+        const headers = ['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Taxable', 'GST', 'Total', 'Status'];
+        const csv = rowsToCsv(headers, all, (r) => [
+            fmtDate(r.invoice_date), r.customer || '', 'Sales', r.invoice_no,
+            Number(r.taxable || 0).toFixed(2), Number(r.tax_amount || 0).toFixed(2),
+            Number(r.total || 0).toFixed(2), txStatusLabel(r.status),
+        ]);
+        return sendCsv(res, month ? `sales-${month}.csv` : 'sales-invoices.csv', csv);
+    } catch (err) { next(err); }
+});
+
 /* ── MASTERS · Edit Company (GET /companies/:id/edit) ───────── */
 router.get('/companies/:id/edit', async (req, res, next) => {
     try {
@@ -1265,6 +1316,32 @@ router.post('/categories', async (req, res, next) => {
 /* ── TRANSACTIONS · Sales Invoices listing (GET /sales-invoices) */
 router.get('/sales-invoices', async (req, res, next) => {
   try {
+    const month = String(req.query.month || '').trim();
+
+    // ── NO MONTH → Tally Sales-Register: month-wise summary (drill-down) ──
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+        const { rows: monthRows, meta: mMeta } = await apiList(req, '/sales-invoices/monthly');
+        return res.render('sales-invoices/register', {
+            title: 'Sales Register',
+            activeMenu: 'sales-inv',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Sales Invoices' },
+            ],
+            months:     monthRows,
+            grandTotal: mMeta.grand_total || 0,
+        });
+    }
+
+    // ── MONTH SELECTED → that month's voucher list (Tally Voucher Register) ──
+    const [yy, mm] = month.split('-').map(Number);
+    const lastDay = new Date(yy, mm, 0).getDate();
+    req.query.date_from = `${month}-01`;
+    req.query.date_to   = `${month}-${String(lastDay).padStart(2, '0')}`;
+    const MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthLabel = `${MN[mm]} ${yy}`;
+
     const { rows, meta } = await apiList(req, '/sales-invoices');
     const invoiceRows = rows.map((r) => ({
         id: r.id, invoice_no: r.invoice_no, date: fmtDate(r.invoice_date),
@@ -1274,11 +1351,12 @@ router.get('/sales-invoices', async (req, res, next) => {
         status: txStatusLabel(r.status), sales_person: r.sales_person || '',
     }));
     res.render('sales-invoices/list', {
-        title: 'Sales Invoices',
+        title: 'Sales Invoices · ' + monthLabel,
         activeMenu: 'sales-inv',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
-            { label: 'Sales Invoices' },
+            { label: 'Sales Register', href: '/sales-invoices' },
+            { label: monthLabel },
         ],
 
         invoiceRows,
@@ -1286,6 +1364,9 @@ router.get('/sales-invoices', async (req, res, next) => {
         grandTotal:     meta.grand_total || 0,
         page:           meta.page,
         perPage:        meta.per_page,
+        monthMode:      true,
+        monthLabel,
+        monthValue:     month,
 
         // Filter option sources.
         customerNames:  mock.customerNames,

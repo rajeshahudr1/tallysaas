@@ -53,6 +53,24 @@ function money(x) {
 }
 
 /**
+ * Reproduce Tally's Sales/Purchase Register membership exactly. Tally EXCLUDES:
+ *   • returns — Credit Notes (sales) / Debit Notes (purchase) live in their own
+ *     register; the cloud maps them onto type='sales'/'purchase' too, and
+ *   • OPTIONAL / CANCELLED vouchers — unposted drafts that show only in the Day
+ *     Book (flagged via invoices.tally_optional).
+ * Cloud-created invoices (tally_voucher_type NULL, tally_optional false) are
+ * real sales and stay in.
+ */
+function excludeReturns(qb, type) {
+    const returnType = type === 'sales' ? 'Credit Note' : 'Debit Note';
+    return qb
+        .where('invoices.tally_optional', false)
+        .where((b) =>
+            b.whereNull('invoices.tally_voucher_type')
+             .orWhere('invoices.tally_voucher_type', '!=', returnType));
+}
+
+/**
  * Base query with the party + location label joins. The list/get handlers layer
  * `where invoices.company_id = ?`, `whereNull(invoices.deleted_at)` and the
  * type filter on top, so the tenant / deleted_at / type columns stay qualified.
@@ -168,6 +186,7 @@ async function listByType(req, res, type) {
             .where('invoices.company_id', req.companyId)
             .where('invoices.type', type)
             .whereNull('invoices.deleted_at');
+        qb = excludeReturns(qb, type);
 
         // Per-user location scoping (Requirement C): a location-restricted user
         // sees ONLY their location's invoices. Unrestricted (req.locationId null)
@@ -252,6 +271,53 @@ async function listSales(req, res) {
 async function listPurchase(req, res) {
     return listByType(req, res, 'purchase');
 }
+
+/**
+ * Month-wise summary for the Tally Sales/Purchase-Register view: one row per
+ * calendar month with the month's voucher total + count and a running closing
+ * balance, plus the grand total. invoice_date is a plain DATE so to_char gives
+ * the real month (no timezone shift). Honours the FY date_from/date_to filters.
+ */
+async function monthlyByType(req, res, type) {
+    try {
+        let qb = db('invoices')
+            .where('invoices.company_id', req.companyId)
+            .where('invoices.type', type)
+            .whereNull('invoices.deleted_at');
+        if (req.locationId != null) qb = qb.where('invoices.location_id', req.locationId);
+        if (req.query.date_from) qb = qb.where('invoices.invoice_date', '>=', req.query.date_from);
+        if (req.query.date_to)   qb = qb.where('invoices.invoice_date', '<=', req.query.date_to);
+        qb = excludeReturns(qb, type);
+
+        const rows = await qb
+            .select(db.raw("to_char(invoices.invoice_date, 'YYYY-MM') as month"))
+            .sum('invoices.total as total')
+            .count('invoices.id as count')
+            .groupByRaw("to_char(invoices.invoice_date, 'YYYY-MM')")
+            .orderByRaw("to_char(invoices.invoice_date, 'YYYY-MM')");
+
+        let running = 0;
+        const months = rows.map((r) => {
+            running += Number(r.total) || 0;
+            return {
+                month:   r.month,
+                total:   money(r.total),
+                count:   Number(r.count) || 0,
+                closing: money(running),
+            };
+        });
+        return R.successResponse(res, {
+            data: months,
+            meta: { grand_total: money(running), months: months.length },
+        });
+    } catch (err) {
+        console.error(`invoices.monthly(${type}) error:`, err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+async function monthlySales(req, res)    { return monthlyByType(req, res, 'sales'); }
+async function monthlyPurchase(req, res) { return monthlyByType(req, res, 'purchase'); }
 
 async function get(req, res) {
     const id = Number(req.params.id);
@@ -453,6 +519,8 @@ async function destroy(req, res) {
 module.exports = {
     listSales,
     listPurchase,
+    monthlySales,
+    monthlyPurchase,
     get,
     createSales,
     createPurchase,

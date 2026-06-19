@@ -498,6 +498,10 @@ class TallyConnector:
                     "amount": _amt(self._child_text(v, "AMOUNT")),
                     "alterid": self._alterid(v),
                     "guid": guid,
+                    # OPTIONAL = unposted draft, CANCELLED = voided — both are
+                    # excluded from Tally's registers, so the cloud flags them.
+                    "is_optional": self._child_text(v, "ISOPTIONAL").lower() == "yes",
+                    "is_cancelled": self._child_text(v, "ISCANCELLED").lower() == "yes",
                     "entries": entries,
                     "inventory": inventory,
                 })
@@ -835,7 +839,7 @@ class TallyConnector:
             "</STATICVARIABLES><TDL><TDLMESSAGE>"
             '<COLLECTION NAME="' + coll + '" ISMODIFY="No">'
             "<TYPE>Voucher</TYPE>"
-            "<FETCH>DATE,VOUCHERTYPENAME,VOUCHERNUMBER,PARTYLEDGERNAME,AMOUNT,ALTERID,GUID</FETCH>"
+            "<FETCH>DATE,VOUCHERTYPENAME,VOUCHERNUMBER,PARTYLEDGERNAME,AMOUNT,ALTERID,GUID,ISOPTIONAL,ISCANCELLED</FETCH>"
             "<FILTER>" + filt + "</FILTER>"
             "</COLLECTION>"
             '<SYSTEM TYPE="Formulae" NAME="' + filt + '">' + cond + "</SYSTEM>"
