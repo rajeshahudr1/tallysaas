@@ -1236,14 +1236,18 @@ async function importFromTally(req, res) {
                 // 0 — keep it. Fall back to |v.amount| only when the voucher carries
                 // NO postings at all.
                 const voucherTotal = _vEntries.length ? (isSales ? _debitSum : _creditSum) : Math.abs(amount);
-                // Dedupe on the SAME columns as the unique constraint
-                // (company_id, type, invoice_no) and do NOT filter deleted_at —
-                // the constraint spans deleted rows too. The old check used
-                // tally_voucher_no + whereNull(deleted_at), so a duplicate slipped
-                // past it and the INSERT then 500-ed the WHOLE import.
-                const dup = await db('invoices')
-                    .where({ company_id: cid, type, invoice_no: vno })
-                    .first('id');
+                // DEDUP BY GUID — the real voucher identity. Tally REUSES bill
+                // numbers (purchase bills especially), so invoice_no is NOT unique
+                // for synced rows (migration 0053). Re-import of the same voucher
+                // (same GUID) = skip; a different voucher that happens to share the
+                // bill no still imports. Empty vno → a GUID-derived number so the
+                // cloud-side unique index never collides.
+                const invoiceNo = (vno && vno.trim())
+                    ? vno
+                    : (guid ? `${isSales ? 'SAL' : 'PUR'}/${guid.slice(-8)}` : vno);
+                const dup = guid
+                    ? await db('invoices').where({ company_id: cid, type, tally_guid: guid }).first('id')
+                    : await db('invoices').where({ company_id: cid, type, invoice_no: invoiceNo }).first('id');
                 if (dup) { counts.skipped += 1; continue; }
                 // CONTENT dedupe: an invoice already pushed cloud→Tally is already
                 // a cloud row; Tally auto-numbers so its vno never matches our
@@ -1265,7 +1269,7 @@ async function importFromTally(req, res) {
                     .whereNull('deleted_at').whereNull('tally_guid').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
                 const invRow = {
-                    company_id: cid, type, invoice_no: vno, invoice_date: date,
+                    company_id: cid, type, invoice_no: invoiceNo, invoice_date: date,
                     [isSales ? 'customer_id' : 'supplier_id']: partyId,
                     taxable: voucherTotal, cgst: 0, sgst: 0, igst: 0, tax_amount: 0, total: voucherTotal,
                     status: 'created', tally_voucher_no: vno, tally_guid: guid || null,

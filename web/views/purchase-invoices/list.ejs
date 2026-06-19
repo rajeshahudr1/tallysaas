@@ -30,20 +30,21 @@ var filterFields = [
     { type: 'text',   name: 'search',    label: 'Search',    placeholder: 'Bill no / supplier...',  colClass: 'filter-col-fifth' },
     { type: 'select', name: 'supplier',  label: 'Supplier',  options: _opts('All Suppliers', _sups), colClass: 'filter-col-fifth' },
     { type: 'select', name: 'status',    label: 'Status',    options: _opts('All Status', _statuses), colClass: 'filter-col-fifth' },
-    { type: 'date',   name: 'date_from', label: 'Date From', value: '2024-05-01',                   colClass: 'filter-col-fifth' },
-    { type: 'date',   name: 'date_to',   label: 'Date To',   value: '2024-05-31',                   colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from', label: 'Date From',                                       colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_to',   label: 'Date To',                                         colClass: 'filter-col-fifth' },
 ];
 
 /* ── Table config ───────────────────────────────────────────── */
+/* Columns ordered like Tally's Purchase/Voucher Register for easy verification. */
 var tableColumns = [
-    { key: 'bill_no',  label: 'Bill No',  sortable: true, type: 'text' },
-    { key: 'date',     label: 'Date',     sortable: true, type: 'date' },
-    { key: 'supplier', label: 'Supplier', sortable: true, type: 'text' },
-    { key: 'location', label: 'Location', sortable: true, type: 'location' },
-    { key: 'amount',   label: 'Taxable',  sortable: true, type: 'currency' },
-    { key: 'gst',      label: 'GST',      sortable: true, type: 'currency' },
-    { key: 'total',    label: 'Total',    sortable: true, type: 'currency' },
-    { key: 'status',   label: 'Status',   sortable: true, type: 'status' },
+    { key: 'date',     label: 'Date',        sortable: true,  type: 'date' },
+    { key: 'supplier', label: 'Particulars', sortable: true,  type: 'text' },
+    { key: 'vch_type', label: 'Vch Type',    sortable: false, type: 'text' },
+    { key: 'bill_no',  label: 'Bill No.',    sortable: true,  type: 'text' },
+    { key: 'amount',   label: 'Taxable',     sortable: true,  type: 'currency' },
+    { key: 'gst',      label: 'GST',         sortable: true,  type: 'currency' },
+    { key: 'total',    label: 'Total',       sortable: true,  type: 'currency' },
+    { key: 'status',   label: 'Status',      sortable: true,  type: 'status' },
 ];
 
 var sortOptions = ['Date', 'Bill No', 'Supplier', 'Total', 'Status'];
@@ -56,17 +57,27 @@ var sortOptions = ['Date', 'Bill No', 'Supplier', 'Total', 'Status'];
         { label: 'Purchase Invoices' },
     ],
     actions: [
-        { label: 'Export',          icon: 'fa-upload', variant: 'light' },
+        { label: 'Export',          icon: 'fa-upload', variant: 'light',
+          href: (typeof monthValue !== 'undefined' && monthValue) ? '/purchase-invoices/export?month=' + monthValue : '/purchase-invoices/export' },
         { label: 'Create Purchase', icon: 'fa-plus',   gradient: true, href: '/purchase-invoices/create' },
     ],
 }) %>
+
+<% if (typeof monthMode !== 'undefined' && monthMode) { %>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+    <a href="/purchase-invoices" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:7px 14px;color:#334155;text-decoration:none;font-weight:600;font-size:13px">
+        <i class="fa-solid fa-arrow-left"></i> Purchase Register
+    </a>
+    <span style="font-size:15px;font-weight:700;color:#111"><%= typeof monthLabel !== 'undefined' ? monthLabel : '' %></span>
+</div>
+<% } %>
 
 <form id="purchase-filters-form" autocomplete="off" method="get" action="/purchase-invoices">
     <%- include('../partials/filter-card', {
         filterId: 'purchase-filters',
         title: 'Advanced Filters',
         fields: filterFields,
-        collapsed: false,
+        collapsed: true,
     }) %>
 </form>
 
@@ -83,18 +94,6 @@ var sortOptions = ['Date', 'Bill No', 'Supplier', 'Total', 'Status'];
             </select>
             <span>entries</span>
         </label>
-
-        <div class="toolbar-sort">
-            <span>Sort By</span>
-            <select class="form-select form-select-sm" aria-label="Sort by column">
-                <% sortOptions.forEach(function (label) { %>
-                    <option value="<%= label %>" <%= label === 'Date' ? 'selected' : '' %>><%= label %></option>
-                <% }); %>
-            </select>
-            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
-                <i class="fa-solid fa-arrow-down-short-wide"></i>
-            </button>
-        </div>
     </div>
 
     <%- include('../partials/table', {

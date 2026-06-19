@@ -853,6 +853,56 @@ router.get('/sales-invoices/export', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Export Purchase Register (month-wise, as shown) ── */
+router.get('/purchase-invoices/register/export', async (req, res, next) => {
+    try {
+        const { rows: months, meta } = await apiList(req, '/purchase-invoices/monthly');
+        const grand = (meta && meta.grand_total) || 0;
+        const MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+            'July', 'August', 'September', 'October', 'November', 'December'];
+        const mlabel = (ym) => { const p = String(ym).split('-'); return (MN[Number(p[1])] || ym) + ' ' + p[0]; };
+        const headers = ['Month', 'No. of Vouchers', 'Purchase Amount', 'Closing Balance'];
+        let totalVch = 0;
+        const records = (months || []).map((m) => {
+            totalVch += Number(m.count) || 0;
+            return [mlabel(m.month), m.count, Number(m.total).toFixed(2), Number(m.closing).toFixed(2)];
+        });
+        records.push(['Grand Total', totalVch, Number(grand).toFixed(2), Number(grand).toFixed(2)]);
+        const csv = rowsToCsv(headers, records, (r) => r);
+        return sendCsv(res, 'purchase-register.csv', csv);
+    } catch (err) { next(err); }
+});
+
+/* ── TRANSACTIONS · Export a month's Purchase vouchers (drill-down) ── */
+router.get('/purchase-invoices/export', async (req, res, next) => {
+    try {
+        const month = String(req.query.month || '').trim();
+        let dateQs = '';
+        if (/^\d{4}-\d{2}$/.test(month)) {
+            const [yy, mm] = month.split('-').map(Number);
+            const lastDay = new Date(yy, mm, 0).getDate();
+            dateQs = `&date_from=${month}-01&date_to=${month}-${String(lastDay).padStart(2, '0')}`;
+        }
+        let all = [];
+        for (let page = 1; page <= 200; page += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            const result = await api.get(req, `/purchase-invoices?per_page=100&page=${page}${dateQs}`);
+            const payload = (result.body && result.body.data) || {};
+            const batch = Array.isArray(payload.data) ? payload.data : [];
+            all = all.concat(batch);
+            const total = (payload.meta && payload.meta.total) || all.length;
+            if (batch.length === 0 || all.length >= total) break;
+        }
+        const headers = ['Date', 'Particulars', 'Vch Type', 'Bill No.', 'Taxable', 'GST', 'Total', 'Status'];
+        const csv = rowsToCsv(headers, all, (r) => [
+            fmtDate(r.invoice_date), r.supplier || '', 'Purchase', r.invoice_no,
+            Number(r.taxable || 0).toFixed(2), Number(r.tax_amount || 0).toFixed(2),
+            Number(r.total || 0).toFixed(2), txStatusLabel(r.status),
+        ]);
+        return sendCsv(res, month ? `purchase-${month}.csv` : 'purchase-invoices.csv', csv);
+    } catch (err) { next(err); }
+});
+
 /* ── MASTERS · Edit Company (GET /companies/:id/edit) ───────── */
 router.get('/companies/:id/edit', async (req, res, next) => {
     try {
@@ -1434,25 +1484,57 @@ router.post('/sales-invoices', async (req, res, next) => {
 /* ── TRANSACTIONS · Purchase Invoices (GET /purchase-invoices) ─ */
 router.get('/purchase-invoices', async (req, res, next) => {
   try {
+    const month = String(req.query.month || '').trim();
+
+    // ── NO MONTH → Tally Purchase-Register: month-wise summary (drill-down) ──
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+        const { rows: monthRows, meta: mMeta } = await apiList(req, '/purchase-invoices/monthly');
+        return res.render('purchase-invoices/register', {
+            title: 'Purchase Register',
+            activeMenu: 'purchase-inv',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Purchase Invoices' },
+            ],
+            months:     monthRows,
+            grandTotal: mMeta.grand_total || 0,
+        });
+    }
+
+    // ── MONTH SELECTED → that month's voucher list (Tally Voucher Register) ──
+    const [yy, mm] = month.split('-').map(Number);
+    const lastDay = new Date(yy, mm, 0).getDate();
+    req.query.date_from = `${month}-01`;
+    req.query.date_to   = `${month}-${String(lastDay).padStart(2, '0')}`;
+    const MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthLabel = `${MN[mm]} ${yy}`;
+
     const { rows, meta } = await apiList(req, '/purchase-invoices');
     const purchaseRows = rows.map((r) => ({
         id: r.id, bill_no: r.invoice_no, date: fmtDate(r.invoice_date),
+        vch_type: 'Purchase',
         supplier: r.supplier || '', location: r.location || '',
         amount: r.taxable, gst: r.tax_amount, total: r.total,
         status: txStatusLabel(r.status),
     }));
     res.render('purchase-invoices/list', {
-        title: 'Purchase Invoices',
+        title: 'Purchase Invoices · ' + monthLabel,
         activeMenu: 'purchase-inv',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
-            { label: 'Purchase Invoices' },
+            { label: 'Purchase Register', href: '/purchase-invoices' },
+            { label: monthLabel },
         ],
 
         purchaseRows,
         purchasesTotal:  meta.total,
+        grandTotal:      meta.grand_total || 0,
         page:            meta.page,
         perPage:         meta.per_page,
+        monthMode:       true,
+        monthLabel,
+        monthValue:      month,
 
         supplierNames:   mock.supplierNames,
         locationNames:   mock.locationNames,
