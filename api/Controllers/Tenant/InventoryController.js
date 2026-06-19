@@ -88,19 +88,36 @@ async function list(req, res) {
         const search            = (req.query.search || '').trim();
         const status            = (req.query.status || '').trim();
 
+        const category = (req.query.category || '').trim();
         // Apply the optional filters identically to every derived query so the
         // count / stats / rows all describe the same filtered population.
         const applyFilters = (qb) => {
-            if (status) qb = qb.where('products.status', status);
-            if (search) {
+            if (status) {                              // derived stock-status filter
+                if (/out/i.test(status))       qb = qb.where('products.opening_stock', '<=', 0);
+                else if (/low/i.test(status))  qb = qb.whereRaw('products.opening_stock > 0 AND products.opening_stock < ?', [LOW_STOCK_LIMIT]);
+                else if (/in\s*stock/i.test(status)) qb = qb.where('products.opening_stock', '>=', LOW_STOCK_LIMIT);
+                else qb = qb.where('products.status', status);
+            }
+            if (category) qb = qb.where('categories.name', category);
+            if (search) {                              // search across all columns
                 const like = `%${search}%`;
                 qb = qb.where((b) => {
                     b.where('products.name', 'ilike', like)
-                     .orWhere('products.sku', 'ilike', like);
+                     .orWhere('products.sku', 'ilike', like)
+                     .orWhere('products.hsn_code', 'ilike', like)
+                     .orWhere('products.unit', 'ilike', like)
+                     .orWhere('categories.name', 'ilike', like);
                 });
             }
             return qb;
         };
+        // Header-sort: map a UI sort key → a real column (default newest first).
+        const SORT_MAP = {
+            product: 'products.name', sku: 'products.sku', category: 'categories.name',
+            current: 'products.opening_stock', value: 'products.opening_stock', status: 'products.status',
+        };
+        const sortCol = SORT_MAP[(req.query.sort || '').trim()] || 'products.id';
+        const sortDir = (req.query.order || '').toLowerCase() === 'asc' ? 'asc' : 'desc';
 
         // Total (filtered) count — BEFORE pagination.
         const totalRow = await applyFilters(baseQuery(companyId))
@@ -130,7 +147,7 @@ async function list(req, res) {
         const productRows = await applyFilters(baseQuery(companyId))
             .offset((page - 1) * perPage)
             .limit(perPage)
-            .orderBy('products.id', 'desc')
+            .orderBy(sortCol, sortDir)
             .select(
                 'products.id',
                 'products.name as product',
@@ -139,12 +156,38 @@ async function list(req, res) {
                 'products.unit',
                 'products.hsn_code as hsn',
                 'products.opening_stock as opening',
-                'products.sales_price',
+                'products.sales_price', 'products.purchase_price',
             );
 
+        // REAL stock movement for THIS page from Tally's inventory entries:
+        // purchased = qty on purchase vouchers, sold = qty on sales vouchers
+        // (qty is stored absolute; the voucher type gives the direction). current
+        // = the Tally closing balance (products.opening_stock); opening is then
+        // back-derived (current − purchased + sold).
+        const names = productRows.map((r) => String(r.product || '').toLowerCase());
+        const moves = {};
+        if (names.length) {
+            const mrows = await db('tally_inventory_entries as ie')
+                .join('invoices as iv', function joinIv() {
+                    this.on('iv.tally_guid', 'ie.voucher_guid').andOn('iv.company_id', 'ie.company_id');
+                })
+                .where('ie.company_id', companyId)
+                .whereNull('iv.deleted_at')
+                .whereRaw('lower(ie.item_name) = ANY(?)', [names])
+                .select(db.raw('lower(ie.item_name) as item_name'))
+                .select(db.raw("SUM(ie.qty) FILTER (WHERE iv.type='purchase') as purchased"))
+                .select(db.raw("SUM(ie.qty) FILTER (WHERE iv.type='sales') as sold"))
+                .groupByRaw('lower(ie.item_name)');
+            mrows.forEach((m) => { moves[String(m.item_name || '').toLowerCase()] = m; });
+        }
+
         const data = productRows.map((row) => {
-            const opening = num(row.opening);
-            const current = opening;                 // no movements yet
+            const m = moves[String(row.product || '').toLowerCase()] || {};
+            const purchased = num(m.purchased);
+            const sold      = num(m.sold);
+            const current   = num(row.opening);             // Tally closing balance
+            const opening    = Math.round((current - purchased + sold) * 1000) / 1000;
+            const rate       = num(row.purchase_price) || num(row.sales_price);
             return {
                 id:           row.id,
                 product:      row.product,
@@ -152,11 +195,12 @@ async function list(req, res) {
                 category:     row.category,
                 unit:         row.unit,
                 hsn:          row.hsn,
+                reorder_level: LOW_STOCK_LIMIT,
                 opening,
-                purchased:    0,
-                sold:         0,
+                purchased,
+                sold,
                 current,
-                value:        num(row.sales_price) * opening,
+                value:        Math.round(rate * current * 100) / 100,
                 status_label: statusLabel(current),
             };
         });

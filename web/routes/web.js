@@ -1901,10 +1901,11 @@ router.get('/inventory', async (req, res, next) => {
         const page    = Math.max(1, parseInt(req.query.page, 10) || 1);
         const perPage = parseInt(req.query.per_page, 10) || 10;
         const qs = new URLSearchParams({ page: String(page), per_page: String(perPage) });
-        if (req.query.search) qs.set('search', String(req.query.search));
-        if (req.query.status) qs.set('status', String(req.query.status));
-        if (req.query.sort)   qs.set('sort',  String(req.query.sort));
-        if (req.query.order)  qs.set('order', String(req.query.order));
+        if (req.query.search)   qs.set('search', String(req.query.search));
+        if (req.query.status)   qs.set('status', String(req.query.status));
+        if (req.query.category) qs.set('category', String(req.query.category));
+        if (req.query.sort)     qs.set('sort',  String(req.query.sort));
+        if (req.query.order)    qs.set('order', String(req.query.order));
 
         const { body } = await api.get(req, `/inventory?${qs.toString()}`);
         const payload  = (body && body.data) || {};
@@ -1922,6 +1923,8 @@ router.get('/inventory', async (req, res, next) => {
             id:        r.id,
             product:   r.product || '',
             sku:       r.sku || '',
+            category:  r.category || '',
+            unit:      r.unit || '',
             location:  r.location || '',
             opening:   r.opening != null ? r.opening : 0,
             purchased: r.purchased != null ? r.purchased : 0,
@@ -1929,6 +1932,22 @@ router.get('/inventory', async (req, res, next) => {
             current:   r.current != null ? r.current : 0,
             value:     r.value != null ? r.value : 0,
             status:    r.status_label || '',
+            // Tab-wise View popup (table.ejs reads row._detail).
+            _detail: [
+                { group: 'Item' },
+                { label: 'Product', value: r.product || '—' },
+                { label: 'SKU', value: r.sku || '—' },
+                { label: 'Category', value: r.category || '—' },
+                { label: 'Unit', value: r.unit || '—' },
+                { label: 'HSN/SAC', value: r.hsn || '—' },
+                { group: 'Stock Movement' },
+                { label: 'Opening', value: r.opening != null ? r.opening : 0 },
+                { label: 'Purchased (Inwards)', value: r.purchased != null ? r.purchased : 0 },
+                { label: 'Sold (Outwards)', value: r.sold != null ? r.sold : 0 },
+                { label: 'Current Stock', value: r.current != null ? r.current : 0 },
+                { label: 'Stock Value', value: inr(r.value) },
+                { label: 'Status', value: r.status_label || '—' },
+            ],
         }));
 
         // 4 summary cards — same {label,value,icon,tone} keys/icons/tones as
@@ -1955,10 +1974,55 @@ router.get('/inventory', async (req, res, next) => {
 
             inventoryStats,
 
-            // Filter dropdown option sources (still mock for now).
-            categoryNames: mock.categoryNames,
-            locationNames: mock.locationNames,
-            stockStatuses: mock.stockStatuses,
+            // Filter dropdown option sources — REAL org data.
+            categoryNames: (await fetchOptions(req, '/categories')).map((o) => o.name),
+            locationNames: (await fetchOptions(req, '/locations')).map((o) => o.name),
+            stockStatuses: ['In Stock', 'Low Stock', 'Out of Stock'],
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── TRANSACTIONS · Export Inventory (GET /inventory/export) ── all columns ── */
+router.get('/inventory/export', async (req, res, next) => {
+    try {
+        let all = [];
+        for (let page = 1; page <= 200; page += 1) {
+            // eslint-disable-next-line no-await-in-loop
+            const result = await api.get(req, `/inventory?per_page=100&page=${page}`);
+            const payload = (result.body && result.body.data) || {};
+            const batch = Array.isArray(payload.data) ? payload.data : [];
+            all = all.concat(batch);
+            const total = (payload.meta && payload.meta.total) || all.length;
+            if (batch.length === 0 || all.length >= total) break;
+        }
+        const headers = ['Product', 'SKU', 'Category', 'Unit', 'HSN', 'Opening',
+            'Purchased', 'Sold', 'Current Stock', 'Stock Value', 'Status'];
+        const csv = rowsToCsv(headers, all, (r) => [
+            r.product, r.sku, r.category, r.unit, r.hsn, r.opening,
+            r.purchased, r.sold, r.current, Number(r.value || 0).toFixed(2), r.status_label,
+        ]);
+        return sendCsv(res, 'inventory.csv', csv);
+    } catch (err) { next(err); }
+});
+
+/* ── TRANSACTIONS · Adjust a product's stock (GET /inventory/:id/edit) ──
+ * The ⋮ "edit" action → the Stock Adjustment form pre-pointed at this product. */
+router.get('/inventory/:id/edit', async (req, res, next) => {
+    try {
+        const [productOptions, locationOptions] = await Promise.all([
+            fetchOptions(req, '/products'),
+            fetchOptions(req, '/locations'),
+        ]);
+        res.render('inventory/form', {
+            title: 'Stock Adjustment',
+            activeMenu: 'inventory',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Inventory', href: '/inventory' },
+                { label: 'Stock Adjustment' },
+            ],
+            productOptions, locationOptions,
+            selectedProductId: Number(req.params.id) || null,
         });
     } catch (err) { next(err); }
 });

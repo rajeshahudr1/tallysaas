@@ -63,7 +63,7 @@ var sortOptions = ['Product', 'Current Stock', 'Stock Value', 'Status'];
         { label: 'Inventory' },
     ],
     actions: [
-        { label: 'Sync from Tally',  icon: 'fa-rotate', variant: 'light', id: 'inv-sync' },
+        { label: 'Export',           icon: 'fa-upload',  variant: 'light', href: '/inventory/export' },
         { label: 'Stock Adjustment', icon: 'fa-sliders', gradient: true, href: '/inventory/adjust' },
     ],
 }) %>
@@ -88,7 +88,7 @@ var sortOptions = ['Product', 'Current Stock', 'Stock Value', 'Status'];
         filterId: 'inventory-filters',
         title: 'Advanced Filters',
         fields: filterFields,
-        collapsed: false,
+        collapsed: true,
     }) %>
 </form>
 
@@ -105,26 +105,16 @@ var sortOptions = ['Product', 'Current Stock', 'Stock Value', 'Status'];
             </select>
             <span>entries</span>
         </label>
-
-        <div class="toolbar-sort">
-            <span>Sort By</span>
-            <select class="form-select form-select-sm" aria-label="Sort by column">
-                <% sortOptions.forEach(function (label) { %>
-                    <option value="<%= label %>" <%= label === 'Product' ? 'selected' : '' %>><%= label %></option>
-                <% }); %>
-            </select>
-            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
-                <i class="fa-solid fa-arrow-down-short-wide"></i>
-            </button>
-        </div>
     </div>
 
     <%- include('../partials/table', {
         tableId: 'inventory-table',
+        basePath: '/inventory',
         columns: tableColumns,
         rows: _rows,
         selectable: true,
         showIndex: true,
+        sortKeys: ['product', 'sku', 'category', 'current', 'value', 'status'],
         actions: ['view', 'edit'],
     }) %>
 
