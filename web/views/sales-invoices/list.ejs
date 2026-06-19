@@ -75,6 +75,9 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
 <% } %>
 
 <form id="invoice-filters-form" autocomplete="off" method="get" action="/sales-invoices">
+    <% if (typeof monthValue !== 'undefined' && monthValue) { %>
+    <input type="hidden" name="month" value="<%= monthValue %>">
+    <% } %>
     <%- include('../partials/filter-card', {
         filterId: 'invoice-filters',
         title: 'Advanced Filters',

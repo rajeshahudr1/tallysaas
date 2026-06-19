@@ -73,6 +73,9 @@ var sortOptions = ['Date', 'Bill No', 'Supplier', 'Total', 'Status'];
 <% } %>
 
 <form id="purchase-filters-form" autocomplete="off" method="get" action="/purchase-invoices">
+    <% if (typeof monthValue !== 'undefined' && monthValue) { %>
+    <input type="hidden" name="month" value="<%= monthValue %>">
+    <% } %>
     <%- include('../partials/filter-card', {
         filterId: 'purchase-filters',
         title: 'Advanced Filters',
@@ -80,6 +83,21 @@ var sortOptions = ['Date', 'Bill No', 'Supplier', 'Total', 'Status'];
         collapsed: true,
     }) %>
 </form>
+
+<%# ── Register summary strip (total amount on top) ── %>
+<% var _gt  = (typeof grandTotal !== 'undefined') ? Number(grandTotal) : 0;
+   var _cnt = (typeof purchasesTotal !== 'undefined') ? purchasesTotal : 0;
+   function _inrG(v){ return Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); } %>
+<div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 18px;min-width:170px">
+        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
+        <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _cnt %></div>
+    </div>
+    <div style="background:linear-gradient(135deg,#0ea5e9,#2563EB);color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
+        <div style="font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.4px">Total (Purchase)</div>
+        <div style="font-size:20px;font-weight:700;margin-top:2px">₹ <%= _inrG(_gt) %></div>
+    </div>
+</div>
 
 <div class="card">
 
