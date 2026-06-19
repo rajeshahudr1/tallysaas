@@ -32,18 +32,18 @@ var filterFields = [
     { type: 'select', name: 'customer',  label: 'Customer',  options: _opts('All Customers', _custs), colClass: 'filter-col-fifth' },
     { type: 'select', name: 'mode',      label: 'Mode',      options: _opts('All Modes', _modes),     colClass: 'filter-col-fifth' },
     { type: 'select', name: 'status',    label: 'Status',    options: _opts('All Status', _statuses), colClass: 'filter-col-fifth' },
-    { type: 'date',   name: 'date_from', label: 'Date From', value: '2024-05-01',                     colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from', label: 'Date From',                                          colClass: 'filter-col-fifth' },
 ];
 
-/* ── Table config ───────────────────────────────────────────── */
+/* ── Table config — Tally Receipt-Register order ────────────── */
 var tableColumns = [
-    { key: 'receipt_no', label: 'Receipt No', sortable: true, type: 'text' },
-    { key: 'date',       label: 'Date',       sortable: true, type: 'date' },
-    { key: 'party',      label: 'Customer',   sortable: true, type: 'text' },
-    { key: 'mode',       label: 'Mode',       sortable: true, type: 'badge' },
-    { key: 'reference',  label: 'Reference',  sortable: true, type: 'text' },
-    { key: 'amount',     label: 'Amount',     sortable: true, type: 'currency' },
-    { key: 'status',     label: 'Status',     sortable: true, type: 'status' },
+    { key: 'date',       label: 'Date',        sortable: true,  type: 'date' },
+    { key: 'party',      label: 'Particulars', sortable: true,  type: 'text' },
+    { key: 'vch_type',   label: 'Vch Type',    sortable: false, type: 'text' },
+    { key: 'receipt_no', label: 'Vch No.',     sortable: true,  type: 'text' },
+    { key: 'amount',     label: 'Amount',      sortable: true,  type: 'currency' },
+    { key: 'mode',       label: 'Mode',        sortable: true,  type: 'badge' },
+    { key: 'status',     label: 'Status',      sortable: true,  type: 'status' },
 ];
 
 var sortOptions = ['Date', 'Receipt No', 'Customer', 'Amount', 'Status'];
@@ -56,19 +56,47 @@ var sortOptions = ['Date', 'Receipt No', 'Customer', 'Amount', 'Status'];
         { label: 'Receipts' },
     ],
     actions: [
-        { label: 'Export',      icon: 'fa-upload', variant: 'light' },
+        { label: 'Export',      icon: 'fa-upload', variant: 'light',
+          href: (typeof monthValue !== 'undefined' && monthValue) ? '/receipts/export?month=' + monthValue : '/receipts/export' },
         { label: 'Add Receipt', icon: 'fa-plus',   gradient: true, href: '/receipts/add' },
     ],
 }) %>
 
+<% if (typeof monthMode !== 'undefined' && monthMode) { %>
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+    <a href="/receipts" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:7px 14px;color:#334155;text-decoration:none;font-weight:600;font-size:13px">
+        <i class="fa-solid fa-arrow-left"></i> Receipt Register
+    </a>
+    <span style="font-size:15px;font-weight:700;color:#111"><%= typeof monthLabel !== 'undefined' ? monthLabel : '' %></span>
+</div>
+<% } %>
+
 <form id="receipt-filters-form" autocomplete="off" method="get" action="/receipts">
+    <% if (typeof monthValue !== 'undefined' && monthValue) { %>
+    <input type="hidden" name="month" value="<%= monthValue %>">
+    <% } %>
     <%- include('../partials/filter-card', {
         filterId: 'receipt-filters',
         title: 'Advanced Filters',
         fields: filterFields,
-        collapsed: false,
+        collapsed: true,
     }) %>
 </form>
+
+<%# ── Total amount on top ── %>
+<% var _gt  = (typeof grandTotal !== 'undefined') ? Number(grandTotal) : 0;
+   var _cnt = (typeof receiptsTotal !== 'undefined') ? receiptsTotal : 0;
+   function _inrG(v){ return Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); } %>
+<div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 18px;min-width:170px">
+        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
+        <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _cnt %></div>
+    </div>
+    <div style="background:linear-gradient(135deg,#10b981,#047857);color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
+        <div style="font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.4px">Total (Receipts)</div>
+        <div style="font-size:20px;font-weight:700;margin-top:2px">₹ <%= _inrG(_gt) %></div>
+    </div>
+</div>
 
 <div class="card">
 
@@ -83,18 +111,6 @@ var sortOptions = ['Date', 'Receipt No', 'Customer', 'Amount', 'Status'];
             </select>
             <span>entries</span>
         </label>
-
-        <div class="toolbar-sort">
-            <span>Sort By</span>
-            <select class="form-select form-select-sm" aria-label="Sort by column">
-                <% sortOptions.forEach(function (label) { %>
-                    <option value="<%= label %>" <%= label === 'Date' ? 'selected' : '' %>><%= label %></option>
-                <% }); %>
-            </select>
-            <button type="button" class="sort-dir-btn" title="Toggle sort direction" aria-label="Toggle sort direction">
-                <i class="fa-solid fa-arrow-down-short-wide"></i>
-            </button>
-        </div>
     </div>
 
     <%- include('../partials/table', {

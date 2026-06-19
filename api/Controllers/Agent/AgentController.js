@@ -1206,8 +1206,14 @@ async function importFromTally(req, res) {
 
             if (isReceipt || isPayment) {
                 const type = isReceipt ? 'receipt' : 'payment';
-                const dup = await db('payments').where({ company_id: cid, type, tally_voucher_no: vno })
-                    .whereNull('deleted_at').first('id');
+                // amount = the money moved = party-side debit sum (excl round-off),
+                // matching the register total. DEDUP BY GUID (Tally reuses receipt/
+                // payment voucher numbers); empty vno → a GUID-derived number.
+                const payAmount = _vEntries.length ? _debitSum : Math.abs(amount);
+                const payVoucherNo = (vno && vno.trim()) ? vno : (guid ? `PV/${guid.slice(-8)}` : vno);
+                const dup = guid
+                    ? await db('payments').where({ company_id: cid, type, tally_guid: guid }).whereNull('deleted_at').first('id')
+                    : await db('payments').where({ company_id: cid, type, tally_voucher_no: vno }).whereNull('deleted_at').first('id');
                 if (dup) { counts.skipped += 1; continue; }
                 // CONTENT dedupe: a payment/receipt already pushed cloud→Tally is
                 // already a cloud row; Tally auto-numbers so its vno never matches
@@ -1225,8 +1231,9 @@ async function importFromTally(req, res) {
                     .whereNull('deleted_at').whereNull('tally_voucher_no').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
                 const payRow = {
-                    company_id: cid, type, voucher_no: vno, payment_date: date,
-                    amount, mode: 'Cash', status: 'created', tally_voucher_no: vno,
+                    company_id: cid, type, voucher_no: payVoucherNo, payment_date: date,
+                    amount: payAmount, mode: 'Cash', status: 'created', tally_voucher_no: vno,
+                    tally_guid: guid || null,
                     party_type: partyId ? (isReceipt ? 'customer' : 'supplier') : null,
                     [isReceipt ? 'customer_id' : 'supplier_id']: partyId,
                     created_at: now, updated_at: now,

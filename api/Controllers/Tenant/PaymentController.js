@@ -132,6 +132,9 @@ async function listByType(req, res, type) {
         const totalRow = await qb.clone().clearSelect().clearOrder()
             .count('payments.id as c').first();
         const total = Number(totalRow ? totalRow.c : 0);
+        const sumRow = await qb.clone().clearSelect().clearOrder()
+            .sum('payments.amount as t').first();
+        const grandTotal = Number(sumRow ? sumRow.t : 0) || 0;
 
         const rows = await qb
             .offset((page - 1) * perPage)
@@ -139,9 +142,31 @@ async function listByType(req, res, type) {
             .select(...LIST_COLUMNS)
             .orderBy('payments.id', 'desc');
 
+        // Synced vouchers are summary-only (party FK null) — reconstruct the party
+        // name for THIS page from the postings: payment → the supplier (a debit),
+        // receipt → the customer (a credit); the cash/bank leg is skipped.
+        const guids = rows.map((r) => r.tally_guid).filter(Boolean);
+        if (guids.length) {
+            const isReceipt = type === 'receipt';
+            const entries = await db('tally_voucher_entries')
+                .where('company_id', req.companyId).whereIn('voucher_guid', guids)
+                .select('voucher_guid', 'ledger_name', 'amount', 'is_debit');
+            const agg = {};
+            entries.forEach((e) => {
+                const onParty = isReceipt ? !e.is_debit : !!e.is_debit;
+                if (!onParty) return;
+                const nm = String(e.ledger_name || '');
+                if (/cash|bank/i.test(nm)) return;
+                const abs = Math.abs(Number(e.amount) || 0);
+                const a = agg[e.voucher_guid] || (agg[e.voucher_guid] = { party: '', abs: -1 });
+                if (abs > a.abs) { a.party = nm; a.abs = abs; }
+            });
+            rows.forEach((r) => { if (!r.party && agg[r.tally_guid]) r.party = agg[r.tally_guid].party; });
+        }
+
         return R.successResponse(res, {
             data: rows,
-            meta: { total, page, per_page: perPage },
+            meta: { total, page, per_page: perPage, grand_total: grandTotal },
         });
     } catch (err) {
         console.error(`payments.list (${type}) error:`, err);
@@ -158,6 +183,47 @@ async function listPayments(req, res) {
 async function listReceipts(req, res) {
     return listByType(req, res, 'receipt');
 }
+
+/**
+ * Month-wise summary for the Payment/Receipt Register: one row per calendar
+ * month with the total + count and a running closing balance, plus the grand
+ * total. Optional (draft) vouchers are excluded, matching Tally's registers.
+ */
+async function monthlyByType(req, res, type) {
+    try {
+        const money = (x) => Number(Number(x || 0).toFixed(2));
+        let qb = db('payments')
+            .where('payments.company_id', req.companyId)
+            .where('payments.type', type)
+            .whereNull('payments.deleted_at')
+            .where('payments.tally_optional', false);
+        if (req.query.date_from) qb = qb.where('payments.payment_date', '>=', req.query.date_from);
+        if (req.query.date_to)   qb = qb.where('payments.payment_date', '<=', req.query.date_to);
+
+        const rows = await qb
+            .select(db.raw("to_char(payments.payment_date, 'YYYY-MM') as month"))
+            .sum('payments.amount as total')
+            .count('payments.id as count')
+            .groupByRaw("to_char(payments.payment_date, 'YYYY-MM')")
+            .orderByRaw("to_char(payments.payment_date, 'YYYY-MM')");
+
+        let running = 0;
+        const months = rows.map((r) => {
+            running += Number(r.total) || 0;
+            return { month: r.month, total: money(r.total), count: Number(r.count) || 0, closing: money(running) };
+        });
+        return R.successResponse(res, {
+            data: months,
+            meta: { grand_total: money(running), months: months.length },
+        });
+    } catch (err) {
+        console.error(`payments.monthly(${type}) error:`, err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+async function monthlyPayments(req, res) { return monthlyByType(req, res, 'payment'); }
+async function monthlyReceipts(req, res) { return monthlyByType(req, res, 'receipt'); }
 
 /**
  * GET /api/v1/payments/:id (or /receipts/:id)
@@ -298,6 +364,8 @@ async function destroy(req, res) {
 module.exports = {
     listPayments,
     listReceipts,
+    monthlyPayments,
+    monthlyReceipts,
     get,
     createPayment,
     createReceipt,

@@ -655,6 +655,12 @@ router.get(
 );
 
 router.get(
+    '/payments/monthly',
+    authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
+    PaymentController.monthlyPayments,
+);
+
+router.get(
     '/payments/:id',
     authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
     PaymentController.get,
@@ -682,6 +688,12 @@ router.get(
     authenticate, resolveCompany, resolveLocation, can('receipts', 'view'),
     validate(listPaymentSchema, 'query'),
     PaymentController.listReceipts,
+);
+
+router.get(
+    '/receipts/monthly',
+    authenticate, resolveCompany, resolveLocation, can('receipts', 'view'),
+    PaymentController.monthlyReceipts,
 );
 
 router.get(

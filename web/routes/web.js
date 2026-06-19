@@ -903,6 +903,63 @@ router.get('/purchase-invoices/export', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Payment/Receipt Register exports (month-wise + drill) ── */
+function makeRegisterExport(basePath, kind, amtLabel) {
+    // basePath '/payments' or '/receipts'; kind 'Payment'/'Receipt'.
+    return {
+        register: async (req, res, next) => {
+            try {
+                const { rows: months, meta } = await apiList(req, `${basePath}/monthly`);
+                const grand = (meta && meta.grand_total) || 0;
+                const MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+                const mlabel = (ym) => { const p = String(ym).split('-'); return (MN[Number(p[1])] || ym) + ' ' + p[0]; };
+                const headers = ['Month', 'No. of Vouchers', amtLabel, 'Closing Balance'];
+                let totalVch = 0;
+                const records = (months || []).map((m) => {
+                    totalVch += Number(m.count) || 0;
+                    return [mlabel(m.month), m.count, Number(m.total).toFixed(2), Number(m.closing).toFixed(2)];
+                });
+                records.push(['Grand Total', totalVch, Number(grand).toFixed(2), Number(grand).toFixed(2)]);
+                return sendCsv(res, `${kind.toLowerCase()}-register.csv`, rowsToCsv(headers, records, (r) => r));
+            } catch (err) { next(err); }
+        },
+        list: async (req, res, next) => {
+            try {
+                const month = String(req.query.month || '').trim();
+                let dateQs = '';
+                if (/^\d{4}-\d{2}$/.test(month)) {
+                    const [yy, mm] = month.split('-').map(Number);
+                    const lastDay = new Date(yy, mm, 0).getDate();
+                    dateQs = `&date_from=${month}-01&date_to=${month}-${String(lastDay).padStart(2, '0')}`;
+                }
+                let all = [];
+                for (let page = 1; page <= 200; page += 1) {
+                    // eslint-disable-next-line no-await-in-loop
+                    const result = await api.get(req, `${basePath}?per_page=100&page=${page}${dateQs}`);
+                    const payload = (result.body && result.body.data) || {};
+                    const batch = Array.isArray(payload.data) ? payload.data : [];
+                    all = all.concat(batch);
+                    const total = (payload.meta && payload.meta.total) || all.length;
+                    if (batch.length === 0 || all.length >= total) break;
+                }
+                const headers = ['Date', 'Particulars', 'Vch Type', 'Vch No.', 'Amount', 'Mode', 'Status'];
+                const csv = rowsToCsv(headers, all, (r) => [
+                    fmtDate(r.payment_date), r.party || '', kind, r.voucher_no,
+                    Number(r.amount || 0).toFixed(2), r.mode || '', txStatusLabel(r.status),
+                ]);
+                return sendCsv(res, month ? `${kind.toLowerCase()}-${month}.csv` : `${kind.toLowerCase()}s.csv`, csv);
+            } catch (err) { next(err); }
+        },
+    };
+}
+const _payExp = makeRegisterExport('/payments', 'Payment', 'Payment Amount');
+const _rcpExp = makeRegisterExport('/receipts', 'Receipt', 'Receipt Amount');
+router.get('/payments/register/export', _payExp.register);
+router.get('/payments/export', _payExp.list);
+router.get('/receipts/register/export', _rcpExp.register);
+router.get('/receipts/export', _rcpExp.list);
+
 /* ── MASTERS · Edit Company (GET /companies/:id/edit) ───────── */
 router.get('/companies/:id/edit', async (req, res, next) => {
     try {
@@ -1599,25 +1656,54 @@ router.post('/purchase-invoices', async (req, res, next) => {
 /* ── TRANSACTIONS · Payments listing (GET /payments) ────────── */
 router.get('/payments', async (req, res, next) => {
   try {
+    const month = String(req.query.month || '').trim();
+
+    // ── NO MONTH → Payment Register (month-wise summary, drill-down) ──
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+        const { rows: monthRows, meta: mMeta } = await apiList(req, '/payments/monthly');
+        return res.render('payments/register', {
+            title: 'Payment Register',
+            activeMenu: 'payments',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Payments' }],
+            months:     monthRows,
+            grandTotal: mMeta.grand_total || 0,
+        });
+    }
+
+    // ── MONTH SELECTED → that month's voucher list ──
+    const [yy, mm] = month.split('-').map(Number);
+    const lastDay = new Date(yy, mm, 0).getDate();
+    req.query.date_from = `${month}-01`;
+    req.query.date_to   = `${month}-${String(lastDay).padStart(2, '0')}`;
+    const MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthLabel = `${MN[mm]} ${yy}`;
+
     const { rows, meta } = await apiList(req, '/payments');
     const config = await fetchConfig(req, ['payment_modes']);
     const paymentRows = rows.map((r) => ({
         id: r.id, payment_no: r.voucher_no, date: fmtDate(r.payment_date),
+        vch_type: 'Payment',
         party: r.party || '', mode: r.mode || '', reference: r.reference || '—',
         amount: r.amount, status: txStatusLabel(r.status),
     }));
     res.render('payments/list', {
-        title: 'Payments',
+        title: 'Payments · ' + monthLabel,
         activeMenu: 'payments',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
-            { label: 'Payments' },
+            { label: 'Payment Register', href: '/payments' },
+            { label: monthLabel },
         ],
 
         paymentRows,
         paymentsTotal:   meta.total,
+        grandTotal:      meta.grand_total || 0,
         page:            meta.page,
         perPage:         meta.per_page,
+        monthMode:       true,
+        monthLabel,
+        monthValue:      month,
 
         supplierNames:   mock.supplierNames,
         ...config,
@@ -1667,25 +1753,54 @@ router.post('/payments', async (req, res, next) => {
 /* ── TRANSACTIONS · Receipts listing (GET /receipts) ────────── */
 router.get('/receipts', async (req, res, next) => {
   try {
+    const month = String(req.query.month || '').trim();
+
+    // ── NO MONTH → Receipt Register (month-wise summary, drill-down) ──
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+        const { rows: monthRows, meta: mMeta } = await apiList(req, '/receipts/monthly');
+        return res.render('receipts/register', {
+            title: 'Receipt Register',
+            activeMenu: 'receipts',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Receipts' }],
+            months:     monthRows,
+            grandTotal: mMeta.grand_total || 0,
+        });
+    }
+
+    // ── MONTH SELECTED → that month's voucher list ──
+    const [yy, mm] = month.split('-').map(Number);
+    const lastDay = new Date(yy, mm, 0).getDate();
+    req.query.date_from = `${month}-01`;
+    req.query.date_to   = `${month}-${String(lastDay).padStart(2, '0')}`;
+    const MN = ['', 'January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthLabel = `${MN[mm]} ${yy}`;
+
     const { rows, meta } = await apiList(req, '/receipts');
     const config = await fetchConfig(req, ['payment_modes']);
     const receiptRows = rows.map((r) => ({
         id: r.id, receipt_no: r.voucher_no, date: fmtDate(r.payment_date),
+        vch_type: 'Receipt',
         party: r.party || '', mode: r.mode || '', reference: r.reference || '—',
         amount: r.amount, status: txStatusLabel(r.status),
     }));
     res.render('receipts/list', {
-        title: 'Receipts',
+        title: 'Receipts · ' + monthLabel,
         activeMenu: 'receipts',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
-            { label: 'Receipts' },
+            { label: 'Receipt Register', href: '/receipts' },
+            { label: monthLabel },
         ],
 
         receiptRows,
         receiptsTotal:   meta.total,
+        grandTotal:      meta.grand_total || 0,
         page:            meta.page,
         perPage:         meta.per_page,
+        monthMode:       true,
+        monthLabel,
+        monthValue:      month,
 
         customerNames:   mock.customerNames,
         ...config,
