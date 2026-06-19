@@ -1076,9 +1076,14 @@ async function importFromTally(req, res) {
             // isSales below; compute both sums here. (Unreliable: v.amount — a
             // sub-ledger value for some vouchers; max-abs — misses split payments.)
             const _vEntries = Array.isArray(v.entries) ? v.entries : [];
+            // EXCLUDE round-off: it is a separate balancing posting on the party's
+            // side (a credit on purchases), so summing it would inflate the bill
+            // total by the rounding. The party ledger already carries the rounded
+            // net — verified to the paisa on both registers.
+            const _isRound = (e) => /round/i.test(String((e && e.ledger) || ''));
             const _sumAbs = (arr) => arr.reduce((s, e) => s + Math.abs(Number(e.amount) || 0), 0);
-            const _debitSum  = _sumAbs(_vEntries.filter((e) => e.is_debit));
-            const _creditSum = _sumAbs(_vEntries.filter((e) => !e.is_debit));
+            const _debitSum  = _sumAbs(_vEntries.filter((e) => e.is_debit && !_isRound(e)));
+            const _creditSum = _sumAbs(_vEntries.filter((e) => !e.is_debit && !_isRound(e)));
 
             // ── FULL MIRROR: store this voucher's COMPLETE double-entry (every
             //    ledger debit/credit) into tally_voucher_entries BEFORE any skip,
