@@ -12,8 +12,10 @@ var _inv   = invoice || {};
 var _items = items || [];
 function inr(v) { return Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function qfmt(v) { var n = Number(v || 0); return (n % 1 === 0) ? String(n) : n.toFixed(2); }
-var _cgst = Number(_inv.cgst) || 0, _sgst = Number(_inv.sgst) || 0, _igst = Number(_inv.igst) || 0;
-var _round = Number(_inv.round_off) || 0;
+var _t = (typeof tax !== 'undefined' && tax) ? tax : {};
+var _cgst = Number(_t.cgst || _inv.cgst) || 0, _sgst = Number(_t.sgst || _inv.sgst) || 0, _igst = Number(_t.igst || _inv.igst) || 0;
+var _round = Number(_t.roundoff != null && _t.roundoff !== 0 ? _t.roundoff : _inv.round_off) || 0;
+var _subtotal = Number((typeof subtotal !== 'undefined' ? subtotal : 0) || _inv.taxable) || 0;
 %><!doctype html>
 <html lang="en">
 <head>
@@ -99,58 +101,52 @@ var _round = Number(_inv.round_off) || 0;
                 </div>
             </div>
 
-            <!-- Items -->
+            <!-- Items (Tally tax-invoice grid) -->
             <table class="items">
                 <thead>
                     <tr>
-                        <th style="width:30px">#</th>
+                        <th style="width:34px">Sl<br>No.</th>
                         <th style="text-align:left">Description of Goods</th>
-                        <th style="width:60px">HSN</th>
-                        <th style="width:55px">Qty</th>
-                        <th style="width:42px">Unit</th>
-                        <th style="width:70px">Rate</th>
-                        <th style="width:80px">Taxable</th>
-                        <th style="width:48px">GST%</th>
-                        <th style="width:78px">GST Amt</th>
-                        <th style="width:88px">Amount</th>
+                        <th style="width:70px">HSN/SAC</th>
+                        <th style="width:66px">Quantity</th>
+                        <th style="width:80px">Rate</th>
+                        <th style="width:38px">per</th>
+                        <th style="width:52px">Disc %</th>
+                        <th style="width:100px">Amount</th>
                     </tr>
                 </thead>
                 <tbody>
                     <% if (!_items.length) { %>
-                        <tr><td colspan="10" class="c" style="padding:18px;color:#777">No line items.</td></tr>
+                        <tr><td colspan="8" class="c" style="padding:18px;color:#777">No line items.</td></tr>
                     <% } %>
                     <% _items.forEach(function (it) { %>
                         <tr>
                             <td class="c"><%= it.sno %></td>
                             <td><%= it.name %></td>
                             <td class="c"><%= it.hsn %></td>
-                            <td class="r"><%= qfmt(it.qty) %></td>
-                            <td class="c"><%= it.unit %></td>
+                            <td class="r"><%= qfmt(it.qty) %><%= it.unit ? ' ' + it.unit : '' %></td>
                             <td class="r"><%= inr(it.rate) %></td>
-                            <td class="r"><%= inr(it.taxable) %></td>
-                            <td class="c"><%= it.gst_rate %>%</td>
-                            <td class="r"><%= inr(it.gst_amount) %></td>
+                            <td class="c"><%= it.unit %></td>
+                            <td class="r"><%= it.disc_pct ? it.disc_pct + ' %' : '' %></td>
                             <td class="r"><%= inr(it.amount) %></td>
                         </tr>
                     <% }); %>
                     <% if (_items.length && _items.length < 8) { for (var f = _items.length; f < 8; f++) { %>
-                        <tr class="filler"><td colspan="10"></td></tr>
+                        <tr class="filler"><td colspan="8"></td></tr>
                     <% } } %>
                 </tbody>
                 <tfoot>
                     <tr class="totrow">
-                        <td colspan="6" class="r">Sub Total (Taxable)</td>
-                        <td class="r"><%= inr(_inv.taxable) %></td>
-                        <td colspan="2"></td>
-                        <td class="r"><%= inr(_inv.taxable) %></td>
+                        <td colspan="7" class="r">Sub Total</td>
+                        <td class="r"><%= inr(_subtotal) %></td>
                     </tr>
-                    <% if (_cgst) { %><tr><td colspan="8" class="r">CGST</td><td colspan="2" class="r"><%= inr(_cgst) %></td></tr><% } %>
-                    <% if (_sgst) { %><tr><td colspan="8" class="r">SGST</td><td colspan="2" class="r"><%= inr(_sgst) %></td></tr><% } %>
-                    <% if (_igst) { %><tr><td colspan="8" class="r">IGST</td><td colspan="2" class="r"><%= inr(_igst) %></td></tr><% } %>
-                    <% if (_round) { %><tr><td colspan="8" class="r">Round Off</td><td colspan="2" class="r"><%= inr(_round) %></td></tr><% } %>
+                    <% if (_cgst) { %><tr><td colspan="7" class="r">CGST</td><td class="r"><%= inr(_cgst) %></td></tr><% } %>
+                    <% if (_sgst) { %><tr><td colspan="7" class="r">SGST</td><td class="r"><%= inr(_sgst) %></td></tr><% } %>
+                    <% if (_igst) { %><tr><td colspan="7" class="r">IGST</td><td class="r"><%= inr(_igst) %></td></tr><% } %>
+                    <% if (_round) { %><tr><td colspan="7" class="r">Round Off</td><td class="r"><%= inr(_round) %></td></tr><% } %>
                     <tr class="totrow">
-                        <td colspan="8" class="r" style="font-size:13px">GRAND TOTAL</td>
-                        <td colspan="2" class="r" style="font-size:13px">₹ <%= inr(_inv.total) %></td>
+                        <td colspan="7" class="r" style="font-size:13px">Total</td>
+                        <td class="r" style="font-size:13px">₹ <%= inr(_inv.total) %></td>
                     </tr>
                 </tfoot>
             </table>

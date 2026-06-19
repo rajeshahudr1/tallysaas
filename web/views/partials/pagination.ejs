@@ -22,11 +22,15 @@ var _totalPages = Math.max(1, Math.ceil(_total / _perPage));
 var _from = _total === 0 ? 0 : ((_page - 1) * _perPage) + 1;
 var _to   = Math.min(_page * _perPage, _total);
 
-/* Build the page-number window: always show 1..5 (or fewer), an ellipsis,
- * then the last page when there is a gap. */
-var _windowEnd = Math.min(5, _totalPages);
+/* Sliding window of just 3 page numbers, centred on the current page (it
+ * shifts as you click). First/Prev/Next/Last handle the jumps — no ellipsis,
+ * no far-end page number. */
+var _windowSize = 3;
+var _start = Math.max(1, _page - 1);
+var _end   = Math.min(_totalPages, _start + _windowSize - 1);
+_start = Math.max(1, _end - _windowSize + 1);
 var _pages = [];
-for (var p = 1; p <= _windowEnd; p++) _pages.push(p);
+for (var p = _start; p <= _end; p++) _pages.push(p);
 
 /* Real navigation: build a URL for page N preserving the current path +
  * query (search/status filters etc.). currentPath/currentQuery are global
@@ -73,15 +77,6 @@ function _pageUrl(n) {
                     <a class="page-link" href="<%= _pageUrl(p) %>"><%= p %></a>
                 </li>
             <% }); %>
-
-            <% if (_totalPages > _windowEnd + 1) { %>
-                <li class="page-item disabled"><span class="page-link">…</span></li>
-            <% } %>
-            <% if (_totalPages > _windowEnd) { %>
-                <li class="page-item <%= _page === _totalPages ? 'active' : '' %>">
-                    <a class="page-link" href="<%= _pageUrl(_totalPages) %>"><%= _totalPages %></a>
-                </li>
-            <% } %>
 
             <li class="page-item <%= _page === _totalPages ? 'disabled' : '' %>">
                 <a class="page-link" href="<%= _page === _totalPages ? '#' : _pageUrl(_page + 1) %>" aria-label="Next"><i class="fa-solid fa-chevron-right"></i></a>

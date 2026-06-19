@@ -67,8 +67,13 @@ class ApiClient:
         *,
         json: dict[str, Any],
         headers: Optional[dict[str, str]] = None,
+        timeout: Optional[int] = None,
     ) -> requests.Response:
         """POST with a short retry/backoff on transport-level errors.
+
+        ``timeout`` overrides the default per-request TIMEOUT — the master/voucher
+        IMPORT processes large batches (double-entry storage), so it needs a much
+        longer read window than a heartbeat.
 
         Returns the :class:`requests.Response` (whatever HTTP status it
         carries). Raises :class:`requests.RequestException` only after the
@@ -79,7 +84,7 @@ class ApiClient:
         for attempt in range(RETRIES + 1):
             try:
                 resp = self._session.post(
-                    url, json=json, headers=headers, timeout=TIMEOUT
+                    url, json=json, headers=headers, timeout=(timeout or TIMEOUT)
                 )
                 return resp
             except requests.RequestException as exc:
@@ -340,7 +345,10 @@ class ApiClient:
         if company_id:
             payload["company_id"] = company_id
         try:
-            resp = self._post("agent/import", json=payload, headers=headers)
+            # IMPORT is heavy (master + voucher double-entry storage) — give the
+            # cloud a long read window instead of the 15s default so big batches
+            # don't time out mid-write.
+            resp = self._post("agent/import", json=payload, headers=headers, timeout=180)
         except requests.RequestException as exc:
             self.log.error("Import transport error: %s", exc)
             raise AgentError("Cannot reach the cloud server.") from exc

@@ -235,7 +235,40 @@ async function get(req, res) {
             .orderBy('id', 'asc')
             .select('*');
 
-        return R.successResponse(res, { ...invoice, items });
+        // Tally-synced invoices store no invoice_items — reconstruct the FULL
+        // voucher (line items + ledger postings) from the entries tables, keyed
+        // by the voucher GUID, so the print/view can be Tally-exact.
+        let tallyItems = [];
+        let tallyLedgers = [];
+        if (!items.length && invoice.tally_guid) {
+            // Join products (by item name) for unit + HSN + GST rate the inventory
+            // entries don't carry, so the print can show Tally's per/HSN/Disc columns.
+            const invEntries = await db('tally_inventory_entries as e')
+                .leftJoin('products as p', function joinProd() {
+                    this.on(db.raw('lower(p.name) = lower(e.item_name)'))
+                        .andOn('p.company_id', '=', 'e.company_id');
+                })
+                .where('e.company_id', req.companyId).where('e.voucher_guid', invoice.tally_guid)
+                .orderBy('e.id', 'asc')
+                .select('e.item_name', 'e.qty', 'e.rate', 'e.amount', 'e.godown',
+                    'p.unit', 'p.hsn_code', 'p.gst_rate');
+            tallyItems = invEntries.map((e) => {
+                const qty = Number(e.qty) || 0, rate = Number(e.rate) || 0, amount = Number(e.amount) || 0;
+                const gross = qty * rate;
+                return {
+                    item_name: e.item_name, qty, rate, amount, godown: e.godown,
+                    unit: e.unit || '',
+                    hsn: (e.hsn_code && e.hsn_code !== 'Not Found') ? e.hsn_code : '',
+                    gst_rate: Number(e.gst_rate) || 0,
+                    disc_pct: gross > 0 ? Math.round(((gross - amount) / gross) * 10000) / 100 : 0,
+                };
+            });
+            tallyLedgers = await db('tally_voucher_entries')
+                .where('company_id', req.companyId).where('voucher_guid', invoice.tally_guid)
+                .orderBy('id', 'asc').select('ledger_name', 'amount', 'is_debit');
+        }
+
+        return R.successResponse(res, { ...invoice, items, tally_items: tallyItems, tally_ledgers: tallyLedgers });
     } catch (err) {
         console.error('invoices.get error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);

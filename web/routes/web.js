@@ -3312,8 +3312,28 @@ async function renderInvoicePrint(req, res, next, apiBase) {
         const invoice = r.body.data;
         const isPurchase = apiBase.indexOf('purchase') > -1;
 
-        // Buyer / supplier party (name + GSTIN + address).
-        let party = { name: (isPurchase ? invoice.supplier : invoice.customer) || '', gst: '', address: '' };
+        // Classify the reconstructed Tally ledger postings (party / sales /
+        // CGST / SGST / IGST / round-off) so the print mirrors the voucher.
+        const ledgers = Array.isArray(invoice.tally_ledgers) ? invoice.tally_ledgers : [];
+        const tax = { cgst: 0, sgst: 0, igst: 0, roundoff: 0, sales: 0 };
+        let partyLedger = '';
+        let _partyAbs = -1;
+        ledgers.forEach((l) => {
+            const nm = String(l.ledger_name || '');
+            const low = nm.toLowerCase();
+            const amt = Number(l.amount) || 0;
+            const abs = Math.abs(amt);
+            if (/c\s*gst|cgst|central/.test(low))      tax.cgst += abs;
+            else if (/s\s*gst|sgst|state/.test(low))   tax.sgst += abs;
+            else if (/i\s*gst|igst|integrated/.test(low)) tax.igst += abs;
+            else if (/round/.test(low))                tax.roundoff += amt;
+            else if (/sales|purchase/.test(low))       tax.sales += abs;
+            else if (abs > _partyAbs) { partyLedger = nm; _partyAbs = abs; }  // the debtor/creditor
+        });
+
+        // Buyer / supplier party (name + GSTIN + address). Tally-synced invoices
+        // carry no FK, so fall back to the party ledger name from the voucher.
+        let party = { name: (isPurchase ? invoice.supplier : invoice.customer) || partyLedger || '', gst: '', address: '' };
         const partyId = isPurchase ? invoice.supplier_id : invoice.customer_id;
         if (partyId) {
             const p = await api.get(req, `${isPurchase ? '/suppliers' : '/customers'}/${partyId}`);
@@ -3321,6 +3341,11 @@ async function renderInvoicePrint(req, res, next, apiBase) {
                 party = { name: p.body.data.name, gst: p.body.data.gst_number || '',
                     address: p.body.data.billing_address || p.body.data.address || '' };
             }
+        } else if (partyLedger) {
+            // Match the ledger name to a cloud customer/supplier for GSTIN/address.
+            const list = await fetchAllRows(req, isPurchase ? '/suppliers' : '/customers');
+            const hit = list.find((x) => String(x.name || '').trim().toLowerCase() === partyLedger.trim().toLowerCase());
+            if (hit) party = { name: hit.name, gst: hit.gst_number || '', address: hit.billing_address || hit.address || '' };
         }
 
         // Seller company profile (from settings).
@@ -3335,19 +3360,24 @@ async function renderInvoicePrint(req, res, next, apiBase) {
         const prodOpts = await fetchOptions(req, '/products');
         const prodMap = {};
         prodOpts.forEach((p) => { prodMap[p.id] = p.name; });
-        const items = (invoice.items || []).map((it, i) => ({
+        // Prefer real invoice_items; else the reconstructed Tally inventory lines.
+        const srcItems = (invoice.items && invoice.items.length) ? invoice.items : (invoice.tally_items || []);
+        const items = srcItems.map((it, i) => ({
             sno: i + 1,
-            name: it.description || prodMap[it.product_id] || 'Item',
-            hsn: it.hsn || '', qty: Number(it.quantity) || 0, unit: it.unit || '',
-            rate: Number(it.rate) || 0, taxable: Number(it.taxable) || 0,
-            gst_rate: Number(it.gst_rate) || 0, gst_amount: Number(it.gst_amount) || 0,
+            name: it.item_name || it.description || prodMap[it.product_id] || 'Item',
+            hsn: it.hsn || '', qty: Number(it.qty != null ? it.qty : it.quantity) || 0, unit: it.unit || '',
+            rate: Number(it.rate) || 0,
+            gst_rate: Number(it.gst_rate) || 0,
+            disc_pct: Number(it.disc_pct) || 0,
             amount: Number(it.amount) || 0,
         }));
+        // Subtotal = sales value (taxable); fall back to summing item amounts.
+        const subtotal = tax.sales || items.reduce((s, it) => s + it.amount, 0);
 
         res.render('invoices/print', {
             layout: false,
             heading: isPurchase ? 'PURCHASE INVOICE' : 'TAX INVOICE',
-            invoice, seller, party, items,
+            invoice, seller, party, items, tax, subtotal,
             words: amountInWords(invoice.total),
             fmtDate,
         });
