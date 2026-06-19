@@ -1067,6 +1067,13 @@ async function importFromTally(req, res) {
             const date = tdate(v.date);
             const partyName = String(v.party || '').trim();
             const guid = String((v && v.guid) || '').trim();
+            // The agent's v.amount can be a SUB-ledger value for some vouchers (e.g.
+            // retail cash sales where it captured the GST line). The true voucher
+            // grand total is the LARGEST absolute ledger posting (the party/cash
+            // line, which always equals the bill total). Fall back to |v.amount|.
+            const voucherTotal = (Array.isArray(v.entries) && v.entries.length)
+                ? (v.entries.reduce((mx, e) => Math.max(mx, Math.abs(Number(e.amount) || 0)), 0) || Math.abs(amount))
+                : Math.abs(amount);
 
             // ── FULL MIRROR: store this voucher's COMPLETE double-entry (every
             //    ledger debit/credit) into tally_voucher_entries BEFORE any skip,
@@ -1231,14 +1238,14 @@ async function importFromTally(req, res) {
                 // re-imported as a duplicate.
                 const invPartyCol = isSales ? 'customer_id' : 'supplier_id';
                 const contentDup = await db('invoices')
-                    .where({ company_id: cid, type, invoice_date: date, total: amount,
+                    .where({ company_id: cid, type, invoice_date: date, total: voucherTotal,
                              [invPartyCol]: partyId })
                     .whereNull('deleted_at').first('id');
                 if (contentDup) { counts.skipped += 1; continue; }
                 const invRow = {
                     company_id: cid, type, invoice_no: vno, invoice_date: date,
                     [isSales ? 'customer_id' : 'supplier_id']: partyId,
-                    taxable: amount, cgst: 0, sgst: 0, igst: 0, tax_amount: 0, total: amount,
+                    taxable: voucherTotal, cgst: 0, sgst: 0, igst: 0, tax_amount: 0, total: voucherTotal,
                     status: 'created', tally_voucher_no: vno, tally_guid: guid || null,
                     created_at: now, updated_at: now,
                 };

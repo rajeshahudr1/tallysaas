@@ -1268,6 +1268,7 @@ router.get('/sales-invoices', async (req, res, next) => {
     const { rows, meta } = await apiList(req, '/sales-invoices');
     const invoiceRows = rows.map((r) => ({
         id: r.id, invoice_no: r.invoice_no, date: fmtDate(r.invoice_date),
+        vch_type: 'Sales',
         customer: r.customer || '', location: r.location || '',
         amount: r.taxable, gst: r.tax_amount, total: r.total,
         status: txStatusLabel(r.status), sales_person: r.sales_person || '',
@@ -1282,6 +1283,7 @@ router.get('/sales-invoices', async (req, res, next) => {
 
         invoiceRows,
         invoicesTotal:  meta.total,
+        grandTotal:     meta.grand_total || 0,
         page:           meta.page,
         perPage:        meta.per_page,
 

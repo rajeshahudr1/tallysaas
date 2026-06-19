@@ -191,6 +191,10 @@ async function listByType(req, res, type) {
         const totalRow = await qb.clone().clearSelect().clearOrder()
             .count('invoices.id as c').first();
         const total = Number(totalRow ? totalRow.c : 0);
+        // Grand total of ALL matching vouchers (for the register summary).
+        const sumRow = await qb.clone().clearSelect().clearOrder()
+            .sum('invoices.total as t').first();
+        const grandTotal = Number(sumRow ? sumRow.t : 0) || 0;
 
         const rows = await qb
             .offset((page - 1) * perPage)
@@ -198,9 +202,42 @@ async function listByType(req, res, type) {
             .orderBy('invoices.id', 'desc')
             .select(...LIST_COLUMNS);
 
+        // Tally-synced invoices are summary-only (no party FK / taxable / tax) —
+        // reconstruct party + taxable + GST for THIS PAGE from the voucher
+        // postings (one batched query) so the register list shows real data.
+        const guids = rows.map((r) => r.tally_guid).filter(Boolean);
+        if (guids.length) {
+            const entries = await db('tally_voucher_entries')
+                .where('company_id', req.companyId).whereIn('voucher_guid', guids)
+                .select('voucher_guid', 'ledger_name', 'amount');
+            const agg = {};
+            entries.forEach((e) => {
+                const a = agg[e.voucher_guid]
+                    || (agg[e.voucher_guid] = { party: '', pAbs: -1, taxable: 0, cgst: 0, sgst: 0, igst: 0 });
+                const low = String(e.ledger_name || '').toLowerCase();
+                const abs = Math.abs(Number(e.amount) || 0);
+                if (/c\s*gst|cgst|central/.test(low)) a.cgst += abs;
+                else if (/s\s*gst|sgst|state/.test(low)) a.sgst += abs;
+                else if (/i\s*gst|igst|integrated/.test(low)) a.igst += abs;
+                else if (/round/.test(low)) { /* round-off: ignore for taxable */ }
+                else if (/sales|purchase/.test(low)) a.taxable += abs;
+                else if (abs > a.pAbs) { a.party = e.ledger_name; a.pAbs = abs; }
+            });
+            rows.forEach((r) => {
+                const a = agg[r.tally_guid]; if (!a) return;
+                const partyKey = isSales ? 'customer' : 'supplier';
+                if (!r[partyKey]) r[partyKey] = a.party;
+                if (!Number(r.taxable))   r.taxable = money(a.taxable);
+                if (!Number(r.cgst))      r.cgst = money(a.cgst);
+                if (!Number(r.sgst))      r.sgst = money(a.sgst);
+                if (!Number(r.igst))      r.igst = money(a.igst);
+                if (!Number(r.tax_amount)) r.tax_amount = money(a.cgst + a.sgst + a.igst);
+            });
+        }
+
         return R.successResponse(res, {
             data: rows,
-            meta: { total, page, per_page: perPage },
+            meta: { total, page, per_page: perPage, grand_total: grandTotal },
         });
     } catch (err) {
         console.error(`invoices.list(${type}) error:`, err);
