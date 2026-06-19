@@ -603,6 +603,54 @@ class TallyConnector:
         """
         return self.send(self.create_purchase_voucher_xml(party, date, items, company, amount))
 
+    def create_voucher_from_ledgers(self, vtype: str, party: str, date: str,
+                                    ledgers: list[dict[str, Any]],
+                                    company: Optional[str] = None) -> str:
+        """Create a voucher from an EXPLICIT ledger breakdown so a cloud invoice
+        reproduces Tally's exact double-entry (party + Sales/Purchase + GST +
+        round-off), not just a 2-line total.
+
+        ``ledgers`` = [{"name": str, "amount": float(abs), "is_debit": bool}].
+        Tally signs: a debit posts ISDEEMEDPOSITIVE=Yes AMOUNT=-x, a credit No +x.
+        """
+        return self.send(self.create_voucher_from_ledgers_xml(vtype, party, date, ledgers, company))
+
+    def create_voucher_from_ledgers_xml(self, vtype: str, party: str, date: str,
+                                        ledgers: list[dict[str, Any]],
+                                        company: Optional[str] = None) -> str:
+        lines = ""
+        for L in (ledgers or []):
+            amt = abs(float(L.get("amount") or 0))
+            if amt == 0:
+                continue
+            is_debit = bool(L.get("is_debit"))
+            pos = "Yes" if is_debit else "No"
+            val = ("-%.2f" % amt) if is_debit else ("%.2f" % amt)
+            lines += (
+                "<ALLLEDGERENTRIES.LIST>"
+                "<LEDGERNAME>" + self._esc(L.get("name") or "") + "</LEDGERNAME>"
+                "<ISDEEMEDPOSITIVE>" + pos + "</ISDEEMEDPOSITIVE>"
+                "<AMOUNT>" + val + "</AMOUNT>"
+                "</ALLLEDGERENTRIES.LIST>"
+            )
+        return (
+            "<ENVELOPE>"
+            "<HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>"
+            "<BODY><IMPORTDATA>"
+            + self._import_requestdesc("Vouchers", company) +
+            "<REQUESTDATA>"
+            '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            '<VOUCHER VCHTYPE="' + self._esc(vtype) + '" ACTION="Create">'
+            "<DATE>" + self._esc(date) + "</DATE>"
+            "<VOUCHERTYPENAME>" + self._esc(vtype) + "</VOUCHERTYPENAME>"
+            "<PARTYLEDGERNAME>" + self._esc(party) + "</PARTYLEDGERNAME>"
+            + lines +
+            "</VOUCHER>"
+            "</TALLYMESSAGE>"
+            "</REQUESTDATA></IMPORTDATA></BODY>"
+            "</ENVELOPE>"
+        )
+
     def ensure_sales_ledger(self, company: Optional[str] = None) -> str:
         """Create the "Sales" account ledger (under Sales Accounts) if missing.
 

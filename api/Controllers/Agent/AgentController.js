@@ -390,6 +390,7 @@ async function pending(req, res) {
             .leftJoin('suppliers as s', 'i.supplier_id', 's.id')
             .limit(50)
             .select('i.id', 'i.company_id', 'i.type', 'i.invoice_no', 'i.invoice_date', 'i.total',
+                    'i.taxable', 'i.cgst', 'i.sgst', 'i.igst',
                     'c.name as customer', 's.name as supplier');
         const invIds = invoices.map((i) => i.id);
         let itemsByInvoice = {};
@@ -407,14 +408,67 @@ async function pending(req, res) {
                 return acc;
             }, {});
         }
-        const invoiceVouchers = invoices.map((i) => ({
-            record_type: i.type === 'purchase' ? 'purchase_invoice' : 'sales_invoice',
-            id: i.id, company_id: i.company_id,
-            voucher_kind: i.type === 'purchase' ? 'purchase' : 'sales',
-            voucher_no: i.invoice_no, date: tallyDate(i.invoice_date),
-            party: i.type === 'purchase' ? i.supplier : i.customer,
-            amount: Number(i.total) || 0, items: itemsByInvoice[i.id] || [],
-        }));
+        // Detect each company's REAL Sales/Purchase + GST + Round-off ledger names
+        // (from its synced vouchers) so a pushed invoice reproduces Tally's EXACT
+        // double-entry — Party + Sales/Purchase + C GST/S GST/I GST + Round Off —
+        // not just a 2-line total. Names vary per company ("Local Sales", "C GST").
+        const ledMap = {};
+        for (const co of [...new Set(invoices.map((i) => i.company_id))]) {
+            const rows = await db('tally_voucher_entries')
+                .where('company_id', co).select('ledger_name').count('id as c')
+                .groupBy('ledger_name').orderBy('c', 'desc').limit(60);
+            const names = rows.map((r) => r.ledger_name || '');
+            const find = (re, excl) => names.find((n) => re.test(n) && !(excl && excl.test(n))) || null;
+            ledMap[co] = {
+                sales:    find(/sales/i, /return|purchase/i) || 'Sales',
+                purchase: find(/purchase/i, /return/i) || 'Purchase',
+                cgst:     find(/c\s*gst|central\s*tax/i),
+                sgst:     find(/s\s*gst|state\s*tax/i),
+                igst:     find(/i\s*gst|integ/i),
+                roundoff: find(/round/i),
+            };
+        }
+        const r2 = (x) => Math.round((Number(x) || 0) * 100) / 100;
+        const invoiceVouchers = invoices.map((i) => {
+            const isPurch = i.type === 'purchase';
+            const party = isPurch ? i.supplier : i.customer;
+            const total = r2(i.total);
+            const L = ledMap[i.company_id] || {};
+            const its = itemsByInvoice[i.id] || [];
+            // GST breakdown: prefer the stored split, else derive from the items.
+            let taxable = Number(i.taxable) || 0;
+            let cgst = Number(i.cgst) || 0, sgst = Number(i.sgst) || 0, igst = Number(i.igst) || 0;
+            if (!taxable && its.length) {
+                taxable = its.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+                const g = its.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0) * (Number(it.gst_rate) || 0) / 100, 0);
+                cgst = sgst = g / 2;
+            }
+            // Explicit ledger double-entry (only when we have a party + taxable base);
+            // otherwise the agent falls back to the simple party+account total form.
+            let ledgers = null;
+            if (party && taxable > 0) {
+                const partyDebit = !isPurch;        // sales: party Dr; purchase: party Cr
+                const acctDebit  = !partyDebit;
+                ledgers = [
+                    { name: party, amount: total, is_debit: partyDebit },
+                    { name: isPurch ? L.purchase : L.sales, amount: r2(taxable), is_debit: acctDebit },
+                ];
+                if (cgst && L.cgst) ledgers.push({ name: L.cgst, amount: r2(cgst), is_debit: acctDebit });
+                if (sgst && L.sgst) ledgers.push({ name: L.sgst, amount: r2(sgst), is_debit: acctDebit });
+                if (igst && L.igst) ledgers.push({ name: L.igst, amount: r2(igst), is_debit: acctDebit });
+                const roundoff = r2(total - taxable - cgst - sgst - igst);
+                if (roundoff && L.roundoff) {
+                    ledgers.push({ name: L.roundoff, amount: Math.abs(roundoff), is_debit: roundoff < 0 ? partyDebit : acctDebit });
+                }
+            }
+            return {
+                record_type: isPurch ? 'purchase_invoice' : 'sales_invoice',
+                id: i.id, company_id: i.company_id,
+                voucher_kind: isPurch ? 'purchase' : 'sales',
+                voucher_no: i.invoice_no, date: tallyDate(i.invoice_date),
+                party, amount: total, items: its, ledgers,
+            };
+        });
 
         // ── Vouchers: payments + receipts ──
         const pays = await db('payments as pm')

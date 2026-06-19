@@ -733,11 +733,19 @@ def _push_voucher(tally: TallyConnector, v: dict, company: Optional[str] = None)
     """
     kind = v.get("voucher_kind")
     if kind == "sales":
-        resp = tally.create_sales_voucher(v["party"], v["date"], v.get("items", []),
-                                          company=company, amount=v.get("amount"))
+        if v.get("ledgers"):   # EXACT double-entry (party + Sales + GST + round-off)
+            resp = tally.create_voucher_from_ledgers("Sales", v["party"], v["date"],
+                                                     v["ledgers"], company=company)
+        else:
+            resp = tally.create_sales_voucher(v["party"], v["date"], v.get("items", []),
+                                              company=company, amount=v.get("amount"))
     elif kind == "purchase":
-        resp = tally.create_purchase_voucher(v["party"], v["date"], v.get("items", []),
-                                             company=company, amount=v.get("amount"))
+        if v.get("ledgers"):
+            resp = tally.create_voucher_from_ledgers("Purchase", v["party"], v["date"],
+                                                     v["ledgers"], company=company)
+        else:
+            resp = tally.create_purchase_voucher(v["party"], v["date"], v.get("items", []),
+                                                 company=company, amount=v.get("amount"))
     elif kind == "receipt":
         resp = tally.create_receipt(v["party"], v["date"], v.get("amount", 0),
                                     mode=v.get("mode", "Cash"), company=company)
