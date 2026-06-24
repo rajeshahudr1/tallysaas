@@ -47,9 +47,10 @@ const base = {
     pool: {
         min: 2,
         max: 10,
-        // All timestamps written/read in UTC — pin every new connection.
+        // Pin every new connection to Indian Standard Time (IST) so now() +
+        // every TIMESTAMPTZ read / date function reports in local Indian time.
         afterCreate: (conn, done) => {
-            conn.query("SET timezone = 'UTC';", (err) => done(err, conn));
+            conn.query("SET timezone = 'Asia/Kolkata';", (err) => done(err, conn));
         },
     },
 };

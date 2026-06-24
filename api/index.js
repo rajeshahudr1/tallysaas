@@ -1,5 +1,8 @@
 'use strict';
 
+// Run on Indian Standard Time (IST) so every Date format + log line is local.
+process.env.TZ = process.env.TZ || 'Asia/Kolkata';
+
 /**
  * api/index.js
  *

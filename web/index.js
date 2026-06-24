@@ -1,5 +1,8 @@
 'use strict';
 
+// Run on Indian Standard Time (IST) so every Date format shown is local.
+process.env.TZ = process.env.TZ || 'Asia/Kolkata';
+
 /* ─────────────────────────────────────────────────────────────
  * index.js — Express bootstrap for the Tally Cloud Sync web tier
  * (Phase 1, UI-only). See docs/PHASE-1-UI-SPEC.md §8.
