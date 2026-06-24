@@ -263,22 +263,31 @@ async function outstanding(req, res) {
 async function gstSummary(req, res) {
     try {
         const cid = req.companyId;
-        const df = req.query.date_from, dt = req.query.date_to;
-        async function agg(type) {
-            let q = db('invoices').where({ company_id: cid, type }).whereNull('deleted_at');
-            // Location scoping: invoices carry location_id.
-            if (req.locationId != null) q = q.where('location_id', req.locationId);
-            if (df) q = q.where('invoice_date', '>=', df);
-            if (dt) q = q.where('invoice_date', '<=', dt);
-            const r = await q.count('id as count').sum('taxable as taxable')
-                .sum('cgst as cgst').sum('sgst as sgst').sum('igst as igst').sum('tax_amount as tax').first();
+        // GST from the DOUBLE-ENTRY: the reconstructed invoices don't carry the
+        // CGST/SGST/IGST split, but tally_voucher_entries does (the C/S/I GST
+        // ledger postings). Output = on sales vouchers, input = on purchases.
+        async function sumPat(vmatch, pat, excl) {
+            let q = db('tally_voucher_entries').where('company_id', cid)
+                .whereRaw('voucher_type ilike ?', [vmatch])
+                .whereRaw('ledger_name ~* ?', [pat]);
+            if (excl) q = q.whereRaw('ledger_name !~* ?', [excl]);
+            const r = await q.sum('amount as s').first();
+            return Math.abs(Number(r && r.s) || 0);
+        }
+        async function agg(vmatch) {
+            const cgst = await sumPat(vmatch, 'c ?gst');
+            const sgst = await sumPat(vmatch, 's ?gst');
+            const igst = await sumPat(vmatch, 'i ?gst');
+            // Taxable = value of the sales/purchase ledgers, EXCLUDING any GST/round-off.
+            const base = vmatch.indexOf('sales') > -1 ? 'sales' : 'purchase';
+            const taxable = await sumPat(vmatch, base, 'gst|round');
             return {
-                count: Number(r.count || 0), taxable: money(r.taxable),
-                cgst: money(r.cgst), sgst: money(r.sgst), igst: money(r.igst), tax: money(r.tax),
+                count: 0, taxable: money(taxable),
+                cgst: money(cgst), sgst: money(sgst), igst: money(igst), tax: money(cgst + sgst + igst),
             };
         }
-        const outward = await agg('sales');
-        const inward = await agg('purchase');
+        const outward = await agg('%sales%');
+        const inward = await agg('%purchase%');
         return R.successResponse(res, {
             outward, inward, net_payable: money(outward.tax - inward.tax),
         });
@@ -296,6 +305,28 @@ async function gstSummary(req, res) {
 async function stockSummary(req, res) {
     try {
         const cid = req.companyId;
+        // EXACT mirror: serve Tally's own Stock Summary snapshot when synced
+        // (item-wise closing qty / rate / value verbatim).
+        const snap = await tallySnapshot(cid, 'stock_summary');
+        if (snap && Array.isArray(snap.rows)) {
+            const data = snap.rows.map((r) => {
+                const qm = String(r.qty || '').match(/^\s*([\-\d.,]+)\s*(.*)$/);
+                const qty = qm ? (Number(String(qm[1]).replace(/,/g, '')) || 0) : 0;
+                const unit = qm ? qm[2].trim() : '';
+                return {
+                    name: r.name, category: '', unit, qty, rate: money(r.rate), value: money(r.amount),
+                    status: qty <= 0 ? 'Out of Stock' : (qty < 50 ? 'Low Stock' : 'In Stock'),
+                };
+            });
+            const summary = {
+                skus: data.length,
+                total_qty: money(data.reduce((s, r) => s + r.qty, 0)),
+                total_value: money(snap.total != null ? snap.total : data.reduce((s, r) => s + r.value, 0)),
+                low: data.filter((r) => r.status === 'Low Stock').length,
+                out: data.filter((r) => r.status === 'Out of Stock').length,
+            };
+            return R.successResponse(res, { summary, data, meta: { total: data.length, page: 1, per_page: data.length }, source: 'tally' });
+        }
         const rows = await db('products')
             .leftJoin('categories', 'categories.id', 'products.category_id')
             .where('products.company_id', cid).whereNull('products.deleted_at')
@@ -470,6 +501,18 @@ async function financialBase(cid, locationId = null) {
     };
 }
 
+/** Fetch a Tally report SNAPSHOT (pulled verbatim by the agent) for exact-match
+ *  rendering. Returns the parsed payload object, or null when not yet synced. */
+async function tallySnapshot(cid, reportType) {
+    try {
+        const row = await db('tally_reports')
+            .where({ company_id: cid, report_type: reportType })
+            .first('payload');
+        if (!row || !row.payload) return null;
+        return typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    } catch (_) { return null; }
+}
+
 /** Whether this company has Tally CLOSING balances synced (any non-zero). When
  *  yes, reports use those authoritative per-ledger balances directly (EXACT match
  *  to Tally); else they fall back to reconstructing opening + Σ(postings). */
@@ -487,6 +530,22 @@ async function hasClosingBalances(cid) {
 async function trialBalance(req, res) {
     try {
         const cid = req.companyId;
+        // EXACT mirror: serve Tally's own Trial Balance snapshot when synced.
+        const snap = await tallySnapshot(cid, 'trial_balance');
+        if (snap && Array.isArray(snap.rows)) {
+            const data = snap.rows.map((r) => ({
+                ledger: r.name, group: '', debit: money(r.debit), credit: money(r.credit),
+            }));
+            let dt = money(snap.debit_total), ct = money(snap.credit_total);
+            // Tally shows a 'Difference in opening balances' row so Dr = Cr ties.
+            const diff = money(ct - dt);
+            if (Math.abs(diff) > 0.01) {
+                data.push({ ledger: 'Difference in opening balances', group: 'Difference',
+                            debit: diff > 0 ? diff : 0, credit: diff < 0 ? money(-diff) : 0 });
+                if (diff > 0) dt = money(dt + diff); else ct = money(ct - diff);
+            }
+            return R.successResponse(res, { data, totals: { debit: dt, credit: ct }, source: 'tally' });
+        }
         const balExpr = (await hasClosingBalances(cid))
             ? 'coalesce(l.closing_balance,0)'
             : 'coalesce(l.opening_balance,0) + coalesce(p.posted,0)';
@@ -580,6 +639,28 @@ function aggByGroup(ledgers) {
  *  income, -ve = Dr expense). Net = income − expense. */
 async function profitLoss(req, res) {
     try {
+        // EXACT mirror: serve Tally's own Profit & Loss snapshot when synced
+        // (income = credit side, expense = debit side — Tally's verbatim rows).
+        const snap = await tallySnapshot(req.companyId, 'profit_loss');
+        if (snap && (Array.isArray(snap.income) || Array.isArray(snap.expense))) {
+            const right = (snap.income || []).map((r) => ({ label: r.name, amount: money(r.amount) }));
+            const left  = (snap.expense || []).map((r) => ({ label: r.name, amount: money(r.amount) }));
+            let lt = money(left.reduce((s, r) => s + r.amount, 0));
+            let rt = money(right.reduce((s, r) => s + r.amount, 0));
+            // Balance with the Net Profit / Net Loss line (Tally's bottom line).
+            const net = money(rt - lt);                  // +ve = profit
+            if (net >= 0) left.push({ label: 'Net Profit', amount: net });
+            else          right.push({ label: 'Net Loss', amount: money(-net) });
+            lt = money(left.reduce((s, r) => s + r.amount, 0));
+            rt = money(right.reduce((s, r) => s + r.amount, 0));
+            // Sub-rows under each main group (Opening Stock / Purchases / Closing
+            // Stock / Direct Expenses under Cost of Sales) for Tally-style detail.
+            const details = Array.isArray(snap.details) ? snap.details : [];
+            return R.successResponse(res, {
+                left, right, left_total: lt, right_total: rt,
+                gross_profit: net, details, source: 'tally',
+            });
+        }
         const rev = (await realLedgerBalances(req.companyId)).filter((l) => l.isRevenue);
         const left = [], right = [];   // left = Dr (Expenses), right = Cr (Income)
         aggByGroup(rev).forEach((g) => {
@@ -607,6 +688,18 @@ async function profitLoss(req, res) {
  *  (+ve = Cr liability, -ve = Dr asset), with the P&L result on the capital side. */
 async function balanceSheet(req, res) {
     try {
+        // EXACT mirror: serve Tally's own Balance Sheet snapshot when synced.
+        const snap = await tallySnapshot(req.companyId, 'balance_sheet');
+        if (snap && Array.isArray(snap.liabilities) && Array.isArray(snap.assets)) {
+            const liabilities = snap.liabilities.map((r) => ({ label: r.name, amount: money(r.amount) }));
+            const assets = snap.assets.map((r) => ({ label: r.name, amount: money(r.amount) }));
+            return R.successResponse(res, {
+                liabilities, assets,
+                liab_total: money(liabilities.reduce((s, r) => s + r.amount, 0)),
+                asset_total: money(assets.reduce((s, r) => s + r.amount, 0)),
+                source: 'tally',
+            });
+        }
         const all = await realLedgerBalances(req.companyId);
         const liabilities = [], assets = [];
         aggByGroup(all.filter((l) => !l.isRevenue)).forEach((g) => {

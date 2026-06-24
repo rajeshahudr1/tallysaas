@@ -229,6 +229,166 @@ class TallyConnector:
             }
         return {}
 
+    # ------------------------------------------------------------------ #
+    # Financial reports — pulled VERBATIM from Tally so the cloud mirrors
+    # them EXACTLY (no reconstruction → no inventory/opening-balance drift).
+    # ------------------------------------------------------------------ #
+    def _report_xml(self, report_id: str, company: Optional[str]) -> str:
+        """EXPORT one of Tally's built-in financial reports as XML."""
+        cmp_xml = ("<SVCURRENTCOMPANY>" + self._esc(company) + "</SVCURRENTCOMPANY>") if company else ""
+        req = (
+            "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
+            "<TYPE>Data</TYPE><ID>" + self._esc(report_id) + "</ID></HEADER>"
+            "<BODY><DESC><STATICVARIABLES>"
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>" + cmp_xml +
+            "</STATICVARIABLES></DESC></BODY></ENVELOPE>"
+        )
+        return self.send(req, timeout=60)
+
+    @staticmethod
+    def _rx_amt(s: str) -> float:
+        s = re.sub(r"[^0-9.\-]", "", str(s or ""))
+        try:
+            return float(s) if s not in ("", "-", ".") else 0.0
+        except ValueError:
+            return 0.0
+
+    def financial_reports(self, company: Optional[str] = None) -> dict[str, Any]:
+        """Pull Tally's EXACT Balance Sheet / Profit&Loss / Trial Balance so the
+        cloud shows them verbatim. Each is best-effort ({} on a miss)."""
+        out: dict[str, Any] = {}
+        try:
+            out["balance_sheet"] = self._parse_balance_sheet(self._report_xml("Balance Sheet", company))
+        except Exception as exc:
+            self.log.warning("Balance Sheet pull failed: %s", exc); out["balance_sheet"] = {}
+        try:
+            out["profit_loss"] = self._parse_pl(self._report_xml("Profit and Loss", company))
+        except Exception as exc:
+            self.log.warning("P&L pull failed: %s", exc); out["profit_loss"] = {}
+        try:
+            out["trial_balance"] = self._parse_tb(self._report_xml("Trial Balance", company))
+        except Exception as exc:
+            self.log.warning("Trial Balance pull failed: %s", exc); out["trial_balance"] = {}
+        try:
+            out["sales_register"] = self._parse_register(self._report_xml("Sales Register", company))
+        except Exception as exc:
+            self.log.warning("Sales Register pull failed: %s", exc); out["sales_register"] = {}
+        try:
+            out["purchase_register"] = self._parse_register(self._report_xml("Purchase Register", company))
+        except Exception as exc:
+            self.log.warning("Purchase Register pull failed: %s", exc); out["purchase_register"] = {}
+        try:
+            out["stock_summary"] = self._parse_stock(self._report_xml("Stock Summary", company))
+        except Exception as exc:
+            self.log.warning("Stock Summary pull failed: %s", exc); out["stock_summary"] = {}
+        return out
+
+    def _parse_balance_sheet(self, xml: str) -> dict[str, Any]:
+        """BS rows: <BSNAME>..<DSPDISPNAME>name</..></BSNAME> <BSAMT><BSMAINAMT>amt</..>.
+        Tally sign: +ve = Liability, -ve = Asset. The balancing 'Difference in
+        opening balances' = Σliab − Σasset, placed on the short side."""
+        pairs = re.findall(
+            r"<BSNAME>.*?<DSPDISPNAME>(.*?)</DSPDISPNAME>.*?</BSNAME>\s*"
+            r"<BSAMT>.*?<BSMAINAMT>(.*?)</BSMAINAMT>", xml, re.S)
+        liab, asset = [], []
+        for name, amt in pairs:
+            a = self._rx_amt(amt)
+            nm = self._unesc(name).strip()
+            if a == 0:
+                continue
+            if a > 0:
+                liab.append({"name": nm, "amount": round(a, 2)})
+            else:
+                asset.append({"name": nm, "amount": round(-a, 2)})
+        lt = round(sum(x["amount"] for x in liab), 2)
+        at = round(sum(x["amount"] for x in asset), 2)
+        diff = round(lt - at, 2)
+        if diff > 0:
+            asset.append({"name": "Difference in opening balances", "amount": diff})
+        elif diff < 0:
+            liab.append({"name": "Difference in opening balances", "amount": -diff})
+        total = max(lt, at)
+        return {"liabilities": liab, "assets": asset, "total": round(total, 2)}
+
+    def _parse_pl(self, xml: str) -> dict[str, Any]:
+        """P&L rows: <DSPDISPNAME>name</> <PLAMT><PLSUBAMT>sub</><BSMAINAMT>main</>.
+        +ve = credit (income), -ve = debit (expense). Keep the main-group rows."""
+        blocks = re.findall(
+            r"<DSPDISPNAME>(.*?)</DSPDISPNAME>\s*</DSPACCNAME>\s*<PLAMT>\s*"
+            r"<PLSUBAMT>(.*?)</PLSUBAMT>\s*<BSMAINAMT>(.*?)</BSMAINAMT>", xml, re.S)
+        # Only the MAIN group rows (BSMAINAMT present) drive the totals — the
+        # SUB rows (Opening Stock / Purchases / Closing Stock / Direct Expenses)
+        # are details UNDER 'Cost of Sales', so counting both double-counts. Keep
+        # the subs in `details` (for display), totals from mains only.
+        income, expense, details = [], [], []
+        cur = None
+        for name, sub, main in blocks:
+            nm = self._unesc(name).strip()
+            if main.strip():                       # MAIN group row
+                amt = self._rx_amt(main)
+                if abs(amt) < 0.005:
+                    cur = None
+                    continue
+                (income if amt > 0 else expense).append({"name": nm, "amount": round(abs(amt), 2)})
+                cur = nm
+            else:                                  # SUB detail under the last main
+                details.append({"name": nm, "amount": round(self._rx_amt(sub), 2), "under": cur})
+        return {"income": income, "expense": expense, "details": details}
+
+    def _parse_tb(self, xml: str) -> dict[str, Any]:
+        """Trial Balance: each group carries a signed Dr (DSPCLDRAMTA, -ve) and a
+        Cr (DSPCLCRAMTA, +ve); the NET = Dr+Cr places the group in the Dr or Cr
+        column (Tally sign: +ve net = Credit, -ve = Debit)."""
+        blocks = re.findall(
+            r"<DSPDISPNAME>(.*?)</DSPDISPNAME>.*?<DSPCLDRAMTA>(.*?)</DSPCLDRAMTA>"
+            r".*?<DSPCLCRAMTA>(.*?)</DSPCLCRAMTA>", xml, re.S)
+        rows = []
+        for nm, drv, crv in blocks:
+            net = self._rx_amt(drv) + self._rx_amt(crv)
+            if abs(net) < 0.005:
+                continue
+            debit = round(-net, 2) if net < 0 else 0.0
+            credit = round(net, 2) if net > 0 else 0.0
+            rows.append({"name": self._unesc(nm).strip(), "debit": debit, "credit": credit})
+        return {"rows": rows,
+                "debit_total": round(sum(r["debit"] for r in rows), 2),
+                "credit_total": round(sum(r["credit"] for r in rows), 2)}
+
+    def _parse_register(self, xml: str) -> dict[str, Any]:
+        """Sales / Purchase Register: month rows — <DSPPERIOD>month</> with a Cr
+        (sales) or Dr (purchase) amount + a running closing balance. Returns the
+        EXACT monthly figures Tally shows so the cloud register ties to the rupee."""
+        blocks = re.findall(
+            r"<DSPPERIOD>(.*?)</DSPPERIOD>\s*<DSPACCINFO>(.*?)</DSPACCINFO>", xml, re.S)
+        rows, total = [], 0.0
+        for month, info in blocks:
+            cr = re.search(r"<DSPCRAMTA>(.*?)</DSPCRAMTA>", info, re.S)
+            dr = re.search(r"<DSPDRAMTA>(.*?)</DSPDRAMTA>", info, re.S)
+            cl = re.search(r"<DSPCLAMTA>(.*?)</DSPCLAMTA>", info, re.S)
+            amt = abs(self._rx_amt(cr.group(1) if cr else "") or self._rx_amt(dr.group(1) if dr else ""))
+            mn = self._unesc(month).strip()
+            if not mn:
+                continue
+            total += amt
+            rows.append({"month": mn, "amount": round(amt, 2),
+                         "closing": round(self._rx_amt(cl.group(1) if cl else ""), 2)})
+        return {"rows": rows, "total": round(total, 2)}
+
+    def _parse_stock(self, xml: str) -> dict[str, Any]:
+        """Stock Summary: per-item closing qty / rate / value, verbatim from Tally."""
+        blocks = re.findall(
+            r"<DSPDISPNAME>(.*?)</DSPDISPNAME>\s*</DSPACCNAME>\s*<DSPSTKINFO>\s*<DSPSTKCL>\s*"
+            r"<DSPCLQTY>(.*?)</DSPCLQTY>\s*<DSPCLRATE>(.*?)</DSPCLRATE>\s*"
+            r"<DSPCLAMTA>(.*?)</DSPCLAMTA>", xml, re.S)
+        rows, total = [], 0.0
+        for name, qty, rate, amt in blocks:
+            a = abs(self._rx_amt(amt))
+            total += a
+            rows.append({"name": self._unesc(name).strip(),
+                         "qty": self._unesc(qty).strip(),
+                         "rate": round(self._rx_amt(rate), 2), "amount": round(a, 2)})
+        return {"rows": rows, "total": round(total, 2)}
+
     def ledger_list(self, company: Optional[str] = None) -> list[dict[str, Any]]:
         """Fetch ledgers from Tally via a COLLECTION (name, parent, alterid, ...).
 
@@ -739,6 +899,13 @@ class TallyConnector:
             .replace(">", "&gt;")
             .replace('"', "&quot;")
         )
+
+    @staticmethod
+    def _unesc(value: Any) -> str:
+        """Reverse XML-escaping in a Tally response value (e.g. 'Profit &amp; Loss')."""
+        return (str("" if value is None else value)
+                .replace("&amp;", "&").replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&quot;", '"').replace("&#4;", ""))
 
     @staticmethod
     def _svcompany(company: Optional[str]) -> str:

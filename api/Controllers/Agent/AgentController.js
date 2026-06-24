@@ -775,6 +775,27 @@ async function importFromTally(req, res) {
             } catch (e) { /* best-effort: company master never blocks the import */ }
         }
 
+        // ── Tally's OWN financial reports (Balance Sheet / P&L / Trial Balance),
+        //    pulled VERBATIM by the agent — store each as the cloud's EXACT mirror
+        //    so /reports shows Tally's figures, not a reconstruction. Upsert per
+        //    (company, report_type). Best-effort: never blocks the import. ──
+        const freports = req.body.financial_reports;
+        if (freports && typeof freports === 'object' && cid) {
+            for (const rtype of Object.keys(freports)) {
+                const payload = freports[rtype];
+                if (payload && typeof payload === 'object' && Object.keys(payload).length) {
+                    try {
+                        const rrow = {
+                            company_id: cid, report_type: rtype,
+                            payload: JSON.stringify(payload), synced_at: now,
+                        };
+                        await db('tally_reports').insert(rrow)
+                            .onConflict(['company_id', 'report_type']).merge(rrow);
+                    } catch (e) { /* best-effort: a report store never blocks the import */ }
+                }
+            }
+        }
+
         const counts = { customers_new: 0, customers_linked: 0, suppliers_new: 0,
             suppliers_linked: 0, products_new: 0, products_linked: 0,
             masters_updated: 0, vouchers_new: 0, journals_new: 0, locations_new: 0,

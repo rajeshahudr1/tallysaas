@@ -318,6 +318,7 @@ class ApiClient:
         *,
         company_name: str | None = None,
         company_id: int | None = None,
+        financial_reports: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Tally → Cloud: upload masters + vouchers read from one Tally company.
 
@@ -332,7 +333,8 @@ class ApiClient:
         vouchers = vouchers or []
         godowns = godowns or []
         groups = groups or []
-        if not ledgers and not stock_items and not vouchers and not godowns and not groups:
+        if (not ledgers and not stock_items and not vouchers and not godowns
+                and not groups and not financial_reports):
             return {}
         headers = {"Authorization": f"Bearer {agent_token}"}
         payload: dict[str, Any] = {"ledgers": ledgers,
@@ -344,6 +346,8 @@ class ApiClient:
             payload["company_name"] = company_name
         if company_id:
             payload["company_id"] = company_id
+        if financial_reports:
+            payload["financial_reports"] = financial_reports
         try:
             # IMPORT is heavy (master + voucher double-entry storage) — give the
             # cloud a long read window instead of the 15s default so big batches

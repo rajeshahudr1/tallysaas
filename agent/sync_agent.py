@@ -1121,6 +1121,14 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             godowns = tally.godown_list(company=cname)
             groups = tally.group_list(company=cname)
             cmaster = tally.company_full_info(company=cname)
+            # Tally's EXACT Balance Sheet / P&L / Trial Balance — pulled verbatim
+            # so the cloud mirrors every figure (no reconstruction drift). Best-
+            # effort: never let a report miss block the masters/voucher import.
+            try:
+                freports = tally.financial_reports(company=cname)
+            except Exception as _rexc:
+                logger.warning("Pull[%s]: financial reports read failed: %s", cname, _rexc)
+                freports = {}
             # Vouchers are NOT read here (Tally's Day Book is single-day). They are
             # pulled below via _pull_vouchers - a chunked, AlterID-incremental
             # Voucher COLLECTION backfill (first run = all history over a few
@@ -1155,7 +1163,7 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
         try:
             counts = api.import_from_tally(token, ledgers, stock, vouchers, godowns,
                                            groups=groups, company_master=cmaster,
-                                           company_name=cname)
+                                           company_name=cname, financial_reports=freports)
             new = sum(counts.get(k, 0) for k in ("customers_new", "suppliers_new", "products_new"))
             linked = sum(counts.get(k, 0) for k in ("customers_linked", "suppliers_linked", "products_linked"))
             updated = counts.get("masters_updated", 0)

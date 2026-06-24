@@ -278,6 +278,23 @@ async function listPurchase(req, res) {
  * balance, plus the grand total. invoice_date is a plain DATE so to_char gives
  * the real month (no timezone shift). Honours the FY date_from/date_to filters.
  */
+/** Tally report SNAPSHOT (pulled verbatim by the agent) for exact-match figures. */
+async function tallyReportSnapshot(cid, rtype) {
+    try {
+        const row = await db('tally_reports')
+            .where({ company_id: cid, report_type: rtype }).first('payload');
+        if (!row || !row.payload) return null;
+        return typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
+    } catch (_) { return null; }
+}
+
+// Calendar month number → Tally's month NAME (used to match the synced register).
+const TALLY_MONTH_NAME = {
+    '01': 'january', '02': 'february', '03': 'march', '04': 'april',
+    '05': 'may', '06': 'june', '07': 'july', '08': 'august',
+    '09': 'september', '10': 'october', '11': 'november', '12': 'december',
+};
+
 async function monthlyByType(req, res, type) {
     try {
         let qb = db('invoices')
@@ -296,19 +313,26 @@ async function monthlyByType(req, res, type) {
             .groupByRaw("to_char(invoices.invoice_date, 'YYYY-MM')")
             .orderByRaw("to_char(invoices.invoice_date, 'YYYY-MM')");
 
+        // Override each month's TOTAL with Tally's EXACT register figure (synced
+        // snapshot) so the register ties to Tally to the paisa — keeping the
+        // cloud's voucher counts + month drill-down. Falls back to the
+        // reconstruction when the register has not been synced yet.
+        const snapType = type === 'purchase' ? 'purchase_register' : 'sales_register';
+        const snap = await tallyReportSnapshot(req.companyId, snapType);
+        const byName = {};
+        if (snap && Array.isArray(snap.rows)) {
+            for (const r of snap.rows) byName[String(r.month || '').trim().toLowerCase()] = Number(r.amount) || 0;
+        }
         let running = 0;
         const months = rows.map((r) => {
-            running += Number(r.total) || 0;
-            return {
-                month:   r.month,
-                total:   money(r.total),
-                count:   Number(r.count) || 0,
-                closing: money(running),
-            };
+            const nm = TALLY_MONTH_NAME[String(r.month).slice(5)];
+            const total = (nm && byName[nm] !== undefined) ? money(byName[nm]) : money(r.total);
+            running = money(running + total);
+            return { month: r.month, total, count: Number(r.count) || 0, closing: running };
         });
         return R.successResponse(res, {
             data: months,
-            meta: { grand_total: money(running), months: months.length },
+            meta: { grand_total: money(running), months: months.length, source: snap ? 'tally' : 'cloud' },
         });
     } catch (err) {
         console.error(`invoices.monthly(${type}) error:`, err);
