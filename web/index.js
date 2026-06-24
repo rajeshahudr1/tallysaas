@@ -214,6 +214,16 @@ app.use(async (req, res, next) => {
     // License-admin (tenant) flag — drives the tenant "Roles" sidebar item and
     // the company-admin route guard. Derived from the session user's role slug.
     res.locals.isCompanyAdmin = !!(u && u.role_slug === 'company-admin');
+    // ── Permission set + can(module) helper — drives the menu/dashboard RBAC.
+    //    Admins (super / company) see EVERYTHING for their scope; every other
+    //    user sees ONLY the modules their role grants a '<module>.view' on. The
+    //    sidebar + dashboard cards both filter through res.locals.can(). ──
+    const _perms = new Set((u && Array.isArray(u.permissions)) ? u.permissions : []);
+    const _allAccess = (u && u.role_slug === 'super-admin')
+        || (u && u.role_slug === 'company-admin') || _perms.has('*');
+    res.locals.permissions = _perms;
+    res.locals.canModule = (mod) => _allAccess
+        || _perms.has(`${mod}.view`) || _perms.has(`${mod}.manage`);
     // ── Top switcher — ROLE-AWARE, ALWAYS FRESH ──────────────────────
     //   • super-admin   → TWO levels: a LICENSE dropdown + a COMPANY dropdown
     //                     for the SELECTED license (defaults to the first).

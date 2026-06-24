@@ -163,9 +163,9 @@ function _relTime(v) {
             </button>
             <div class="dropdown-menu dropdown-menu-end notif-menu">
                 <div class="notif-head">
-                    <span>Tally Sync Activity</span>
+                    <span>Notifications</span>
                     <span class="d-flex align-items-center gap-2">
-                        <% if (_notif > 0) { %><span class="badge bg-danger rounded-pill"><%= _notif %> failed</span><% } %>
+                        <% if (_notif > 0) { %><span class="badge bg-danger rounded-pill"><%= _notif %> unread</span><% } %>
                         <% if (_notif > 0) { %>
                             <button type="button" id="notif-mark-all" class="btn btn-link btn-sm p-0 text-decoration-none">Mark all read</button>
                         <% } %>
@@ -173,49 +173,30 @@ function _relTime(v) {
                 </div>
                 <% if (_notifs.length) { %>
                     <% _notifs.forEach(function (n) {
-                        var _isUpdate = String(n.type || '') === 'agent_update';
-                        var _failed = !_isUpdate && String(n.status || '').toLowerCase() === 'failed';
-                        var _reason = (n.reason && n.reason.cause) ? n.reason.cause : (n.raw_message || '');
-                        var _rec    = [n.module, n.record_type].filter(Boolean).join(' ');
-                        // Agent-update entries carry their own title/body/severity;
-                        // a 'warning' severity (mandatory) shows amber, else blue.
-                        var _updWarn = _isUpdate && String(n.severity || '') === 'warning';
-                        var _href    = _isUpdate ? '#' : '/sync-logs';
-                        // Per-item read state (PER USER) from the api feed. The
-                        // stable key is n.id (sync-log id, or "agent-update-<ver>").
-                        var _isRead  = !!n.read;
+                        // Uniform feed item: { id, kind, tone, icon, title, sub, link, when, read }.
+                        var _tone = ({ success:'text-success', danger:'text-danger', warning:'text-warning',
+                                       info:'text-info', primary:'text-primary' })[n.tone] || 'text-muted';
+                        // href marks the item read THEN opens its page (works without JS too).
+                        var _href = '/notifications/open?key=' + encodeURIComponent(n.id) +
+                                    '&to=' + encodeURIComponent(n.link || '/');
                     %>
-                        <a class="dropdown-item notif-item <%= _isRead ? 'is-read' : 'is-unread' %>"
+                        <a class="dropdown-item notif-item <%= n.read ? 'is-read' : 'is-unread' %>"
                            href="<%= _href %>" data-notif-key="<%= n.id %>">
-                            <span class="notif-item-icon">
-                                <% if (_isUpdate) { %>
-                                    <i class="fa-solid fa-cloud-arrow-down <%= _updWarn ? 'text-warning' : 'text-primary' %>"></i>
-                                <% } else if (_failed) { %>
-                                    <i class="fa-solid fa-triangle-exclamation text-danger"></i>
-                                <% } else { %>
-                                    <i class="fa-solid fa-circle-check text-success"></i>
-                                <% } %>
-                            </span>
+                            <span class="notif-item-icon"><i class="fa-solid <%= n.icon || 'fa-circle-info' %> <%= _tone %>"></i></span>
                             <span class="flex-grow-1">
                                 <span class="notif-item-title d-flex align-items-center justify-content-between">
-                                    <span><%= _isUpdate ? (n.title || 'New agent version available') : (_rec || (n.module || 'Tally sync')) %></span>
+                                    <span><%= n.title || 'Notification' %></span>
                                     <span class="notif-item-time text-muted small ms-2"><%= _relTime(n.when) %></span>
                                 </span>
-                                <% if (_isUpdate) { %>
-                                    <span class="notif-item-sub d-block <%= _updWarn ? 'text-warning' : 'text-primary' %>"><%= n.body || '' %></span>
-                                <% } else if (_failed && _reason) { %>
-                                    <span class="notif-item-sub d-block text-danger"><%= _reason %></span>
-                                <% } else { %>
-                                    <span class="notif-item-sub d-block">Synced to Tally.</span>
-                                <% } %>
+                                <% if (n.sub) { %><span class="notif-item-sub d-block text-muted"><%= n.sub %></span><% } %>
                             </span>
                         </a>
                     <% }); %>
-                    <a class="dropdown-item notif-item notif-foot text-center" href="/sync-logs">
+                    <a class="dropdown-item notif-item notif-foot text-center" href="/notifications">
                         <span class="w-100">View all</span>
                     </a>
                 <% } else { %>
-                    <div class="notif-empty"><i class="fa-regular fa-bell-slash d-block mb-2 fs-5"></i>No recent sync activity</div>
+                    <div class="notif-empty"><i class="fa-regular fa-bell-slash d-block mb-2 fs-5"></i>No notifications yet</div>
                 <% } %>
             </div>
         </div>

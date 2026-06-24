@@ -23,32 +23,32 @@ var menu = [
         { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/' },
     ]},
     { label: 'Masters', items: [
-        { key: 'companies',  label: 'Companies',     icon: 'fa-building',      href: '/companies' },
-        { key: 'locations',  label: 'Locations',     icon: 'fa-location-dot',  href: '/locations' },
-        { key: 'sales',      label: 'Sales Persons', icon: 'fa-user-tie',      href: '/sales-persons' },
-        { key: 'customers',  label: 'Customers',     icon: 'fa-user-group',    href: '/customers' },
-        { key: 'suppliers',  label: 'Suppliers',     icon: 'fa-truck-field',   href: '/suppliers' },
-        { key: 'products',   label: 'Products',      icon: 'fa-box',           href: '/products' },
-        { key: 'categories', label: 'Categories',    icon: 'fa-tags',          href: '/categories' },
+        { key: 'companies',  label: 'Companies',     icon: 'fa-building',      href: '/companies',     perm: 'companies' },
+        { key: 'locations',  label: 'Locations',     icon: 'fa-location-dot',  href: '/locations',     perm: 'locations' },
+        { key: 'sales',      label: 'Sales Persons', icon: 'fa-user-tie',      href: '/sales-persons', perm: 'sales-persons' },
+        { key: 'customers',  label: 'Customers',     icon: 'fa-user-group',    href: '/customers',     perm: 'customers' },
+        { key: 'suppliers',  label: 'Suppliers',     icon: 'fa-truck-field',   href: '/suppliers',     perm: 'suppliers' },
+        { key: 'products',   label: 'Products',      icon: 'fa-box',           href: '/products',      perm: 'products' },
+        { key: 'categories', label: 'Categories',    icon: 'fa-tags',          href: '/categories',    perm: 'categories' },
     ]},
     { label: 'Transactions', items: [
-        { key: 'sales-inv',    label: 'Sales Invoices',    icon: 'fa-file-invoice',     href: '/sales-invoices' },
-        { key: 'purchase-inv', label: 'Purchase Invoices', icon: 'fa-file-import',      href: '/purchase-invoices' },
-        { key: 'payments',     label: 'Payments',          icon: 'fa-money-bill-wave',  href: '/payments' },
-        { key: 'receipts',     label: 'Receipts',          icon: 'fa-receipt',          href: '/receipts' },
-        { key: 'journals',     label: 'Journals',          icon: 'fa-book',             href: '/journals' },
-        { key: 'inventory',    label: 'Inventory',         icon: 'fa-warehouse',        href: '/inventory' },
+        { key: 'sales-inv',    label: 'Sales Invoices',    icon: 'fa-file-invoice',     href: '/sales-invoices',    perm: 'sales-invoices' },
+        { key: 'purchase-inv', label: 'Purchase Invoices', icon: 'fa-file-import',      href: '/purchase-invoices', perm: 'purchase-invoices' },
+        { key: 'payments',     label: 'Payments',          icon: 'fa-money-bill-wave',  href: '/payments',          perm: 'payments' },
+        { key: 'receipts',     label: 'Receipts',          icon: 'fa-receipt',          href: '/receipts',          perm: 'receipts' },
+        { key: 'journals',     label: 'Journals',          icon: 'fa-book',             href: '/journals',          perm: 'journals' },
+        { key: 'inventory',    label: 'Inventory',         icon: 'fa-warehouse',        href: '/inventory',         perm: 'inventory' },
     ]},
     { label: 'Tally Sync', items: [
-        { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',     href: '/sync-dashboard' },
-        { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check', href: '/sync-logs' },
-        { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history' },
+        { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',     href: '/sync-dashboard', adminOnly: true },
+        { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check', href: '/sync-logs',      adminOnly: true },
+        { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',  adminOnly: true },
     ]},
     { label: 'Reports', items: [
-        { key: 'reports', label: 'Reports', icon: 'fa-chart-column', href: '/reports' },
+        { key: 'reports', label: 'Reports', icon: 'fa-chart-column', href: '/reports', perm: 'reports' },
     ]},
     { label: 'Settings', items: [
-        { key: 'users',    label: 'Users',                icon: 'fa-users',       href: '/users' },
+        { key: 'users',    label: 'Users',                icon: 'fa-users',       href: '/users', perm: 'users' },
         { key: 'settings', label: 'Settings',             icon: 'fa-gear',        href: '/settings' },
     ]},
 ];
@@ -73,6 +73,19 @@ if (_isSuperAdmin) {
         { key: 'agent-releases', label: 'Agent Updates',  icon: 'fa-cloud-arrow-up',     href: '/agent-releases' },
     ]});
 }
+
+// ── RBAC: keep only the items this user may see. Admins (super / company) see
+// everything; a plain user sees a module ONLY when their role grants it
+// ('<module>.view'); Tally-Sync + Users are admin-only. Empty groups drop out. ──
+var _canMod = (typeof canModule === 'function') ? canModule : function () { return true; };
+menu = menu.map(function (g) {
+    g.items = (g.items || []).filter(function (it) {
+        if (it.adminOnly) return _isCompanyAdmin || _isSuperAdmin;
+        if (it.perm)      return _canMod(it.perm);
+        return true;                                  // Dashboard / Settings = always
+    });
+    return g;
+}).filter(function (g) { return g.items.length > 0; });
 %>
 <div class="sidebar-inner">
 

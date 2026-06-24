@@ -642,47 +642,76 @@ async function importFromTally(req, res) {
         // (respecting the license's max_companies cap). 422 if neither is usable.
         const rawId = Number(req.body && req.body.company_id);
         const companyName = String((req.body && req.body.company_name) || '').trim();
+        // Tally's STABLE per-company GUID (sent in company_master.guid). The cloud
+        // dedups companies on THIS — name is mutable (can go blank or change), so
+        // matching on it spawned a duplicate company. Our own placeholders
+        // ('tally'/'synced') are NOT real guids, so ignore them here.
+        const _cm0    = req.body && req.body.company_master;
+        const _rawGuid = String((_cm0 && _cm0.guid) || '').trim();
+        const cmGuid  = (_rawGuid && !/^(tally|synced)$/i.test(_rawGuid)) ? _rawGuid : '';
         let cid = null;
         let companyCreated = false;
 
+        // 1) Explicit, owned company_id wins.
         if (rawId) {
             const owned = await db('companies').where({ id: rawId, license_id: licenseId })
                 .whereNull('deleted_at').first('id');
             if (owned) cid = owned.id;
         }
-        if (!cid && companyName) {
-            const existing = await db('companies').where('license_id', licenseId).whereNull('deleted_at')
-                .whereRaw('lower(name) = ?', [companyName.toLowerCase()]).first('id');
-            if (existing) {
-                cid = existing.id;
-            } else {
-                const lic = await db('licenses').where('id', licenseId).first('max_companies');
-                const [{ c }] = await db('companies').where('license_id', licenseId)
-                    .whereNull('deleted_at').count({ c: '*' });
-                if (lic && lic.max_companies != null && Number(c) >= Number(lic.max_companies)) {
-                    return R.errorResponse(res,
-                        `Company limit reached for this license (max ${lic.max_companies}). Could not add '${companyName}'.`, 422);
+        // 2) Match by the STABLE Tally GUID (name-independent — the real dedup key).
+        if (!cid && cmGuid) {
+            const byGuid = await db('companies').where({ license_id: licenseId, tally_guid: cmGuid })
+                .whereNull('deleted_at').first('id', 'name');
+            if (byGuid) {
+                cid = byGuid.id;
+                // Heal a blank-named placeholder by restoring its Tally name.
+                if (companyName && !String(byGuid.name || '').trim()) {
+                    await db('companies').where('id', cid).update({ name: companyName, updated_at: new Date() });
                 }
-                // Unique URL slug derived from the Tally company name.
-                const base = (companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-                    .replace(/^-+|-+$/g, '').slice(0, 40)) || 'company';
-                let slug = base;
-                while (await db('companies').where('slug', slug).first('id')) {
-                    slug = `${base}-${Math.random().toString(36).slice(2, 6)}`;
-                }
-                const [row] = await db('companies').insert({
-                    name: companyName, slug, license_id: licenseId, status: 'Active',
-                    // It came FROM Tally, so it already exists there — stamp the
-                    // guid so the cloud->Tally push never tries to re-create it.
-                    tally_guid: 'tally',
-                    created_at: new Date(), updated_at: new Date(),
-                }).returning('id');
-                cid = row.id || row;
-                companyCreated = true;
             }
         }
+        // 3) Fall back to a case-insensitive NAME match — then MIGRATE that row onto
+        //    the GUID so every later pull matches by guid (step 2) and never twins.
+        if (!cid && companyName) {
+            const byName = await db('companies').where('license_id', licenseId).whereNull('deleted_at')
+                .whereRaw('lower(name) = ?', [companyName.toLowerCase()]).first('id', 'tally_guid');
+            if (byName) {
+                cid = byName.id;
+                if (cmGuid && byName.tally_guid !== cmGuid) {
+                    await db('companies').where('id', cid).update({ tally_guid: cmGuid, updated_at: new Date() });
+                }
+            }
+        }
+        // 4) Nothing matched → CREATE. NEVER create a blank-named company (that is
+        //    exactly what produced the duplicate) — require a real company name.
         if (!cid) {
-            return R.errorResponse(res, 'No target company — send company_name (the Tally company) or a valid company_id.', 422);
+            if (!companyName) {
+                return R.errorResponse(res, 'No target company — send company_name (the Tally company) or a valid company_id.', 422);
+            }
+            const lic = await db('licenses').where('id', licenseId).first('max_companies');
+            const [{ c }] = await db('companies').where('license_id', licenseId)
+                .whereNull('deleted_at').count({ c: '*' });
+            if (lic && lic.max_companies != null && Number(c) >= Number(lic.max_companies)) {
+                return R.errorResponse(res,
+                    `Company limit reached for this license (max ${lic.max_companies}). Could not add '${companyName}'.`, 422);
+            }
+            // Unique URL slug derived from the Tally company name.
+            const base = (companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '').slice(0, 40)) || 'company';
+            let slug = base;
+            while (await db('companies').where('slug', slug).first('id')) {
+                slug = `${base}-${Math.random().toString(36).slice(2, 6)}`;
+            }
+            const [row] = await db('companies').insert({
+                name: companyName, slug, license_id: licenseId, status: 'Active',
+                // Stamp the STABLE guid (real Tally guid when known, else the 'tally'
+                // placeholder) so the cloud->Tally push never re-creates it AND the
+                // next pull dedups on it.
+                tally_guid: cmGuid || 'tally',
+                created_at: new Date(), updated_at: new Date(),
+            }).returning('id');
+            cid = row.id || row;
+            companyCreated = true;
         }
 
         // SYNC GATE: refuse a pull into a company that is OVER the license sync

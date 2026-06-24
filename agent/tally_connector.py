@@ -185,7 +185,7 @@ class TallyConnector:
         financial-year start. Returns ``{}`` on miss. Best-effort."""
         xml = self._collection_request_xml(
             "TSSCmpFull", "Company",
-            ["NAME", "MAILINGNAME", "ADDRESS", "STATENAME", "PINCODE", "COUNTRYNAME",
+            ["NAME", "GUID", "MAILINGNAME", "ADDRESS", "STATENAME", "PINCODE", "COUNTRYNAME",
              "EMAIL", "PHONENUMBER", "MOBILENUMBERS", "CMPGSTIN",
              "GSTREGISTRATIONNUMBER", "INCOMETAXNUMBER", "STARTINGFROM", "BOOKSFROM"], None)
         root = self._safe_parse(self.send(xml, timeout=60))
@@ -206,6 +206,11 @@ class TallyConnector:
                      if self._localname(a.tag).upper() == "ADDRESS" and (a.text or "").strip()]
             return {
                 "name": nm,
+                # Tally's STABLE per-company GUID — the cloud dedups companies on
+                # this (NOT the mutable name), so a renamed/blank-named company
+                # never spawns a duplicate. None if Tally didn't return it (then
+                # the cloud falls back to name matching).
+                "guid": self._child_text(el, "GUID") or None,
                 "mailing_name": self._child_text(el, "MAILINGNAME") or None,
                 "email": self._child_text(el, "EMAIL") or None,
                 "pincode": self._child_text(el, "PINCODE") or None,

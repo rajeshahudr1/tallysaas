@@ -878,25 +878,33 @@ router.post(
     authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.pull,
 );
-// Notification-bell feed (unread failed count + recent rows w/ friendly reasons,
-// each carrying a PER-USER `read` flag). Same guard chain as the rest of /sync.
+// Notification-bell feed — now a GENERAL feed (every module's cloud actions +
+// sync failures + agent updates), each item with a deep-link + PER-USER `read`
+// flag. EVERY logged-in user gets their company's notifications, so these are
+// guarded by auth + company scope only (NOT the tally-sync permission).
 router.get(
     '/sync/notifications',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveCompany, resolveLocation,
     SyncController.notifications,
+);
+// Paginated FULL feed for the dedicated /notifications page (View all + details).
+router.get(
+    '/sync/notifications/all',
+    authenticate, resolveCompany, resolveLocation,
+    SyncController.notificationsAll,
 );
 // Mark ONE (or a few) bell item(s) read for the caller. Body { key } or
 // { keys:[...] } — a body key (NOT a :id path param) because keys like
 // "agent-update-1.2.0" contain dots. Returns the fresh read-aware { unread }.
 router.post(
     '/sync/notifications/read',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveCompany, resolveLocation,
     SyncController.markRead,
 );
 // Mark ALL currently-unread bell items read for the caller. Returns { unread:0 }.
 router.post(
     '/sync/notifications/read-all',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveCompany, resolveLocation,
     SyncController.markAllRead,
 );
 

@@ -1485,10 +1485,23 @@ class DashboardView:
         (re)start the in-process loop, whose first cycle runs immediately.
         """
         if self.service_mode:
-            state = service_state()
-            if state != "running":
-                # Nothing to nudge - bring the service up (its first cycle runs
-                # immediately).
+            alive = service_state() == "running"
+            if not alive:
+                # A NON-ADMIN GUI cannot query the SCM (reads not-running even
+                # while the service is happily syncing). Trust a FRESH
+                # .status.json (running + recent ts) as the reliable "alive"
+                # signal so Sync Now just NUDGES the running service instead of
+                # trying to (re)start it — which would pop a UAC prompt that then
+                # reads "cancelled or failed".
+                snap = self._read_status_file()
+                if snap:
+                    try:
+                        alive = bool(snap.get("running")) and (
+                            time.time() - float(snap.get("ts") or 0)) <= 150.0
+                    except Exception:
+                        alive = False
+            if not alive:
+                # Genuinely stopped - bring the service up (first cycle is immediate).
                 self.on_start()
                 return
             try:

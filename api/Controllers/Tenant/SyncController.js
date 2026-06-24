@@ -62,6 +62,125 @@ const MODULE_CATALOG = [
 // Fast lookup by key for retry().
 const MODULE_BY_KEY = MODULE_CATALOG.reduce((acc, m) => { acc[m.key] = m; return acc; }, {});
 
+// ── Notification feed (record_history → bell + /notifications) ──────────────
+// Window for cloud-side user actions surfaced as notifications.
+const NOTIF_ACTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;   // last 30 days
+const NOTIF_PAGE_MAX         = 300;                        // cap for the full page
+
+// record_history.module (singular log name OR plural key) → { label, path } so a
+// notification can show a friendly title AND deep-link to the right list page.
+const NOTIF_MODULE_META = {};
+MODULE_CATALOG.forEach((m) => {
+    const hyphen = m.key.replace(/_/g, '-');               // sales_invoices → sales-invoices
+    const meta   = { label: m.label, path: '/' + hyphen };
+    NOTIF_MODULE_META[m.key]  = meta;                       // 'sales_invoices'
+    NOTIF_MODULE_META[hyphen] = meta;                       // 'sales-invoices' (the value history stores)
+    (m.logModules || []).forEach((lm) => { NOTIF_MODULE_META[lm] = meta; });
+});
+// crudController + transaction controllers write these exact (plural, hyphenated)
+// module slugs; map the ones not derivable from MODULE_CATALOG above.
+Object.assign(NOTIF_MODULE_META, {
+    'sales-persons':   { label: 'Sales Persons',   path: '/sales-persons' },
+    'customer-groups': { label: 'Customer Groups', path: '/customers' },
+    company:   { label: 'Company', path: '/companies' }, companies: { label: 'Company', path: '/companies' },
+    user:      { label: 'User',    path: '/users' },     users:     { label: 'User',    path: '/users' },
+    stock_adjustment: { label: 'Stock', path: '/inventory' }, inventory: { label: 'Stock', path: '/inventory' },
+});
+function notifModuleMeta(module) {
+    return NOTIF_MODULE_META[String(module || '').toLowerCase()] || { label: 'Record', path: '/' };
+}
+// action verb → { verb, tone, icon } for the notification presentation.
+function notifAction(action) {
+    switch (String(action || '').toLowerCase()) {
+        case 'created':  return { verb: 'created',  tone: 'success', icon: 'fa-circle-plus' };
+        case 'updated':  return { verb: 'updated',  tone: 'primary', icon: 'fa-pen' };
+        case 'deleted':  return { verb: 'deleted',  tone: 'danger',  icon: 'fa-trash-can' };
+        case 'synced':   return { verb: 'synced',   tone: 'info',    icon: 'fa-rotate' };
+        case 'reverted': return { verb: 'reverted', tone: 'warning', icon: 'fa-rotate-left' };
+        default:         return { verb: String(action || 'changed'), tone: 'muted', icon: 'fa-circle-info' };
+    }
+}
+// Pull a human display name out of a history before/after JSON snapshot so the
+// notification reads "ABC Traders" / "INV-001" instead of a bare id.
+function notifRecordName(jsonText) {
+    if (!jsonText) return '';
+    try {
+        const o = typeof jsonText === 'string' ? JSON.parse(jsonText) : jsonText;
+        if (!o || typeof o !== 'object') return '';
+        return String(o.name || o.title || o.invoice_no || o.voucher_no
+            || o.holder_name || o.sku || o.email || '').trim();
+    } catch (_) { return ''; }
+}
+// Map one record_history row → a uniform notification item. key = 'h<id>'.
+function historyToNotif(r, readSet) {
+    const a    = notifAction(r.action);
+    const meta = notifModuleMeta(r.module);
+    const key  = 'h' + r.id;
+    const name = notifRecordName(r.action === 'deleted' ? r.before_json : r.after_json);
+    return {
+        id:    key,
+        kind:  'action',
+        tone:  a.tone,
+        icon:  a.icon,
+        title: `${meta.label} ${a.verb}`,
+        sub:   name || r.note || (r.record_type && r.record_type !== r.module ? String(r.record_type) : ''),
+        link:  meta.path,
+        when:  r.created_at,
+        read:  readSet.has(key),
+    };
+}
+// Recent CLOUD user-actions (create/update/delete/revert) as notification items.
+// SOURCE='cloud' only — the per-record bulk-sync rows (source tally/agent) stay in
+// the full Change-History audit and never flood the bell. PER company.
+async function buildActionFeed(companyId, readSet, limit) {
+    try {
+        const cutoff = new Date(Date.now() - NOTIF_ACTION_WINDOW_MS);
+        const rows = await db('record_history')
+            .where('company_id', companyId)
+            .where('source', 'cloud')
+            .where('created_at', '>=', cutoff)
+            .orderBy('id', 'desc')
+            .limit(limit)
+            .select('id', 'module', 'record_type', 'record_id', 'action', 'note',
+                    'before_json', 'after_json', 'created_at');
+        return rows.map((r) => historyToNotif(r, readSet));
+    } catch (err) {
+        console.error('sync.notifications buildActionFeed (ignored):', err && err.message);
+        return [];
+    }
+}
+// The UNREAD cloud-action keys (for the badge + markAllRead). Cheap id-only scan.
+async function unreadActionKeys(companyId, readSet) {
+    try {
+        const cutoff = new Date(Date.now() - NOTIF_ACTION_WINDOW_MS);
+        const rows = await db('record_history')
+            .where('company_id', companyId).where('source', 'cloud')
+            .where('created_at', '>=', cutoff).select('id');
+        const keys = [];
+        for (const r of rows) { const k = 'h' + r.id; if (!readSet.has(k)) keys.push(k); }
+        return keys;
+    } catch (err) {
+        console.error('sync.notifications unreadActionKeys (ignored):', err && err.message);
+        return [];
+    }
+}
+// A failed sync-log row → uniform notification item (links to the Sync Logs page).
+function failedLogToNotif(r, readSet) {
+    const reason = friendlyReason(r.message, r.status);
+    const rec = [r.module, r.record_type].filter(Boolean).join(' ');
+    return {
+        id:    String(r.id),
+        kind:  'failed',
+        tone:  'danger',
+        icon:  'fa-triangle-exclamation',
+        title: `Sync failed${rec ? ': ' + rec : ''}`,
+        sub:   (reason && reason.cause) ? reason.cause : (r.message || 'A sync attempt failed.'),
+        link:  '/sync-logs',
+        when:  r.synced_at || r.created_at || null,
+        read:  readSet.has(String(r.id)),
+    };
+}
+
 // Clamp/normalise pagination from the query string.
 function parsePagination(query) {
     let page    = parseInt(query.page, 10);
@@ -560,6 +679,10 @@ async function computeUnreadKeys(companyId, readSet, updateNotif) {
         if (!readSet.has(key)) keys.push(key);
     }
 
+    // Cloud user-actions (create/update/delete across every module) not yet read.
+    const actionKeys = await unreadActionKeys(companyId, readSet);
+    for (const k of actionKeys) keys.push(k);
+
     return keys;
 }
 
@@ -638,39 +761,41 @@ async function notifications(req, res) {
                 .orderBy('n', 'desc'),
         ]);
 
-        const recentOut = recent.map((r) => ({
-            id:          r.id,
-            module:      r.module || '',
-            record_type: r.record_type || '',
-            status:      r.status || '',
-            direction:   r.direction || '',
-            reason:      friendlyReason(r.message, r.status),
-            raw_message: r.message || '',
-            // synced_at is NULL on failed rows → fall back to created_at so the
-            // bell can render a relative time for failures too.
-            when:        r.synced_at || r.created_at || null,
-            // PER-USER read flag (item id stringified, matched against the read
-            // set). Non-failed rows are decorative but still carry the flag.
-            read:        readSet.has(String(r.id)),
-        }));
+        // ── UNIFIED notification feed ──────────────────────────────────────
+        // Cloud user-actions (EVERY module: create/update/delete) + sync
+        // FAILURES + the agent-update entry — newest first. Each item is uniform
+        // { id, kind, tone, icon, title, sub, link, when, read } so the bell AND
+        // the /notifications page render it identically and a click deep-links to
+        // the right screen + marks it read.
+        const actionItems = await buildActionFeed(companyId, readSet, NOTIF_RECENT_MAX);
+        const failedItems = recent
+            .filter((r) => String(r.status || '').toLowerCase() === 'failed')
+            .map((r) => failedLogToNotif(r, readSet));
+        const recentOut = actionItems.concat(failedItems)
+            .sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0))
+            .slice(0, NOTIF_RECENT_MAX);
 
         const failedOut = failedByModule.map((r) => ({
             module: r.module || '(unknown)',
             n:      Number(r.n) || 0,
         }));
 
-        // ── New-agent-version notification (Requirement) ──────────────────
-        // When the published-latest release is NEWER than this license's
-        // installed agent_version, surface ONE "new version available" entry in
-        // the bell feed. Auto-update=ON agents self-update silently, but
-        // auto-update=OFF agents need the operator to update — the bell is how
-        // they find out. We show it for ALL update_available licenses (harmless
-        // for auto ones; they just update before/around seeing it). Best-effort:
-        // a release/license lookup hiccup must never sink the whole feed.
+        // ── New-agent-version notification — pinned to the TOP when present.
+        // Auto-update=OFF agents need the operator to update; the bell is how
+        // they find out. Best-effort: a lookup hiccup never sinks the feed.
         const updateNotif = await buildAgentUpdateNotif(companyId);
         if (updateNotif) {
-            updateNotif.read = readSet.has(String(updateNotif.id));
-            recentOut.unshift(updateNotif);
+            recentOut.unshift({
+                id:    String(updateNotif.id),
+                kind:  'update',
+                tone:  String(updateNotif.severity || '') === 'warning' ? 'warning' : 'primary',
+                icon:  'fa-cloud-arrow-down',
+                title: updateNotif.title || 'New agent version available',
+                sub:   updateNotif.body || '',
+                link:  '/sync-dashboard',
+                when:  updateNotif.when || new Date(),
+                read:  readSet.has(String(updateNotif.id)),
+            });
         }
 
         // ── Read-aware badge ── the unread count EXCLUDES this user's already-
@@ -1038,10 +1163,65 @@ async function logDetail(req, res) {
     }
 }
 
+/**
+ * notificationsAll(req,res) — GET /sync/notifications/all  (paginated full feed)
+ *
+ * The same uniform notification items as the bell, but the WHOLE list (last 30
+ * days) paginated — backs the dedicated /notifications page (View all + details
+ * + Mark all read). Shape: { data:[{id,kind,tone,icon,title,sub,link,when,read}],
+ * meta:{ total, page, per_page, unread } }. Company-scoped + PER-USER read flags.
+ */
+async function notificationsAll(req, res) {
+    try {
+        const companyId = req.companyId;
+        const userId    = req.user && req.user.sub;
+        let page    = parseInt(req.query.page, 10);     if (!(page > 0)) page = 1;
+        let perPage = parseInt(req.query.per_page, 10); if (!(perPage > 0)) perPage = 20;
+        if (perPage > MAX_PER_PAGE) perPage = MAX_PER_PAGE;
+
+        const readSet = await readKeySet(userId);
+
+        const actionItems = await buildActionFeed(companyId, readSet, NOTIF_PAGE_MAX);
+
+        const cutoff = new Date(Date.now() - NOTIF_ACTION_WINDOW_MS);
+        const failedRows = await db('tally_sync_logs')
+            .where('company_id', companyId).where('status', 'failed')
+            .where('created_at', '>=', cutoff)
+            .orderBy('id', 'desc').limit(NOTIF_PAGE_MAX)
+            .select('id', 'module', 'record_type', 'status', 'message', 'synced_at', 'created_at');
+        const failedItems = failedRows.map((r) => failedLogToNotif(r, readSet));
+
+        const merged = actionItems.concat(failedItems)
+            .sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
+
+        const updateNotif = await buildAgentUpdateNotif(companyId);
+        if (updateNotif) {
+            merged.unshift({
+                id:   String(updateNotif.id), kind: 'update',
+                tone: String(updateNotif.severity || '') === 'warning' ? 'warning' : 'primary',
+                icon: 'fa-cloud-arrow-down', title: updateNotif.title || 'New agent version available',
+                sub:  updateNotif.body || '', link: '/sync-dashboard',
+                when: updateNotif.when || new Date(), read: readSet.has(String(updateNotif.id)),
+            });
+        }
+
+        const total  = merged.length;
+        const start  = (page - 1) * perPage;
+        const data   = merged.slice(start, start + perPage);
+        const unread = merged.filter((n) => !n.read).length;
+
+        return R.successResponse(res, { data, meta: { total, page, per_page: perPage, unread } });
+    } catch (err) {
+        console.error('sync.notificationsAll error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 module.exports = {
     summary,
     logs,
     notifications,
+    notificationsAll,
     markRead,
     markAllRead,
     retry,

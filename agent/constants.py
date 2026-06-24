@@ -26,8 +26,8 @@ from __future__ import annotations
 # --------------------------------------------------------------------------- #
 # PRODUCTION: set your domain here before building the distributable exe; this
 # is the ONLY place. e.g. "https://app.yourdomain.com/api/v1".
-# The value below is the current DEV server. It is never written to config.ini.
-API_BASE_URL = "http://localhost:4500/api/v1"
+# The value below is the PRODUCTION server. It is never written to config.ini.
+API_BASE_URL = "https://tallysaasapi.dukansetu.in/api/v1"
 
 
 # --------------------------------------------------------------------------- #

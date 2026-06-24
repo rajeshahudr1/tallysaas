@@ -1,0 +1,101 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/notifications/index.ejs — the dedicated Notifications page.
+ * Route: GET /notifications. Shows the WHOLE feed (every module's cloud
+ * actions + sync failures + agent updates) paginated, each clickable
+ * (→ marks read + opens its page), plus a Mark-all-read control.
+ *
+ * Expected locals: items[], meta{total,page,per_page,unread}, page.
+ * ─────────────────────────────────────────────────────────── */
+var _items = (typeof items !== 'undefined' && items) ? items : [];
+var _meta  = (typeof meta !== 'undefined' && meta) ? meta : { total: _items.length, page: 1, per_page: 20, unread: 0 };
+
+function _toneClass(t) {
+    return ({ success: 'text-success', danger: 'text-danger', warning: 'text-warning',
+              info: 'text-info', primary: 'text-primary' })[t] || 'text-muted';
+}
+function _rel(when) {
+    if (!when) return '';
+    var d = new Date(when); if (isNaN(d.getTime())) return '';
+    var s = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (s < 60) return 'just now';
+    var m = Math.floor(s / 60); if (m < 60) return m + 'm ago';
+    var h = Math.floor(m / 60); if (h < 24) return h + 'h ago';
+    var dd = Math.floor(h / 24); if (dd < 30) return dd + 'd ago';
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function _openHref(n) {
+    return '/notifications/open?key=' + encodeURIComponent(n.id) + '&to=' + encodeURIComponent(n.link || '/');
+}
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Notifications',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Notifications' },
+    ],
+    actions: [],
+}) %>
+
+<div class="card">
+    <div class="d-flex align-items-center justify-content-between p-3 border-bottom">
+        <div class="d-flex align-items-center gap-2">
+            <strong>All notifications</strong>
+            <% if (_meta.unread) { %><span class="badge bg-danger rounded-pill"><%= _meta.unread %> unread</span><% } %>
+        </div>
+        <% if (_meta.unread) { %>
+            <button type="button" id="notif-page-mark-all" class="btn btn-light btn-sm">
+                <i class="fa-regular fa-circle-check me-1"></i>Mark all read
+            </button>
+        <% } %>
+    </div>
+
+    <% if (!_items.length) { %>
+        <div class="text-center text-muted py-5">
+            <i class="fa-regular fa-bell-slash d-block mb-2 fs-3"></i>
+            No notifications yet.
+        </div>
+    <% } else { %>
+        <ul class="notif-list list-unstyled m-0">
+            <% _items.forEach(function (n) { %>
+                <li>
+                    <a class="notif-row <%= n.read ? 'is-read' : 'is-unread' %>"
+                       href="<%= _openHref(n) %>" data-notif-key="<%= n.id %>">
+                        <span class="notif-row-icon <%= _toneClass(n.tone) %>"><i class="fa-solid <%= n.icon %>"></i></span>
+                        <span class="notif-row-main">
+                            <span class="notif-row-top">
+                                <span class="notif-row-title"><%= n.title %></span>
+                                <span class="notif-row-time"><%= _rel(n.when) %></span>
+                            </span>
+                            <% if (n.sub) { %><span class="notif-row-sub"><%= n.sub %></span><% } %>
+                        </span>
+                        <% if (!n.read) { %><span class="notif-dot" aria-label="unread"></span><% } %>
+                    </a>
+                </li>
+            <% }); %>
+        </ul>
+    <% } %>
+
+    <%- include('../partials/pagination', { page: _meta.page, perPage: _meta.per_page, total: _meta.total }) %>
+</div>
+
+<style>
+    .notif-list .notif-row {
+        display: flex; align-items: flex-start; gap: 12px;
+        padding: 14px 18px; border-bottom: 1px solid var(--border);
+        text-decoration: none; color: var(--text); transition: background .12s;
+    }
+    .notif-list li:last-child .notif-row { border-bottom: 0; }
+    .notif-row:hover { background: #F9FAFB; }
+    .notif-row.is-unread { background: #F5F8FF; }
+    .notif-row.is-unread:hover { background: #EEF3FF; }
+    .notif-row-icon { font-size: 16px; width: 22px; text-align: center; padding-top: 2px; }
+    .notif-row-main { flex: 1 1 auto; min-width: 0; }
+    .notif-row-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .notif-row-title { font-weight: 600; font-size: 14px; }
+    .notif-row-time { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+    .notif-row-sub { display: block; color: var(--text-muted); font-size: 13px; margin-top: 2px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .notif-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-top: 6px; flex: 0 0 auto; }
+</style>

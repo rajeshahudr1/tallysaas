@@ -107,6 +107,10 @@ async function create(req, res) {
                 max_users:        b.max_users != null ? b.max_users : 10,
                 valid_until:      b.valid_until || null,
                 status:           'active',
+                // AUTO push (Cloud → Tally) is OFF by default — most setups only
+                // PULL from Tally; pushing edits back is opt-in (turn it on from
+                // the Sync settings when wanted). Pull + master sync stay ON.
+                sync_push_enabled: false,
                 created_by:       req.user ? req.user.sub : null,
             }).returning('*');
 

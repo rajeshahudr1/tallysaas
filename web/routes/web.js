@@ -40,6 +40,45 @@ router.get('/logout', AuthController.logout);
 /* Everything below this line requires a logged-in session. */
 router.use(requireAuth);
 
+/* ── RBAC route guard ───────────────────────────────────────────
+ * Stops a hand-typed URL from reaching a module the user's role does not
+ * grant (the sidebar + dashboard already HIDE such modules; this is the
+ * matching gate so the page itself is blocked too). Maps the first path
+ * segment → module and checks res.locals.canModule() (set in index.js).
+ * Tally-Sync screens are company-admin-only per spec. The api ALSO enforces
+ * can() on its data routes — this just renders a friendly Forbidden instead
+ * of surfacing a raw 403 from the proxied call. */
+const RBAC_MODULE_BY_PATH = {
+    companies: 'companies', locations: 'locations', 'sales-persons': 'sales-persons',
+    customers: 'customers', suppliers: 'suppliers', products: 'products',
+    categories: 'categories', 'sales-invoices': 'sales-invoices',
+    'purchase-invoices': 'purchase-invoices', payments: 'payments',
+    receipts: 'receipts', journals: 'journals', inventory: 'inventory',
+    reports: 'reports', users: 'users',
+};
+const RBAC_ADMIN_ONLY_PATH = new Set(['sync-dashboard', 'sync-logs', 'history']);
+router.use((req, res, next) => {
+    const seg = (req.path.split('/')[1] || '').toLowerCase();
+    if (!seg) return next();                                   // '/' dashboard
+    const isAdmin = res.locals.isSuperAdmin || res.locals.isCompanyAdmin;
+    const forbid = () => {
+        if (req.xhr || (req.headers.accept || '').indexOf('application/json') !== -1) {
+            return res.status(403).json({ status: 403, show: true, msg: 'You do not have access to this section.' });
+        }
+        return res.status(403).render('errors/404', {
+            title: 'Forbidden',
+            activeMenu: '',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Forbidden' }],
+        });
+    };
+    if (RBAC_ADMIN_ONLY_PATH.has(seg)) return isAdmin ? next() : forbid();
+    const mod = RBAC_MODULE_BY_PATH[seg];
+    if (mod && typeof res.locals.canModule === 'function' && !res.locals.canModule(mod)) {
+        return forbid();
+    }
+    return next();
+});
+
 /* ── Company switcher (GET /switch-company/:id) ─────────────────
  * Sets the active company on the session (only if it is one the user may
  * access — the list was license-scoped at login), then returns to the
@@ -472,16 +511,21 @@ router.get('/', async (req, res, next) => {
         // counts → the 8 stat cards. label/icon/tone copied verbatim from
         // mock.dashboardStats so the cards look identical (labels also drive
         // the view's per-card sparkline/trend lookup, so they MUST match).
+        // Each card carries the module it belongs to; below we keep only the
+        // cards this user may see (admins see all; 'Pending Tally Sync' is
+        // admin-only). A sales-only user thus sees only the sales cards, etc.
+        const _canMod = (m) => (typeof res.locals.canModule === 'function') ? res.locals.canModule(m) : true;
+        const _admin  = res.locals.isCompanyAdmin || res.locals.isSuperAdmin;
         const stats = [
-            { label: 'Total Companies',    value: grp(counts.companies),        icon: 'fa-building',          tone: 'blue'   },
-            { label: 'Total Customers',    value: grp(counts.customers),        icon: 'fa-user-group',        tone: 'purple' },
-            { label: 'Total Products',     value: grp(counts.products),         icon: 'fa-box',               tone: 'teal'   },
-            { label: "Today's Sales",      value: inr(counts.today_sales),      icon: 'fa-indian-rupee-sign', tone: 'green'  },
-            { label: 'Pending Tally Sync', value: grp(counts.pending_sync),     icon: 'fa-rotate',            tone: 'amber'  },
-            { label: 'Stock Value',        value: inr(counts.stock_value),      icon: 'fa-warehouse',         tone: 'indigo' },
-            { label: 'Invoice Amount',     value: inr(counts.invoice_amount),   icon: 'fa-file-invoice',      tone: 'blue'   },
-            { label: 'Payment Received',   value: inr(counts.payment_received), icon: 'fa-money-bill-wave',   tone: 'green'  },
-        ];
+            { label: 'Total Companies',    value: grp(counts.companies),        icon: 'fa-building',          tone: 'blue',   perm: 'companies' },
+            { label: 'Total Customers',    value: grp(counts.customers),        icon: 'fa-user-group',        tone: 'purple', perm: 'customers' },
+            { label: 'Total Products',     value: grp(counts.products),         icon: 'fa-box',               tone: 'teal',   perm: 'products' },
+            { label: "Today's Sales",      value: inr(counts.today_sales),      icon: 'fa-indian-rupee-sign', tone: 'green',  perm: 'sales-invoices' },
+            { label: 'Pending Tally Sync', value: grp(counts.pending_sync),     icon: 'fa-rotate',            tone: 'amber',  adminOnly: true },
+            { label: 'Stock Value',        value: inr(counts.stock_value),      icon: 'fa-warehouse',         tone: 'indigo', perm: 'inventory' },
+            { label: 'Invoice Amount',     value: inr(counts.invoice_amount),   icon: 'fa-file-invoice',      tone: 'blue',   perm: 'sales-invoices' },
+            { label: 'Payment Received',   value: inr(counts.payment_received), icon: 'fa-money-bill-wave',   tone: 'green',  perm: 'payments' },
+        ].filter((c) => c.adminOnly ? _admin : (c.perm ? _canMod(c.perm) : true));
 
         // Super-admin only: prepend a platform-level "Total Licenses" card.
         // Count comes from the licenses list meta.total (accurate beyond the
@@ -2334,6 +2378,38 @@ router.post('/sync-direction', async (req, res) => {
     }
     const back = req.get('Referer') || '/sync-dashboard';
     return req.session.save(() => res.redirect(back));
+});
+
+/* ── NOTIFICATIONS · Full page (GET /notifications) ─────────────
+ * The dedicated notifications screen: the whole feed (every module's cloud
+ * actions + sync failures + agent updates) paginated, with Mark-all-read and a
+ * click-through that opens the related page. Open to EVERY logged-in user. */
+router.get('/notifications', async (req, res, next) => {
+    try {
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const result = await api.get(req, `/sync/notifications/all?page=${page}&per_page=20`);
+        const body  = (result && result.body) || {};
+        const items = Array.isArray(body.data) ? body.data : [];
+        const meta  = body.meta || { total: items.length, page, per_page: 20, unread: 0 };
+        res.render('notifications/index', {
+            title: 'Notifications',
+            activeMenu: 'notifications',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Notifications' }],
+            items, meta, page,
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── NOTIFICATIONS · Open one (GET /notifications/open?key=&to=) ──
+ * Marks the item read (best-effort) then redirects to its target page. Used as
+ * the href on every notification so it works WITHOUT JS too. `to` is restricted
+ * to internal paths to avoid an open-redirect. */
+router.get('/notifications/open', async (req, res) => {
+    const key = req.query.key ? String(req.query.key) : '';
+    let to    = req.query.to  ? String(req.query.to)  : '/';
+    if (!/^\/[^/]/.test(to)) to = '/';                 // internal "/path" only
+    if (key) { try { await api.post(req, '/sync/notifications/read', { key }); } catch (_) { /* best-effort */ } }
+    return res.redirect(to);
 });
 
 /* ── NOTIFICATIONS · Mark ONE bell item read (POST /notifications/read) ──

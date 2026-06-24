@@ -212,16 +212,31 @@ async function login(req, res) {
             jti,
         });
 
+        // Permission slugs for the role (drives the web's menu/dashboard RBAC).
+        // Super Admin short-circuits to ['*']; everyone else gets their role's
+        // granted slugs (e.g. 'sales-invoices.view').
+        let permissions;
+        if (user.role_slug === 'super-admin') {
+            permissions = ['*'];
+        } else {
+            const permRows = await db('role_permissions as rp')
+                .join('permissions as p', 'p.id', 'rp.permission_id')
+                .where('rp.role_id', user.role_id)
+                .select('p.slug');
+            permissions = permRows.map((r) => r.slug);
+        }
+
         // 7. Success envelope — never echo the password_hash.
         return R.successResponse(res, {
             token,
             user: {
-                id:         user.id,
-                name:       user.name,
-                email:      user.email,
-                role:       user.role_name,
-                role_slug:  user.role_slug,
-                company_id: user.company_id,
+                id:          user.id,
+                name:        user.name,
+                email:       user.email,
+                role:        user.role_name,
+                role_slug:   user.role_slug,
+                company_id:  user.company_id,
+                permissions,
             },
             expires_in: EXPIRES_IN,
         }, 'Login successful.');

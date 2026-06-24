@@ -23,6 +23,7 @@
 
     function init() {
         initSidebarGroups();
+        initTableDropdowns();
         initRowActions();
         initListControls();
         initExport();
@@ -70,6 +71,25 @@
                 apply(gid, nowCollapsed);
                 collapsed[gid] = nowCollapsed;
                 try { localStorage.setItem(KEY, JSON.stringify(collapsed)); } catch (e) { /* ignore */ }
+            });
+        });
+    }
+
+    /* ── Table row-action ⋮ dropdowns ─────────────────────────────
+     * The table wrapper scrolls horizontally (overflow-x:auto) when a listing
+     * is wider than its card, so a normally-positioned dropdown menu would be
+     * CLIPPED inside that scroll box. Pre-initialise each row-action dropdown
+     * with Popper strategy:'fixed' → its menu is positioned against the
+     * viewport and floats ABOVE the scroll box instead of being cut off.
+     * ─────────────────────────────────────────────────────────── */
+    function initTableDropdowns() {
+        var BS = window.bootstrap;
+        if (!BS || !BS.Dropdown) return;
+        document.querySelectorAll('.data-table-actions [data-bs-toggle="dropdown"]').forEach(function (el) {
+            BS.Dropdown.getOrCreateInstance(el, {
+                popperConfig: function (defaultConfig) {
+                    return Object.assign({}, defaultConfig, { strategy: 'fixed' });
+                },
             });
         });
     }
@@ -433,6 +453,18 @@
                         // Hide itself — there is nothing left to mark.
                         markAll.style.display = 'none';
                     }
+                });
+            });
+        }
+
+        // "Mark all read" on the dedicated /notifications page → reload so the
+        // whole list re-renders as read (and the badge clears).
+        var pageMarkAll = document.getElementById('notif-page-mark-all');
+        if (pageMarkAll) {
+            pageMarkAll.addEventListener('click', function () {
+                pageMarkAll.disabled = true;
+                postForm('/notifications/read-all', {}).then(function () {
+                    window.location.reload();
                 });
             });
         }
