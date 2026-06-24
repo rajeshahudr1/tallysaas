@@ -610,6 +610,11 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
     # cycle EVEN when the AUTO pull toggle is OFF - a manual action must always
     # work (the cloud reset the watermark; this consumes it now).
     pull_now = _dispatch_commands(cfg, logger, api)
+    if pull_now:
+        # The cloud reset only the MASTERS watermark; vouchers keep a separate
+        # LOCAL cursor, so clear it too — else "Sync from Tally" re-imports masters
+        # but never the vouchers (the exact symptom this fixes).
+        _reset_all_voucher_state(cfg, logger)
 
     # 3) Push (cloud -> Tally) then Pull (Tally -> cloud), each gated by its
     #    per-license AUTO toggle. Push drives the pass result; the pull is best-
@@ -1210,6 +1215,12 @@ VOUCHER_STATE_FILENAME = ".voucher_sync.json"
 VOUCHER_CHUNK = 50000        # AlterID window per Tally fetch
 VOUCHER_BATCH = 2000         # vouchers per cloud /agent/import POST
 VOUCHER_MAX_FETCHES = 6      # AlterID windows per cycle (keeps a cycle bounded)
+# If the backfill scans this far and finds NO voucher at all (max_seen == 0), the
+# cursor likely overran the data while Tally was still loading (cold start) or the
+# cloud was reset — re-scan from AlterID 0 ONCE so the vouchers are actually found
+# instead of climbing empty high windows forever.
+VOUCHER_RESCAN_CEILING = 300000
+_voucher_rescan_done = set()     # companies already re-scanned this session (no loop)
 
 
 def _voucher_state_path(cfg: Config) -> str:
@@ -1240,6 +1251,22 @@ def _save_voucher_state(cfg: Config, company: str, st: dict) -> None:
                           "max_seen": int(st.get("max_seen", 0) or 0)}
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(allst, fh)
+    except Exception:
+        pass
+
+
+def _reset_all_voucher_state(cfg: Config, logger=None) -> None:
+    """Wipe the LOCAL voucher watermark(s) so the next pull re-scans every
+    company's vouchers from AlterID 0. A manual 'Sync from Tally' (and the cloud
+    reset) only clear the MASTERS watermark cloud-side; vouchers keep their own
+    local cursor, which must be cleared too or they never re-import."""
+    try:
+        path = _voucher_state_path(cfg)
+        if os.path.exists(path):
+            os.remove(path)
+        _voucher_rescan_done.clear()
+        if logger:
+            logger.info("Manual pull: voucher watermark cleared — re-scanning vouchers from AlterID 0.")
     except Exception:
         pass
 
@@ -1299,6 +1326,17 @@ def _pull_vouchers(cfg, logger, api, tally, token, cname) -> int:
                 _save_voucher_state(cfg, cname, {"through": max_seen, "max_seen": max_seen})
                 logger.info("Voucher pull[%s]: caught up at alterid %d (incremental now).",
                             cname, max_seen)
+                return sent
+            # Scanned a long stretch with NO voucher found at all (max_seen == 0):
+            # the cursor likely overran the data while Tally was still loading, or
+            # the cloud was reset. Re-scan from 0 ONCE this session so the vouchers
+            # are actually found (a genuinely high-alterid company then scans on
+            # past the ceiling normally — the flag stops an endless reset loop).
+            if max_seen == 0 and hi >= VOUCHER_RESCAN_CEILING and cname not in _voucher_rescan_done:
+                _voucher_rescan_done.add(cname)
+                _save_voucher_state(cfg, cname, {"through": 0, "max_seen": 0})
+                logger.info("Voucher pull[%s]: no voucher up to AlterID %d — resetting to 0 "
+                            "to re-scan (Tally may have been loading).", cname, hi)
                 return sent
             through = hi
         _save_voucher_state(cfg, cname, {"through": through, "max_seen": max_seen})

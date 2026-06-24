@@ -259,6 +259,10 @@ class TallyConnector:
                         "parent": self._child_text(el, "PARENT"),
                         "gstin": self._child_text(el, "PARTYGSTIN") or None,
                         "opening": self._child_text(el, "OPENINGBALANCE"),
+                        # Tally's AUTHORITATIVE current balance (opening + all
+                        # postings + inventory valuation). The cloud uses this for
+                        # exact-match reports instead of reconstructing.
+                        "closing": self._child_text(el, "CLOSINGBALANCE"),
                         "mobile": (self._child_text(el, "LEDGERMOBILE")
                                    or self._child_text(el, "LEDGERPHONE") or None),
                         "email": self._child_text(el, "EMAIL") or None,
@@ -829,7 +833,7 @@ class TallyConnector:
         mobile, email, PAN, address, credit limit)."""
         return TallyConnector._collection_request_xml(
             "TSSLedgerColl", "Ledger",
-            ["NAME", "PARENT", "ALTERID", "PARTYGSTIN", "OPENINGBALANCE",
+            ["NAME", "PARENT", "ALTERID", "PARTYGSTIN", "OPENINGBALANCE", "CLOSINGBALANCE",
              "LEDGERMOBILE", "LEDGERPHONE", "EMAIL", "INCOMETAXNUMBER",
              "ADDRESS", "LEDSTATENAME", "PINCODE", "COUNTRYNAME", "CREDITLIMIT"],
             company,

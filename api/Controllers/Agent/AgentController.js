@@ -872,9 +872,14 @@ async function importFromTally(req, res) {
                 if (lalter && lalter <= watermark) continue;   // unchanged -> skip
                 if (lalter > maxAlterId) maxAlterId = lalter;
                 const opening = parseFloat(String(l.opening || '0').replace(/[^0-9.\-]/g, '')) || 0;
+                // Tally's AUTHORITATIVE current balance (opening + all postings +
+                // inventory valuation). Reports use this for an EXACT match instead
+                // of reconstructing opening + Σ(postings), which drifts when an
+                // opening balance is incomplete or stock is involved.
+                const closing = parseFloat(String(l.closing || '0').replace(/[^0-9.\-]/g, '')) || 0;
                 const row = {
                     company_id: cid, name: lname, parent: String(l.parent || ''),
-                    opening_balance: opening, gstin: l.gstin || null,
+                    opening_balance: opening, closing_balance: closing, gstin: l.gstin || null,
                     tally_guid: 'tally', tally_alter_id: lalter, updated_at: now,
                 };
                 await db('tally_ledgers').insert({ ...row, created_at: now })

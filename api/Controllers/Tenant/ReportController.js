@@ -214,14 +214,33 @@ async function outstanding(req, res) {
         inv.forEach((r) => { invMap[r[fkCol]] = Number(r.t || 0); });
         pay.forEach((r) => { payMap[r[fkCol]] = Number(r.t || 0); });
 
+        // When Tally closing balances are synced, use each party's LEDGER closing
+        // balance as the AUTHORITATIVE outstanding (matches Tally exactly). The
+        // opening/invoiced/settled columns still show the reconstruction breakup.
+        // Tally sign: a customer (receivable) closes Dr (-ve); a supplier (payable)
+        // closes Cr (+ve) — surface both as a positive "amount owed".
+        const useClosing = await hasClosingBalances(cid);
+        const closingByName = {};
+        if (useClosing) {
+            const lrows = await db('tally_ledgers').where('company_id', cid)
+                .select('name', 'closing_balance');
+            lrows.forEach((l) => {
+                closingByName[String(l.name || '').trim().toLowerCase()] = Number(l.closing_balance) || 0;
+            });
+        }
+
         const rows = parties.map((p) => {
             const opening = Number(p.opening_balance || 0);
             const invoiced = invMap[p.id] || 0;
             const settled = payMap[p.id] || 0;
+            const cb = closingByName[String(p.name || '').trim().toLowerCase()];
+            const balance = (useClosing && cb !== undefined)
+                ? (payable ? cb : -cb)               // ledger closing → owed amount
+                : (opening + invoiced - settled);    // fallback reconstruction
             return {
                 party_id: p.id, party: p.name, gstin: p.gst_number || '',
                 opening: money(opening), invoiced: money(invoiced), settled: money(settled),
-                balance: money(opening + invoiced - settled),
+                balance: money(balance),
             };
         }).filter((r) => Math.abs(r.balance) > 0.001)
           .sort((a, b) => b.balance - a.balance);
@@ -451,15 +470,29 @@ async function financialBase(cid, locationId = null) {
     };
 }
 
-/** GET /reports/trial-balance — REAL per-ledger Dr/Cr from the full Tally
- *  double-entry: balance = opening_balance + Σ(voucher postings). Tally sign:
+/** Whether this company has Tally CLOSING balances synced (any non-zero). When
+ *  yes, reports use those authoritative per-ledger balances directly (EXACT match
+ *  to Tally); else they fall back to reconstructing opening + Σ(postings). */
+async function hasClosingBalances(cid) {
+    try {
+        const [{ cc }] = await db('tally_ledgers').where('company_id', cid)
+            .whereRaw('coalesce(closing_balance,0) <> 0').count({ cc: '*' });
+        return Number(cc) > 0;
+    } catch (_) { return false; }
+}
+
+/** GET /reports/trial-balance — REAL per-ledger Dr/Cr from Tally. Uses the synced
+ *  CLOSING balance when available (exact), else opening + Σ(postings). Tally sign:
  *  +ve balance = Credit, -ve = Debit (ISDEEMEDPOSITIVE). Total Dr must = Cr. */
 async function trialBalance(req, res) {
     try {
         const cid = req.companyId;
+        const balExpr = (await hasClosingBalances(cid))
+            ? 'coalesce(l.closing_balance,0)'
+            : 'coalesce(l.opening_balance,0) + coalesce(p.posted,0)';
         const result = await db.raw(
             `select l.name as ledger, l.parent as grp,
-                    coalesce(l.opening_balance,0) + coalesce(p.posted,0) as balance
+                    ${balExpr} as balance
                from tally_ledgers l
                left join (
                     select lower(ledger_name) as ln, sum(amount) as posted
@@ -511,9 +544,16 @@ async function realLedgerBalances(cid) {
         if (!p || /primary/i.test(p) || p.toLowerCase() === String(gname).toLowerCase()) return false;
         return isRev(p, depth + 1);
     };
+    // Prefer Tally's AUTHORITATIVE per-ledger CLOSING balance (synced) for an
+    // exact match — it already folds in opening + every posting + inventory
+    // valuation. Fall back to opening + Σ(postings) only until closing balances
+    // are synced (older agent / pre-sync), so there is never a regression.
+    const balExpr = (await hasClosingBalances(cid))
+        ? 'coalesce(l.closing_balance,0)'
+        : 'coalesce(l.opening_balance,0)+coalesce(p.posted,0)';
     const result = await db.raw(
         `select l.name as ledger, l.parent as grp,
-                coalesce(l.opening_balance,0)+coalesce(p.posted,0) as balance
+                ${balExpr} as balance
            from tally_ledgers l
            left join (select lower(ledger_name) as ln, sum(amount) as posted
                         from tally_voucher_entries where company_id=? group by lower(ledger_name)) p

@@ -225,6 +225,13 @@
     /* POST a form-encoded body to a web route and return the parsed JSON. */
     function postForm(action, params) {
         var body = new URLSearchParams(params || {}).toString();
+        // ALWAYS settle: a slow/unreachable server (web → api hop) must never
+        // leave the request hanging — that is what kept the row button's spinner
+        // turning forever. Abort after 30s so the caller's .catch/.finally runs
+        // and the button is restored. Normal queue responses land in <5s.
+        var ctrl  = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 30000) : null;
+        var done  = function () { if (timer) { clearTimeout(timer); timer = null; } };
         return fetch(action, {
             method: 'POST',
             headers: {
@@ -233,8 +240,12 @@
                 'X-Requested-With': 'XMLHttpRequest',
             },
             credentials: 'same-origin',
+            signal: ctrl ? ctrl.signal : undefined,
             body: body,
-        }).then(function (r) { return r.ok ? r.json() : null; });
+        }).then(
+            function (r) { done(); return r.ok ? r.json() : null; },
+            function (err) { done(); throw err; }   // network/abort → caller's .catch
+        );
     }
 
     /* "Update now" → enqueue a self_update command for the agent. */
