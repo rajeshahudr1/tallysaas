@@ -1269,6 +1269,12 @@ class DashboardView:
         self.controller = app.controller
         self._last_sync_ts: Optional[float] = None
         self._connected = False
+        # Service mode but the Windows service isn't running: the GUI runs the
+        # syncer IN-PROCESS so the agent keeps syncing (Connected + logs + cloud
+        # heartbeats) instead of a dead Disconnected screen. `_paused` lets the
+        # user Stop it without the next status tick auto-restarting it.
+        self._fallback_active = False
+        self._fallback_paused = False
         self._update_available = ""
 
         # MODE (Phase 2 G): if the Windows service is installed, the Dashboard
@@ -1444,6 +1450,8 @@ class DashboardView:
         """Start syncing. Service mode -> start the service (elevated); portable
         mode -> start the in-process daemon thread."""
         if self.service_mode:
+            # Trying the real service again clears any user pause on the fallback.
+            self._fallback_paused = False
             self._service_action("start-service", "Starting the service...")
             return
         if self.controller.is_running():
@@ -1460,6 +1468,16 @@ class DashboardView:
         """Stop syncing. Service mode -> stop the service (elevated); portable
         mode -> signal the in-process loop to stop."""
         if self.service_mode:
+            # If we're syncing IN-PROCESS (service down), Stop pauses that so the
+            # next status tick doesn't auto-restart it; otherwise stop the service.
+            if self._fallback_active or self._fallback_paused:
+                self._fallback_paused = True
+                self._stop_inprocess_fallback(user=True)
+                self._connected = False
+                self._set_status(False)
+                self.btn_start.configure(state="normal")
+                self.btn_stop.configure(state="disabled")
+                return
             self._service_action("stop-service", "Stopping the service...")
             return
         self._activity("[..] Stopping sync...")
@@ -1475,6 +1493,42 @@ class DashboardView:
         self.btn_start.configure(state="normal")
         self.btn_stop.configure(state="disabled")
         self._activity("[OK] Sync stopped.")
+
+    # -- in-process fallback (service mode, service not running) ----------- #
+    def _start_inprocess_fallback(self) -> None:
+        """Run the syncer inside the app because the Windows service is down.
+
+        Keeps the agent Connected + streaming logs + pushing cloud heartbeats
+        instead of a dead Disconnected screen. No-op while the user has paused it
+        (clicked Stop) or the controller is already running.
+        """
+        if self._fallback_paused:
+            return
+        if self.controller.is_running():
+            self._fallback_active = True
+            return
+        cfg = load_config_safe()
+        self.cfg = cfg
+        if self.controller.start(cfg, self.logger):
+            self._fallback_active = True
+            self._activity("[fallback] Windows service not running - syncing "
+                           "in-process from the app.")
+
+    def _stop_inprocess_fallback(self, user: bool = False) -> None:
+        """Hand syncing back to the service (it came up), or stop on user request."""
+        if not self._fallback_active and not self.controller.is_running():
+            self._fallback_active = False
+            return
+        self._fallback_active = False
+        try:
+            self.controller.stop(timeout=4.0)
+        except Exception:
+            pass
+        if user:
+            self._activity("[OK] In-process sync stopped.")
+        else:
+            self._activity("[fallback] Windows service is running again - "
+                           "handed sync back to it.")
 
     def on_sync_now(self) -> None:
         """Force an immediate cycle.
@@ -1501,8 +1555,13 @@ class DashboardView:
                     except Exception:
                         alive = False
             if not alive:
-                # Genuinely stopped - bring the service up (first cycle is immediate).
-                self.on_start()
+                # Service genuinely down: sync IN-PROCESS right now (immediate
+                # first cycle, Connected + logs) instead of a UAC prompt to
+                # (re)start the Windows service.
+                self._fallback_paused = False
+                self._activity("[..] Sync Now: service is down - syncing "
+                               "in-process from the app.")
+                self._start_inprocess_fallback()
                 return
             try:
                 path = sync_agent.sync_now_path(self.cfg)
@@ -1588,20 +1647,42 @@ class DashboardView:
             connected = running and bool(snap.get("ok"))
         else:
             connected = running
-        self._set_status(connected)
-        self._connected = connected
         # Start/Stop reflect the EFFECTIVE running state, not the raw SCM query.
         # The SCM query fails for a NON-ADMIN GUI and would falsely read
         # not-running, wrongly enabling Start on a happily-syncing service. A
         # fresh .status.json (running, with a recent ts - even if ok briefly
         # false) is the reliable "the service is alive" signal, so OR it in.
-        running_eff = running or status_fresh or status_alive
-        if running_eff:
+        service_up = running or status_fresh or status_alive
+        # In-process fallback: if the Windows service is genuinely down, sync
+        # from the app (Connected + logs + cloud heartbeats) instead of a dead
+        # Disconnected screen, and hand back the moment the service is alive
+        # again. Safe to key both edges off `service_up`: the in-process syncer
+        # only enqueues status (it never writes .status.json), so a fresh status
+        # file always means the SERVICE is alive -> no start/stop flip-flop.
+        if self._fallback_active:
+            if service_up:
+                self._stop_inprocess_fallback()
+        elif not service_up:
+            self._start_inprocess_fallback()
+        elif self._fallback_paused:
+            # Service is alive again; a leftover user-pause is moot. Clear it so
+            # the Stop button controls the service, not the (gone) fallback.
+            self._fallback_paused = False
+
+        if self._fallback_active:
+            # The fallback's own cycle events drive the Connected dot (via
+            # _drain_status); don't stomp it here with the service's Disconnected.
             self.btn_start.configure(state="disabled")
             self.btn_stop.configure(state="normal")
         else:
-            self.btn_start.configure(state="normal")
-            self.btn_stop.configure(state="disabled")
+            self._set_status(connected)
+            self._connected = connected
+            if service_up:
+                self.btn_start.configure(state="disabled")
+                self.btn_stop.configure(state="normal")
+            else:
+                self.btn_start.configure(state="normal")
+                self.btn_stop.configure(state="disabled")
         if snap:
             ls = snap.get("last_sync")
             if ls:
@@ -2068,6 +2149,10 @@ class DashboardView:
         try:
             if self.service_mode:
                 self._poll_service()
+                # When the in-process fallback is driving the sync, its status
+                # events set the Connected dot + Last-sync just like portable mode.
+                if self._fallback_active:
+                    self._drain_status()
             else:
                 self._drain_status()
             self._drain_logs()
