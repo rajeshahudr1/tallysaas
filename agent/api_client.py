@@ -348,6 +348,22 @@ class ApiClient:
             payload["company_id"] = company_id
         if financial_reports:
             payload["financial_reports"] = financial_reports
+        # Field-diagnosable summary of EXACTLY what we're uploading (INFO so it
+        # shows without DEBUG). If a pull fails, this proves whether masters were
+        # even pulled (e.g. ledgers=0 -> wrong/empty Tally company) vs a cloud
+        # rejection. stock_items may be a dict (stock_summary) — guard len().
+        try:
+            _stk = (len(stock_items.get("rows") or []) if isinstance(stock_items, dict)
+                    else (len(stock_items) if hasattr(stock_items, "__len__") else 0))
+            self.log.info(
+                "Import -> cloud [%s]: ledgers=%d stock=%d vouchers=%d godowns=%d "
+                "groups=%d reports=%d",
+                company_name or company_id or "?", len(ledgers), _stk,
+                len(vouchers), len(godowns), len(groups),
+                len(financial_reports or {}),
+            )
+        except Exception:
+            pass
         try:
             # IMPORT is heavy (master + voucher double-entry storage) — give the
             # cloud a long read window instead of the 15s default so big batches
@@ -359,6 +375,18 @@ class ApiClient:
 
         body = self._envelope(resp)
         if body.get("status") != 200:
+            # Log the FULL cloud response (HTTP + envelope status + the message),
+            # so the REAL reason a pull was rejected is visible in the agent log
+            # instead of just a generic raise. With the cloud's surfaced error
+            # this reads e.g. "Import failed: column ... does not exist".
+            try:
+                self.log.error(
+                    "Import REJECTED by cloud: http=%s status=%s msg=%s",
+                    getattr(resp, "status_code", "?"),
+                    body.get("status"), body.get("msg", "?"),
+                )
+            except Exception:
+                pass
             raise AgentError(body.get("msg", "Could not import from Tally."))
         return body.get("data") or {}
 
