@@ -1459,7 +1459,12 @@ async function importFromTally(req, res) {
         return R.successResponse(res, counts, 'Imported from Tally.');
     } catch (err) {
         console.error('AgentController.importFromTally error:', err);
-        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+        // Surface the REAL cause to the agent log (it used to return a generic
+        // "Oops" that hid the actual DB / constraint error), so a failed pull is
+        // diagnosable in the field instead of guessing.
+        const detail = (err && (err.detail || err.message))
+            ? String(err.detail || err.message).slice(0, 300) : 'unknown error';
+        return R.errorResponse(res, `Import failed: ${detail}`, 500);
     }
 }
 
