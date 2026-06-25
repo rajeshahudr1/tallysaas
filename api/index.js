@@ -92,8 +92,13 @@ app.use(compression({
 }));
 
 // ── Body parsing ─────────────────────────────────────────────────
-app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+// 50mb (not 2mb): a full Tally master pull bundles ALL ledgers + stock items +
+// groups + the verbatim financial reports in ONE request — a large company runs
+// to several MB, and a >2mb body was being REJECTED by the parser (a generic
+// "Oops" 500 from the error handler, before ever reaching the import route),
+// which is exactly why masters failed while the smaller voucher batches synced.
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // ── Request id ───────────────────────────────────────────────────
 // A uuid on every request — attached to req and echoed in a response header
