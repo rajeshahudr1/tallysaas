@@ -22,11 +22,11 @@ class InvoiceRepository {
     int page = 1,
     int perPage = 10,
     String? search,
-    String? status,
+    Map<String, String>? filters,
   }) async {
     final query = <String, dynamic>{'page': page, 'per_page': perPage};
     if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
-    if (status != null && status.isNotEmpty) query['status'] = status;
+    if (filters != null) query.addAll(filters);
     final data = await _api.get(basePath, query: query);
     return PagedResult<Invoice>.fromData(data, Invoice.fromJson);
   }
@@ -46,12 +46,12 @@ class InvoiceRepository {
   Future<void> delete(String basePath, int id) => _api.delete('$basePath/$id');
 
   // Convenience aliases for the two endpoints.
-  Future<PagedResult<Invoice>> listSales({int page = 1, int perPage = 10, String? search, String? status}) =>
-      list(Endpoints.salesInvoices, page: page, perPage: perPage, search: search, status: status);
+  Future<PagedResult<Invoice>> listSales({int page = 1, int perPage = 10, String? search, Map<String, String>? filters}) =>
+      list(Endpoints.salesInvoices, page: page, perPage: perPage, search: search, filters: filters);
   Future<Invoice> createSales(Map<String, dynamic> body) => create(Endpoints.salesInvoices, body);
 
-  Future<PagedResult<Invoice>> listPurchase({int page = 1, int perPage = 10, String? search, String? status}) =>
-      list(Endpoints.purchaseInvoices, page: page, perPage: perPage, search: search, status: status);
+  Future<PagedResult<Invoice>> listPurchase({int page = 1, int perPage = 10, String? search, Map<String, String>? filters}) =>
+      list(Endpoints.purchaseInvoices, page: page, perPage: perPage, search: search, filters: filters);
   Future<Invoice> createPurchase(Map<String, dynamic> body) => create(Endpoints.purchaseInvoices, body);
 }
 

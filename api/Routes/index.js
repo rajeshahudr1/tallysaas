@@ -44,7 +44,7 @@ const { can }             = require('../Middlewares/rbac');
 const { validate }        = require('../Middlewares/validate');
 
 // ── Validators ────────────────────────────────────────────────────
-const { loginSchema } = require('../Validators/auth');
+const { loginSchema, forgotPasswordSchema, resetPasswordSchema } = require('../Validators/auth');
 const {
     createCustomerSchema,
     updateCustomerSchema,
@@ -181,6 +181,10 @@ router.get('/health', async (req, res) => {
 // ───────────────────────────────────────────────────────────────────
 
 router.post('/auth/login', validate(loginSchema), AuthController.login);
+// Forgot / reset password (public). forgot-password emails a 6-digit code;
+// reset-password verifies it and sets the new password.
+router.post('/auth/forgot-password', validate(forgotPasswordSchema), AuthController.forgotPassword);
+router.post('/auth/reset-password',  validate(resetPasswordSchema),  AuthController.resetPassword);
 // logout runs behind authenticate so it can clear the user's active session.
 router.post('/auth/logout', authenticate, AuthController.logout);
 
@@ -250,6 +254,9 @@ router.post('/super-admin/licenses/:id/activate',
 // key ONCE; never touches machine binding / status / companies / users.
 router.post('/super-admin/licenses/:id/regenerate',
     authenticate, requireSuperAdmin, LicenseController.regenerate);
+// Change the license admin's LOGIN email and/or password (super-admin only).
+router.put('/super-admin/licenses/:id/credentials',
+    authenticate, requireSuperAdmin, LicenseController.updateCredentials);
 
 // Super-Admin · Roles & Permissions matrix (roles are global → platform op).
 router.get('/permissions/matrix',
@@ -594,6 +601,12 @@ router.get(
     InvoiceController.get,
 );
 
+router.get(
+    '/sales-invoices/:id/pdf',
+    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    InvoiceController.pdf,
+);
+
 router.post(
     '/sales-invoices',
     authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
@@ -628,6 +641,12 @@ router.get(
     '/purchase-invoices/:id',
     authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
     InvoiceController.get,
+);
+
+router.get(
+    '/purchase-invoices/:id/pdf',
+    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
+    InvoiceController.pdf,
 );
 
 router.post(
@@ -993,5 +1012,9 @@ router.get(
 router.get('/reports/trial-balance', authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.trialBalance);
 router.get('/reports/profit-loss',   authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.profitLoss);
 router.get('/reports/balance-sheet', authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.balanceSheet);
+
+// Server-rendered, data-ONLY PDF of ANY report (no app chrome) — same data as
+// the JSON endpoints above. 3-segment path, so it never shadows them.
+router.get('/reports/:type/pdf', authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.reportPdf);
 
 module.exports = router;

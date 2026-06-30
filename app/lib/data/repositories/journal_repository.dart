@@ -19,12 +19,22 @@ class JournalRepository {
     int perPage = 20,
     String? search,
     String? status,
+    String? dateFrom,
+    String? dateTo,
   }) async {
     final query = <String, dynamic>{'page': page, 'per_page': perPage};
     if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
     if (status != null && status.isNotEmpty) query['status'] = status;
+    if (dateFrom != null) query['date_from'] = dateFrom;
+    if (dateTo != null) query['date_to'] = dateTo;
     final data = await _api.get(Endpoints.journals, query: query);
     return PagedResult<Journal>.fromData(data, Journal.fromJson);
+  }
+
+  /// Fetch ONE journal (with its Dr/Cr entries) — drives the View screen.
+  Future<Journal> get(int id) async {
+    final data = await _api.get('${Endpoints.journals}/$id');
+    return Journal.fromJson((data as Map).cast<String, dynamic>());
   }
 
   Future<dynamic> create(Map<String, dynamic> body) =>

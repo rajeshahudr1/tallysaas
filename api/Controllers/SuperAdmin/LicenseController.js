@@ -476,4 +476,78 @@ async function setStatus(req, res, status, msg) {
 const suspend  = (req, res) => setStatus(req, res, 'suspended', 'License suspended.');
 const activate = (req, res) => setStatus(req, res, 'active', 'License re-activated.');
 
-module.exports = { create, list, get, update, remove, resetMachine, suspend, activate, regenerate };
+/**
+ * PUT /super-admin/licenses/:id/credentials   { email?, password? }
+ *
+ * Super-Admin ONLY (route is behind requireSuperAdmin). Changes the LOGIN email
+ * and/or password of the license's admin user (the company-admin, company_id
+ * NULL). At least one of email/password is required. A password change revokes
+ * that user's live sessions so they must sign in again with the new password.
+ */
+async function updateCredentials(req, res) {
+    try {
+        const lic = await db('licenses')
+            .where('id', req.params.id).whereNull('deleted_at').first();
+        if (!lic) return R.errorResponse(res, NOT_FOUND, 404);
+
+        // The license-admin = company-admin user under this license (company_id NULL).
+        const admin = await db('users as u')
+            .leftJoin('roles as r', 'r.id', 'u.role_id')
+            .where('u.license_id', lic.id)
+            .whereNull('u.deleted_at')
+            .where('r.slug', 'company-admin')
+            .whereNull('u.company_id')
+            .orderBy('u.id', 'asc')
+            .select('u.id', 'u.email')
+            .first();
+        if (!admin) {
+            return R.errorResponse(res, 'This license has no admin login to update.', 404);
+        }
+
+        const patch = { updated_at: new Date() };
+        const newEmail = String(req.body.email || '').trim().toLowerCase();
+        const newPassword = req.body.password;
+
+        if (newEmail) {
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+                return R.errorResponse(res, 'Please enter a valid email address.', 422);
+            }
+            const clash = await db('users')
+                .whereRaw('lower(email) = ?', [newEmail])
+                .whereNull('deleted_at')
+                .whereNot('id', admin.id)
+                .first('id');
+            if (clash) {
+                return R.errorResponse(res, 'That email is already in use by another account.', 409);
+            }
+            patch.email = newEmail;
+        }
+        if (newPassword != null && String(newPassword) !== '') {
+            if (String(newPassword).length < 6) {
+                return R.errorResponse(res, 'Password must be at least 6 characters.', 422);
+            }
+            patch.password_hash = await passwords.hash(String(newPassword));
+        }
+        if (!patch.email && !patch.password_hash) {
+            return R.errorResponse(res, 'Provide a new email and/or password.', 422);
+        }
+
+        await db('users').where('id', admin.id).update(patch);
+        if (patch.password_hash) {
+            // Revoke live sessions so the old password stops working immediately.
+            await db('user_sessions').where('user_id', admin.id).del();
+            await db('users').where('id', admin.id)
+                .update({ active_session_jti: null, session_expires_at: null });
+        }
+        return R.successResponse(
+            res,
+            { id: admin.id, email: patch.email || admin.email },
+            'License login credentials updated.',
+        );
+    } catch (err) {
+        console.error('LicenseController.updateCredentials error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+module.exports = { create, list, get, update, remove, resetMachine, suspend, activate, regenerate, updateCredentials };

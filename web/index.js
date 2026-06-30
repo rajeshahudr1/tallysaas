@@ -331,6 +331,12 @@ app.use((req, res) => {
 /* ── Error handler ──────────────────────────────────────────── */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+    // Session ended (backend returned 401 for our token) → log the user out
+    // cleanly and bounce to /login instead of showing an error.
+    if (err && err.code === 'SESSION_ENDED') {
+        if (req.session) return req.session.destroy(() => res.redirect('/login'));
+        return res.redirect('/login');
+    }
     console.error('[error]', err && (err.stack || err.message || err));
     res.status(500).type('html').send(
         '<!doctype html><meta charset="utf-8"><title>500</title>' +

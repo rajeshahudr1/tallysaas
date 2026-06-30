@@ -5,34 +5,52 @@ import 'package:go_router/go_router.dart';
 import '../core/api/endpoints.dart';
 import '../core/auth/session.dart';
 import '../features/auth/login_screen.dart';
+import '../features/auth/forgot_password_screen.dart';
 import '../features/categories/categories_screen.dart';
+import '../features/categories/category_detail_screen.dart';
 import '../features/categories/category_form_screen.dart';
+import '../features/companies/companies_screen.dart';
+import '../features/companies/company_detail_screen.dart';
+import '../features/companies/company_form_screen.dart';
 import '../features/company_switcher/company_switcher_screen.dart';
+import '../features/customers/customer_detail_screen.dart';
 import '../features/customers/customer_form_screen.dart';
 import '../features/customers/customers_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
+import '../features/journals/journal_detail_screen.dart';
 import '../features/journals/journal_form_screen.dart';
 import '../features/journals/journals_screen.dart';
+import '../features/inventory/inventory_screen.dart';
+import '../features/locations/location_detail_screen.dart';
 import '../features/locations/location_form_screen.dart';
 import '../features/locations/locations_screen.dart';
 import '../features/masters/masters_hub_screen.dart';
+import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
 import '../features/payments/vouchers_screen.dart';
+import '../features/products/product_detail_screen.dart';
 import '../features/products/product_form_screen.dart';
 import '../features/products/products_screen.dart';
 import '../features/profile/profile_screen.dart';
 import '../features/purchase_invoices/purchase_invoice_form_screen.dart';
-import '../features/purchase_invoices/purchase_invoices_screen.dart';
 import '../features/reports/report_view_screen.dart';
 import '../features/reports/reports_screen.dart';
+import '../features/sales_invoices/invoice_register_screen.dart';
 import '../features/sales_invoices/sales_invoice_form_screen.dart';
-import '../features/sales_invoices/sales_invoices_screen.dart';
+import '../features/sales_persons/sales_person_detail_screen.dart';
 import '../features/sales_persons/sales_person_form_screen.dart';
 import '../features/sales_persons/sales_persons_screen.dart';
 import '../features/settings/settings_screen.dart';
+import '../features/suppliers/supplier_detail_screen.dart';
 import '../features/suppliers/supplier_form_screen.dart';
 import '../features/suppliers/suppliers_screen.dart';
+import '../features/notifications/notifications_screen.dart';
+import '../features/users/roles_screen.dart';
+import '../features/users/users_screen.dart';
+import '../features/sync/change_history_screen.dart';
+import '../features/sync/sync_logs_screen.dart';
 import '../features/sync/sync_screen.dart';
+import '../features/transactions/invoice_detail_screen.dart';
 import '../features/transactions/transactions_hub_screen.dart';
 import '../features/splash/splash_screen.dart';
 import '../shared/layouts/app_shell.dart';
@@ -70,8 +88,10 @@ final routerProvider = Provider<GoRouter>((ref) {
       final isSplash = going == '/';
 
       if (session is SessionAnonymous) {
-        // Signed-out users belong on the login screen; let them stay there.
-        return isLogin ? null : '/login';
+        // Signed-out users may stay on login OR the public forgot-password
+        // flow; anything else bounces to login.
+        final isPublic = isLogin || going == '/forgot-password';
+        return isPublic ? null : '/login';
       }
       if (session is SessionSignedIn) {
         // Signed-in users have no business on splash / login — send them in.
@@ -91,6 +111,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/login',
         name: 'login',
         builder: (_, __) => const LoginScreen(),
+      ),
+      GoRoute(
+        path: '/forgot-password',
+        name: 'forgot-password',
+        builder: (_, __) => const ForgotPasswordScreen(),
       ),
 
       // ─── Authed shell ───────────────────────────────────────
@@ -142,6 +167,28 @@ final routerProvider = Provider<GoRouter>((ref) {
       // tab), not as tabs themselves — there are more masters than fit a
       // bottom-nav, so they live as pushed routes.
       GoRoute(
+        path: '/companies',
+        name: 'companies',
+        builder: (_, __) => const CompaniesScreen(),
+      ),
+      GoRoute(
+        path: '/companies/add',
+        name: 'company-add',
+        builder: (_, __) => const CompanyFormScreen(),
+      ),
+      GoRoute(
+        path: '/companies/:id',
+        name: 'company-view',
+        builder: (_, state) =>
+            CompanyDetailScreen(companyId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/companies/:id/edit',
+        name: 'company-edit',
+        builder: (_, state) =>
+            CompanyFormScreen(companyId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
         path: '/customers',
         name: 'customers',
         builder: (_, __) => const CustomersScreen(),
@@ -150,6 +197,19 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/customers/add',
         name: 'customer-add',
         builder: (_, __) => const CustomerFormScreen(),
+      ),
+      // Declared AFTER '/customers/add' so the literal 'add' wins over ':id'.
+      GoRoute(
+        path: '/customers/:id',
+        name: 'customer-view',
+        builder: (_, state) =>
+            CustomerDetailScreen(customerId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/customers/:id/edit',
+        name: 'customer-edit',
+        builder: (_, state) =>
+            CustomerFormScreen(customerId: int.parse(state.pathParameters['id']!)),
       ),
       GoRoute(
         path: '/suppliers',
@@ -162,6 +222,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const SupplierFormScreen(),
       ),
       GoRoute(
+        path: '/suppliers/:id',
+        name: 'supplier-view',
+        builder: (_, state) =>
+            SupplierDetailScreen(supplierId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/suppliers/:id/edit',
+        name: 'supplier-edit',
+        builder: (_, state) =>
+            SupplierFormScreen(supplierId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
         path: '/products',
         name: 'products',
         builder: (_, __) => const ProductsScreen(),
@@ -170,6 +242,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/products/add',
         name: 'product-add',
         builder: (_, __) => const ProductFormScreen(),
+      ),
+      GoRoute(
+        path: '/products/:id',
+        name: 'product-view',
+        builder: (_, state) =>
+            ProductDetailScreen(productId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/products/:id/edit',
+        name: 'product-edit',
+        builder: (_, state) =>
+            ProductFormScreen(productId: int.parse(state.pathParameters['id']!)),
       ),
       GoRoute(
         path: '/categories',
@@ -182,6 +266,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const CategoryFormScreen(),
       ),
       GoRoute(
+        path: '/categories/:id',
+        name: 'category-view',
+        builder: (_, state) =>
+            CategoryDetailScreen(categoryId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/categories/:id/edit',
+        name: 'category-edit',
+        builder: (_, state) =>
+            CategoryFormScreen(categoryId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
         path: '/locations',
         name: 'locations',
         builder: (_, __) => const LocationsScreen(),
@@ -190,6 +286,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/locations/add',
         name: 'location-add',
         builder: (_, __) => const LocationFormScreen(),
+      ),
+      GoRoute(
+        path: '/locations/:id',
+        name: 'location-view',
+        builder: (_, state) =>
+            LocationDetailScreen(locationId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/locations/:id/edit',
+        name: 'location-edit',
+        builder: (_, state) =>
+            LocationFormScreen(locationId: int.parse(state.pathParameters['id']!)),
       ),
       GoRoute(
         path: '/sales-persons',
@@ -201,12 +309,37 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'sales-person-add',
         builder: (_, __) => const SalesPersonFormScreen(),
       ),
+      GoRoute(
+        path: '/sales-persons/:id',
+        name: 'sales-person-view',
+        builder: (_, state) =>
+            SalesPersonDetailScreen(salesPersonId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/sales-persons/:id/edit',
+        name: 'sales-person-edit',
+        builder: (_, state) =>
+            SalesPersonFormScreen(salesPersonId: int.parse(state.pathParameters['id']!)),
+      ),
 
       // ─── Transactions (side trips off the Transactions hub) ─────
       GoRoute(
         path: '/sales-invoices',
         name: 'sales-invoices',
-        builder: (_, __) => const SalesInvoicesScreen(),
+        builder: (_, __) => const InvoiceRegisterScreen(
+          title: 'Sales Register',
+          monthlyPath: '/sales-invoices/monthly',
+          basePath: '/sales-invoices',
+          module: 'sales-invoices',
+        ),
+      ),
+      GoRoute(
+        path: '/sales-invoices/month/:ym',
+        name: 'sales-invoices-month',
+        builder: (_, state) => MonthInvoicesScreen(
+          basePath: '/sales-invoices',
+          month: state.pathParameters['ym']!,
+        ),
       ),
       GoRoute(
         path: '/sales-invoices/add',
@@ -214,14 +347,47 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const SalesInvoiceFormScreen(),
       ),
       GoRoute(
+        path: '/sales-invoices/:id',
+        name: 'sales-invoice-view',
+        builder: (_, state) => InvoiceDetailScreen(
+          basePath: Endpoints.salesInvoices,
+          module: 'sales-invoices',
+          title: 'Sales Invoice',
+          invoiceId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
         path: '/purchase-invoices',
         name: 'purchase-invoices',
-        builder: (_, __) => const PurchaseInvoicesScreen(),
+        builder: (_, __) => const InvoiceRegisterScreen(
+          title: 'Purchase Register',
+          monthlyPath: '/purchase-invoices/monthly',
+          basePath: '/purchase-invoices',
+          module: 'purchase-invoices',
+        ),
+      ),
+      GoRoute(
+        path: '/purchase-invoices/month/:ym',
+        name: 'purchase-invoices-month',
+        builder: (_, state) => MonthInvoicesScreen(
+          basePath: '/purchase-invoices',
+          month: state.pathParameters['ym']!,
+        ),
       ),
       GoRoute(
         path: '/purchase-invoices/add',
         name: 'purchase-invoice-add',
         builder: (_, __) => const PurchaseInvoiceFormScreen(),
+      ),
+      GoRoute(
+        path: '/purchase-invoices/:id',
+        name: 'purchase-invoice-view',
+        builder: (_, state) => InvoiceDetailScreen(
+          basePath: Endpoints.purchaseInvoices,
+          module: 'purchase-invoices',
+          title: 'Purchase Invoice',
+          invoiceId: int.parse(state.pathParameters['id']!),
+        ),
       ),
       GoRoute(
         path: '/payments',
@@ -244,6 +410,16 @@ final routerProvider = Provider<GoRouter>((ref) {
           partyLabel: 'Supplier *',
           partyEndpoint: '/suppliers',
           saveLabel: 'Save Payment',
+        ),
+      ),
+      GoRoute(
+        path: '/payments/:id',
+        name: 'payment-view',
+        builder: (_, state) => VoucherDetailScreen(
+          basePath: '/payments',
+          module: 'payments',
+          title: 'Payment',
+          voucherId: int.parse(state.pathParameters['id']!),
         ),
       ),
       GoRoute(
@@ -270,6 +446,16 @@ final routerProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(
+        path: '/receipts/:id',
+        name: 'receipt-view',
+        builder: (_, state) => VoucherDetailScreen(
+          basePath: '/receipts',
+          module: 'receipts',
+          title: 'Receipt',
+          voucherId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
         path: '/journals',
         name: 'journals',
         builder: (_, __) => const JournalsScreen(),
@@ -278,6 +464,17 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/journals/add',
         name: 'journal-add',
         builder: (_, __) => const JournalFormScreen(),
+      ),
+      GoRoute(
+        path: '/journals/:id',
+        name: 'journal-view',
+        builder: (_, state) =>
+            JournalDetailScreen(journalId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: '/inventory',
+        name: 'inventory',
+        builder: (_, __) => const InventoryScreen(),
       ),
 
       // ─── Account / admin (reached from the Profile tab) ─────────
@@ -292,9 +489,34 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const SyncScreen(),
       ),
       GoRoute(
+        path: '/sync-logs',
+        name: 'sync-logs',
+        builder: (_, __) => const SyncLogsScreen(),
+      ),
+      GoRoute(
+        path: '/change-history',
+        name: 'change-history',
+        builder: (_, __) => const ChangeHistoryScreen(),
+      ),
+      GoRoute(
+        path: '/notifications',
+        name: 'notifications',
+        builder: (_, __) => const NotificationsScreen(),
+      ),
+      GoRoute(
         path: '/settings',
         name: 'settings-page',
         builder: (_, __) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: '/users',
+        name: 'users',
+        builder: (_, __) => const UsersScreen(),
+      ),
+      GoRoute(
+        path: '/roles',
+        name: 'roles',
+        builder: (_, __) => const RolesScreen(),
       ),
 
       // ─── Reports (side trips off the Reports tab/hub) ───────────

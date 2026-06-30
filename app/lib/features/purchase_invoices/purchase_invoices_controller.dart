@@ -48,6 +48,8 @@ class PurchaseInvoicesController extends StateNotifier<PurchaseInvoicesState> {
   static const _perPage = 10;
 
   String _search = '';
+  Map<String, String> _adv = {};
+  Map<String, String> get adv => _adv;
   int _page = 1;
   bool _hasMore = true;
   final List<Invoice> _all = [];
@@ -62,7 +64,7 @@ class PurchaseInvoicesController extends StateNotifier<PurchaseInvoicesState> {
 
   Future<void> _fetch() async {
     try {
-      final res = await _repo.listPurchase(page: _page, perPage: _perPage, search: _search);
+      final res = await _repo.listPurchase(page: _page, perPage: _perPage, search: _search, filters: _adv);
       _all.addAll(res.items);
       _hasMore = res.hasMore;
       if (!mounted) return;
@@ -76,6 +78,11 @@ class PurchaseInvoicesController extends StateNotifier<PurchaseInvoicesState> {
 
   Future<void> search(String query) async {
     _search = query;
+    await _reload();
+  }
+
+  Future<void> setAdvFilter(Map<String, String> f) async {
+    _adv = f;
     await _reload();
   }
 

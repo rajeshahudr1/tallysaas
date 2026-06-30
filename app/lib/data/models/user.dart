@@ -17,6 +17,7 @@ class AppUser {
     required this.role,
     required this.roleSlug,
     this.companyId,
+    this.permissions = const [],
   });
 
   final int id;
@@ -25,6 +26,30 @@ class AppUser {
   final String role;      // human-readable role name, e.g. "Administrator"
   final String roleSlug;  // machine slug, e.g. "admin"
   final int? companyId;   // active tenant; null until a company is resolved
+
+  /// Flat permission slugs the role grants, e.g. `customers.view`,
+  /// `customers.create`. Super Admin is reported as the single wildcard `['*']`.
+  /// Drives the SAME role-based menu + action gating the web does (see [can]).
+  final List<String> permissions;
+
+  /// The platform owner — sees + does everything; bypasses every RBAC check.
+  bool get isSuperAdmin => roleSlug == 'super-admin' || permissions.contains('*');
+
+  /// True when the role may perform `action` on `module` — mirrors the web's
+  /// `canModule`/permission check. `module.action`, e.g. can('customers','edit').
+  bool can(String module, String action) =>
+      permissions.contains('*') || permissions.contains('$module.$action');
+
+  /// True when the role has ANY permission on `module` (so the menu entry +
+  /// its list screen are visible). Add/edit/delete are gated separately by [can].
+  bool canModule(String module) =>
+      permissions.contains('*') ||
+      permissions.any((p) => p == module || p.startsWith('$module.'));
+
+  /// True when the role can see at least one of [modules] — used to show/hide a
+  /// whole nav GROUP (e.g. the Masters or Transactions tab).
+  bool canAny(List<String> modules) =>
+      permissions.contains('*') || modules.any(canModule);
 
   /// Builds an [AppUser] from either the login `user` object or the `/me`
   /// payload. Numeric ids are coerced through [_toInt] because Postgres'
@@ -50,6 +75,7 @@ class AppUser {
       role: roleName,
       roleSlug: slug,
       companyId: _toInt(j['company_id']),
+      permissions: _strList(j['permissions']),
     );
   }
 
@@ -62,6 +88,7 @@ class AppUser {
         'role': role,
         'role_slug': roleSlug,
         'company_id': companyId,
+        'permissions': permissions,
       };
 
   /// Up-to-two-letter avatar initials derived from the display name.
@@ -87,4 +114,13 @@ class AppUser {
   }
 
   static String _str(Object? v) => v == null ? '' : v.toString();
+
+  /// Coerces a JSON value into a `List<String>` of permission slugs, tolerating
+  /// a missing/null field (→ empty) or odd element types.
+  static List<String> _strList(Object? v) {
+    if (v is List) {
+      return v.map((e) => e == null ? '' : e.toString()).where((s) => s.isNotEmpty).toList();
+    }
+    return const [];
+  }
 }

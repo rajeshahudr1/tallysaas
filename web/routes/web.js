@@ -35,6 +35,9 @@ const agentUpload = multer({
 /* ── Public auth routes (NO guard) ──────────────────────────── */
 router.get('/login',  AuthController.showLogin);
 router.post('/login', AuthController.login);
+router.get('/forgot-password',  AuthController.showForgot);
+router.post('/forgot-password', AuthController.forgot);
+router.post('/reset-password',  AuthController.reset);
 router.get('/logout', AuthController.logout);
 
 /* Everything below this line requires a logged-in session. */
@@ -2797,6 +2800,30 @@ router.get('/reports', (req, res) => {
     });
 });
 
+/* ── REPORTS · server-rendered PDF proxy (data-only) ──────────
+ * GET /reports/pdf/<slug> → streams the api's /reports/<type>/pdf with the SAME
+ * auth + company + query, so the browser opens a CLEAN PDF (no sidebar / header
+ * / buttons). The two Outstanding slugs map onto the api's single 'outstanding'
+ * report (with ?type=). 3-segment path → never shadows the report pages above. */
+router.get('/reports/pdf/:slug', async (req, res, next) => {
+    try {
+        const slug = String(req.params.slug || '');
+        const map = {
+            'outstanding-receivables': { type: 'outstanding', extra: { type: 'receivable' } },
+            'outstanding-payables':    { type: 'outstanding', extra: { type: 'payable' } },
+        };
+        const m = map[slug] || { type: slug, extra: {} };
+        const qs = new URLSearchParams({ ...req.query, ...m.extra }).toString();
+        const r = await api.fetchBinary(req, `/reports/${encodeURIComponent(m.type)}/pdf${qs ? '?' + qs : ''}`);
+        if (!r || r.status === 0 || !r.buffer || !String(r.contentType).includes('application/pdf')) {
+            return next(new Error('Could not generate the report PDF. Please try again.'));
+        }
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${slug || 'report'}.pdf"`);
+        return res.send(r.buffer);
+    } catch (err) { next(err); }
+});
+
 /* ── REPORTS · Day Book (GET /reports/day-book) ─────────────── */
 router.get('/reports/day-book', async (req, res, next) => {
     try {
@@ -3778,23 +3805,26 @@ async function renderInvoicePrint(req, res, next, apiBase) {
         const invoice = r.body.data;
         const isPurchase = apiBase.indexOf('purchase') > -1;
 
-        // Classify the reconstructed Tally ledger postings (party / sales /
-        // CGST / SGST / IGST / round-off) so the print mirrors the voucher.
+        // The tax split (CGST/SGST/IGST/round + taxable) comes from the API — it
+        // derives them from the synced ledgers as the SINGLE source of truth, so
+        // the print matches the app + the detail to the paisa (NO web-side calc).
+        // The ledger loop here only finds the party (debtor/creditor) ledger name.
         const ledgers = Array.isArray(invoice.tally_ledgers) ? invoice.tally_ledgers : [];
-        const tax = { cgst: 0, sgst: 0, igst: 0, roundoff: 0, sales: 0 };
+        const tax = {
+            cgst:     Number(invoice.cgst) || 0,
+            sgst:     Number(invoice.sgst) || 0,
+            igst:     Number(invoice.igst) || 0,
+            roundoff: Number(invoice.round_off) || 0,
+            sales:    Number(invoice.taxable) || 0,
+        };
         let partyLedger = '';
         let _partyAbs = -1;
         ledgers.forEach((l) => {
             const nm = String(l.ledger_name || '');
             const low = nm.toLowerCase();
-            const amt = Number(l.amount) || 0;
-            const abs = Math.abs(amt);
-            if (/c\s*gst|cgst|central/.test(low))      tax.cgst += abs;
-            else if (/s\s*gst|sgst|state/.test(low))   tax.sgst += abs;
-            else if (/i\s*gst|igst|integrated/.test(low)) tax.igst += abs;
-            else if (/round/.test(low))                tax.roundoff += amt;
-            else if (/sales|purchase/.test(low))       tax.sales += abs;
-            else if (abs > _partyAbs) { partyLedger = nm; _partyAbs = abs; }  // the debtor/creditor
+            const abs = Math.abs(Number(l.amount) || 0);
+            if (/gst|round|sales|purchase|central|state|integrated/.test(low)) return; // skip tax/sales lines
+            if (abs > _partyAbs) { partyLedger = nm; _partyAbs = abs; }                 // the debtor/creditor
         });
 
         // Buyer / supplier party (name + GSTIN + address). Tally-synced invoices
@@ -3837,8 +3867,8 @@ async function renderInvoicePrint(req, res, next, apiBase) {
             disc_pct: Number(it.disc_pct) || 0,
             amount: Number(it.amount) || 0,
         }));
-        // Subtotal = sales value (taxable); fall back to summing item amounts.
-        const subtotal = tax.sales || items.reduce((s, it) => s + it.amount, 0);
+        // Subtotal = the API-computed taxable (single source of truth — no web calc).
+        const subtotal = Number(invoice.taxable) || 0;
 
         res.render('invoices/print', {
             layout: false,
@@ -4087,6 +4117,27 @@ function licenseAction(apiPath, okMsg, failMsg) {
 router.post('/licenses/:id/suspend',       requireSuperAdmin, licenseAction('suspend',       'License suspended.',        'Could not suspend the license.'));
 router.post('/licenses/:id/activate',      requireSuperAdmin, licenseAction('activate',      'License reactivated.',      'Could not activate the license.'));
 router.post('/licenses/:id/reset-machine', requireSuperAdmin, licenseAction('reset-machine', 'Agent machine unbound.',    'Could not reset the machine.'));
+
+/* POST /licenses/:id/credentials — super-admin changes the license admin's
+ * LOGIN email and/or password (proxies api PUT …/credentials). */
+router.post('/licenses/:id/credentials', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const email = String(req.body.email || '').trim();
+        const password = String(req.body.password || '');
+        const payload = {};
+        if (email) payload.email = email;
+        if (password) payload.password = password;
+        if (!payload.email && !payload.password) {
+            setFlash(req, 'error', 'Enter a new email and/or password.');
+            return req.session.save(() => res.redirect(`/licenses/${id}`));
+        }
+        const result = await api.put(req, `/super-admin/licenses/${id}/credentials`, payload);
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Login credentials updated.');
+        else setFlash(req, 'error', apiError(result, 'Could not update the login credentials.'));
+        return req.session.save(() => res.redirect(`/licenses/${id}`));
+    } catch (err) { next(err); }
+});
 
 /* POST /licenses/:id/regenerate — mint a NEW key for this license (super-admin).
  * Proxies to api POST /super-admin/licenses/:id/regenerate. On success we stash

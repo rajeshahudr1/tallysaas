@@ -33,6 +33,8 @@
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
 const { recordHistory } = require('../../Helpers/history');
+const { htmlToPdf } = require('../../Helpers/pdf');
+const { invoicePdfHtml } = require('../../Helpers/transactionPdf');
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND_MSG    = 'Invoice not found.';
@@ -395,6 +397,31 @@ async function get(req, res) {
                 .orderBy('id', 'asc').select('ledger_name', 'amount', 'is_debit');
         }
 
+        // ── Derive the GST breakdown from the synced ledgers when present ──
+        // Tally-synced invoices carry the tax split in tally_voucher_entries
+        // (e.g. "C GST", "S GST"), NOT in invoices.cgst/sgst (often 0) — so the
+        // stored taxable+tax+round wouldn't add up to the total. Recompute the
+        // split from the ledgers; taxable = total − cgst − sgst − igst − round.
+        if (Array.isArray(tallyLedgers) && tallyLedgers.length) {
+            let cgst = 0, sgst = 0, igst = 0, roundOff = 0;
+            for (const l of tallyLedgers) {
+                const norm = String(l.ledger_name || '').toLowerCase().replace(/\s+/g, '');
+                const amt = Number(l.amount) || 0;
+                if (norm.includes('cgst')) cgst += Math.abs(amt);
+                else if (norm.includes('sgst')) sgst += Math.abs(amt);
+                else if (norm.includes('igst')) igst += Math.abs(amt);
+                else if (norm.includes('round')) roundOff += amt;
+            }
+            const r2 = (n) => Math.round(n * 100) / 100;
+            const total = Number(invoice.total) || 0;
+            invoice.cgst       = r2(cgst);
+            invoice.sgst       = r2(sgst);
+            invoice.igst       = r2(igst);
+            invoice.tax_amount = r2(cgst + sgst + igst);
+            invoice.round_off  = r2(roundOff);
+            invoice.taxable    = r2(total - cgst - sgst - igst - roundOff);
+        }
+
         return R.successResponse(res, { ...invoice, items, tally_items: tallyItems, tally_ledgers: tallyLedgers });
     } catch (err) {
         console.error('invoices.get error:', err);
@@ -540,12 +567,48 @@ async function destroy(req, res) {
     }
 }
 
+/**
+ * GET /sales-invoices/:id/pdf  (and /purchase-invoices/:id/pdf)
+ *
+ * Renders a clean, data-only invoice PDF. Reuses get()'s rich detail by calling
+ * it with a capturing fake-res, then feeds the result through the shared
+ * invoice renderer + Puppeteer (same pipeline as the report PDFs).
+ */
+async function pdf(req, res) {
+    try {
+        let captured = null;
+        const fakeRes = {
+            status() { return this; },
+            json(payload) { captured = payload; return this; },
+        };
+        await get(req, fakeRes);
+        if (!captured || captured.status !== 200 || !captured.data) {
+            return R.errorResponse(res, NOT_FOUND_MSG, 404);
+        }
+        const inv = captured.data;
+        const company = await db('companies').where('id', req.companyId).first('name');
+        const { html, landscape } = invoicePdfHtml(inv, {
+            companyName: (company && company.name) || 'Company',
+            generatedAt: new Date().toLocaleString('en-IN', { hour12: true }),
+        });
+        const buf = await htmlToPdf(html, { landscape });
+        const fname = String(inv.invoice_no || inv.id).replace(/[^\w.-]/g, '_');
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="invoice-${fname}.pdf"`);
+        return res.send(buf);
+    } catch (err) {
+        console.error('InvoiceController.pdf error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 module.exports = {
     listSales,
     listPurchase,
     monthlySales,
     monthlyPurchase,
     get,
+    pdf,
     createSales,
     createPurchase,
     destroy,

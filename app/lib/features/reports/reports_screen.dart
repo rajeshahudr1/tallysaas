@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../shared/widgets/app_card.dart';
 
 /// Reports hub — the Reports bottom-nav tab. Mirrors the Masters hub: an
@@ -76,18 +77,23 @@ class ReportsScreen extends ConsumerWidget {
         route: '/reports/balance-sheet',
       ),
     ]),
-    _ReportGroup('Inventory', [
-      _ReportEntry(
-        title: 'Stock Summary',
-        subtitle: 'Items with quantity, rate & value',
-        icon: Icons.inventory_2_outlined,
-        route: '/reports/stock-summary',
-      ),
-    ]),
+    // Stock Summary moved to Transactions → Inventory / Stock.
   ];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    // RBAC: Reports is a single 'reports' module (no per-report perms, like the
+    // web). The bottom-nav already hides the tab without it; this guards a
+    // direct deep-link too.
+    if (user != null && !user.canModule('reports')) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Reports')),
+        body: const Center(child: Text('Reports are not available for your role.')),
+      );
+    }
+
     final theme = Theme.of(context);
     final children = <Widget>[];
     for (final group in _groups) {

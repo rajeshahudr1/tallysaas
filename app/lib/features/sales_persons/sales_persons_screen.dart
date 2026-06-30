@@ -5,11 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../data/models/sales_person.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
 import 'sales_persons_controller.dart';
@@ -56,21 +58,49 @@ class _SalesPersonsScreenState extends ConsumerState<SalesPersonsScreen> {
     });
   }
 
+  static const _fields = [
+    FilterField('status', 'Status', FType.select, options: ['Active', 'Inactive', 'Blocked']),
+    FilterField('created_from', 'Created From', FType.dateFrom),
+    FilterField('created_to', 'Created To', FType.dateTo),
+  ];
+
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(salesPersonsControllerProvider.notifier);
+    final res = await showAdvancedFilter(context, ref, title: 'Sales Persons filter', fields: _fields, current: ctrl.adv);
+    if (res != null) ctrl.setAdvFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(salesPersonsControllerProvider);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    final canCreate = user?.can('sales-persons', 'create') ?? false;
+    final hasFilter = ref.read(salesPersonsControllerProvider.notifier).adv.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Sales Persons')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>('/sales-persons/add');
-          if (created == true) {
-            ref.read(salesPersonsControllerProvider.notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+      appBar: AppBar(
+        title: const Text('Sales Persons'),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>('/sales-persons/add');
+                if (created == true) {
+                  ref.read(salesPersonsControllerProvider.notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Add'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -124,7 +154,16 @@ class _SalesPersonsScreenState extends ConsumerState<SalesPersonsScreen> {
                   ),
                 );
               }
-              return _SalesPersonCard(items[i]);
+              final s = items[i];
+              return _SalesPersonCard(
+                s,
+                onTap: () async {
+                  await context.push('/sales-persons/${s.id}');
+                  if (context.mounted) {
+                    ref.read(salesPersonsControllerProvider.notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -133,8 +172,9 @@ class _SalesPersonsScreenState extends ConsumerState<SalesPersonsScreen> {
 }
 
 class _SalesPersonCard extends StatelessWidget {
-  const _SalesPersonCard(this.s);
+  const _SalesPersonCard(this.s, {this.onTap});
   final SalesPerson s;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -144,6 +184,7 @@ class _SalesPersonCard extends StatelessWidget {
       if (s.mobile != null) s.mobile!,
     ].join(' · ');
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

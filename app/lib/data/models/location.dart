@@ -10,7 +10,9 @@ class Location {
     this.pincode,
     this.mobile,
     this.manager,
+    this.isTallyGodown,
     this.status,
+    this.customFields = const {},
     this.createdAt,
   });
 
@@ -22,7 +24,9 @@ class Location {
   final String? pincode;
   final String? mobile;
   final String? manager;
-  final String? status; // Active | Inactive
+  final bool? isTallyGodown;
+  final String? status; // Active | Inactive | Blocked
+  final Map<String, dynamic> customFields;
   final String? createdAt;
 
   factory Location.fromJson(Map<String, dynamic> j) => Location(
@@ -34,7 +38,9 @@ class Location {
         pincode: _sn(j['pincode']),
         mobile: _sn(j['mobile']),
         manager: _sn(j['manager']),
+        isTallyGodown: _toBool(j['is_tally_godown']),
         status: _sn(j['status']),
+        customFields: _toMap(j['custom_fields']),
         createdAt: _sn(j['created_at']),
       );
 
@@ -50,5 +56,18 @@ class Location {
     if (v is num) return v.toInt();
     final s = v.toString().trim();
     return s.isEmpty ? null : int.tryParse(s);
+  }
+
+  static bool? _toBool(Object? v) {
+    if (v == null) return null;
+    if (v is bool) return v;
+    final s = v.toString().trim().toLowerCase();
+    if (s.isEmpty) return null;
+    return s == 'true' || s == '1' || s == 't' || s == 'yes';
+  }
+
+  static Map<String, dynamic> _toMap(Object? v) {
+    if (v is Map) return v.cast<String, dynamic>();
+    return const {};
   }
 }

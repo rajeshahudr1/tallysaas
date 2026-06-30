@@ -76,14 +76,38 @@ class ProfileScreen extends ConsumerWidget {
           const SizedBox(height: AppSpacing.sm8),
           _MenuTile(
             icon: Icons.sync,
-            label: 'Tally Sync',
+            label: 'Sync Dashboard',
             onTap: () => context.push('/sync'),
+          ),
+          const SizedBox(height: AppSpacing.sm8),
+          _MenuTile(
+            icon: Icons.list_alt_outlined,
+            label: 'Sync Logs',
+            onTap: () => context.push('/sync-logs'),
+          ),
+          const SizedBox(height: AppSpacing.sm8),
+          _MenuTile(
+            icon: Icons.history,
+            label: 'Change History',
+            onTap: () => context.push('/change-history'),
           ),
           const SizedBox(height: AppSpacing.sm8),
           _MenuTile(
             icon: Icons.settings_outlined,
             label: 'Settings',
             onTap: () => context.push('/settings'),
+          ),
+          const SizedBox(height: AppSpacing.sm8),
+          _MenuTile(
+            icon: Icons.group_outlined,
+            label: 'Users',
+            onTap: () => context.push('/users'),
+          ),
+          const SizedBox(height: AppSpacing.sm8),
+          _MenuTile(
+            icon: Icons.shield_outlined,
+            label: 'Roles & Permissions',
+            onTap: () => context.push('/roles'),
           ),
 
           const SizedBox(height: AppSpacing.xl24),

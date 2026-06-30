@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/invoice.dart' show invoiceStatusLabel;
 import '../../data/models/journal.dart';
@@ -12,6 +13,7 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
 import 'journals_controller.dart';
@@ -58,21 +60,52 @@ class _JournalsScreenState extends ConsumerState<JournalsScreen> {
     });
   }
 
+  static const _fields = [
+    FilterField('status', 'Status', FType.select,
+        options: ['pending_tally', 'sent_to_tally', 'created', 'failed'],
+        optionLabels: {'pending_tally': 'Pending', 'sent_to_tally': 'Sent', 'created': 'Synced', 'failed': 'Failed'}),
+    FilterField('date_from', 'From Date', FType.dateFrom),
+    FilterField('date_to', 'To Date', FType.dateTo),
+  ];
+
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(journalsControllerProvider.notifier);
+    final res = await showAdvancedFilter(context, ref, title: 'Journals filter', fields: _fields, current: ctrl.adv);
+    if (res != null) ctrl.setAdvFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(journalsControllerProvider);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    final canCreate = user?.can('journals', 'create') ?? false;
+    final jctrl = ref.read(journalsControllerProvider.notifier);
+    final hasFilter = jctrl.adv.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Journals')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>('/journals/add');
-          if (created == true) {
-            ref.read(journalsControllerProvider.notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('New'),
+      appBar: AppBar(
+        title: const Text('Journals'),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter (date range)',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>('/journals/add');
+                if (created == true) {
+                  ref.read(journalsControllerProvider.notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('New'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -126,7 +159,16 @@ class _JournalsScreenState extends ConsumerState<JournalsScreen> {
                   ),
                 );
               }
-              return _JournalCard(items[i]);
+              final j = items[i];
+              return _JournalCard(
+                j,
+                onTap: () async {
+                  await context.push('/journals/${j.id}');
+                  if (context.mounted) {
+                    ref.read(journalsControllerProvider.notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -135,14 +177,16 @@ class _JournalsScreenState extends ConsumerState<JournalsScreen> {
 }
 
 class _JournalCard extends StatelessWidget {
-  const _JournalCard(this.j);
+  const _JournalCard(this.j, {this.onTap});
   final Journal j;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final ledgers = [j.drLedger, j.crLedger].where((x) => x != null && x.isNotEmpty).join('  →  ');
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

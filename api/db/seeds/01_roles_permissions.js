@@ -39,12 +39,11 @@
  */
 
 // ── system roles (display name → slug) ───────────────────────────────────
+// Only super-admin + company-admin are built-in. Sales Manager / Sales Person /
+// Accountant are NOT seeded — each company creates its OWN roles (empty to start).
 const ROLES = [
     { name: 'Super Admin',   slug: 'super-admin' },
     { name: 'Company Admin', slug: 'company-admin' },
-    { name: 'Sales Manager', slug: 'sales-manager' },
-    { name: 'Sales Person',  slug: 'sales-person' },
-    { name: 'Accountant',    slug: 'accountant' },
 ];
 
 // ── 17 modules: display name (as in mock.js) → kebab slug ─────────────────

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
 import '../../core/api/api_exception.dart';
@@ -84,10 +86,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Brand lockup — matches the web sign-in (cloud tile + wordmark).
+            Row(
+              children: [
+                SvgPicture.asset('assets/images/logo.svg', width: 44, height: 44),
+                const SizedBox(width: AppSpacing.md12),
+                const Text(
+                  'Tally Cloud Sync',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.text1),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.xl24),
             Text('Welcome back', style: theme.textTheme.titleLarge),
             const SizedBox(height: AppSpacing.xs4),
             Text(
-              'Sign in to your TallySaaS account to continue.',
+              'Sign in to your account to continue.',
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: AppSpacing.xl24),
@@ -139,8 +153,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               loading: _busy,
               onPressed: _submit,
             ),
+            const SizedBox(height: AppSpacing.sm8),
+            Center(
+              child: TextButton(
+                onPressed: _busy ? null : () => context.go('/forgot-password'),
+                child: const Text('Forgot password?'),
+              ),
+            ),
 
-            const SizedBox(height: AppSpacing.lg16),
+            const SizedBox(height: AppSpacing.sm8),
             // Demo hint — handy while the API is still being seeded. Not a
             // hardcoded credential the app uses; purely an on-screen note.
             Text(

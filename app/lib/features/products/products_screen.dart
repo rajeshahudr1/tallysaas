@@ -5,12 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/product.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
 import 'products_controller.dart';
@@ -58,21 +60,49 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
     });
   }
 
+  static const _fields = [
+    FilterField('status', 'Status', FType.select, options: ['Active', 'Inactive']),
+    FilterField('created_from', 'Created From', FType.dateFrom),
+    FilterField('created_to', 'Created To', FType.dateTo),
+  ];
+
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(productsControllerProvider.notifier);
+    final res = await showAdvancedFilter(context, ref, title: 'Products filter', fields: _fields, current: ctrl.adv);
+    if (res != null) ctrl.setAdvFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(productsControllerProvider);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    final canCreate = user?.can('products', 'create') ?? false;
+    final hasFilter = ref.read(productsControllerProvider.notifier).adv.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Products')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>('/products/add');
-          if (created == true) {
-            ref.read(productsControllerProvider.notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+      appBar: AppBar(
+        title: const Text('Products'),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>('/products/add');
+                if (created == true) {
+                  ref.read(productsControllerProvider.notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Add'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -126,7 +156,16 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
                   ),
                 );
               }
-              return _ProductCard(items[i]);
+              final p = items[i];
+              return _ProductCard(
+                p,
+                onTap: () async {
+                  await context.push('/products/${p.id}');
+                  if (context.mounted) {
+                    ref.read(productsControllerProvider.notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -135,8 +174,9 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
 }
 
 class _ProductCard extends StatelessWidget {
-  const _ProductCard(this.p);
+  const _ProductCard(this.p, {this.onTap});
   final Product p;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -147,6 +187,7 @@ class _ProductCard extends StatelessWidget {
       if (p.unit != null) p.unit!,
     ];
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

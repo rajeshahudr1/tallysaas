@@ -17,6 +17,7 @@ class Endpoints {
   static const String configOptions = '/config/options';
 
   // ─── Masters ────────────────────────────────────────────────
+  static const String companies    = '/companies';
   static const String customers    = '/customers';
   static const String suppliers    = '/suppliers';
   static const String products     = '/products';

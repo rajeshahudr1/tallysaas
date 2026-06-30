@@ -20,6 +20,12 @@ class SyncSummary {
     this.agentVersion,
     this.lastSeenAt,
     this.company,
+    this.lastSyncAt,
+    this.autoUpdate = false,
+    this.syncEnabled = false,
+    this.pushEnabled = false,
+    this.pullEnabled = false,
+    this.updateAvailable = false,
     required this.totalSynced,
     required this.pending,
     required this.failed,
@@ -33,6 +39,14 @@ class SyncSummary {
   final String? agentVersion;
   final String? lastSeenAt;
   final String? company;
+  final String? lastSyncAt;
+
+  // ── sync toggles (agent behaviour) ─────────────────────────
+  final bool autoUpdate;
+  final bool syncEnabled;
+  final bool pushEnabled;
+  final bool pullEnabled;
+  final bool updateAvailable;
 
   // ── stats block ────────────────────────────────────────────
   final int totalSynced;
@@ -68,6 +82,12 @@ class SyncSummary {
       agentVersion: _sn(summary['agent_version']),
       lastSeenAt: _sn(summary['last_seen_at']),
       company: _sn(summary['company']),
+      lastSyncAt: _sn(summary['last_sync_at']),
+      autoUpdate: _toBool(summary['auto_update']),
+      syncEnabled: _toBool(summary['sync_enabled']),
+      pushEnabled: _toBool(summary['push_enabled']),
+      pullEnabled: _toBool(summary['pull_enabled']),
+      updateAvailable: _toBool(summary['update_available']),
       totalSynced: _toInt(stats['total_synced']) ?? 0,
       pending: _toInt(stats['pending']) ?? 0,
       failed: _toInt(stats['failed']) ?? 0,

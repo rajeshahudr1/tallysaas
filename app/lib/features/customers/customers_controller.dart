@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../data/models/customer.dart';
 import '../../data/repositories/customer_repository.dart';
+import '../../features/customers/customer_filter_sheet.dart';
 
 /// Async, searchable, paginated list of customers for the active company.
 @immutable
@@ -46,7 +47,11 @@ class CustomersController extends StateNotifier<CustomersState> {
   final CustomerRepository _repo;
   static const _perPage = 20;
 
-  String _search = '';
+  CustomerFilter _filter = const CustomerFilter();
+  CustomerFilter get filter => _filter;
+  String? _ymd(DateTime? d) => d == null
+      ? null
+      : '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
   int _page = 1;
   bool _hasMore = true;
   final List<Customer> _all = [];
@@ -62,7 +67,13 @@ class CustomersController extends StateNotifier<CustomersState> {
 
   Future<void> _fetch() async {
     try {
-      final res = await _repo.list(page: _page, perPage: _perPage, search: _search);
+      final res = await _repo.list(
+        page: _page, perPage: _perPage,
+        search: _filter.search, status: _filter.status,
+        location: _filter.location, salesPerson: _filter.salesPerson,
+        customerGroup: _filter.customerGroup, gst: _filter.gst,
+        createdFrom: _ymd(_filter.from), createdTo: _ymd(_filter.to),
+      );
       _all.addAll(res.items);
       _hasMore = res.hasMore;
       if (!mounted) return;
@@ -75,7 +86,13 @@ class CustomersController extends StateNotifier<CustomersState> {
   }
 
   Future<void> search(String query) async {
-    _search = query;
+    _filter = _filter.copyWith(search: query.trim().isEmpty ? null : query.trim());
+    await _reload();
+  }
+
+  /// Apply the full advanced filter. Re-loads from page 1.
+  Future<void> setFilter(CustomerFilter f) async {
+    _filter = f;
     await _reload();
   }
 

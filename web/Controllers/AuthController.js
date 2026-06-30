@@ -73,9 +73,56 @@ async function login(req, res) {
     req.session.save(() => res.redirect(next));
 }
 
+// ─── Forgot / reset password (proxies the api) ─────────────────────────────
+// Single view `auth/forgot` driven by `step`: 'email' → 'code' → 'done'.
+
+// GET /forgot-password — show the email step.
+function showForgot(req, res) {
+    if (req.session && req.session.token) return res.redirect('/');
+    res.render('auth/forgot', {
+        layout: false, title: 'Forgot password', step: 'email', error: null, info: null, email: '',
+    });
+}
+
+// POST /forgot-password — ask the api to email a code, then show the code step.
+async function forgot(req, res) {
+    const email = String(req.body.email || '').trim();
+    const render = (o) => res.status(200).render('auth/forgot', Object.assign(
+        { layout: false, title: 'Forgot password', step: 'email', error: null, info: null, email }, o));
+
+    if (!email) return render({ error: 'Enter your email.' });
+
+    const { status, body, networkError } = await api.callApi(req, 'POST', '/auth/forgot-password', { email });
+    if (networkError || status === 0) return render({ error: 'Cannot reach the server. Is the API running?' });
+
+    // Generic success regardless of whether the email exists (no enumeration).
+    return render({ step: 'code', info: (body && body.msg) || 'If that email is registered, a 6-digit code has been sent.' });
+}
+
+// POST /reset-password — verify the code + set the new password.
+async function reset(req, res) {
+    const email = String(req.body.email || '').trim();
+    const code = String(req.body.code || '').trim();
+    const password = String(req.body.password || '');
+    const render = (o) => res.status(200).render('auth/forgot', Object.assign(
+        { layout: false, title: 'Forgot password', step: 'code', error: null, info: null, email }, o));
+
+    if (!email || !code || !password) return render({ error: 'Enter the 6-digit code and a new password.' });
+
+    const { status, body, networkError } = await api.callApi(req, 'POST', '/auth/reset-password', { email, code, password });
+    if (networkError || status === 0) return render({ error: 'Cannot reach the server. Is the API running?' });
+    if (!body || body.status !== 200) {
+        return render({ error: (body && body.msg) || 'The code is invalid or has expired. Please request a new one.' });
+    }
+
+    return res.status(200).render('auth/forgot', {
+        layout: false, title: 'Password reset', step: 'done', error: null, info: null, email,
+    });
+}
+
 // GET /logout — drop the session.
 function logout(req, res) {
     req.session.destroy(() => res.redirect('/login'));
 }
 
-module.exports = { showLogin, login, logout };
+module.exports = { showLogin, login, logout, showForgot, forgot, reset };

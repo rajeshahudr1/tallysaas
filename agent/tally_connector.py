@@ -68,6 +68,9 @@ class TallyConnector:
         self.url = (url or DEFAULT_URL).rstrip("/")
         self.log = logger or logging.getLogger(__name__)
         self._session = requests.Session()
+        # Gentle request throttle (see send()) — timestamp of the last request so
+        # we never fire Tally calls back-to-back.
+        self._last_send = 0.0
 
     # ------------------------------------------------------------------ #
     # Transport
@@ -100,6 +103,13 @@ class TallyConnector:
             On any transport-level error (connection refused, timeout, DNS),
             or when Tally answers with a non-2xx HTTP status.
         """
+        # Gentle throttle: never fire Tally requests back-to-back. A minimum gap
+        # keeps Tally stable AND avoids tripping a licence's abnormal-access guard
+        # (request floods can get a Tally licence temporarily locked).
+        gap = 0.12 - (time.monotonic() - self._last_send)
+        if gap > 0:
+            time.sleep(gap)
+        self._last_send = time.monotonic()
         try:
             # Tally expects raw bytes; encode explicitly so non-ASCII names
             # (party names, GSTIN) survive the trip.
@@ -1082,7 +1092,13 @@ class TallyConnector:
 
     @staticmethod
     def _day_book_request_xml(company: Optional[str] = None) -> str:
-        """EXPORT: the Day Book report over a wide date range (all vouchers)."""
+        """EXPORT: the Day Book report, BOUNDED to a recent window so it never
+        asks Tally for an unbounded 200-year span (a crash risk). Prefer
+        voucher_list() for the actual sync — this stays bounded just in case."""
+        from datetime import date, timedelta
+        _today = date.today()
+        _frm = (_today - timedelta(days=400)).strftime("%Y%m%d")   # ~13 months
+        _to = (_today + timedelta(days=1)).strftime("%Y%m%d")
         return (
             "<ENVELOPE>"
             "<HEADER><TALLYREQUEST>Export Data</TALLYREQUEST></HEADER>"
@@ -1090,8 +1106,8 @@ class TallyConnector:
             "<REPORTNAME>Day Book</REPORTNAME>"
             "<STATICVARIABLES>"
             "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
-            "<SVFROMDATE>19000401</SVFROMDATE>"
-            "<SVTODATE>20991231</SVTODATE>"
+            "<SVFROMDATE>" + _frm + "</SVFROMDATE>"
+            "<SVTODATE>" + _to + "</SVTODATE>"
             + TallyConnector._svcompany(company) +
             "</STATICVARIABLES>"
             "</REQUESTDESC></EXPORTDATA></BODY>"

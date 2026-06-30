@@ -5,11 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../data/models/location.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
 import 'locations_controller.dart';
@@ -56,21 +58,50 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
     });
   }
 
+  static const _fields = [
+    FilterField('status', 'Status', FType.select, options: ['Active', 'Inactive']),
+    FilterField('state', 'State', FType.text),
+    FilterField('created_from', 'Created From', FType.dateFrom),
+    FilterField('created_to', 'Created To', FType.dateTo),
+  ];
+
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(locationsControllerProvider.notifier);
+    final res = await showAdvancedFilter(context, ref, title: 'Locations filter', fields: _fields, current: ctrl.adv);
+    if (res != null) ctrl.setAdvFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(locationsControllerProvider);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    final canCreate = user?.can('locations', 'create') ?? false;
+    final hasFilter = ref.read(locationsControllerProvider.notifier).adv.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Locations')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>('/locations/add');
-          if (created == true) {
-            ref.read(locationsControllerProvider.notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+      appBar: AppBar(
+        title: const Text('Locations'),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>('/locations/add');
+                if (created == true) {
+                  ref.read(locationsControllerProvider.notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Add'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -124,7 +155,16 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
                   ),
                 );
               }
-              return _LocationCard(items[i]);
+              final l = items[i];
+              return _LocationCard(
+                l,
+                onTap: () async {
+                  await context.push('/locations/${l.id}');
+                  if (context.mounted) {
+                    ref.read(locationsControllerProvider.notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -133,8 +173,9 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
 }
 
 class _LocationCard extends StatelessWidget {
-  const _LocationCard(this.l);
+  const _LocationCard(this.l, {this.onTap});
   final Location l;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -145,6 +186,7 @@ class _LocationCard extends StatelessWidget {
       if (place.isNotEmpty) place,
     ].join(' · ');
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

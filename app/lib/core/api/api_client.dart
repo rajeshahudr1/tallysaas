@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../auth/session.dart';
 import '../auth/token_storage.dart';
 import '../constants.dart';
 import 'api_exception.dart';
@@ -20,14 +21,20 @@ import 'api_exception.dart';
 /// The instance is exposed via Riverpod so tests can override it with a
 /// MockDio.
 class ApiClient {
-  ApiClient(this._dio, this._tokens);
+  ApiClient(this._dio, this._tokens, {this.onUnauthorized});
 
   final Dio _dio;
   final TokenStorage _tokens;
 
+  /// Fired when the server rejects the request with 401 (token expired or the
+  /// session was evicted). The provider wires this to drop creds + flip the
+  /// session to anonymous so the router sends the user cleanly to /login —
+  /// instead of a screen showing a generic "could not load" error.
+  final void Function()? onUnauthorized;
+
   /// Factory used by the Riverpod provider — builds a Dio with sensible
   /// defaults and attaches the auth + envelope interceptors.
-  factory ApiClient.create(TokenStorage tokens) {
+  factory ApiClient.create(TokenStorage tokens, {void Function()? onUnauthorized}) {
     final dio = Dio(BaseOptions(
       baseUrl: '${AppConfig.apiBase}${AppConfig.apiPrefix}',
       connectTimeout: const Duration(seconds: 15),
@@ -43,7 +50,7 @@ class ApiClient {
       validateStatus: (s) => s != null && s < 500,
     ));
 
-    final client = ApiClient(dio, tokens);
+    final client = ApiClient(dio, tokens, onUnauthorized: onUnauthorized);
     dio.interceptors.add(InterceptorsWrapper(
       onRequest: client._onRequest,
     ));
@@ -82,6 +89,22 @@ class ApiClient {
 
   Future<dynamic> delete(String path, {Object? body, Map<String, dynamic>? query}) =>
       _send('DELETE', path, body: body, query: query);
+
+  /// GET a raw BINARY response (e.g. a server-rendered PDF from
+  /// `/reports/<type>/pdf`) — bypasses the JSON-envelope unwrap. The auth +
+  /// company headers are still added by the interceptor. Returns the bytes.
+  Future<List<int>> getBytes(String path, {Map<String, dynamic>? query}) async {
+    try {
+      final resp = await _dio.get<List<int>>(
+        path,
+        queryParameters: query,
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return resp.data ?? const <int>[];
+    } on DioException catch (e) {
+      throw _fromDioError(e);
+    }
+  }
 
   /// Multipart upload — used by any endpoint that accepts a file (e.g. a
   /// company logo or attachment). Wraps the same envelope handling so
@@ -144,6 +167,7 @@ class ApiClient {
     if (status == 200) {
       return body['data'];
     }
+    if (status == 401) onUnauthorized?.call();
     throw ApiException(
       (body['msg'] as String?) ?? 'Request failed (HTTP $status).',
       httpStatus: status,
@@ -172,6 +196,7 @@ class ApiClient {
       );
     }
     final status = e.response?.statusCode ?? 0;
+    if (status == 401) onUnauthorized?.call();
     final body   = e.response?.data;
     final msg    = (body is Map && body['msg'] is String)
         ? body['msg'] as String
@@ -187,5 +212,12 @@ class ApiClient {
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   final tokens = ref.watch(tokenStorageProvider);
-  return ApiClient.create(tokens);
+  return ApiClient.create(tokens, onUnauthorized: () {
+    // 401 → the stored token is expired or its session was evicted. Wipe the
+    // creds (fire-and-forget) and flip the session to anonymous so the router
+    // redirects to /login on its own — a clean re-login instead of a generic
+    // "could not load" error the user has to manually log out from.
+    tokens.clear();
+    ref.read(sessionProvider.notifier).setAnonymous();
+  });
 });

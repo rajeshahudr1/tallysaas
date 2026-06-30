@@ -26,7 +26,9 @@
         "jsonwebtoken": "^9",
         "knex": "^3",
         "multer": "^2.2.0",
-        "pg": "^8.13"
+        "nodemailer": "^9.0.1",
+        "pg": "^8.13",
+        "puppeteer": "^24.43.1"
     },
     "devDependencies": {
         "nodemon": "^3"

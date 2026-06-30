@@ -31,6 +31,7 @@ const crypto    = require('node:crypto');
 const R         = require('../../Helpers/response');
 const jwt       = require('../../Helpers/jwt');
 const passwords = require('../../Helpers/passwords');
+const mail      = require('../../Helpers/mail');
 const db        = require('../../config/db').db;
 
 // Session tuning.
@@ -158,6 +159,13 @@ async function login(req, res) {
                 if (company && company.max_sessions_per_user != null) {
                     limit = Math.max(1, Number(company.max_sessions_per_user));
                 }
+            } else if (user.license_id) {
+                // License-admin (no fixed company_id): without this they'd be stuck
+                // at the default cap of 1 and every other login would evict them.
+                // Use the highest session cap among the license's companies.
+                const row = await db('companies').where('license_id', user.license_id)
+                    .whereNull('deleted_at').max('max_sessions_per_user as m').first();
+                if (row && row.m != null) limit = Math.max(1, Number(row.m));
             }
             // Evict oldest logins so that, once the new session is added below,
             // the live count never exceeds `limit`. (Keep the most recent logins.)
@@ -167,6 +175,7 @@ async function login(req, res) {
             if (evictCount > 0) {
                 const victimIds = live.slice(0, evictCount).map((s) => s.id);
                 await db('user_sessions').whereIn('id', victimIds).del();
+                console.error(`[LOGIN-EVICT] user=${user.id} (${user.email}) evicted ${evictCount} oldest session(s) ids=[${victimIds}] limit=${limit} liveWas=${live.length}`);
             }
         }
 
@@ -351,10 +360,99 @@ async function logout(req, res) {
     return R.successResponse(res, null, 'Logged out.');
 }
 
+// ─── Password reset (forgot-password) ──────────────────────────────────────
+const RESET_TTL_MS = 60 * 60 * 1000;                       // code valid 60 minutes
+const sha256  = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+const genCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+
+/**
+ * POST /api/v1/auth/forgot-password   { email }
+ *
+ * ALWAYS replies with the same generic message (no account enumeration). When
+ * the email maps to an Active user, we store a HASHED 6-digit code (latest-wins,
+ * 15-min expiry) in `password_resets` and email it via Helpers/mail.
+ */
+async function forgotPassword(req, res) {
+    const { email } = req.body;
+    const GENERIC = 'If that email is registered, a reset code has been sent.';
+    try {
+        const user = await db('users')
+            .whereRaw('lower(email) = ?', [email])
+            .whereNull('deleted_at')
+            .first('id', 'name', 'email', 'status');
+
+        if (user && user.status === 'Active') {
+            const code = genCode();
+            await db('password_resets').where('email', user.email).del();   // latest-wins
+            await db('password_resets').insert({
+                email:      user.email,
+                token:      sha256(code),
+                expires_at: new Date(Date.now() + RESET_TTL_MS),
+                created_at: new Date(),
+            });
+            try {
+                await mail.sendPasswordResetCode(user.email, code, user.name);
+            } catch (mailErr) {
+                console.error('forgotPassword: email send failed:', mailErr.message);
+            }
+        }
+        return R.successResponse(res, null, GENERIC);
+    } catch (err) {
+        console.error('AuthController.forgotPassword error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * POST /api/v1/auth/reset-password   { email, code, password }
+ *
+ * Verifies the (un-expired) hashed code, sets the new password, consumes the
+ * code, and revokes all existing sessions so the user must sign in afresh.
+ */
+async function resetPassword(req, res) {
+    const { email, code, password } = req.body;
+    const BAD = 'The code is invalid or has expired. Please request a new one.';
+    try {
+        const row = await db('password_resets')
+            .where('email', email)
+            .andWhere('expires_at', '>', new Date())
+            .orderBy('id', 'desc')
+            .first();
+        if (!row || row.token !== sha256(code)) {
+            return R.errorResponse(res, BAD, 400);
+        }
+
+        const user = await db('users')
+            .whereRaw('lower(email) = ?', [email])
+            .whereNull('deleted_at')
+            .first('id');
+        if (!user) {
+            return R.errorResponse(res, BAD, 400);
+        }
+
+        const hash = await passwords.hash(password);
+        await db('users').where('id', user.id)
+            .update({ password_hash: hash, updated_at: new Date() });
+
+        // Consume the code(s) + revoke every live session (force a fresh login).
+        await db('password_resets').where('email', email).del();
+        await db('user_sessions').where('user_id', user.id).del();
+        await db('users').where('id', user.id)
+            .update({ active_session_jti: null, session_expires_at: null });
+
+        return R.successResponse(res, null, 'Your password has been reset. Please sign in.');
+    } catch (err) {
+        console.error('AuthController.resetPassword error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
 module.exports = {
     login,
     me,
     logout,
+    forgotPassword,
+    resetPassword,
     // exported for tests / reuse
     BAD_CREDS_MSG,
     DISABLED_MSG,

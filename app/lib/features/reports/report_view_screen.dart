@@ -1,7 +1,12 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:printing/printing.dart';
 
 import '../../app/theme.dart';
+import '../../core/api/api_client.dart';
+import '../../core/api/api_exception.dart';
 import '../../core/api/endpoints.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/repositories/report_repository.dart';
@@ -96,6 +101,7 @@ class _ReportViewScreenState extends ConsumerState<ReportViewScreen> {
   // Bumped to force a refetch when filters change (FutureBuilder keys off it).
   int _reloadToken = 0;
   Future<Map<String, dynamic>>? _future;
+  bool _pdfBusy = false; // true while the server renders + we fetch the PDF
 
   @override
   void initState() {
@@ -157,10 +163,62 @@ class _ReportViewScreenState extends ConsumerState<ReportViewScreen> {
     _refresh();
   }
 
+  /// Fetch THIS report's server-rendered, data-only PDF (same data + filters as
+  /// shown) and open the native Print / Save-as-PDF sheet.
+  Future<void> _printPdf() async {
+    if (_pdfBusy) return;
+    if (widget.needsParty && _partyId == null) {
+      _snack('Pick a party first.');
+      return;
+    }
+    setState(() => _pdfBusy = true);
+    try {
+      final query = <String, dynamic>{...widget.extraQuery};
+      if (widget.dateRange) {
+        query['date_from'] = _ymd(_from);
+        query['date_to'] = _ymd(_to);
+      }
+      if (widget.needsParty && _partyId != null) {
+        query['party_type'] = 'customer';
+        query['party_id'] = _partyId;
+      }
+      final bytes = await ref.read(apiClientProvider).getBytes('${widget.endpoint}/pdf', query: query);
+      if (!mounted) return;
+      await Printing.layoutPdf(
+        name: widget.title,
+        onLayout: (_) async => Uint8List.fromList(bytes),
+      );
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } catch (e) {
+      _snack('Could not open the PDF. Please try again.');
+    } finally {
+      if (mounted) setState(() => _pdfBusy = false);
+    }
+  }
+
+  void _snack(String m) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(m)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(
+            icon: _pdfBusy
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.picture_as_pdf_outlined),
+            tooltip: 'Print / PDF',
+            onPressed: _pdfBusy ? null : _printPdf,
+          ),
+        ],
+      ),
       body: Column(
         children: [
           if (widget.dateRange) _dateBar(),

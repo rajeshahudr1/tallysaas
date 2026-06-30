@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/customer.dart';
 import '../../shared/widgets/app_card.dart';
@@ -13,6 +14,7 @@ import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
+import 'customer_filter_sheet.dart';
 import 'customers_controller.dart';
 
 /// Customers master — searchable, paginated list of customer cards with a
@@ -58,21 +60,47 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
     });
   }
 
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(customersControllerProvider.notifier);
+    final res = await showCustomerFilter(context, ref, ctrl.filter);
+    if (res == null) return;
+    _searchCtl.text = res.search ?? ''; // keep the top search box in sync
+    ctrl.setFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(customersControllerProvider);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    // RBAC: the Add button shows ONLY when the role grants 'customers.create'
+    // (mirrors the web hiding the "Add Customer" button for view-only roles).
+    final canCreate = user?.can('customers', 'create') ?? false;
+    final hasFilter = ref.read(customersControllerProvider.notifier).filter.isActive;
     return Scaffold(
-      appBar: AppBar(title: const Text('Customers')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>('/customers/add');
-          if (created == true) {
-            ref.read(customersControllerProvider.notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+      appBar: AppBar(
+        title: const Text('Customers'),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>('/customers/add');
+                if (created == true) {
+                  ref.read(customersControllerProvider.notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Add'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -126,7 +154,18 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
                   ),
                 );
               }
-              return _CustomerCard(items[i]);
+              final c = items[i];
+              return _CustomerCard(
+                c,
+                onTap: () async {
+                  // Tap → detail (View). Refresh on return so an edit / delete
+                  // made there is reflected in the list.
+                  await context.push('/customers/${c.id}');
+                  if (context.mounted) {
+                    ref.read(customersControllerProvider.notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -135,8 +174,9 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
 }
 
 class _CustomerCard extends StatelessWidget {
-  const _CustomerCard(this.c);
+  const _CustomerCard(this.c, {this.onTap});
   final Customer c;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -144,6 +184,7 @@ class _CustomerCard extends StatelessWidget {
     final subtitle =
         [c.mobile, c.location].where((s) => s != null && s.isNotEmpty).join(' · ');
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

@@ -27,12 +27,15 @@ class FkDropdown extends ConsumerWidget {
     required this.endpoint,
     required this.value,
     required this.onChanged,
+    this.validator,
   });
 
   final String label;
   final String endpoint;
   final int? value;
   final ValueChanged<int?> onChanged;
+  /// Optional — pass to make the field required, e.g. `(v) => v == null ? 'Required' : null`.
+  final String? Function(int?)? validator;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -59,6 +62,7 @@ class FkDropdown extends ConsumerWidget {
                 .map((o) => DropdownMenuItem(value: o.id, child: Text(o.name)))
                 .toList(),
             onChanged: onChanged,
+            validator: validator,
           ),
         ),
       ],

@@ -5,8 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/invoice.dart';
+import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
@@ -57,21 +59,51 @@ class _PurchaseInvoicesScreenState extends ConsumerState<PurchaseInvoicesScreen>
     });
   }
 
+  static const _fields = [
+    FilterField('status', 'Status', FType.select,
+        options: ['pending_tally', 'sent_to_tally', 'created', 'failed'],
+        optionLabels: {'pending_tally': 'Pending', 'sent_to_tally': 'Sent', 'created': 'Synced', 'failed': 'Failed'}),
+    FilterField('date_from', 'From Date', FType.dateFrom),
+    FilterField('date_to', 'To Date', FType.dateTo),
+  ];
+
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(purchaseInvoicesControllerProvider.notifier);
+    final res = await showAdvancedFilter(context, ref, title: 'Purchase Invoices filter', fields: _fields, current: ctrl.adv);
+    if (res != null) ctrl.setAdvFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(purchaseInvoicesControllerProvider);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    final canCreate = user?.can('purchase-invoices', 'create') ?? false;
+    final hasFilter = ref.read(purchaseInvoicesControllerProvider.notifier).adv.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Purchase Invoices')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>('/purchase-invoices/add');
-          if (created == true) {
-            ref.read(purchaseInvoicesControllerProvider.notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('New'),
+      appBar: AppBar(
+        title: const Text('Purchase Invoices'),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>('/purchase-invoices/add');
+                if (created == true) {
+                  ref.read(purchaseInvoicesControllerProvider.notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('New'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -125,7 +157,16 @@ class _PurchaseInvoicesScreenState extends ConsumerState<PurchaseInvoicesScreen>
                   ),
                 );
               }
-              return _InvoiceCard(items[i]);
+              final inv = items[i];
+              return _InvoiceCard(
+                inv,
+                onTap: () async {
+                  await context.push('/purchase-invoices/${inv.id}');
+                  if (context.mounted) {
+                    ref.read(purchaseInvoicesControllerProvider.notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -134,13 +175,15 @@ class _PurchaseInvoicesScreenState extends ConsumerState<PurchaseInvoicesScreen>
 }
 
 class _InvoiceCard extends StatelessWidget {
-  const _InvoiceCard(this.inv);
+  const _InvoiceCard(this.inv, {this.onTap});
   final Invoice inv;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

@@ -24,6 +24,8 @@
 
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
+const { htmlToPdf } = require('../../Helpers/pdf');
+const { reportPdfHtml } = require('../../Helpers/reportPdf');
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const DEFAULT_PER_PAGE = 10;
@@ -728,6 +730,67 @@ async function balanceSheet(req, res) {
     }
 }
 
+// ── PDF export (Puppeteer) — the SAME data as the JSON endpoints, rendered to
+//    a clean A4 sheet (no app chrome). One handler for every report type. ──
+const PDF_REPORTS = {
+    'balance-sheet':  { fn: balanceSheet,  title: 'Balance Sheet' },
+    'profit-loss':    { fn: profitLoss,    title: 'Profit & Loss' },
+    'trial-balance':  { fn: trialBalance,  title: 'Trial Balance' },
+    'gst-summary':    { fn: gstSummary,    title: 'GST Summary' },
+    'stock-summary':  { fn: stockSummary,  title: 'Stock Summary' },
+    'sales-register': { fn: salesRegister, title: 'Sales Register' },
+    'day-book':       { fn: dayBook,       title: 'Day Book' },
+    'outstanding':    { fn: outstanding,   title: 'Outstanding' },
+    'ledger':         { fn: partyLedger,   title: 'Party Ledger' },
+};
+
+// Run a report handler against a fake res to CAPTURE its JSON body — the PDF is
+// the EXACT same data the on-screen report shows (no second query path).
+function captureReportBody(fn, req) {
+    return new Promise((resolve, reject) => {
+        const fakeRes = {
+            status() { return this; },
+            json(payload) {
+                // reportPdfHtml expects the DATA object (body.liabilities, body.data,
+                // …), not the {status,data} envelope — unwrap to payload.data.
+                if (payload && payload.status === 200) resolve(payload.data || {});
+                else reject(new Error((payload && payload.msg) || 'Report failed'));
+                return this;
+            },
+        };
+        Promise.resolve(fn(req, fakeRes)).catch(reject);
+    });
+}
+
+/**
+ * GET /reports/:type/pdf — server-rendered, data-ONLY PDF of any report
+ *   [auth, company, reports.view]. Opens inline (clean PDF) on web; the app
+ *   downloads the bytes. No sidebar/header/buttons — just the report data.
+ */
+async function reportPdf(req, res) {
+    try {
+        const entry = PDF_REPORTS[req.params.type];
+        if (!entry) return R.errorResponse(res, 'Unknown report.', 404);
+        const body = await captureReportBody(entry.fn, req);
+        const comp = await db('companies').where('id', req.companyId).first('name');
+        const df = (req.query.date_from || '').trim(), dt = (req.query.date_to || '').trim();
+        const ctx = {
+            companyName: comp ? comp.name : 'Company',
+            title: entry.title,
+            subtitle: (df || dt) ? `Period: ${df || '…'} to ${dt || '…'}` : '',
+            generatedAt: new Date().toLocaleString('en-IN'),
+        };
+        const { html, landscape } = reportPdfHtml(req.params.type, body, ctx);
+        const buffer = await htmlToPdf(html, { landscape });
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${req.params.type}.pdf"`);
+        return res.status(200).send(buffer);
+    } catch (err) {
+        console.error('reports.pdf error:', err);
+        return R.errorResponse(res, 'Could not generate the PDF. Please try again.', 500);
+    }
+}
+
 module.exports = {
     salesRegister,
     dayBook,
@@ -738,4 +801,5 @@ module.exports = {
     trialBalance,
     profitLoss,
     balanceSheet,
+    reportPdf,
 };

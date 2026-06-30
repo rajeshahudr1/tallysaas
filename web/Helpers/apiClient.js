@@ -47,6 +47,15 @@ async function callApi(req, method, path, body) {
 
     let parsed = null;
     try { parsed = await resp.json(); } catch { /* non-JSON response */ }
+    // The backend rejected our (previously valid) token → the session has ended
+    // (expired / evicted). Surface it so the error handler clears the web session
+    // and redirects to /login instead of rendering an error page. The login call
+    // itself carries no token, so it is naturally exempt.
+    if (resp.status === 401 && req && req.session && req.session.token) {
+        const e = new Error('Session ended');
+        e.code = 'SESSION_ENDED';
+        throw e;
+    }
     return { status: resp.status, body: parsed };
 }
 
@@ -57,4 +66,27 @@ const put   = (req, path, body) => callApi(req, 'PUT', path, body);
 const patch = (req, path, body) => callApi(req, 'PATCH', path, body);
 const del   = (req, path)       => callApi(req, 'DELETE', path);
 
-module.exports = { callApi, get, post, put, patch, del, API_URL };
+/**
+ * GET a BINARY response (e.g. a server-rendered PDF) with the same auth +
+ * company headers, returning the raw bytes so a BFF route can stream it to the
+ * browser. Returns { status, contentType, buffer } (buffer null on failure).
+ */
+async function fetchBinary(req, path) {
+    const headers = { Accept: '*/*' };
+    if (req && req.session && req.session.token) {
+        headers.Authorization = `Bearer ${req.session.token}`;
+    }
+    if (req && req.session && req.session.companyId != null) {
+        headers['X-Company-Id'] = String(req.session.companyId);
+    }
+    let resp;
+    try {
+        resp = await fetch(`${API_URL}${path}`, { method: 'GET', headers });
+    } catch (err) {
+        return { status: 0, contentType: '', buffer: null, networkError: err.message };
+    }
+    const buffer = Buffer.from(await resp.arrayBuffer());
+    return { status: resp.status, contentType: resp.headers.get('content-type') || '', buffer };
+}
+
+module.exports = { callApi, get, post, put, patch, del, fetchBinary, API_URL };

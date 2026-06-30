@@ -63,7 +63,35 @@ const forgotPasswordSchema = Joi.object({
     email: emailRule,
 });
 
+/**
+ * POST /api/v1/auth/reset-password
+ *   { email, code: <6 digits>, password: <new, min 6> }
+ */
+const resetPasswordSchema = Joi.object({
+    email: emailRule,
+    code: Joi.string()
+        .trim()
+        .pattern(/^\d{6}$/)
+        .required()
+        .messages({
+            'string.empty':        'Enter the 6-digit code we emailed you.',
+            'string.pattern.base': 'The reset code must be 6 digits.',
+            'any.required':        'Enter the 6-digit code we emailed you.',
+        }),
+    password: Joi.string()
+        .min(6)
+        .max(255)
+        .required()
+        .messages({
+            'string.empty': 'New password is required.',
+            'string.min':   'Password must be at least 6 characters.',
+            'string.max':   'Password is too long.',
+            'any.required': 'New password is required.',
+        }),
+});
+
 module.exports = {
     loginSchema,
     forgotPasswordSchema,
+    resetPasswordSchema,
 };

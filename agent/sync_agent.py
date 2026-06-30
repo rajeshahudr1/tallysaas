@@ -1220,9 +1220,14 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
 
 
 VOUCHER_STATE_FILENAME = ".voucher_sync.json"
-VOUCHER_CHUNK = 50000        # AlterID window per Tally fetch
+VOUCHER_CHUNK = 2000         # DEFAULT AlterID window per Tally fetch (config.ini
+                             # [agent] voucher_chunk overrides). SMALL on purpose:
+                             # a big window pulls thousands of full double-entry
+                             # vouchers in one COLLECTION → Tally "memory access
+                             # violation" crash. 2000 keeps each response safe.
 VOUCHER_BATCH = 2000         # vouchers per cloud /agent/import POST
-VOUCHER_MAX_FETCHES = 6      # AlterID windows per cycle (keeps a cycle bounded)
+VOUCHER_MAX_FETCHES = 30     # DEFAULT AlterID windows per cycle (cfg overrides);
+                             # more, smaller windows keep the same backfill pace.
 # If the backfill scans this far and finds NO voucher at all (max_seen == 0), the
 # cursor likely overran the data while Tally was still loading (cold start) or the
 # cloud was reset — re-scan from AlterID 0 ONCE so the vouchers are actually found
@@ -1298,8 +1303,12 @@ def _pull_vouchers(cfg, logger, api, tally, token, cname) -> int:
     through = st["through"]
     max_seen = st["max_seen"]
     sent = 0
-    for _ in range(VOUCHER_MAX_FETCHES):
-        lo, hi = through, through + VOUCHER_CHUNK
+    # Window size + count come from config (safe small defaults) so a busy book
+    # can be tuned WITHOUT a rebuild and Tally never gets a huge COLLECTION.
+    chunk = getattr(cfg, "voucher_chunk", VOUCHER_CHUNK) or VOUCHER_CHUNK
+    fetches = getattr(cfg, "voucher_max_fetches", VOUCHER_MAX_FETCHES) or VOUCHER_MAX_FETCHES
+    for _ in range(fetches):
+        lo, hi = through, through + chunk
         try:
             vs = tally.voucher_list(company=cname, after_alterid=lo, upto_alterid=hi)
         except Exception as exc:

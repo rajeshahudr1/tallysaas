@@ -61,9 +61,8 @@ var filterFields = [
         { label: 'Sales Register' },
     ],
     actions: [
-        { label: 'PDF',   icon: 'fa-file-pdf',   variant: 'light' },
-        { label: 'Excel', icon: 'fa-file-excel', variant: 'light' },
-        { label: 'Print', icon: 'fa-print',      gradient: true },
+        { label: 'PDF',   icon: 'fa-file-pdf',   variant: 'light', id: 'report-print' },
+        { label: 'Print', icon: 'fa-print',      gradient: true,   id: 'report-print2' },
     ],
 }) %>
 
@@ -157,3 +156,17 @@ var filterFields = [
         .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
     }
 </style>
+
+<script>
+    // PDF + Print → the server-rendered, data-only Sales Register PDF (no chrome),
+    // carrying the current filters (date range etc.) via location.search.
+    (function () {
+        function openPdf() {
+            window.open('/reports/pdf' + location.pathname.slice('/reports'.length) + location.search, '_blank');
+        }
+        ['report-print', 'report-print2'].forEach(function (id) {
+            var b = document.getElementById(id);
+            if (b) b.addEventListener('click', openPdf);
+        });
+    })();
+</script>

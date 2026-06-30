@@ -1,0 +1,161 @@
+'use strict';
+
+/**
+ * api/Helpers/transactionPdf.js
+ *
+ * Renders a sales/purchase INVOICE (the rich detail from InvoiceController.get)
+ * into a clean, print-ready, data-only HTML document — company header, party
+ * block, line-items table and a tax/total summary. Helpers/pdf.js turns the
+ * returned HTML into a PDF via Puppeteer (same pipeline as the reports).
+ *
+ * Uses `tally_items` (the synced line items) when present, else `items`.
+ */
+
+function esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** ₹ with Indian digit grouping, 2 decimals; blank for null/empty. */
+function inr(n) {
+    if (n == null || n === '') return '';
+    const num = Number(n);
+    if (!Number.isFinite(num)) return esc(n);
+    const neg = num < 0;
+    const [whole, frac] = Math.abs(num).toFixed(2).split('.');
+    let last3 = whole.slice(-3);
+    const rest = whole.slice(0, -3);
+    if (rest) last3 = ',' + last3;
+    const grouped = rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',') + last3;
+    return (neg ? '-' : '') + '₹' + grouped + '.' + frac;
+}
+
+function fmtDate(d) {
+    if (!d) return '';
+    const dt = new Date(d);
+    if (isNaN(dt)) return esc(d);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}`;
+}
+
+// Normalise a line item from either tally_items or items into one shape.
+function normItem(it) {
+    return {
+        name: it.item_name || it.product_name || it.name || '',
+        hsn:  it.hsn || '',
+        qty:  it.qty != null ? it.qty : (it.quantity != null ? it.quantity : ''),
+        unit: it.unit || '',
+        rate: it.rate,
+        disc: it.disc_pct != null ? it.disc_pct : (it.discount_pct != null ? it.discount_pct : ''),
+        gst:  it.gst_rate != null ? it.gst_rate : (it.gst != null ? it.gst : ''),
+        amount: it.amount,
+    };
+}
+
+/** Build invoice PDF HTML. inv = InvoiceController.get's data object. */
+function invoicePdfHtml(inv, ctx = {}) {
+    const isSales = (inv.type || 'sales') === 'sales';
+    const title = isSales ? 'TAX INVOICE' : 'PURCHASE INVOICE';
+    const party = inv.customer || inv.supplier || null;
+    const partyLabel = isSales ? 'Bill To' : 'From';
+    const partyName = party ? (party.name || '') : (isSales ? 'Cash / Walk-in' : '');
+    const partyGstin = party ? (party.gstin || party.gst_no || '') : '';
+
+    const src = (Array.isArray(inv.tally_items) && inv.tally_items.length) ? inv.tally_items
+        : (Array.isArray(inv.items) ? inv.items : []);
+    const items = src.map(normItem);
+
+    const rowsHtml = items.length
+        ? items.map((it, i) => `<tr>
+            <td class="c">${i + 1}</td>
+            <td>${esc(it.name)}</td>
+            <td>${esc(it.hsn)}</td>
+            <td class="num">${esc(it.qty)}</td>
+            <td>${esc(it.unit)}</td>
+            <td class="num">${inr(it.rate)}</td>
+            <td class="num">${it.disc !== '' && it.disc != null ? esc(it.disc) + '%' : ''}</td>
+            <td class="num">${inr(it.amount)}</td>
+          </tr>`).join('')
+        : `<tr><td colspan="8" class="empty">No line items.</td></tr>`;
+
+    const totalRow = (label, val, strong) =>
+        `<tr${strong ? ' class="grand"' : ''}><td>${esc(label)}</td><td class="num">${inr(val)}</td></tr>`;
+
+    const num = (v) => Number(v || 0);
+    let totals = '';
+    totals += totalRow('Taxable', inv.taxable);
+    if (num(inv.cgst))     totals += totalRow('CGST', inv.cgst);
+    if (num(inv.sgst))     totals += totalRow('SGST', inv.sgst);
+    if (num(inv.igst))     totals += totalRow('IGST', inv.igst);
+    if (num(inv.discount)) totals += totalRow('Discount', inv.discount);
+    if (num(inv.round_off)) totals += totalRow('Round Off', inv.round_off);
+    totals += totalRow('Total', inv.total, true);
+
+    const inner = `
+      <div class="meta-grid">
+        <div class="party">
+          <div class="lbl">${esc(partyLabel)}</div>
+          <div class="pname">${esc(partyName) || '—'}</div>
+          ${partyGstin ? `<div class="pgst">GSTIN: ${esc(partyGstin)}</div>` : ''}
+        </div>
+        <div class="inv-meta">
+          <div><span>Invoice No</span><b>${esc(inv.invoice_no || inv.tally_voucher_no || '')}</b></div>
+          <div><span>Date</span><b>${fmtDate(inv.invoice_date)}</b></div>
+          ${inv.tally_voucher_type ? `<div><span>Voucher Type</span><b>${esc(inv.tally_voucher_type)}</b></div>` : ''}
+          ${inv.supplier_bill_no ? `<div><span>Bill No</span><b>${esc(inv.supplier_bill_no)}</b></div>` : ''}
+        </div>
+      </div>
+      <table class="rpt">
+        <thead><tr>
+          <th class="c">#</th><th>Item</th><th>HSN</th><th class="num">Qty</th><th>Unit</th>
+          <th class="num">Rate</th><th class="num">Disc</th><th class="num">Amount</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div class="totals-wrap"><table class="totals">${totals}</table></div>
+      ${inv.notes ? `<div class="notes"><b>Notes:</b> ${esc(inv.notes)}</div>` : ''}`;
+
+    return { html: wrap(ctx, title, inner), landscape: false };
+}
+
+function wrap(ctx, title, inner) {
+    return `<!doctype html><html><head><meta charset="utf-8"><style>
+      * { box-sizing: border-box; }
+      body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color:#1f2937; margin:0; font-size:12px; }
+      .head { display:flex; justify-content:space-between; align-items:flex-start; border-bottom:2px solid #2563eb; padding-bottom:10px; margin-bottom:14px; }
+      .head .co { font-size:18px; font-weight:700; color:#111827; }
+      .head .meta { font-size:11px; color:#6b7280; margin-top:2px; }
+      .head .title { font-size:16px; font-weight:700; color:#2563eb; text-align:right; }
+      .head .title small { display:block; font-size:11px; color:#6b7280; font-weight:400; margin-top:2px; }
+      .meta-grid { display:flex; justify-content:space-between; gap:16px; margin-bottom:12px; }
+      .party .lbl { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#6b7280; }
+      .party .pname { font-size:14px; font-weight:700; color:#111827; }
+      .party .pgst { font-size:11px; color:#6b7280; }
+      .inv-meta div { display:flex; gap:10px; justify-content:flex-end; font-size:11px; margin-bottom:2px; }
+      .inv-meta span { color:#6b7280; }
+      .inv-meta b { color:#111827; min-width:90px; text-align:right; }
+      table.rpt { width:100%; border-collapse:collapse; }
+      table.rpt th, table.rpt td { border:1px solid #e5e7eb; padding:6px 8px; text-align:left; vertical-align:top; }
+      table.rpt th { background:#f3f4f6; font-weight:600; font-size:10.5px; text-transform:uppercase; color:#374151; }
+      table.rpt td.num, table.rpt th.num { text-align:right; white-space:nowrap; }
+      table.rpt td.c, table.rpt th.c { text-align:center; }
+      .empty { color:#6b7280; text-align:center; padding:18px; }
+      .totals-wrap { display:flex; justify-content:flex-end; margin-top:10px; }
+      table.totals { border-collapse:collapse; min-width:240px; }
+      table.totals td { padding:5px 10px; font-size:12px; }
+      table.totals td:last-child { text-align:right; white-space:nowrap; }
+      table.totals tr.grand td { font-weight:700; font-size:13px; border-top:2px solid #d1d5db; color:#111827; }
+      .notes { margin-top:14px; font-size:11px; color:#374151; }
+      .foot { margin-top:20px; font-size:10px; color:#9ca3af; text-align:center; border-top:1px solid #e5e7eb; padding-top:8px; }
+    </style></head><body>
+      <div class="head">
+        <div><div class="co">${esc(ctx.companyName || 'Company')}</div>
+          ${ctx.companyGstin ? `<div class="meta">GSTIN: ${esc(ctx.companyGstin)}</div>` : ''}</div>
+        <div class="title">${esc(title)}<small>${esc(ctx.generatedAt || '')}</small></div>
+      </div>
+      ${inner}
+      <div class="foot">Generated from Tally Cloud Sync${ctx.generatedAt ? ' · ' + esc(ctx.generatedAt) : ''}</div>
+    </body></html>`;
+}
+
+module.exports = { invoicePdfHtml };

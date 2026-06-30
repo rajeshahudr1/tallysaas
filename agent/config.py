@@ -52,7 +52,7 @@ _CRED_TOKEN_NAME = "cred_t"
 _DEFAULT_API_URL = API_BASE_URL
 _DEFAULT_SYNC_INTERVAL = 60
 _DEFAULT_LOG_LEVEL = "INFO"
-_DEFAULT_AGENT_VERSION = "1.2.9"
+_DEFAULT_AGENT_VERSION = "1.3.0"
 # Auto-update (Requirement 2). auto_update: master on/off for self-update (the
 # CLOUD per-license toggle overrides this when the version endpoint provides it).
 # update_check_cycles: check for a new exe once at startup, then every N loop
@@ -68,6 +68,14 @@ _DEFAULT_TALLY_AUTO_START = True
 # locations (see sync_agent._find_tally_exe). Set it explicitly if Tally lives
 # somewhere non-standard.
 _DEFAULT_TALLY_EXE = ""
+
+# Voucher pull SAFETY — avoids the Tally "memory access violation" crash and
+# keeps the licence safe. voucher_chunk = the AlterID window per Voucher
+# COLLECTION fetch; kept SMALL so each response stays small and Tally never
+# chokes on a huge double-entry pull. voucher_max_fetches = windows per cycle
+# (bounds a cycle). Both tunable in config.ini [agent] for very large books.
+_DEFAULT_VOUCHER_CHUNK = 2000
+_DEFAULT_VOUCHER_MAX_FETCHES = 30
 
 
 class ConfigError(Exception):
@@ -248,6 +256,9 @@ class Config:
         self.auto_update: bool = _DEFAULT_AUTO_UPDATE
         self.update_check_cycles: int = _DEFAULT_UPDATE_CHECK_CYCLES
         self.confirm_updates: bool = _DEFAULT_CONFIRM_UPDATES
+        # Voucher pull safety (the [agent] section; see defaults above).
+        self.voucher_chunk: int = _DEFAULT_VOUCHER_CHUNK
+        self.voucher_max_fetches: int = _DEFAULT_VOUCHER_MAX_FETCHES
 
         # Tally connectivity + auto-start (the [tally] section).
         self.tally_url: str = _DEFAULT_TALLY_URL
@@ -320,6 +331,21 @@ class Config:
             cfg.update_check_cycles = _DEFAULT_UPDATE_CHECK_CYCLES
         if cfg.update_check_cycles <= 0:
             cfg.update_check_cycles = _DEFAULT_UPDATE_CHECK_CYCLES
+
+        # Voucher pull safety — a SMALL AlterID window per Voucher COLLECTION so
+        # Tally never chokes (memory access violation). Tunable for big books.
+        try:
+            cfg.voucher_chunk = agent.getint("voucher_chunk", _DEFAULT_VOUCHER_CHUNK)
+        except ValueError:
+            cfg.voucher_chunk = _DEFAULT_VOUCHER_CHUNK
+        if cfg.voucher_chunk <= 0:
+            cfg.voucher_chunk = _DEFAULT_VOUCHER_CHUNK
+        try:
+            cfg.voucher_max_fetches = agent.getint("voucher_max_fetches", _DEFAULT_VOUCHER_MAX_FETCHES)
+        except ValueError:
+            cfg.voucher_max_fetches = _DEFAULT_VOUCHER_MAX_FETCHES
+        if cfg.voucher_max_fetches <= 0:
+            cfg.voucher_max_fetches = _DEFAULT_VOUCHER_MAX_FETCHES
 
         # Tally section — connectivity + auto-start.
         tally = cfg._parser[_TALLY_SECTION]

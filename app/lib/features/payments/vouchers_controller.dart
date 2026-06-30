@@ -50,6 +50,8 @@ class VouchersController extends StateNotifier<VouchersState> {
   static const _perPage = 20;
 
   String _search = '';
+  Map<String, String> _adv = {};
+  Map<String, String> get adv => _adv;
   int _page = 1;
   bool _hasMore = true;
   final List<Payment> _all = [];
@@ -64,7 +66,8 @@ class VouchersController extends StateNotifier<VouchersState> {
 
   Future<void> _fetch() async {
     try {
-      final res = await _repo.list(_basePath, page: _page, perPage: _perPage, search: _search);
+      final res = await _repo.list(_basePath, page: _page, perPage: _perPage, search: _search,
+          status: _adv['status'], dateFrom: _adv['date_from'], dateTo: _adv['date_to']);
       _all.addAll(res.items);
       _hasMore = res.hasMore;
       if (!mounted) return;
@@ -78,6 +81,11 @@ class VouchersController extends StateNotifier<VouchersState> {
 
   Future<void> search(String query) async {
     _search = query;
+    await _reload();
+  }
+
+  Future<void> setAdvFilter(Map<String, String> f) async {
+    _adv = f;
     await _reload();
   }
 

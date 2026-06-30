@@ -39,6 +39,14 @@ class Fmt {
     return DateFormat('dd/MM/yyyy').format(d.toLocal());
   }
 
+  /// `dd/MM/yyyy hh:mm a` — date + time. Accepts a DateTime or API string;
+  /// unparseable → an em-dash. Used for "last synced at" / sync activity.
+  static String dateTime(dynamic v) {
+    final d = _toDate(v);
+    if (d == null) return '—';
+    return DateFormat('dd/MM/yyyy hh:mm a').format(d.toLocal());
+  }
+
   /// Up to two uppercase initials from a name — drives avatar fallbacks.
   /// `'Rajesh Shah' → 'RS'`, `'rajesh' → 'R'`, empty → `'?'`.
   static String initials(String name) {

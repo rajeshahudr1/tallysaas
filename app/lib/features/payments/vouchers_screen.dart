@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/invoice.dart' show invoiceStatusLabel;
 import '../../data/models/payment.dart';
@@ -12,6 +13,7 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
 import 'vouchers_controller.dart';
@@ -74,21 +76,54 @@ class _VouchersScreenState extends ConsumerState<VouchersScreen> {
     });
   }
 
+  static const _fields = [
+    FilterField('status', 'Status', FType.select,
+        options: ['pending_tally', 'sent_to_tally', 'created', 'failed'],
+        optionLabels: {'pending_tally': 'Pending', 'sent_to_tally': 'Sent', 'created': 'Synced', 'failed': 'Failed'}),
+    FilterField('date_from', 'From Date', FType.dateFrom),
+    FilterField('date_to', 'To Date', FType.dateTo),
+  ];
+
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(vouchersControllerProvider(_path).notifier);
+    final res = await showAdvancedFilter(context, ref, title: 'Vouchers filter', fields: _fields, current: ctrl.adv);
+    if (res != null) ctrl.setAdvFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(vouchersControllerProvider(_path));
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    // Permission module is the basePath without the leading slash ('payments' | 'receipts').
+    final module = widget.basePath.replaceAll('/', '');
+    final canCreate = user?.can(module, 'create') ?? false;
+    final vctrl = ref.read(vouchersControllerProvider(_path).notifier);
+    final hasFilter = vctrl.adv.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>(widget.addRoute);
-          if (created == true) {
-            ref.read(vouchersControllerProvider(_path).notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('New'),
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter (date range)',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>(widget.addRoute);
+                if (created == true) {
+                  ref.read(vouchersControllerProvider(_path).notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('New'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -142,7 +177,16 @@ class _VouchersScreenState extends ConsumerState<VouchersScreen> {
                   ),
                 );
               }
-              return _VoucherCard(items[i]);
+              final v = items[i];
+              return _VoucherCard(
+                v,
+                onTap: () async {
+                  await context.push('${widget.basePath}/${v.id}');
+                  if (context.mounted) {
+                    ref.read(vouchersControllerProvider(_path).notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -151,8 +195,9 @@ class _VouchersScreenState extends ConsumerState<VouchersScreen> {
 }
 
 class _VoucherCard extends StatelessWidget {
-  const _VoucherCard(this.v);
+  const _VoucherCard(this.v, {this.onTap});
   final Payment v;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -162,6 +207,7 @@ class _VoucherCard extends StatelessWidget {
       Fmt.date(v.paymentDate),
     ].join(' · ');
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

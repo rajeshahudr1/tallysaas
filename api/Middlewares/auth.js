@@ -76,6 +76,14 @@ async function authenticate(req, res, next) {
             const now = new Date();
             const expired = session && session.expires_at && new Date(session.expires_at) < now;
             if (!session || expired || !user || user.status !== 'Active') {
+                // DEBUG: pinpoint WHY the session check failed (temporary logging).
+                const reason = !session ? 'NO_SESSION_ROW(evicted/logged-out)'
+                    : expired ? `EXPIRED(${session.expires_at})`
+                    : !user ? 'NO_USER'
+                    : 'INACTIVE:' + user.status;
+                let live = '?';
+                try { const c = await db('user_sessions').where('user_id', payload.sub).count('id as c').first(); live = c && c.c; } catch (_) {}
+                console.error(`[AUTH-401] reason=${reason} user=${payload.sub} jti=${payload.jti} liveSessions=${live} req=${req.method} ${req.originalUrl}`);
                 return R.errorResponse(res, SESSION_ENDED_MSG, 401);
             }
             // Refresh this session's liveness.

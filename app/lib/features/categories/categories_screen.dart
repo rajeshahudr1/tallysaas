@@ -5,11 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/auth/session.dart';
 import '../../data/models/category.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
 import 'categories_controller.dart';
@@ -56,21 +58,50 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
     });
   }
 
+  static const _fields = [
+    FilterField('status', 'Status', FType.select, options: ['Active', 'Inactive']),
+    FilterField('parent', 'Parent Category', FType.dynamicSelect, endpoint: '/categories'),
+    FilterField('created_from', 'Created From', FType.dateFrom),
+    FilterField('created_to', 'Created To', FType.dateTo),
+  ];
+
+  Future<void> _openFilter() async {
+    final ctrl = ref.read(categoriesControllerProvider.notifier);
+    final res = await showAdvancedFilter(context, ref, title: 'Categories filter', fields: _fields, current: ctrl.adv);
+    if (res != null) ctrl.setAdvFilter(res);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(categoriesControllerProvider);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    final canCreate = user?.can('categories', 'create') ?? false;
+    final hasFilter = ref.read(categoriesControllerProvider.notifier).adv.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: const Text('Categories')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          final created = await context.push<bool>('/categories/add');
-          if (created == true) {
-            ref.read(categoriesControllerProvider.notifier).refresh();
-          }
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+      appBar: AppBar(
+        title: const Text('Categories'),
+        actions: [
+          IconButton(
+            icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
+            color: hasFilter ? AppColors.primary : null,
+            tooltip: 'Filter',
+            onPressed: _openFilter,
+          ),
+        ],
       ),
+      floatingActionButton: !canCreate
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () async {
+                final created = await context.push<bool>('/categories/add');
+                if (created == true) {
+                  ref.read(categoriesControllerProvider.notifier).refresh();
+                }
+              },
+              icon: const Icon(Icons.add),
+              label: const Text('Add'),
+            ),
       body: Column(
         children: [
           Padding(
@@ -124,7 +155,16 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
                   ),
                 );
               }
-              return _CategoryCard(items[i]);
+              final c = items[i];
+              return _CategoryCard(
+                c,
+                onTap: () async {
+                  await context.push('/categories/${c.id}');
+                  if (context.mounted) {
+                    ref.read(categoriesControllerProvider.notifier).refresh();
+                  }
+                },
+              );
             },
           ),
         );
@@ -133,13 +173,15 @@ class _CategoriesScreenState extends ConsumerState<CategoriesScreen> {
 }
 
 class _CategoryCard extends StatelessWidget {
-  const _CategoryCard(this.c);
+  const _CategoryCard(this.c, {this.onTap});
   final Category c;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AppCard(
+      onTap: onTap,
       child: Row(
         children: [
           Expanded(

@@ -21,12 +21,22 @@ class PaymentRepository {
     int perPage = 20,
     String? search,
     String? status,
+    String? dateFrom,
+    String? dateTo,
   }) async {
     final query = <String, dynamic>{'page': page, 'per_page': perPage};
     if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
     if (status != null && status.isNotEmpty) query['status'] = status;
+    if (dateFrom != null) query['date_from'] = dateFrom;
+    if (dateTo != null) query['date_to'] = dateTo;
     final data = await _api.get(basePath, query: query);
     return PagedResult<Payment>.fromData(data, Payment.fromJson);
+  }
+
+  /// Fetch ONE voucher — drives the View (detail) screen.
+  Future<Payment> get(String basePath, int id) async {
+    final data = await _api.get('$basePath/$id');
+    return Payment.fromJson((data as Map).cast<String, dynamic>());
   }
 
   Future<dynamic> create(String basePath, Map<String, dynamic> body) =>

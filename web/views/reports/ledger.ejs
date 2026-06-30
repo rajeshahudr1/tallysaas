@@ -83,6 +83,8 @@ function _inr(v) { return '₹' + Number(v || 0).toLocaleString('en-IN', { minim
 <script>
     (function () {
         var b = document.getElementById('report-print');
-        if (b) b.addEventListener('click', function () { window.print(); });
+        if (b) b.addEventListener('click', function () {
+            window.open('/reports/pdf' + location.pathname.slice('/reports'.length) + location.search, '_blank');
+        });
     })();
 </script>

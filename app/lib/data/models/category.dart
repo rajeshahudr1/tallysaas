@@ -6,6 +6,7 @@ class Category {
     required this.id,
     required this.name,
     this.parent,
+    this.parentId,
     this.status,
     this.createdAt,
   });
@@ -13,6 +14,7 @@ class Category {
   final int id;
   final String name;
   final String? parent; // joined parent category name (null = top-level)
+  final int? parentId;  // FK id (detail) — drives the Edit form dropdown
   final String? status; // Active | Inactive
   final String? createdAt;
 
@@ -20,6 +22,7 @@ class Category {
         id: _toInt(j['id']) ?? 0,
         name: _s(j['name']),
         parent: _sn(j['parent']),
+        parentId: _toInt(j['parent_id']),
         status: _sn(j['status']),
         createdAt: _sn(j['created_at']),
       );
