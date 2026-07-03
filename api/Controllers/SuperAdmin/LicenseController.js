@@ -368,7 +368,9 @@ async function remove(req, res) {
             .where('id', req.params.id).whereNull('deleted_at').first('id');
         if (!lic) return R.errorResponse(res, NOT_FOUND, 404);
 
-        const [{ count: compCount }] = await db('companies')
+        // Companies live in the licence's tenant db; users are a master concern.
+        const tdb = require('../../config/tenantDb').getKnexForLicense(lic.id);
+        const [{ count: compCount }] = await tdb('companies')
             .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });
         const [{ count: userCount }] = await db('users')
             .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });
