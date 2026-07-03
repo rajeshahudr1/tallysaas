@@ -26,8 +26,8 @@ const crud = require('../../Helpers/crudController');
 const db   = require('../../config/db').db;
 const R    = require('../../Helpers/response');
 const { hash } = require('../../Helpers/passwords');
-const { reconcileLicenseSeats } = require('../../Helpers/seats');
-const { emailInUse, EMAIL_TAKEN_MSG } = require('../../Helpers/emailUnique');
+const { emailInUse, EMAIL_TAKEN_MSG } = require('../../Helpers/emailUnique');   // emailInUse: sales_persons CRUD uniqueCheck (tenant-scoped)
+const { emailTakenAcrossPlanes, createLicensedUser, patchLicensedUser } = require('../../Helpers/tenantUsers');
 
 const OOPS_MSG      = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND_MSG = 'Sales Person not found.';
@@ -177,19 +177,20 @@ async function setLogin(req, res) {
         // assign a global SYSTEM role EXCEPT the platform/admin roles, or one of
         // THEIR OWN license's custom roles — nothing else. Super Admin bypasses.
         const isSuper = req.user && req.user.role_slug === 'super-admin';
+        const licenseId = (req.user && req.user.license_id) || null;
+        // Fetch the role once (both paths need its slug — master.users.role_slug
+        // drives auth), then policy-check it for a non-super caller.
+        const role = await db('roles').where('id', role_id)
+            .first('id', 'slug', 'is_system', 'license_id');
+        if (!role) return R.errorResponse(res, 'You cannot assign that role.', 422);
         if (!isSuper) {
-            const licenseId = (req.user && req.user.license_id) || null;
-            const role = await db('roles').where('id', role_id)
-                .first('id', 'slug', 'is_system', 'license_id');
-            const assignable = role
-                && !['super-admin', 'company-admin'].includes(role.slug)
+            const assignable = !['super-admin', 'company-admin'].includes(role.slug)
                 && ((role.is_system && role.license_id == null) || role.license_id === licenseId);
             if (!assignable) {
                 return R.errorResponse(res, 'You cannot assign that role.', 422);
             }
         }
-
-        const licenseId = (req.user && req.user.license_id) || null;
+        const roleSlug = role.slug;
 
         // ── UPDATE path: the sales person already has a linked login user. ──
         if (sp.user_id) {
@@ -205,7 +206,7 @@ async function setLogin(req, res) {
                 // If the email is changing, guard against a duplicate across BOTH
                 // tables — excluding this login user and this sales person (same person).
                 if (email && email !== linked.email) {
-                    const clash = await emailInUse(db, email, {
+                    const clash = await emailTakenAcrossPlanes(email, licenseId, {
                         exceptUserId: linked.id,
                         exceptSalesPersonId: sp.id,
                     });
@@ -217,14 +218,17 @@ async function setLogin(req, res) {
                 if (status) patch.status = status;
                 if (password) patch.password_hash = await hash(password);
 
-                const [updated] = await db('users').where('id', linked.id).update(patch)
-                    .returning(['id', 'email', 'role_id', 'status']);
+                // Update the login on BOTH planes (master auth + tenant mirror);
+                // reconcile seats when the status changed (it may free/consume one).
+                const freshStatus = await patchLicensedUser(
+                    linked.id, licenseId, () => patch, { reconcile: !!status },
+                );
 
                 return R.successResponse(res, {
-                    id:      updated.id,
-                    email:   updated.email,
-                    role_id: updated.role_id,
-                    status:  updated.status,
+                    id:      linked.id,
+                    email:   patch.email || linked.email,
+                    role_id,
+                    status:  freshStatus != null ? freshStatus : (patch.status || linked.status),
                 }, 'Login updated.');
             }
         }
@@ -234,9 +238,10 @@ async function setLogin(req, res) {
             return R.errorResponse(res, 'Password is required to create a login.', 422);
         }
 
-        // Duplicate-email guard across BOTH users + sales_persons — excluding
-        // THIS sales person's own row (its email legitimately becomes the login).
-        const taken = await emailInUse(db, email, { exceptSalesPersonId: sp.id });
+        // Duplicate-email guard across ALL logins (master.users) + this licence's
+        // sales_persons — excluding THIS sales person's own row (its email
+        // legitimately becomes the login).
+        const taken = await emailTakenAcrossPlanes(email, licenseId, { exceptSalesPersonId: sp.id });
         if (taken) return R.errorResponse(res, EMAIL_TAKEN_MSG, 422);
 
         const password_hash = await hash(password);
@@ -258,21 +263,12 @@ async function setLogin(req, res) {
             approved_by:     req.user ? req.user.sub : null,
         };
 
-        // Create the user, reconcile seats, and link it to the sales person — all
-        // in ONE transaction so a failure leaves no half state.
-        const linked = await db.transaction(async (trx) => {
-            const [u] = await trx('users').insert(row).returning([
-                'id', 'email', 'role_id', 'status',
-            ]);
-            if (licenseId) {
-                await reconcileLicenseSeats(trx, licenseId);
-                const fresh = await trx('users').where('id', u.id).first('status');
-                if (fresh) u.status = fresh.status;
-            }
-            await trx('sales_persons').where('id', sp.id)
-                .update({ user_id: u.id, updated_at: new Date() });
-            return u;
-        });
+        // Dual-write the login (MASTER auth + same-id TENANT mirror) + seat
+        // reconcile, then link the sales person to it. The link stores the tenant
+        // user id (= master id), which resolves against the tenant.users mirror.
+        const linked = await createLicensedUser(row, roleSlug, ['id', 'email', 'role_id', 'status']);
+        await db('sales_persons').where('id', sp.id)
+            .update({ user_id: linked.id, updated_at: new Date() });
 
         const msg = linked.status === 'Active'
             ? 'Login created. The sales person can sign in now.'

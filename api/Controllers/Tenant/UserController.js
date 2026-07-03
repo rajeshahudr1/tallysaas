@@ -25,8 +25,8 @@
 const R  = require('../../Helpers/response');
 const db = require('../../config/db').db;
 const { hash } = require('../../Helpers/passwords');
-const { reconcileLicenseSeats } = require('../../Helpers/seats');
-const { emailInUse, EMAIL_TAKEN_MSG } = require('../../Helpers/emailUnique');
+const { EMAIL_TAKEN_MSG } = require('../../Helpers/emailUnique');
+const { emailTakenAcrossPlanes, createLicensedUser } = require('../../Helpers/tenantUsers');
 
 const OOPS_MSG       = 'Oops..Something went wrong. Please try again.';
 const DUP_EMAIL_MSG  = 'A user with this email already exists.';
@@ -124,15 +124,11 @@ async function create(req, res) {
         const body  = req.body;
         const email = body.email;
 
-        // Duplicate-email guard. The email is the login identity, so it must be
-        // unique across the whole install — across BOTH users AND sales_persons
-        // (one email = one person). Ignore soft-deleted rows so a previously
-        // removed email can be reused.
-        // Email is the LOGIN identity → unique across the whole install. Check
-        // master.users (every licence's logins) AND the tenant (its sales_persons).
-        const emailMaster = await require('../../config/masterDb').db('users')
-            .whereRaw('lower(email) = ?', [String(email).toLowerCase()]).whereNull('deleted_at').first('id');
-        if (emailMaster || await emailInUse(db, email, {})) {
+        // Duplicate-email guard. The email is the LOGIN identity → unique across
+        // the whole install: ALL licences' logins (master.users) AND this licence's
+        // sales_persons (tenant). Soft-deleted rows ignored (a removed email reuses).
+        const licenseIdForEmail = (req.user && req.user.license_id) || null;
+        if (await emailTakenAcrossPlanes(email, licenseIdForEmail)) {
             return R.errorResponse(res, EMAIL_TAKEN_MSG, 422);
         }
 
@@ -158,7 +154,6 @@ async function create(req, res) {
         const password_hash = await hash(body.password);
         const now = new Date();
         const licenseId = (req.user && req.user.license_id) || null;
-        const masterDb = require('../../config/masterDb').db;
 
         // Shared fields for BOTH the master (auth) row and the tenant mirror.
         const base = {
@@ -178,28 +173,10 @@ async function create(req, res) {
             approved_by:     req.user ? req.user.sub : null,
         };
 
-        // Users straddle two DBs: MASTER holds the LOGIN identity (+ a denormalised
-        // role_slug so auth needn't touch a tenant); the TENANT holds a MIRROR at
-        // the SAME id so business FKs (created_by, sales_persons.user_id, …)
-        // resolve. Create master first (mints the id), then mirror into the tenant.
-        const [mu] = await masterDb('users').insert({ ...base, role_slug: role.slug })
-            .returning(['id', 'company_id', 'license_id', 'role_id', 'name', 'email',
-                'mobile', 'status', 'approval_status', 'location_id', 'created_at']);
-
-        await db('users').insert({ id: mu.id, ...base });
-        await db.raw("SELECT setval(pg_get_serial_sequence('users','id'), (SELECT COALESCE(MAX(id),1) FROM users))");
-
-        // Seats are a MASTER concern (subscriptions + master.users.status). After
-        // reconciling, mirror the (possibly flipped) status onto the tenant row so
-        // the two stay consistent. A new user over the cap ends up Inactive.
-        if (licenseId) {
-            await reconcileLicenseSeats(masterDb, licenseId);
-            const fresh = await masterDb('users').where('id', mu.id).first('status');
-            if (fresh) {
-                mu.status = fresh.status;
-                await db('users').where('id', mu.id).update({ status: fresh.status });
-            }
-        }
+        // Dual-write: MASTER login (auth, role_slug) + same-id TENANT mirror +
+        // seat reconcile + status mirror (over-cap → Inactive), with orphan
+        // rollback if the tenant mirror fails. See Helpers/tenantUsers.
+        const mu = await createLicensedUser(base, role.slug);
 
         const msg = mu.status === 'Active'
             ? 'User created. They can sign in now.'

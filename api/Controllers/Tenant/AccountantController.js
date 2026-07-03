@@ -23,8 +23,8 @@ const R            = require('../../Helpers/response');
 const db           = require('../../config/db').db;
 const entitlements = require('../../Helpers/entitlements');
 const { hash }     = require('../../Helpers/passwords');
-const { reconcileLicenseSeats } = require('../../Helpers/seats');
-const { emailInUse, EMAIL_TAKEN_MSG } = require('../../Helpers/emailUnique');
+const { EMAIL_TAKEN_MSG } = require('../../Helpers/emailUnique');
+const { emailTakenAcrossPlanes, createLicensedUser, patchLicensedUser } = require('../../Helpers/tenantUsers');
 const { sendAccountantInvite } = require('../../Helpers/mail');
 
 const OOPS = 'Oops..Something went wrong. Please try again.';
@@ -82,13 +82,15 @@ async function invite(req, res) {
         const email = String(req.body.email || '').trim().toLowerCase();
         const password = String(req.body.password || '');
 
-        if (await emailInUse(db, email, {})) {
+        if (await emailTakenAcrossPlanes(email, licenseId)) {
             return R.errorResponse(res, EMAIL_TAKEN_MSG, 422);
         }
 
         // Role: the company MAY pick any role they can assign (their own custom
         // roles); if none is chosen, fall back to the safe auto "Accountant" role.
+        // roleSlug is denormalised onto the master login (auth).
         let roleId;
+        let roleSlug;
         const picked = Number(req.body.role_id);
         if (Number.isInteger(picked) && picked > 0) {
             const role = await db('roles').where('id', picked)
@@ -98,8 +100,10 @@ async function invite(req, res) {
                 && ((role.is_system && role.license_id == null) || role.license_id === licenseId);
             if (!assignable) return R.errorResponse(res, 'You cannot assign that role.', 422);
             roleId = picked;
+            roleSlug = role.slug;
         } else {
             roleId = await ensureAccountantRole(licenseId);
+            roleSlug = 'accountant';
         }
         const password_hash = await hash(password);
         const now = new Date();
@@ -116,13 +120,11 @@ async function invite(req, res) {
             approved_by:     req.user ? req.user.sub : null,
         };
 
-        const inserted = await db.transaction(async (trx) => {
-            const [u] = await trx('users').insert(row).returning(['id', 'name', 'email', 'status', 'created_at']);
-            await reconcileLicenseSeats(trx, licenseId);
-            const fresh = await trx('users').where('id', u.id).first('status');
-            if (fresh) u.status = fresh.status;
-            return u;
-        });
+        // Dual-write the login: MASTER (auth, role_slug) + same-id TENANT mirror,
+        // then reconcile the licence seats (an over-cap invite lands Inactive).
+        const inserted = await createLicensedUser(
+            row, roleSlug, ['id', 'name', 'email', 'status', 'created_at'],
+        );
 
         // Fire the invite email in the BACKGROUND — non-blocking, so the API
         // responds instantly; an email/SMTP failure never breaks the invite (the
@@ -179,19 +181,18 @@ async function revoke(req, res) {
         // Soft-delete so the row LEAVES the list (the list filters deleted_at) and
         // the licence seat is freed; reconcile in the same txn.
         const now = new Date();
-        await db.transaction(async (trx) => {
-            await trx('users').where('id', id).update({
-                status: 'Inactive',
-                deleted_at: now,
-                // FREE the email so the same address can be re-invited later. The
-                // users_email_unique index counts soft-deleted rows too, so we
-                // tombstone the address (concat keeps it unique + auditable).
-                email: trx.raw("concat(email, '#revoked-', id)"),
-                updated_at: now,
-            });
-            const lic = req.user && req.user.license_id;
-            if (lic) await reconcileLicenseSeats(trx, lic);
-        });
+        const lic = (req.user && req.user.license_id) || null;
+        // Soft-delete the login on BOTH planes (master auth + tenant mirror) so the
+        // CA can no longer sign in AND leaves the tenant list, then reconcile seats
+        // (frees the seat). Email is tombstoned per-plane so it can be re-invited.
+        await patchLicensedUser(id, lic, (k) => ({
+            status: 'Inactive',
+            deleted_at: now,
+            // The users_email_unique index counts soft-deleted rows too, so
+            // tombstone the address (concat keeps it unique + auditable).
+            email: k.raw("concat(email, '#revoked-', id)"),
+            updated_at: now,
+        }));
         return R.successResponse(res, { id }, 'Accountant access revoked.');
     } catch (err) {
         console.error('accountants.revoke error:', err);

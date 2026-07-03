@@ -27,6 +27,8 @@
  */
 
 const db = require('../config/db').db;
+const masterDb = require('../config/masterDb').db;          // seats live in the master control plane
+const { getKnexForLicense } = require('../config/tenantDb');  // for mirroring status to the tenant
 
 // "YYYY-MM-DD" for a Date / ms / ISO input.
 function isoDate(d) {
@@ -154,16 +156,46 @@ async function reconcileLicenseSeats(trx, licenseId) {
 }
 
 /**
- * Convenience wrapper: run reconcileLicenseSeats in its OWN transaction. Used by
- * callers (e.g. LicenseController.update) that aren't already inside one.
+ * Mirror every master.users status for a licence onto its tenant.users mirror
+ * rows. Seats are a MASTER concern (subscriptions + master.users.status drive
+ * login), but the tenant keeps a same-id user mirror for its FKs + user list —
+ * this keeps that mirror's `status` column consistent after a reconcile. Cross-DB
+ * (master read → tenant write), so it CANNOT share the reconcile's master txn;
+ * best-effort, batched by status. `tenantDb` may be passed to reuse a knex.
+ */
+async function mirrorSeatStatusToTenant(licenseId, tenantDb) {
+    if (!licenseId) return;
+    const rows = await masterDb('users')
+        .where('license_id', licenseId).whereNull('deleted_at')
+        .select('id', 'status');
+    if (!rows.length) return;
+    const tdb = tenantDb || getKnexForLicense(licenseId);
+    const byStatus = rows.reduce((m, r) => {
+        (m[r.status] = m[r.status] || []).push(r.id);
+        return m;
+    }, {});
+    for (const [status, ids] of Object.entries(byStatus)) {
+        await tdb('users').whereIn('id', ids).update({ status, updated_at: new Date() });
+    }
+}
+
+/**
+ * Convenience wrapper: reconcile a licence's seats in its OWN master transaction
+ * (the reconcile touches ONLY master-plane tables — licenses / users / subscriptions),
+ * then mirror the resulting statuses onto the tenant user rows. Used by callers
+ * (LicenseController.update, the user dual-write helper) that aren't already in a txn.
  */
 async function reconcileLicenseSeatsTx(licenseId) {
-    return db.transaction((trx) => reconcileLicenseSeats(trx, licenseId));
+    const result = await masterDb.transaction((trx) => reconcileLicenseSeats(trx, licenseId));
+    await mirrorSeatStatusToTenant(licenseId).catch((e) =>
+        console.error('[seats] mirror status to tenant failed:', e && e.message));
+    return result;
 }
 
 module.exports = {
     reconcileLicenseSeats,
     reconcileLicenseSeatsTx,
+    mirrorSeatStatusToTenant,
     // exported for the data migration / reuse
     ensureActiveSubscription,
     expireActiveSubscription,
