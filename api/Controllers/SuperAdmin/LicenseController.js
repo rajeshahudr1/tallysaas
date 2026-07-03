@@ -192,35 +192,46 @@ async function get(req, res) {
         const clearKey    = encRow ? keyCrypto.decryptKey(encRow.license_key_enc) : null;
         const keyAvailable = !!clearKey;
 
-        // Companies ordered by the SAME rule the sync gate uses (created_at asc,
-        // id asc) so we can mark the first max_companies as Syncing and the rest
-        // as over-limit (computed on-the-fly — there is no stored sync flag).
-        const companyRows = await db('companies')
-            .where('license_id', lic.id).whereNull('deleted_at')
-            .orderBy('created_at', 'asc').orderBy('id', 'asc')
-            .select('id', 'name', 'status');
+        // A licence's companies + users (and the roles they reference) live in its
+        // OWN tenant db, not the master control plane — read them from there. A
+        // missing/unreachable tenant db degrades to empty (never a 500 on the
+        // super-admin view).
+        const tdb = require('../../config/tenantDb').getKnexForLicense(lic.id);
         const maxCompanies = lic.max_companies != null ? Number(lic.max_companies) : null;
-        const companies = companyRows.map((c, i) => ({
-            ...c,
-            syncing: maxCompanies == null ? true : i < maxCompanies,
-        }));
+        let companies = [];
+        let users = [];
+        try {
+            // Companies ordered by the SAME rule the sync gate uses (created_at asc,
+            // id asc) so we can mark the first max_companies as Syncing and the rest
+            // as over-limit (computed on-the-fly — there is no stored sync flag).
+            const companyRows = await tdb('companies')
+                .where('license_id', lic.id).whereNull('deleted_at')
+                .orderBy('created_at', 'asc').orderBy('id', 'asc')
+                .select('id', 'name', 'status');
+            companies = companyRows.map((c, i) => ({
+                ...c,
+                syncing: maxCompanies == null ? true : i < maxCompanies,
+            }));
 
-        // Users ordered by the SAME rule the seat reconcile uses (created_at asc,
-        // id asc). Mark the license-admin (role slug company-admin, company_id
-        // NULL) so the UI never lets the operator confuse it for a seat user.
-        const users = await db('users')
-            .leftJoin('roles', 'roles.id', 'users.role_id')
-            .where('users.license_id', lic.id).whereNull('users.deleted_at')
-            .orderBy('users.created_at', 'asc').orderBy('users.id', 'asc')
-            .select(
-                'users.id', 'users.name', 'users.email', 'users.status',
-                'users.company_id', 'roles.name as role', 'roles.slug as role_slug',
-            )
-            .then((rows) => rows.map((u) => ({
-                id: u.id, name: u.name, email: u.email, status: u.status,
-                role: u.role,
-                is_license_admin: u.role_slug === 'company-admin' && u.company_id == null,
-            })));
+            // Users ordered by the SAME rule the seat reconcile uses (created_at asc,
+            // id asc). Mark the license-admin (role slug company-admin, company_id
+            // NULL) so the UI never lets the operator confuse it for a seat user.
+            users = await tdb('users')
+                .leftJoin('roles', 'roles.id', 'users.role_id')
+                .where('users.license_id', lic.id).whereNull('users.deleted_at')
+                .orderBy('users.created_at', 'asc').orderBy('users.id', 'asc')
+                .select(
+                    'users.id', 'users.name', 'users.email', 'users.status',
+                    'users.company_id', 'roles.name as role', 'roles.slug as role_slug',
+                )
+                .then((rows) => rows.map((u) => ({
+                    id: u.id, name: u.name, email: u.email, status: u.status,
+                    role: u.role,
+                    is_license_admin: u.role_slug === 'company-admin' && u.company_id == null,
+                })));
+        } catch (e) {
+            console.error('LicenseController.get tenant read failed:', e && e.message);
+        }
 
         const lastSeen  = lic.last_seen_at ? new Date(lic.last_seen_at) : null;
         const connected = !!(lastSeen && (Date.now() - lastSeen.getTime()) <= CONNECTED_WINDOW_MS);
@@ -268,8 +279,10 @@ async function update(req, res) {
         const holder = (b.holder_name == null ? '' : String(b.holder_name)).trim();
         if (!holder) return R.errorResponse(res, 'Holder name is required.', 422);
 
-        // Current usage — the caps may not be set below these.
-        const [{ count: compCount }] = await db('companies')
+        // Current usage — the caps may not be set below these. Companies live in
+        // the licence's tenant db; users are a master concern (the auth source).
+        const tdb = require('../../config/tenantDb').getKnexForLicense(lic.id);
+        const [{ count: compCount }] = await tdb('companies')
             .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });
         const [{ count: userCount }] = await db('users')
             .where('license_id', lic.id).whereNull('deleted_at').count({ count: '*' });

@@ -19,22 +19,32 @@ const db = require('../../config/db').db;
 async function list(req, res) {
     try {
         const user = req.user || {};
-        let qb = db('companies')
-            .whereNull('deleted_at')
-            .select('id', 'name', 'license_id')
-            .orderBy('name', 'asc');
 
-        // Regular users are scoped to their license; Super Admin sees all,
-        // but may narrow to ONE license via ?license_id= (drives the super
-        // admin's License→Company two-level switcher).
-        if (user.role_slug !== 'super-admin') {
-            qb = qb.where('license_id', user.license_id != null ? user.license_id : -1);
-        } else if (req.query.license_id != null && req.query.license_id !== '') {
-            const lid = Number(req.query.license_id);
-            if (Number.isInteger(lid) && lid > 0) qb = qb.where('license_id', lid);
+        // Super Admin is platform-only — they own NO companies (no company
+        // switcher). They MAY narrow to one licence's companies via ?license_id=
+        // (that licence's OWN tenant db); with no license_id there is nothing.
+        if (user.role_slug === 'super-admin') {
+            const raw = req.query.license_id;
+            const lid = Number(raw);
+            if (raw == null || raw === '' || !Number.isInteger(lid) || lid <= 0) {
+                return R.successResponse(res, { data: [], meta: { total: 0, page: 1, per_page: 0 } });
+            }
+            const tdb = require('../../config/tenantDb').getKnexForLicense(lid);
+            const rows = await tdb('companies')
+                .whereNull('deleted_at').where('license_id', lid)
+                .select('id', 'name', 'license_id').orderBy('name', 'asc');
+            return R.successResponse(res, {
+                data: rows, meta: { total: rows.length, page: 1, per_page: rows.length },
+            });
         }
 
-        const rows = await qb;
+        // Regular user: companies live in the caller's tenant db (bound by
+        // resolveTenant), scoped to their license.
+        const rows = await db('companies')
+            .whereNull('deleted_at')
+            .where('license_id', user.license_id != null ? user.license_id : -1)
+            .select('id', 'name', 'license_id')
+            .orderBy('name', 'asc');
         return R.successResponse(res, {
             data: rows,
             meta: { total: rows.length, page: 1, per_page: rows.length },
