@@ -9,25 +9,43 @@ class Fmt {
 
   /// `₹ 12,345.00` — Indian-Rupee money with en_IN grouping (lakh/crore)
   /// and a fixed 2 decimals. Null / unparseable → an em-dash.
-  static String inr(num? v) {
-    if (v == null) return '—';
+  static String inr(Object? v) {
+    final n = _numN(v);
+    if (n == null) return '—';
     final f = NumberFormat.currency(
       locale: 'en_IN',
       symbol: '₹ ',
       decimalDigits: 2,
     );
-    return f.format(v);
+    return f.format(n);
   }
 
   /// A plain number with en_IN grouping and NO forced decimals — a whole
   /// number shows as `1,250`, a fractional one keeps up to 2 places (`12.5`).
   /// Used for quantities, stock, GST percents. Null → an em-dash.
-  static String num0(num? v) {
-    if (v == null) return '—';
-    final f = (v == v.roundToDouble())
+  static String num0(Object? v) {
+    final n = _numN(v);
+    if (n == null) return '—';
+    final f = (n == n.roundToDouble())
         ? NumberFormat('#,##0', 'en_IN')
         : NumberFormat('#,##0.##', 'en_IN');
-    return f.format(v);
+    return f.format(n);
+  }
+
+  /// Coerce a JSON numeric — a real num, a pg NUMERIC/DECIMAL **String**, or
+  /// null — to a num for MATH. Null / blank / unparseable → 0. pg returns
+  /// NUMERIC/DECIMAL columns as Strings, and `value as num` THROWS in release
+  /// mode (rendering a grey ErrorWidget), so always route raw money/decimal
+  /// JSON through this instead of casting with `as num`.
+  static num n(Object? v) => _numN(v) ?? 0;
+
+  /// Nullable variant behind the display formatters — null/blank stays null so
+  /// a missing value renders as an em-dash rather than a misleading 0.
+  static num? _numN(Object? v) {
+    if (v == null) return null;
+    if (v is num) return v;
+    final s = v.toString().trim();
+    return s.isEmpty ? null : num.tryParse(s);
   }
 
   /// `dd/MM/yyyy` — accepts a DateTime or an API date string. Anything that

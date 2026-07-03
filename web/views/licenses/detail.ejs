@@ -21,6 +21,7 @@
 var _lic   = (typeof license !== 'undefined' && license) ? license : {};
 var _comps = (typeof companies !== 'undefined' && companies) ? companies : [];
 var _users = (typeof users !== 'undefined' && users) ? users : [];
+var _rem   = (typeof reminderSettings !== 'undefined' && reminderSettings) ? reminderSettings : {};
 // Full key reveal (super-admin). _newKey is set ONCE right after Regenerate.
 var _keyAvailable = !!_lic.key_available;
 var _fullKey      = _keyAvailable ? (_lic.license_key || '') : '';
@@ -276,6 +277,53 @@ var headActions =
     </div>
 </div>
 
+<!-- ── Payment reminders (super-admin per-license entitlement) ── -->
+<div class="card mb-4">
+    <div class="card-body p-4">
+        <h2 class="form-section-title mb-1"><i class="fa-solid fa-bell me-2 text-primary"></i>Payment Reminders</h2>
+        <p class="text-muted small mb-3">Choose which channels THIS license's companies may use to nudge overdue customers, and whether the automatic scheduler runs. The SMTP / WhatsApp credentials live in the server <code>.env</code> — this only flips per-license access + the schedule.</p>
+        <form method="post" action="/licenses/<%= _lic.id %>/reminders" class="row g-3">
+            <div class="col-md-4">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="rem-email" name="email_enabled" <%= _rem.email_enabled ? 'checked' : '' %>>
+                    <label class="form-check-label" for="rem-email"><i class="fa-solid fa-envelope me-1 text-primary"></i>Email reminders</label>
+                </div>
+                <% if (_rem.email_enabled && _rem.email_configured === false) { %>
+                    <div class="form-hint text-warning mt-1"><i class="fa-solid fa-triangle-exclamation me-1"></i>SMTP not set in .env</div>
+                <% } %>
+            </div>
+            <div class="col-md-4">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="rem-wa" name="whatsapp_enabled" <%= _rem.whatsapp_enabled ? 'checked' : '' %>>
+                    <label class="form-check-label" for="rem-wa"><i class="fa-brands fa-whatsapp me-1 text-success"></i>WhatsApp reminders</label>
+                </div>
+                <% if (_rem.whatsapp_enabled && _rem.whatsapp_configured === false) { %>
+                    <div class="form-hint text-warning mt-1"><i class="fa-solid fa-triangle-exclamation me-1"></i>WhatsApp API not set in .env</div>
+                <% } %>
+            </div>
+            <div class="col-md-4">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="rem-auto" name="auto_enabled" <%= _rem.auto_enabled ? 'checked' : '' %>>
+                    <label class="form-check-label" for="rem-auto"><i class="fa-solid fa-robot me-1 text-primary"></i>Automatic scheduler</label>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Reminder days after due date</label>
+                <input type="text" name="offsets" class="form-control" value="<%= (Array.isArray(_rem.offsets) ? _rem.offsets : [1,7,15]).join(', ') %>" placeholder="e.g. 1, 7, 15">
+                <div class="form-hint">Comma-separated days overdue the auto scheduler nudges on.</div>
+            </div>
+            <div class="col-md-6">
+                <label class="form-label">Daily run hour (0–23)</label>
+                <input type="number" name="send_hour" class="form-control" min="0" max="23" value="<%= _rem.send_hour != null ? _rem.send_hour : 10 %>">
+                <div class="form-hint">Server hour the automatic job fires each day.</div>
+            </div>
+            <div class="col-12">
+                <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i> Save reminder settings</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- ── Quick actions ── -->
 <div class="card">
     <div class="card-body p-4">
@@ -304,7 +352,8 @@ var headActions =
                 </button>
             </form>
             <form method="post" action="/licenses/<%= _lic.id %>/regenerate" class="d-inline"
-                  onsubmit="return confirm('Generate a NEW license key for this license? The OLD key stops working immediately and the Tally agent must be re-activated with the new key. Continue?');">
+                  data-confirm="Generate a NEW license key? The OLD key stops working immediately and the Tally agent must be re-activated with the new key."
+                  data-confirm-title="Regenerate license key?" data-confirm-ok="Regenerate" data-confirm-variant="danger">
                 <button type="submit" class="btn btn-warning" title="Generate a new license key">
                     <i class="fa-solid fa-rotate-right me-1"></i>Regenerate Key
                 </button>

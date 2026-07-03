@@ -17,6 +17,11 @@ import '../features/customers/customer_detail_screen.dart';
 import '../features/customers/customer_form_screen.dart';
 import '../features/customers/customers_screen.dart';
 import '../features/dashboard/dashboard_screen.dart';
+import '../features/field/approvals_screen.dart';
+import '../features/field/checkin_screen.dart';
+import '../features/field/field_dashboard_screen.dart';
+import '../features/field/part_visit_screen.dart';
+import '../features/field/visits_screen.dart';
 import '../features/journals/journal_detail_screen.dart';
 import '../features/journals/journal_form_screen.dart';
 import '../features/journals/journals_screen.dart';
@@ -45,11 +50,18 @@ import '../features/suppliers/supplier_detail_screen.dart';
 import '../features/suppliers/supplier_form_screen.dart';
 import '../features/suppliers/suppliers_screen.dart';
 import '../features/notifications/notifications_screen.dart';
+import '../features/users/accountant_access_screen.dart';
+import '../features/reminders/reminders_screen.dart';
+import '../features/analytics/analytics_screen.dart';
+import '../features/expenses/expenses_screen.dart';
+import '../features/recurring_invoices/recurring_invoices_screen.dart';
+import '../features/bank_reconciliation/bank_reconciliation_screen.dart';
+import '../features/einvoices/einvoices_screen.dart';
 import '../features/users/roles_screen.dart';
 import '../features/users/users_screen.dart';
 import '../features/sync/change_history_screen.dart';
 import '../features/sync/sync_logs_screen.dart';
-import '../features/sync/sync_screen.dart';
+import '../features/sync/sync_dashboard_screen.dart';
 import '../features/transactions/invoice_detail_screen.dart';
 import '../features/transactions/transactions_hub_screen.dart';
 import '../features/splash/splash_screen.dart';
@@ -346,6 +358,34 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'sales-invoice-add',
         builder: (_, __) => const SalesInvoiceFormScreen(),
       ),
+      // SFA — the logged-in salesman's field dashboard (assigned locations).
+      GoRoute(
+        path: '/my-field',
+        name: 'my-field',
+        builder: (_, __) => const FieldDashboardScreen(),
+      ),
+      GoRoute(
+        path: '/field/checkin',
+        name: 'field-checkin',
+        builder: (_, __) => const CheckinScreen(),
+      ),
+      GoRoute(
+        path: '/field/part-visit',
+        name: 'field-part-visit',
+        builder: (_, __) => const PartVisitScreen(),
+      ),
+      GoRoute(
+        path: '/field/visits',
+        name: 'field-visits',
+        builder: (_, __) => const VisitsScreen(),
+      ),
+      // SFA — Invoice Approvals (admin). MUST precede '/sales-invoices/:id' so
+      // "approvals" isn't captured as an invoice id.
+      GoRoute(
+        path: '/sales-invoices/approvals',
+        name: 'sales-invoice-approvals',
+        builder: (_, __) => const ApprovalsScreen(),
+      ),
       GoRoute(
         path: '/sales-invoices/:id',
         name: 'sales-invoice-view',
@@ -486,7 +526,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/sync',
         name: 'sync',
-        builder: (_, __) => const SyncScreen(),
+        builder: (_, __) => const SyncDashboardScreen(),
       ),
       GoRoute(
         path: '/sync-logs',
@@ -517,6 +557,41 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/roles',
         name: 'roles',
         builder: (_, __) => const RolesScreen(),
+      ),
+      GoRoute(
+        path: '/accountant-access',
+        name: 'accountant-access',
+        builder: (_, __) => const AccountantAccessScreen(),
+      ),
+      GoRoute(
+        path: '/reminders',
+        name: 'reminders',
+        builder: (_, __) => const RemindersScreen(),
+      ),
+      GoRoute(
+        path: '/analytics',
+        name: 'analytics',
+        builder: (_, __) => const AnalyticsScreen(),
+      ),
+      GoRoute(
+        path: '/expenses',
+        name: 'expenses',
+        builder: (_, __) => const ExpensesScreen(),
+      ),
+      GoRoute(
+        path: '/recurring-invoices',
+        name: 'recurring-invoices',
+        builder: (_, __) => const RecurringInvoicesScreen(),
+      ),
+      GoRoute(
+        path: '/bank-reconciliation',
+        name: 'bank-reconciliation',
+        builder: (_, __) => const BankReconciliationScreen(),
+      ),
+      GoRoute(
+        path: '/einvoices',
+        name: 'einvoices',
+        builder: (_, __) => const EInvoicesScreen(),
       ),
 
       // ─── Reports (side trips off the Reports tab/hub) ───────────

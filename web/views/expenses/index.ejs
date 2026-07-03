@@ -1,0 +1,217 @@
+<%
+/* views/expenses/index.ejs — TRANSACTIONS · Expenses.
+ * Locals: expenses [{id,category,category_id,vendor,expense_date,amount,payment_mode,reference,notes}],
+ *         categories [{id,name}], total, monthTotal. */
+var _list = (typeof expenses !== 'undefined' && expenses) ? expenses : [];
+var _cats = (typeof categories !== 'undefined' && categories) ? categories : [];
+var _total = (typeof total !== 'undefined' && total) ? total : 0;
+var _month = (typeof monthTotal !== 'undefined' && monthTotal) ? monthTotal : 0;
+function _money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—'; }
+var MODES = ['Cash', 'Bank', 'UPI', 'Card', 'Cheque', 'Other'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Expenses',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Expenses' }],
+    actions: '<button type="button" class="btn btn-light" onclick="expOpenCats()"><i class="fa-solid fa-tags me-1"></i>Manage Categories</button>',
+}) %>
+
+<!-- Summary -->
+<div class="card ex-card ex-summary">
+    <div class="ex-metric"><span class="ex-metric-label">This Month</span><span class="ex-metric-val ex-red"><%= _money(_month) %></span></div>
+    <div class="ex-metric"><span class="ex-metric-label">Total Expenses</span><span class="ex-metric-val"><%= _money(_total) %></span></div>
+    <div class="ex-metric"><span class="ex-metric-label">Records</span><span class="ex-metric-val"><%= _list.length %></span></div>
+</div>
+
+<!-- Add expense -->
+<div class="card ex-card">
+    <h2 class="form-section-title">Add Expense</h2>
+    <form method="post" action="/expenses" autocomplete="off">
+        <div class="form-grid">
+            <div class="form-group">
+                <label class="form-label">Category</label>
+                <select class="form-select" name="category_id">
+                    <option value="">— Uncategorized —</option>
+                    <% _cats.forEach(function (c) { %><option value="<%= c.id %>"><%= c.name %></option><% }); %>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Vendor / Paid to</label>
+                <input type="text" class="form-control" name="vendor" placeholder="e.g. Landlord">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Date</label>
+                <input type="date" class="form-control" name="expense_date">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Amount <span class="req">*</span></label>
+                <input type="number" step="0.01" min="0" class="form-control" name="amount" placeholder="0.00" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Payment Mode</label>
+                <select class="form-select" name="payment_mode">
+                    <option value="">—</option>
+                    <% MODES.forEach(function (m) { %><option value="<%= m %>"><%= m %></option><% }); %>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Reference</label>
+                <input type="text" class="form-control" name="reference" placeholder="Bill / voucher no">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Notes</label>
+            <input type="text" class="form-control" name="notes" placeholder="Optional note">
+        </div>
+        <button type="submit" class="btn btn-gradient"><i class="fa-solid fa-plus"></i> Add Expense</button>
+    </form>
+</div>
+
+<!-- List -->
+<div class="card ex-card">
+    <h2 class="form-section-title">Expense Records <span class="ex-count"><%= _list.length %></span></h2>
+    <% if (!_list.length) { %>
+        <div class="ex-empty"><i class="fa-solid fa-receipt"></i><p>No expenses recorded yet. Add one above.</p></div>
+    <% } else { %>
+        <div class="table-wrap">
+            <table class="ex-table">
+                <thead><tr><th>Date</th><th>Category</th><th>Vendor</th><th>Mode</th><th>Reference</th><th class="ex-right">Amount</th><th class="ex-right">Actions</th></tr></thead>
+                <tbody>
+                    <% _list.forEach(function (e) { %>
+                        <tr>
+                            <td class="ex-muted"><%= _date(e.expense_date) %></td>
+                            <td><% if (e.category) { %><span class="ex-cat"><%= e.category %></span><% } else { %><span class="ex-muted">—</span><% } %></td>
+                            <td><%= e.vendor || '—' %></td>
+                            <td class="ex-muted"><%= e.payment_mode || '—' %></td>
+                            <td class="ex-muted"><%= e.reference || '—' %></td>
+                            <td class="ex-right"><strong><%= _money(e.amount) %></strong></td>
+                            <td class="ex-right">
+                                <button type="button" class="ex-icon-btn" title="Edit"
+                                    data-id="<%= e.id %>" data-category_id="<%= e.category_id || '' %>" data-vendor="<%= e.vendor || '' %>"
+                                    data-expense_date="<%= e.expense_date ? String(e.expense_date).slice(0,10) : '' %>" data-amount="<%= e.amount %>"
+                                    data-payment_mode="<%= e.payment_mode || '' %>" data-reference="<%= e.reference || '' %>" data-notes="<%= e.notes || '' %>"
+                                    onclick="expEdit(this)"><i class="fa-solid fa-pen"></i></button>
+                                <form method="post" action="/expenses/<%= e.id %>/delete" style="display:inline" id="exdel-<%= e.id %>"></form>
+                                <button type="button" class="ex-icon-btn ex-del" title="Delete" onclick="expAskDelete('exdel-<%= e.id %>')"><i class="fa-regular fa-trash-can"></i></button>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
+
+<!-- Edit modal -->
+<div id="ex-edit" class="ex-overlay">
+    <div class="ex-modal">
+        <h3>Edit Expense</h3>
+        <form method="post" id="ex-edit-form" action="/expenses/0" autocomplete="off">
+            <div class="form-grid">
+                <div class="form-group"><label class="form-label">Category</label>
+                    <select class="form-select" name="category_id" id="ex-e-cat"><option value="">— Uncategorized —</option><% _cats.forEach(function (c) { %><option value="<%= c.id %>"><%= c.name %></option><% }); %></select></div>
+                <div class="form-group"><label class="form-label">Vendor</label><input class="form-control" name="vendor" id="ex-e-vendor"></div>
+                <div class="form-group"><label class="form-label">Date</label><input type="date" class="form-control" name="expense_date" id="ex-e-date"></div>
+                <div class="form-group"><label class="form-label">Amount <span class="req">*</span></label><input type="number" step="0.01" min="0" class="form-control" name="amount" id="ex-e-amount" required></div>
+                <div class="form-group"><label class="form-label">Payment Mode</label>
+                    <select class="form-select" name="payment_mode" id="ex-e-mode"><option value="">—</option><% MODES.forEach(function (m) { %><option value="<%= m %>"><%= m %></option><% }); %></select></div>
+                <div class="form-group"><label class="form-label">Reference</label><input class="form-control" name="reference" id="ex-e-ref"></div>
+            </div>
+            <div class="form-group"><label class="form-label">Notes</label><input class="form-control" name="notes" id="ex-e-notes"></div>
+            <div class="ex-modal-actions">
+                <button type="button" class="btn btn-light" onclick="expClose('ex-edit')">Cancel</button>
+                <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Categories modal -->
+<div id="ex-cats" class="ex-overlay">
+    <div class="ex-modal">
+        <h3>Expense Categories</h3>
+        <form method="post" action="/expense-categories" class="ex-cat-add">
+            <input type="text" class="form-control" name="name" placeholder="New category (e.g. Utilities)" required>
+            <button type="submit" class="btn btn-primary"><i class="fa-solid fa-plus"></i></button>
+        </form>
+        <div class="ex-cat-list">
+            <% if (!_cats.length) { %><p class="ex-muted" style="text-align:center;padding:12px">No categories yet.</p><% } %>
+            <% _cats.forEach(function (c) { %>
+                <div class="ex-cat-row">
+                    <span><%= c.name %></span>
+                    <form method="post" action="/expense-categories/<%= c.id %>/delete" style="display:inline" id="excat-<%= c.id %>"></form>
+                    <button type="button" class="ex-icon-btn ex-del" title="Delete" onclick="expAskDelete('excat-<%= c.id %>')"><i class="fa-regular fa-trash-can"></i></button>
+                </div>
+            <% }); %>
+        </div>
+        <div class="ex-modal-actions"><button type="button" class="btn btn-light" onclick="expClose('ex-cats')">Close</button></div>
+    </div>
+</div>
+
+<!-- Delete confirm -->
+<div id="ex-del" class="ex-overlay">
+    <div class="ex-modal ex-modal-sm">
+        <div class="ex-del-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <h3>Delete this record?</h3>
+        <p class="ex-muted">This action cannot be undone.</p>
+        <div class="ex-modal-actions">
+            <button type="button" class="btn btn-light" onclick="expClose('ex-del')">Cancel</button>
+            <button type="button" class="btn btn-danger" onclick="expConfirmDelete()">Delete</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    function expOpen(id) { document.getElementById(id).classList.add('open'); }
+    function expClose(id) { document.getElementById(id).classList.remove('open'); }
+    function expOpenCats() { expOpen('ex-cats'); }
+    function expEdit(btn) {
+        var f = document.getElementById('ex-edit-form');
+        f.action = '/expenses/' + btn.getAttribute('data-id');
+        document.getElementById('ex-e-cat').value = btn.getAttribute('data-category_id') || '';
+        document.getElementById('ex-e-vendor').value = btn.getAttribute('data-vendor') || '';
+        document.getElementById('ex-e-date').value = btn.getAttribute('data-expense_date') || '';
+        document.getElementById('ex-e-amount').value = btn.getAttribute('data-amount') || '';
+        document.getElementById('ex-e-mode').value = btn.getAttribute('data-payment_mode') || '';
+        document.getElementById('ex-e-ref').value = btn.getAttribute('data-reference') || '';
+        document.getElementById('ex-e-notes').value = btn.getAttribute('data-notes') || '';
+        expOpen('ex-edit');
+    }
+    var _exDelForm = null;
+    function expAskDelete(formId) { _exDelForm = formId; expOpen('ex-del'); }
+    function expConfirmDelete() { if (_exDelForm) document.getElementById(_exDelForm).submit(); }
+    document.querySelectorAll('.ex-overlay').forEach(function (o) { o.addEventListener('click', function (e) { if (e.target === o) o.classList.remove('open'); }); });
+</script>
+
+<style>
+    .card.ex-card { padding:20px; margin-bottom:18px; }
+    .form-section-title { margin:0 0 16px; }
+    .ex-summary { display:flex; flex-wrap:wrap; gap:32px; }
+    .ex-metric { display:flex; flex-direction:column; gap:3px; }
+    .ex-metric-label { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; }
+    .ex-metric-val { font-size:22px; font-weight:800; color:#111827; }
+    .ex-red { color:#DC2626; }
+    .ex-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .ex-empty { text-align:center; padding:32px 12px; color:#9CA3AF; } .ex-empty i { font-size:34px; opacity:.5; } .ex-empty p { margin:12px 0 0; }
+    .ex-table { width:100%; border-collapse:collapse; }
+    .ex-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 12px 12px; border-bottom:1px solid #EEF1F5; }
+    .ex-table td { padding:12px; border-bottom:1px solid #F3F4F6; }
+    .ex-table tr:last-child td { border-bottom:none; }
+    .ex-right { text-align:right; } .ex-muted { color:#6B7280; }
+    .ex-cat { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; background:rgba(109,40,217,.10); color:#6D28D9; }
+    .ex-icon-btn { border:1px solid var(--border); background:#fff; color:#4B5563; width:32px; height:32px; border-radius:8px; cursor:pointer; margin-left:4px; }
+    .ex-icon-btn:hover { background:#F8FAFC; } .ex-del { color:#DC2626; border-color:#FECACA; } .ex-del:hover { background:#FEF2F2; }
+    .ex-overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:2000; }
+    .ex-overlay.open { display:flex; }
+    .ex-modal { background:#fff; border-radius:16px; padding:24px; max-width:640px; width:92%; box-shadow:0 24px 70px rgba(0,0,0,.25); max-height:88vh; overflow:auto; }
+    .ex-modal-sm { max-width:400px; text-align:center; }
+    .ex-modal h3 { margin:0 0 16px; font-size:18px; font-weight:700; color:#111827; }
+    .ex-modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+    .ex-modal-sm .ex-modal-actions { justify-content:center; }
+    .ex-del-icon { width:52px; height:52px; margin:0 auto 14px; border-radius:50%; background:rgba(220,38,38,.12); color:#DC2626; display:grid; place-items:center; font-size:22px; }
+    .ex-cat-add { display:flex; gap:8px; margin-bottom:14px; }
+    .ex-cat-list { max-height:280px; overflow:auto; }
+    .ex-cat-row { display:flex; align-items:center; justify-content:space-between; padding:9px 4px; border-bottom:1px solid #F3F4F6; }
+    .req { color:#DC2626; }
+</style>

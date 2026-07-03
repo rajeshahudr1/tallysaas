@@ -47,6 +47,24 @@ function _mlabel(ym) { var p = String(ym).split('-'); return (MN[Number(p[1])] |
     </div>
 </div>
 
+<%# ── Pending-approval strip: these invoices are NOT counted above until an admin
+     approves them. Links to the flat cross-month pending view. ── %>
+<% var _pend = (typeof pendingCount !== 'undefined') ? Number(pendingCount) : 0; %>
+<% if (_pend > 0) { %>
+<a href="/sales-invoices?approval=pending" class="pending-strip">
+    <i class="fa-solid fa-clock"></i>
+    <span><strong><%= _pend %></strong> invoice<%= _pend === 1 ? '' : 's' %> awaiting approval — not counted in Sales yet.</span>
+    <span class="pending-strip-cta">View pending <i class="fa-solid fa-arrow-right"></i></span>
+</a>
+<style>
+    .pending-strip { display:flex; align-items:center; gap:10px; margin-bottom:14px;
+        padding:11px 16px; background:#fffbeb; border:1px solid #fde68a; border-radius:10px;
+        color:#92400e; text-decoration:none; font-size:13px; }
+    .pending-strip:hover { background:#fef3c7; }
+    .pending-strip .pending-strip-cta { margin-left:auto; font-weight:700; color:#b45309; white-space:nowrap; }
+</style>
+<% } %>
+
 <div class="card">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px 6px;flex-wrap:wrap;gap:10px">
         <div style="font-size:13px;color:#475569;font-weight:600">

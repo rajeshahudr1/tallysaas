@@ -19,6 +19,8 @@ class Invoice {
     this.roundOff,
     this.total,
     this.status,
+    this.approvalStatus,
+    this.salesPerson,
     this.notes,
     this.items = const [],
   });
@@ -38,8 +40,15 @@ class Invoice {
   final num? roundOff;
   final num? total;
   final String? status; // pending_tally | sent_to_tally | created | failed
+  final String? approvalStatus; // draft | pending | approved | rejected (SFA)
+  final String? salesPerson;    // salesman name (list join)
   final String? notes;
   final List<InvoiceItem> items;
+
+  /// SFA convenience — a field invoice still waiting on admin approval.
+  bool get isPendingApproval => (approvalStatus ?? '') == 'pending';
+  bool get isDraft => (approvalStatus ?? '') == 'draft';
+  bool get isRejected => (approvalStatus ?? '') == 'rejected';
 
   /// The party label that applies to this voucher kind (customer for sales,
   /// supplier for purchase) — whichever the join filled in.
@@ -63,6 +72,8 @@ class Invoice {
       roundOff: _toNum(j['round_off']),
       total: _toNum(j['total']),
       status: _sn(j['status']),
+      approvalStatus: _sn(j['approval_status']),
+      salesPerson: _sn(j['sales_person']),
       notes: _sn(j['notes']),
       items: rawItems
           .whereType<Map>()

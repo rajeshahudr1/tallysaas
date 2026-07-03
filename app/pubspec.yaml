@@ -16,6 +16,14 @@ dependencies:
   # cancel tokens, and structured DioException → API envelope.
   dio: ^5.4.3+1
 
+  # ─── Media (product image gallery) ──────────────────────────
+  # image_picker → native gallery/camera picker; http_parser gives us
+  # MediaType so each uploaded image carries a real image/* content-type
+  # (Dio would otherwise send application/octet-stream, which the API's
+  # mime filter rejects).
+  image_picker: ^1.1.2
+  http_parser: ^4.0.2
+
   # ─── State management + DI ──────────────────────────────────
   # Riverpod = compile-safe DI + reactive providers. Every service and
   # piece of session state is exposed as a provider.
@@ -46,6 +54,19 @@ dependencies:
   # Takes the server-rendered PDF bytes (GET /reports/<type>/pdf) and opens the
   # native print / save / share sheet on iOS + Android — the report "Print/PDF".
   printing: ^5.12.0
+
+  # ─── App auto-update (self-install of a newer APK; sideloaded, not Play) ──
+  # package_info_plus → installed build number (compared to /app/version);
+  # path_provider → a cache dir to save the downloaded apk; open_filex → open
+  # the apk to trigger Android's package installer.
+  package_info_plus: ^8.0.2
+  path_provider: ^2.1.4
+  open_filex: ^4.5.0
+
+  # ─── GPS field tracking (SFA Phase 2) ───────────────────────
+  # geolocator → device GPS + runtime location-permission flow for the
+  # salesman's Start/End-Day punch and outlet check-in (geofence verify).
+  geolocator: ^11.0.0
 
 dev_dependencies:
   flutter_test:

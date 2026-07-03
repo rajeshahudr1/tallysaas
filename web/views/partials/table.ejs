@@ -145,7 +145,18 @@ function _alignClass(col) {
                     <% _columns.forEach(function (col) { %>
                         <% var val = row[col.key]; %>
                         <td class="<%= _alignClass(col) %>">
-                            <% if (col.type === 'currency') { %>
+                            <% if (col.type === 'thumb') { %>
+                                <% var _tImgs = Array.isArray(row.images) ? row.images : (val ? [val] : []); %>
+                                <% if (val) { %>
+                                    <button type="button" class="data-table-thumb-btn" title="View images"
+                                            data-gallery data-gallery-images="<%= JSON.stringify(_tImgs) %>"
+                                            data-gallery-title="<%= row.name || 'Images' %>">
+                                        <img class="data-table-thumb" src="<%= val %>" alt="" loading="lazy">
+                                    </button>
+                                <% } else { %>
+                                    <span class="data-table-thumb data-table-thumb--empty"><i class="fa-regular fa-image"></i></span>
+                                <% } %>
+                            <% } else if (col.type === 'currency') { %>
                                 <span class="data-table-money"><%= _inr(val) %></span>
                             <% } else if (col.type === 'status') { %>
                                 <span class="pill-status <%= _statusClass(val) %>"><%= val %></span>
@@ -175,18 +186,22 @@ function _alignClass(col) {
                         // A human label for the modals = first non-empty column value.
                         var _label = '';
                         for (var _ci = 0; _ci < _columns.length; _ci++) {
+                            if (_columns[_ci].type === 'thumb') continue;   // a thumb value is an image URL, never a title
                             var _cv = row[_columns[_ci].key];
                             if (_cv !== undefined && _cv !== null && String(_cv).trim() !== '') { _label = String(_cv); break; }
                         }
                         // Details payload for the View popup. A row may supply its own
                         // `_detail` array (tab-wise groups + ALL fields) — use it when
                         // present; otherwise fall back to the visible columns.
-                        var _details = Array.isArray(row._detail) ? row._detail : _columns.map(function (c) {
+                        var _details = Array.isArray(row._detail) ? row._detail : _columns.filter(function (c) { return c.type !== 'thumb'; }).map(function (c) {
                             var v = row[c.key];
                             if (c.type === 'currency') v = _inr(v);
                             else if (Array.isArray(v)) v = v.join(', ');
                             return { label: c.label, value: (v === 0 || v) ? String(v) : '—' };
                         });
+                        // Row-level action lock (e.g. an APPROVED invoice a non-admin
+                        // may no longer edit/delete). View + Print stay available.
+                        var _locked = !!row._lockActions;
                         %>
                         <td class="text-end data-table-actions">
                             <%# All row actions live in ONE compact ⋮ dropdown so the
@@ -204,11 +219,12 @@ function _alignClass(col) {
                                             <i class="fa-regular fa-eye me-2 text-muted"></i>View</button></li>
                                     <% } %>
                                     <% if (_actions.indexOf('edit') > -1) { %>
-                                        <% if (_canLink && _editable) { %>
+                                        <% if (_canLink && _editable && !_locked) { %>
                                             <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/edit">
                                                 <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</a></li>
                                         <% } else { %>
-                                            <li><button class="dropdown-item" type="button" disabled>
+                                            <li><button class="dropdown-item" type="button" disabled
+                                                    <% if (_locked) { %>title="Approved — locked"<% } %>>
                                                 <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</button></li>
                                         <% } %>
                                     <% } %>
@@ -218,9 +234,15 @@ function _alignClass(col) {
                                     <% } %>
                                     <% if (_actions.indexOf('delete') > -1) { %>
                                         <li><hr class="dropdown-divider"></li>
-                                        <li><button class="dropdown-item text-danger" type="button"
-                                                <% if (_canLink) { %>data-row-delete data-delete-url="<%= _base %>/<%= _idVal %>" data-delete-label="<%= _label %>"<% } else { %>disabled<% } %>>
-                                            <i class="fa-regular fa-trash-can me-2"></i>Delete</button></li>
+                                        <% if (_canLink && !_locked) { %>
+                                            <li><button class="dropdown-item text-danger" type="button"
+                                                    data-row-delete data-delete-url="<%= _base %>/<%= _idVal %>" data-delete-label="<%= _label %>">
+                                                <i class="fa-regular fa-trash-can me-2"></i>Delete</button></li>
+                                        <% } else { %>
+                                            <li><button class="dropdown-item text-danger" type="button" disabled
+                                                    <% if (_locked) { %>title="Approved — locked"<% } %>>
+                                                <i class="fa-regular fa-trash-can me-2"></i>Delete</button></li>
+                                        <% } %>
                                     <% } %>
                                 </ul>
                             </div>

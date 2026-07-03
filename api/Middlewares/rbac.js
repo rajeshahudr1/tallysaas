@@ -21,8 +21,10 @@
 
 const R  = require('../Helpers/response');
 const db = require('../config/db').db;
+const { entitledSlugSet } = require('../Helpers/entitlements');
 
 const FORBIDDEN_MSG = 'You do not have permission to perform this action.';
+const PLAN_MSG = 'This feature is not included in your plan. Please contact your administrator.';
 
 // role_id → Set<'module.action'>. Lazy-filled on first check for a role.
 const _permCache = new Map();
@@ -65,14 +67,37 @@ function can(module, action) {
 
         try {
             const perms = await loadRolePermissions(user.role_id);
-            if (perms.has(required)) return next();
-            return R.errorResponse(res, FORBIDDEN_MSG, 403);
+            if (!perms.has(required)) return R.errorResponse(res, FORBIDDEN_MSG, 403);
+            // PLAN GATE — even a company-admin (whose role has every permission)
+            // is blocked from a module the LICENCE's plan is not entitled to. A
+            // licence with no explicit entitlements resolves to ALL, so existing
+            // licences keep full access until a plan is set.
+            const licenseId = user.license_id;
+            if (licenseId) {
+                const entitled = await entitledSlugSet(licenseId);
+                if (entitled && !entitled.has(required)) return R.errorResponse(res, PLAN_MSG, 403);
+            }
+            return next();
         } catch (err) {
             console.error('rbac.can error:', err);
             // Fail closed — a lookup failure must not grant access.
             return R.errorResponse(res, FORBIDDEN_MSG, 403);
         }
     };
+}
+
+/**
+ * Field-sales (SFA) gate. A LINKED salesman is entitled to their own field
+ * views simply BY BEING a salesman — their custom role need not carry a
+ * `field-sales.view` grant (and it usually won't). Everyone else (admins /
+ * managers who monitor field sales) must hold `field-sales.view`. Must run
+ * AFTER resolveLocation (which sets req.isSalesman).
+ */
+function canField(req, res, next) {
+    const user = req.user || {};
+    if (user.role_slug === 'super-admin') return next();
+    if (req.isSalesman) return next();               // being a salesman IS the entitlement
+    return can('field-sales', 'view')(req, res, next);
 }
 
 /**
@@ -86,6 +111,7 @@ function clearCache(roleId) {
 
 module.exports = {
     can,
+    canField,
     clearCache,
     loadRolePermissions,
     FORBIDDEN_MSG,

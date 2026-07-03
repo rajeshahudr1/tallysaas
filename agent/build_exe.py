@@ -181,6 +181,12 @@ def build(gui: bool = False) -> int:
         "--hidden-import",
         "tally_connector",
     ]
+    # Brand icon for BOTH the exe FILE icon (--icon) and the running window /
+    # taskbar icon (bundled via --add-data so gui_agent iconbitmaps it at
+    # runtime) — so the file icon and the app-window icon are the SAME.
+    icon_ico = here / "app_icon.ico"
+    if icon_ico.exists():
+        cmd += ["--icon", str(icon_ico), "--add-data", str(icon_ico) + ";."]
     if gui:
         # No console window for the windowed GUI. The GUI also imports the engine
         # entry point (sync_agent) + the new constants/win_service modules, so

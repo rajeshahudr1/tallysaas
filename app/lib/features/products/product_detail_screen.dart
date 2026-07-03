@@ -1,14 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/auth/session.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/product.dart';
 import '../../data/repositories/product_repository.dart';
 import '../../shared/widgets/detail_view.dart';
 import '../../shared/widgets/status_pill.dart';
+import 'product_images_section.dart';
 
 /// Product detail (View) — read-only mirror of the form, via the shared
 /// [DetailScaffold] (RBAC-gated Edit/Delete on `products.edit`/`products.delete`).
+/// Also hosts the image gallery (add/remove gated on `products.edit`).
 class ProductDetailScreen extends ConsumerWidget {
   const ProductDetailScreen({super.key, required this.productId});
   final int productId;
@@ -16,6 +19,8 @@ class ProductDetailScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repo = ref.read(productRepositoryProvider);
+    final session = ref.watch(sessionProvider);
+    final canEdit = session is SessionSignedIn && session.user.can('products', 'edit');
     return DetailScaffold<Product>(
       title: 'Product',
       module: 'products',
@@ -40,6 +45,8 @@ class ProductDetailScreen extends ConsumerWidget {
         DetailRow('Sales Price', p.salesPrice == null ? null : Fmt.inr(p.salesPrice)),
         const DetailSection('Stock & Inventory'),
         DetailRow('Opening Stock', p.openingStock?.toString()),
+        const DetailSection('Product Images'),
+        ProductImagesSection(productId: p.id, initial: p.images, canEdit: canEdit),
         if (p.customFields.isNotEmpty) ...[
           const DetailSection('Custom Fields'),
           for (final e in p.customFields.entries) DetailRow(e.key, e.value?.toString()),

@@ -32,6 +32,16 @@ const agentUpload = multer({
     limits: { fileSize: 200 * 1024 * 1024, files: 1 },
 }).single('file');
 
+// Multipart receiver for the product-image gallery: up to 8 images held in
+// memory, then re-streamed on to the api as multipart (field `images`). 5MB per
+// file mirrors the api's own multer cap; only image mimetypes pass the filter.
+const PRODUCT_IMG_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const productImgUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 8 },
+    fileFilter: (req, file, cb) => cb(null, PRODUCT_IMG_MIMES.has(file.mimetype)),
+}).array('images', 8);
+
 /* ── Public auth routes (NO guard) ──────────────────────────── */
 router.get('/login',  AuthController.showLogin);
 router.post('/login', AuthController.login);
@@ -41,6 +51,49 @@ router.post('/reset-password',  AuthController.reset);
 router.get('/logout', AuthController.logout);
 
 /* Everything below this line requires a logged-in session. */
+
+/* ── My Profile — available to EVERY role. Shows identity (name/email/role/
+ *    mobile) + a Change Password form. GET reads the session user + /me. ── */
+router.get('/profile', async (req, res, next) => {
+    try {
+        let me = null;
+        try { const r = await api.get(req, '/me'); me = (r.body && r.body.data) || null; } catch (_) { /* fall back to session */ }
+        const u = (req.session && req.session.user) || {};
+        const profile = {
+            name:   (me && me.name)  || u.name  || 'User',
+            email:  (me && me.email) || u.email || '',
+            mobile: (me && me.mobile) || u.mobile || '',
+            role:   (me && me.role && me.role.name) || u.role || u.role_slug || '',
+            status: (me && me.status) || '',
+            last_login_at: me && me.last_login_at,
+        };
+        res.render('profile/index', {
+            title: 'My Profile',
+            activeMenu: '',
+            breadcrumb: [{ label: 'My Profile' }],
+            profile,
+        });
+    } catch (err) { next(err); }
+});
+
+/* POST /profile/change-password — proxy to the api (self password change). */
+router.post('/profile/change-password', async (req, res, next) => {
+    try {
+        const b = req.body || {};
+        if (String(b.new_password || '') !== String(b.confirm_password || '')) {
+            setFlash(req, 'error', 'The new password and confirmation do not match.');
+            return req.session.save(() => res.redirect('/profile'));
+        }
+        const result = await api.post(req, '/account/change-password', {
+            current_password: b.current_password,
+            new_password:     b.new_password,
+        });
+        setFlash(req, apiOk(result) ? 'success' : 'error',
+            apiOk(result) ? ((result.body && result.body.msg) || 'Your password has been changed.')
+                          : apiError(result, 'Could not change your password.'));
+        return req.session.save(() => res.redirect('/profile'));
+    } catch (err) { next(err); }
+});
 router.use(requireAuth);
 
 /* ── RBAC route guard ───────────────────────────────────────────
@@ -198,11 +251,24 @@ function isHeartbeatFresh(tsIso) {
 async function apiList(req, basePath) {
     const page    = Math.max(1, parseInt(req.query.page, 10) || 1);
     const perPage = parseInt(req.query.per_page, 10) || 10;
-    const qs = new URLSearchParams({ page: String(page), per_page: String(perPage) });
-    if (req.query.search) qs.set('search', String(req.query.search));
-    if (req.query.status) qs.set('status', String(req.query.status));
-    if (req.query.sort)   qs.set('sort',  String(req.query.sort));
-    if (req.query.order)  qs.set('order', String(req.query.order));
+
+    // basePath MAY already carry a query string (e.g. the Approvals screen passes
+    // '/sales-invoices?approval=pending'). PARSE it out and MERGE, using qs.set()
+    // throughout so we NEVER emit a duplicate key. A duplicated 'page' (basePath
+    // had page=1 AND we add page=1) reaches the api as an ARRAY → Joi rejects it
+    // with 422 ("page must be a number") → the whole list comes back empty. That
+    // was exactly why the admin's approval queue rendered "All caught up".
+    const qIdx = basePath.indexOf('?');
+    const path = qIdx === -1 ? basePath : basePath.slice(0, qIdx);
+    const qs   = new URLSearchParams(qIdx === -1 ? '' : basePath.slice(qIdx + 1));
+
+    qs.set('page', String(page));
+    qs.set('per_page', String(perPage));
+    if (req.query.search)   qs.set('search', String(req.query.search));
+    if (req.query.status)   qs.set('status', String(req.query.status));
+    if (req.query.approval) qs.set('approval', String(req.query.approval));
+    if (req.query.sort)     qs.set('sort',  String(req.query.sort));
+    if (req.query.order)    qs.set('order', String(req.query.order));
     // Forward filter dropdown params so the api can actually filter the list.
     for (const k of ['location', 'sales_person', 'customer_group', 'supplier_group', 'gst',
         'category', 'gst_rate', 'hsn', 'parent', 'state', 'financial_year', 'created_from', 'created_to',
@@ -210,7 +276,7 @@ async function apiList(req, basePath) {
         if (req.query[k]) qs.set(k, String(req.query[k]));
     }
 
-    const { body } = await api.get(req, `${basePath}?${qs.toString()}`);
+    const { body } = await api.get(req, `${path}?${qs.toString()}`);
     const payload  = (body && body.data) || {};
     const rows     = Array.isArray(payload.data) ? payload.data : [];
     const meta     = payload.meta || { total: rows.length, page, per_page: perPage };
@@ -480,6 +546,13 @@ function txStatusLabel(s) {
 /* ── PAGE 3 — Dashboard (GET /) ─────────────────────────────── */
 router.get('/', async (req, res, next) => {
     try {
+        // Role-based landing:
+        //  • Super Admin is a platform operator (no tenant data) → their overview
+        //    is the Licenses screen (total licences, companies, expiry, sync…).
+        //  • A field salesman has no company-dashboard permission (the KPI page
+        //    would 403) → their own "My Field" dashboard.
+        if (res.locals.isSuperAdmin) return res.redirect('/licenses');
+        if (res.locals.isSalesman)   return res.redirect('/my-field');
         // Date-range picker (header pill). Default = current month (1st → today)
         // so the pill always shows a concrete, working range; the user can
         // change it. Both dates flow to the api, which scopes the money metrics.
@@ -1381,7 +1454,9 @@ router.get('/products', async (req, res, next) => {
             try { cf = (typeof r.custom_fields === 'string') ? JSON.parse(r.custom_fields || '{}') : (r.custom_fields || {}); } catch (_) { cf = {}; }
             const cfRows = Object.keys(cf).map((k) => ({ label: k, value: String(cf[k] || '—') }));
             return {
-                id: r.id, name: r.name, sku: r.sku || '', category: r.category || '',
+                id: r.id, name: r.name, image_url: r.image_url || null,
+                images: Array.isArray(r.images) ? r.images.map((im) => im.url).filter(Boolean) : [],
+                sku: r.sku || '', category: r.category || '',
                 hsn: r.hsn_code || '', gst_rate: (r.gst_rate != null ? parseFloat(r.gst_rate) + '%' : ''),
                 purchase_price: r.purchase_price, sales_price: r.sales_price,
                 stock: r.opening_stock != null ? parseFloat(r.opening_stock) : '',
@@ -1449,7 +1524,13 @@ router.post('/products', async (req, res, next) => {
             custom_fields: assembleCustomFields(b),
         };
         const result = await api.post(req, '/products', payload);
-        if (apiOk(result)) { setFlash(req, 'success', 'Product created successfully.'); return req.session.save(() => res.redirect('/products')); }
+        if (apiOk(result)) {
+            const newId = result.body && result.body.data && result.body.data.id;
+            setFlash(req, 'success', 'Product created — add images below (optional).');
+            // Land on the edit page so images (which need a saved product id) can be
+            // added right away, instead of bouncing back to the list.
+            return req.session.save(() => res.redirect(newId ? `/products/${newId}/edit` : '/products'));
+        }
         setFlash(req, 'error', apiError(result, 'Could not create product.'));
         return req.session.save(() => res.redirect('/products/add'));
     } catch (err) { next(err); }
@@ -1518,9 +1599,39 @@ router.get('/sales-invoices', async (req, res, next) => {
   try {
     const month = String(req.query.month || '').trim();
 
-    // ── NO MONTH → Tally Sales-Register: month-wise summary (drill-down) ──
+    // ── NO MONTH ──
     if (!/^\d{4}-\d{2}$/.test(month)) {
+        const approval = String(req.query.approval || '').trim();
+        // A non-approved tab (Pending / All) → a FLAT list across every month, so a
+        // salesman can find their pending invoices without knowing the month.
+        if (approval && approval !== 'approved') {
+            const { rows, meta } = await apiList(req, '/sales-invoices');
+            const _viewerIsAdmin = !!(res.locals.isCompanyAdmin || res.locals.isSuperAdmin);
+            const invoiceRows = rows.map((r) => ({
+                id: r.id, invoice_no: r.invoice_no, date: fmtDate(r.invoice_date), vch_type: 'Sales',
+                customer: r.customer || '', location: r.location || '',
+                amount: r.taxable, gst: r.tax_amount, total: r.total,
+                status: txStatusLabel(r.status), sales_person: r.sales_person || '',
+                approval: r.approval_status || 'approved',
+                _lockActions: !_viewerIsAdmin && (r.approval_status === 'approved'),
+            }));
+            return res.render('sales-invoices/list', {
+                title: 'Sales Invoices', activeMenu: 'sales-inv',
+                breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Sales Invoices' }],
+                invoiceRows, invoicesTotal: meta.total, grandTotal: meta.grand_total || 0,
+                page: meta.page, perPage: meta.per_page,
+                monthMode: false, approvalTab: approval, monthValue: '',
+                customerNames: mock.customerNames, locationNames: mock.locationNames, invoiceStatuses: mock.invoiceStatuses,
+            });
+        }
+        // Tally Sales-Register: month-wise summary of the APPROVED (real) sales.
         const { rows: monthRows, meta: mMeta } = await apiList(req, '/sales-invoices/monthly');
+        // Count of invoices still awaiting approval (for the register banner/link).
+        let pendingCount = 0;
+        try {
+            const p = await apiList(req, '/sales-invoices?approval=pending');
+            pendingCount = (p.meta && p.meta.total != null) ? p.meta.total : (p.rows ? p.rows.length : 0);
+        } catch (_) { /* non-fatal */ }
         return res.render('sales-invoices/register', {
             title: 'Sales Register',
             activeMenu: 'sales-inv',
@@ -1530,6 +1641,7 @@ router.get('/sales-invoices', async (req, res, next) => {
             ],
             months:     monthRows,
             grandTotal: mMeta.grand_total || 0,
+            pendingCount,
         });
     }
 
@@ -1543,12 +1655,17 @@ router.get('/sales-invoices', async (req, res, next) => {
     const monthLabel = `${MN[mm]} ${yy}`;
 
     const { rows, meta } = await apiList(req, '/sales-invoices');
+    // Once an invoice is APPROVED it counts + syncs to Tally, so a non-admin can
+    // no longer edit/delete it — lock those row actions (admins stay unlocked).
+    const _viewerIsAdmin = !!(res.locals.isCompanyAdmin || res.locals.isSuperAdmin);
     const invoiceRows = rows.map((r) => ({
         id: r.id, invoice_no: r.invoice_no, date: fmtDate(r.invoice_date),
         vch_type: 'Sales',
         customer: r.customer || '', location: r.location || '',
         amount: r.taxable, gst: r.tax_amount, total: r.total,
         status: txStatusLabel(r.status), sales_person: r.sales_person || '',
+        approval: r.approval_status || 'approved',
+        _lockActions: !_viewerIsAdmin && (r.approval_status === 'approved'),
     }));
     res.render('sales-invoices/list', {
         title: 'Sales Invoices · ' + monthLabel,
@@ -1567,6 +1684,8 @@ router.get('/sales-invoices', async (req, res, next) => {
         monthMode:      true,
         monthLabel,
         monthValue:     month,
+        // SFA approval tab: 'approved' (default — real sales) | 'pending' | 'all'.
+        approvalTab:    String(req.query.approval || 'approved'),
 
         // Filter option sources.
         customerNames:  mock.customerNames,
@@ -1611,6 +1730,9 @@ router.post('/sales-invoices', async (req, res, next) => {
     try {
         const b = req.body;
         const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        // SFA — a salesman may "Save as Draft" (button posts save_as_draft=1)
+        // instead of submitting for approval. Harmless for admins (api ignores it).
+        const wantsDraft = b.save_as_draft === '1' || b.save_as_draft === 'true' || b.save_as_draft === 'on';
         const payload = {
             customer_id:     num(b.customer_id),
             location_id:     num(b.location_id),
@@ -1618,17 +1740,137 @@ router.post('/sales-invoices', async (req, res, next) => {
             invoice_date:    b.invoice_date || undefined,
             due_date:        b.due_date || undefined,
             notes:           b.notes || undefined,
+            save_as_draft:   wantsDraft ? true : undefined,
             items:           parseInvoiceItems(b.items_json),
         };
         const result = await api.post(req, '/sales-invoices', payload);
         if (apiOk(result)) {
-            const no = result.body.data && result.body.data.invoice_no;
-            setFlash(req, 'success', `Invoice ${no || ''} created successfully.`);
-            return req.session.save(() => res.redirect('/sales-invoices'));
+            // Use the api's message ("Draft saved." / "Invoice submitted for
+            // approval." / "Invoice created.") so the salesman sees the right one.
+            const msg = (result.body && result.body.message)
+                || `Invoice ${(result.body.data && result.body.data.invoice_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            // Salesmen land on their field dashboard; admins on the register.
+            return req.session.save(() => res.redirect(res.locals.isSalesman ? '/my-field' : '/sales-invoices'));
         }
         setFlash(req, 'error', apiError(result, 'Could not create invoice.'));
         return req.session.save(() => res.redirect('/sales-invoices/create'));
     } catch (err) { next(err); }
+});
+
+/* ── SFA · Invoice Approvals — pending field invoices for an admin to act on.
+ *    (GET /sales-invoices/approvals) — must be a LITERAL path (no :id conflict). */
+router.get('/sales-invoices/approvals', async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const { rows, meta } = await apiList(req, '/sales-invoices?approval=pending');
+    const approvals = rows.map((r) => ({
+        id:           r.id,
+        invoice_no:   r.invoice_no,
+        date:         fmtDate(r.invoice_date),
+        customer:     r.customer || '',
+        location:     r.location || '',
+        sales_person: r.sales_person || '',
+        total:        r.total,
+    }));
+    res.render('sales-invoices/approvals', {
+        title: 'Invoice Approvals',
+        activeMenu: 'approvals',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Invoice Approvals' },
+        ],
+        approvals,
+        total:   meta.total != null ? meta.total : approvals.length,
+        page:    meta.page || page,
+        perPage: meta.per_page || 10,
+    });
+  } catch (err) { next(err); }
+});
+
+/* POST approve / reject a pending field invoice (admins with edit perm). */
+router.post('/sales-invoices/:id/approve', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/sales-invoices/${req.params.id}/approve`, {});
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Invoice approved.')
+                      : apiError(result, 'Could not approve the invoice.'));
+    return req.session.save(() => res.redirect('/sales-invoices/approvals'));
+  } catch (err) { next(err); }
+});
+
+router.post('/sales-invoices/:id/reject', async (req, res, next) => {
+  try {
+    const reason = String(req.body.reason || '').trim();
+    const result = await api.post(req, `/sales-invoices/${req.params.id}/reject`, { reason });
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Invoice rejected.')
+                      : apiError(result, 'Could not reject the invoice.'));
+    return req.session.save(() => res.redirect('/sales-invoices/approvals'));
+  } catch (err) { next(err); }
+});
+
+/* ── SFA · Salesman "My Field" dashboard (GET /my-field) — assigned locations +
+ *    their customer/invoice tallies + approval-status counts. */
+router.get('/my-field', async (req, res, next) => {
+  try {
+    const { body } = await api.get(req, '/field/my-dashboard');
+    const field = (body && body.data) || { is_salesman: false, locations: [], stats: {} };
+    res.render('field/my-dashboard', {
+        title: 'My Field',
+        activeMenu: 'my-field',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'My Field' },
+        ],
+        field,
+    });
+  } catch (err) { next(err); }
+});
+
+/* ── SFA Phase 2 · Field Tracking (GET /field-tracking) — GPS visit log.
+ *    Admin sees the whole company; a salesman sees their own (api scopes it). */
+router.get('/field-tracking', async (req, res, next) => {
+  try {
+    const date = (req.query.date || '').trim();
+    const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+    const [visitsR, pingsR] = await Promise.all([
+        api.get(req, `/field/visits${qs}`),
+        api.get(req, `/field/locations${qs}`),
+    ]);
+    const rows = (visitsR.body && visitsR.body.data && Array.isArray(visitsR.body.data.data)) ? visitsR.body.data.data : [];
+    const visits = rows.map((v) => ({
+        id:           v.id,
+        customer:     v.customer || '—',
+        location:     v.location || '—',
+        sales_person: v.sales_person || '—',
+        checkin:      fmtDate(v.checkin_at),
+        checkout:     v.checkout_at ? fmtDate(v.checkout_at) : '',
+        distance:     v.checkin_distance_m,
+        within:       !!v.checkin_within,
+        note:         v.note || '',
+        status:       v.status,
+    }));
+    const prows = (pingsR.body && pingsR.body.data && Array.isArray(pingsR.body.data.data)) ? pingsR.body.data.data : [];
+    const pings = prows.map((p) => ({
+        sales_person: p.sales_person || '—',
+        source:       p.source || '—',
+        lat:          p.lat, lng: p.lng,
+        moved:        p.moved_m,
+        at:           fmtDate(p.captured_at),
+    }));
+    res.render('field/tracking', {
+        title: 'Field Tracking',
+        activeMenu: 'field-tracking',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Field Tracking' },
+        ],
+        visits,
+        pings,
+        date,
+    });
+  } catch (err) { next(err); }
 });
 
 /* ── TRANSACTIONS · Purchase Invoices (GET /purchase-invoices) ─ */
@@ -3111,6 +3353,432 @@ router.get('/users/add', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── SETTINGS · Accountant Access (CA sharing) ──────────────────
+ * Mirrors the app: invite a CA → curated read-only Accountant login; list +
+ * revoke. Backed by the api's /account/accountants endpoints. */
+router.get('/accountant-access', async (req, res, next) => {
+    try {
+        const [r, roleOptions] = await Promise.all([
+            api.get(req, '/account/accountants'),
+            fetchOptions(req, '/roles'),
+        ]);
+        const rows = (r.body && r.body.data && r.body.data.data) || [];
+        res.render('accountant-access/index', {
+            title: 'Accountant Access', activeMenu: 'users',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Accountant Access' }],
+            roleOptions,
+            accountants: rows.map((a) => ({
+                id: a.id, name: a.name || '', email: a.email || '', role: a.role || '',
+                status: a.status || '', last_login: fmtDate(a.last_login_at),
+            })),
+        });
+    } catch (err) { next(err); }
+});
+router.post('/accountant-access', async (req, res, next) => {
+    try {
+        const b = req.body || {};
+        const result = await api.post(req, '/account/accountants', {
+            name: b.name, email: b.email, password: b.password,
+            role_id: b.role_id || undefined,
+        });
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Accountant invited.');
+        else setFlash(req, 'error', apiError(result, 'Could not invite the accountant.'));
+        return req.session.save(() => res.redirect('/accountant-access'));
+    } catch (err) { next(err); }
+});
+router.post('/accountant-access/:id/revoke', async (req, res, next) => {
+    try {
+        const result = await api.del(req, '/account/accountants/' + Number(req.params.id));
+        if (apiOk(result)) setFlash(req, 'success', 'Accountant access revoked.');
+        else setFlash(req, 'error', apiError(result, 'Could not revoke access.'));
+        return req.session.save(() => res.redirect('/accountant-access'));
+    } catch (err) { next(err); }
+});
+
+/* ── Payment Reminders — overdue customers + manual send ───────── */
+router.get('/reminders', async (req, res, next) => {
+    try {
+        const r = await api.get(req, '/account/reminders');
+        const d = (r.body && r.body.data) || {};
+        res.render('reminders/index', {
+            title: 'Payment Reminders', activeMenu: 'reminders',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Payment Reminders' }],
+            reminders: Array.isArray(d.data) ? d.data : [],
+            channels: d.channels || { email: false, whatsapp: false },
+            totalOutstanding: d.total_outstanding || 0,
+        });
+    } catch (err) { next(err); }
+});
+router.post('/reminders/:id/send', async (req, res, next) => {
+    try {
+        const channel = (req.body && req.body.channel) || 'email';
+        const result = await api.post(req, `/account/reminders/${Number(req.params.id)}/send`, { channel });
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Reminder sent.');
+        else setFlash(req, 'error', apiError(result, 'Could not send the reminder.'));
+        return req.session.save(() => res.redirect('/reminders'));
+    } catch (err) { next(err); }
+});
+
+/* ── Business Analytics — read-only insights dashboard ────────── */
+router.get('/analytics', async (req, res, next) => {
+    try {
+        const r = await api.get(req, '/account/analytics');
+        const analytics = (r.body && r.body.data) || {};
+        res.render('analytics/index', {
+            title: 'Business Analytics', activeMenu: 'analytics',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Business Analytics' }],
+            analytics,
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── Expenses — list + add/edit/delete + categories ───────────── */
+function _expenseBody(b) {
+    return {
+        category_id:  b.category_id || undefined,
+        vendor:       b.vendor,
+        expense_date: b.expense_date || undefined,
+        amount:       b.amount,
+        payment_mode: b.payment_mode || undefined,
+        reference:    b.reference,
+        notes:        b.notes,
+    };
+}
+router.get('/expenses', async (req, res, next) => {
+    try {
+        const [er, categories] = await Promise.all([
+            api.get(req, '/expenses?per_page=100'),
+            fetchOptions(req, '/expense-categories'),
+        ]);
+        const rows = (er.body && er.body.data && er.body.data.data) || [];
+        const now = new Date();
+        const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+        let total = 0, monthTotal = 0;
+        rows.forEach((e) => {
+            const amt = Number(e.amount) || 0;
+            total += amt;
+            const d = e.expense_date ? String(e.expense_date).slice(0, 10) : '';
+            if (d && d >= monthStart) monthTotal += amt;
+        });
+        res.render('expenses/index', {
+            title: 'Expenses', activeMenu: 'expenses',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Expenses' }],
+            expenses: rows, categories,
+            total: Math.round(total * 100) / 100, monthTotal: Math.round(monthTotal * 100) / 100,
+        });
+    } catch (err) { next(err); }
+});
+router.post('/expenses', async (req, res, next) => {
+    try {
+        const result = await api.post(req, '/expenses', _expenseBody(req.body || {}));
+        if (apiOk(result)) setFlash(req, 'success', 'Expense added.');
+        else setFlash(req, 'error', apiError(result, 'Could not add the expense.'));
+        return req.session.save(() => res.redirect('/expenses'));
+    } catch (err) { next(err); }
+});
+router.post('/expenses/:id/delete', async (req, res, next) => {
+    try {
+        const result = await api.del(req, `/expenses/${Number(req.params.id)}`);
+        if (apiOk(result)) setFlash(req, 'success', 'Expense deleted.');
+        else setFlash(req, 'error', apiError(result, 'Could not delete the expense.'));
+        return req.session.save(() => res.redirect('/expenses'));
+    } catch (err) { next(err); }
+});
+router.post('/expenses/:id', async (req, res, next) => {
+    try {
+        const result = await api.put(req, `/expenses/${Number(req.params.id)}`, _expenseBody(req.body || {}));
+        if (apiOk(result)) setFlash(req, 'success', 'Expense updated.');
+        else setFlash(req, 'error', apiError(result, 'Could not update the expense.'));
+        return req.session.save(() => res.redirect('/expenses'));
+    } catch (err) { next(err); }
+});
+router.post('/expense-categories', async (req, res, next) => {
+    try {
+        const result = await api.post(req, '/expense-categories', { name: (req.body && req.body.name) || '' });
+        if (apiOk(result)) setFlash(req, 'success', 'Category added.');
+        else setFlash(req, 'error', apiError(result, 'Could not add the category.'));
+        return req.session.save(() => res.redirect('/expenses'));
+    } catch (err) { next(err); }
+});
+router.post('/expense-categories/:id/delete', async (req, res, next) => {
+    try {
+        const result = await api.del(req, `/expense-categories/${Number(req.params.id)}`);
+        if (apiOk(result)) setFlash(req, 'success', 'Category deleted.');
+        else setFlash(req, 'error', apiError(result, 'Could not delete the category.'));
+        return req.session.save(() => res.redirect('/expenses'));
+    } catch (err) { next(err); }
+});
+
+/* ── Recurring Invoices — list + add/edit/delete + generate-now ── */
+function _recurringBody(b) {
+    return {
+        customer_id:   b.customer_id || undefined,
+        title:         b.title,
+        description:   b.description,
+        amount:        b.amount,
+        gst_rate:      b.gst_rate || undefined,
+        frequency:     b.frequency || undefined,
+        due_days:      b.due_days || undefined,
+        start_date:    b.start_date || undefined,
+        next_run_date: b.next_run_date || undefined,
+        end_date:      b.end_date || undefined,
+        status:        b.status || undefined,
+    };
+}
+router.get('/recurring-invoices', async (req, res, next) => {
+    try {
+        const [rr, customers] = await Promise.all([
+            api.get(req, '/recurring-invoices?per_page=100'),
+            fetchOptions(req, '/customers'),
+        ]);
+        const rows = (rr.body && rr.body.data && rr.body.data.data) || [];
+        res.render('recurring-invoices/index', {
+            title: 'Recurring Invoices', activeMenu: 'recurring',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Recurring Invoices' }],
+            templates: rows, customers,
+        });
+    } catch (err) { next(err); }
+});
+router.post('/recurring-invoices', async (req, res, next) => {
+    try {
+        const result = await api.post(req, '/recurring-invoices', _recurringBody(req.body || {}));
+        if (apiOk(result)) setFlash(req, 'success', 'Recurring invoice created.');
+        else setFlash(req, 'error', apiError(result, 'Could not create it.'));
+        return req.session.save(() => res.redirect('/recurring-invoices'));
+    } catch (err) { next(err); }
+});
+router.post('/recurring-invoices/:id/generate', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/recurring-invoices/${Number(req.params.id)}/generate`, {});
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Invoice generated.');
+        else setFlash(req, 'error', apiError(result, 'Could not generate the invoice.'));
+        return req.session.save(() => res.redirect('/recurring-invoices'));
+    } catch (err) { next(err); }
+});
+router.post('/recurring-invoices/:id/delete', async (req, res, next) => {
+    try {
+        const result = await api.del(req, `/recurring-invoices/${Number(req.params.id)}`);
+        if (apiOk(result)) setFlash(req, 'success', 'Recurring invoice deleted.');
+        else setFlash(req, 'error', apiError(result, 'Could not delete it.'));
+        return req.session.save(() => res.redirect('/recurring-invoices'));
+    } catch (err) { next(err); }
+});
+router.post('/recurring-invoices/:id', async (req, res, next) => {
+    try {
+        const result = await api.put(req, `/recurring-invoices/${Number(req.params.id)}`, _recurringBody(req.body || {}));
+        if (apiOk(result)) setFlash(req, 'success', 'Recurring invoice updated.');
+        else setFlash(req, 'error', apiError(result, 'Could not update it.'));
+        return req.session.save(() => res.redirect('/recurring-invoices'));
+    } catch (err) { next(err); }
+});
+
+/* ── Bank Reconciliation — import (CSV parsed client-side) + match ── */
+router.get('/bank-reconciliation', async (req, res, next) => {
+    try {
+        const r = await api.get(req, '/bank/transactions');
+        const d = (r.body && r.body.data) || {};
+        res.render('bank-reconciliation/index', {
+            title: 'Bank Reconciliation', activeMenu: 'bank',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Bank Reconciliation' }],
+            transactions: Array.isArray(d.data) ? d.data : [], summary: d.summary || {},
+        });
+    } catch (err) { next(err); }
+});
+router.post('/bank-reconciliation/import', async (req, res, next) => {
+    try {
+        let rows = [];
+        try { rows = JSON.parse((req.body && req.body.rows) || '[]'); } catch (_) { rows = []; }
+        const result = await api.post(req, '/bank/import', { rows });
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'Statement imported.');
+        else setFlash(req, 'error', apiError(result, 'Could not import the statement.'));
+        return req.session.save(() => res.redirect('/bank-reconciliation'));
+    } catch (err) { next(err); }
+});
+router.get('/bank-reconciliation/:id/candidates', async (req, res) => {
+    try {
+        const r = await api.get(req, `/bank/transactions/${Number(req.params.id)}/candidates`);
+        const d = (r.body && r.body.data) || {};
+        res.json({ data: Array.isArray(d.data) ? d.data : [] });
+    } catch (_) { res.json({ data: [] }); }
+});
+function _bankAction(apiPath, okMsg, errMsg) {
+    return async (req, res, next) => {
+        try {
+            const id = Number(req.params.id);
+            const result = apiPath === 'delete'
+                ? await api.del(req, `/bank/transactions/${id}`)
+                : await api.post(req, `/bank/transactions/${id}/${apiPath}`, req.body || {});
+            if (apiOk(result)) setFlash(req, 'success', okMsg);
+            else setFlash(req, 'error', apiError(result, errMsg));
+            return req.session.save(() => res.redirect('/bank-reconciliation'));
+        } catch (err) { next(err); }
+    };
+}
+router.post('/bank-reconciliation/:id/match',   _bankAction('match',   'Matched.',       'Could not match.'));
+router.post('/bank-reconciliation/:id/unmatch', _bankAction('unmatch', 'Unmatched.',     'Could not unmatch.'));
+router.post('/bank-reconciliation/:id/ignore',  _bankAction('ignore',  'Ignored.',       'Could not ignore.'));
+router.post('/bank-reconciliation/:id/delete',  _bankAction('delete',  'Line deleted.',  'Could not delete.'));
+
+/* ── e-Invoice & e-Way Bill ── */
+router.get('/einvoices', async (req, res, next) => {
+    try {
+        const qs = new URLSearchParams();
+        if (req.query.page) qs.set('page', req.query.page);
+        if (req.query.per_page) qs.set('per_page', req.query.per_page);
+        if (req.query.search) qs.set('search', req.query.search);
+        if (req.query.status) qs.set('status', req.query.status);
+        if (req.query.date_from) qs.set('date_from', req.query.date_from);
+        if (req.query.date_to) qs.set('date_to', req.query.date_to);
+        const r = await api.get(req, '/einvoices' + (qs.toString() ? `?${qs}` : ''));
+        const d = (r.body && r.body.data) || {};
+        const meta = d.meta || {};
+        res.render('einvoices/index', {
+            title: 'e-Invoice & e-Way Bill', activeMenu: 'einvoice',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'e-Invoice' }],
+            rows: Array.isArray(d.data) ? d.data : [], gspConfigured: !!d.gsp_configured,
+            total: meta.total || 0, page: meta.page || 1, perPage: meta.per_page || 20,
+            search: req.query.search || '',
+            statusFilter: req.query.status || '', dateFrom: req.query.date_from || '', dateTo: req.query.date_to || '',
+        });
+    } catch (err) { next(err); }
+});
+router.get('/einvoices/dashboard', async (req, res, next) => {
+  try {
+    const { body } = await api.get(req, '/einvoices/dashboard');
+    const d = (body && body.data) || {};
+    res.render('einvoices/dashboard', {
+        title: 'e-Invoice Dashboard', activeMenu: 'einvoice-dash',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'e-Invoice Dashboard' }],
+        d,
+    });
+  } catch (err) { next(err); }
+});
+router.get('/einvoices/reports', async (req, res, next) => {
+  try {
+    const type = String(req.query.type || 'irn');
+    const qs = new URLSearchParams({ type });
+    if (req.query.from) qs.set('from', req.query.from);
+    if (req.query.to) qs.set('to', req.query.to);
+    const { body } = await api.get(req, '/einvoices/report?' + qs.toString());
+    const d = (body && body.data) || {};
+    res.render('einvoices/reports', {
+        title: 'e-Invoice Reports', activeMenu: 'einvoice-rep',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'e-Invoice Reports' }],
+        type, rows: Array.isArray(d.data) ? d.data : [],
+        from: req.query.from || '', to: req.query.to || '',
+    });
+  } catch (err) { next(err); }
+});
+router.get('/einvoices/:id/view', async (req, res, next) => {
+  try {
+    const { body } = await api.get(req, `/einvoices/${Number(req.params.id)}/details`);
+    const dd = (body && body.data) || {};
+    res.render('einvoices/details', {
+        title: 'e-Invoice Details', activeMenu: 'einvoice',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'e-Invoice', href: '/einvoices' }, { label: 'Details' }],
+        ei: dd.einvoice || {}, invoice: dd.invoice || {}, customer: dd.customer || null,
+        items: dd.items || [], apiLogs: dd.api_logs || [], transport: dd.transport || [],
+        cancellations: dd.cancellations || [], validity: dd.validity || [],
+    });
+  } catch (err) { next(err); }
+});
+router.post('/einvoices/bulk-generate', async (req, res, next) => {
+  try {
+    const ids = [].concat(req.body.ids || []).map(Number).filter(Boolean);
+    const result = await api.post(req, '/einvoices/bulk-generate', { ids });
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.msg) || 'Bulk generate complete.') : apiError(result, 'Bulk generate failed.'));
+    return req.session.save(() => res.redirect('/einvoices'));
+  } catch (err) { next(err); }
+});
+/* Delivery — Download (official-format PDF) / Email / WhatsApp (no browser print).
+ * The API renders the e-Invoice/e-Way Bill PDF; we stream those bytes straight
+ * to the browser (same document the app + email + WhatsApp get). */
+router.get('/einvoices/:id/download', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await api.fetchBinary(req, `/einvoices/${id}/download`);
+    if (r.status !== 200 || !r.buffer) {
+        setFlash(req, 'error', 'Could not generate the PDF. Make sure the e-Invoice exists.');
+        return req.session.save(() => res.redirect('/einvoices'));
+    }
+    res.setHeader('Content-Type', r.contentType || 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="einvoice-${id}.pdf"`);
+    return res.end(r.buffer);
+  } catch (err) { next(err); }
+});
+router.post('/einvoices/:id/email', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/einvoices/${Number(req.params.id)}/email`, req.body || {});
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.msg) || 'e-Invoice emailed.') : apiError(result, 'Could not email the e-Invoice.'));
+    return req.session.save(() => res.redirect('/einvoices'));
+  } catch (err) { next(err); }
+});
+router.post('/einvoices/:id/whatsapp', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/einvoices/${Number(req.params.id)}/whatsapp`, req.body || {});
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.msg) || 'Sent on WhatsApp.') : apiError(result, 'Could not send on WhatsApp.'));
+    return req.session.save(() => res.redirect('/einvoices'));
+  } catch (err) { next(err); }
+});
+router.get('/einvoices/:id/payload', async (req, res) => {
+    try {
+        const r = await api.get(req, `/einvoices/${Number(req.params.id)}`);
+        const e = (r.body && r.body.data) || null;
+        res.json({ payload: e && e.payload ? e.payload : null });
+    } catch (_) { res.json({ payload: null }); }
+});
+router.post('/einvoices/:id/generate', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/einvoices/${Number(req.params.id)}/generate`, {});
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'IRP payload prepared.');
+        else setFlash(req, 'error', apiError(result, 'Could not generate.'));
+        return req.session.save(() => res.redirect('/einvoices'));
+    } catch (err) { next(err); }
+});
+router.post('/einvoices/:id/manual', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/einvoices/${Number(req.params.id)}/manual`, req.body || {});
+        if (apiOk(result)) setFlash(req, 'success', 'e-Invoice / e-Way details saved.');
+        else setFlash(req, 'error', apiError(result, 'Could not save.'));
+        return req.session.save(() => res.redirect('/einvoices'));
+    } catch (err) { next(err); }
+});
+router.post('/einvoices/:id/cancel', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/einvoices/${Number(req.params.id)}/cancel`, req.body || {});
+        if (apiOk(result)) setFlash(req, 'success', 'e-Invoice cancelled.');
+        else setFlash(req, 'error', apiError(result, 'Could not cancel.'));
+        return req.session.save(() => res.redirect('/einvoices'));
+    } catch (err) { next(err); }
+});
+router.post('/einvoices/:id/eway', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/einvoices/${Number(req.params.id)}/eway`, req.body || {});
+        if (apiOk(result)) setFlash(req, 'success', (result.body && result.body.msg) || 'e-Way Bill generated.');
+        else setFlash(req, 'error', apiError(result, 'Could not generate e-Way.'));
+        return req.session.save(() => res.redirect('/einvoices'));
+    } catch (err) { next(err); }
+});
+router.post('/einvoices/:id/update-vehicle', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/einvoices/${Number(req.params.id)}/update-vehicle`, req.body || {});
+        if (apiOk(result)) setFlash(req, 'success', 'Vehicle updated.');
+        else setFlash(req, 'error', apiError(result, 'Could not update the vehicle.'));
+        return req.session.save(() => res.redirect('/einvoices'));
+    } catch (err) { next(err); }
+});
+router.post('/einvoices/:id/extend', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/einvoices/${Number(req.params.id)}/extend`, req.body || {});
+        if (apiOk(result)) setFlash(req, 'success', 'e-Way validity extended.');
+        else setFlash(req, 'error', apiError(result, 'Could not extend validity.'));
+        return req.session.save(() => res.redirect('/einvoices'));
+    } catch (err) { next(err); }
+});
+
 /* ── POST /users — create a tenant user via the api ───────────── */
 router.post('/users', async (req, res, next) => {
     try {
@@ -3645,6 +4313,67 @@ router.post('/products/:id', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── Product images · upload gallery (multipart → api) ────────────
+ * Receive up to 8 images in WEB (multer, in-memory), then FORWARD them to the
+ * api POST /products/:id/images as multipart (form-data + the session bearer +
+ * X-Company-Id). Images are NOT synced to Tally — they live only in our cloud. */
+router.post('/products/:id/images', (req, res) => {
+    const id   = Number(req.params.id);
+    const back = `/products/${id}/edit`;
+    productImgUpload(req, res, async (mErr) => {
+        if (mErr) {
+            const msg = mErr.code === 'LIMIT_FILE_SIZE'  ? 'Each image must be 5MB or smaller.'
+                      : mErr.code === 'LIMIT_FILE_COUNT' ? 'You can upload at most 8 images at once.'
+                      : 'Could not read the uploaded images.';
+            setFlash(req, 'error', msg);
+            return req.session.save(() => res.redirect(back));
+        }
+        const files = Array.isArray(req.files) ? req.files : [];
+        if (!files.length) {
+            setFlash(req, 'error', 'Please choose at least one image (JPG, PNG, WEBP or GIF).');
+            return req.session.save(() => res.redirect(back));
+        }
+        try {
+            const form = new FormData();
+            for (const f of files) {
+                form.append('images', f.buffer, {
+                    filename:    f.originalname || 'image',
+                    contentType: f.mimetype || 'application/octet-stream',
+                    knownLength: f.buffer.length,
+                });
+            }
+            const headers = Object.assign({ Accept: 'application/json' }, form.getHeaders());
+            if (req.session && req.session.token)            headers.Authorization  = `Bearer ${req.session.token}`;
+            if (req.session && req.session.companyId != null) headers['X-Company-Id'] = String(req.session.companyId);
+            let parsed = null;
+            try {
+                const resp = await fetch(`${api.API_URL}/products/${id}/images`, { method: 'POST', headers, body: form.getBuffer() });
+                try { parsed = await resp.json(); } catch { parsed = null; }
+            } catch (e) {
+                setFlash(req, 'error', 'Cannot reach the API server.');
+                return req.session.save(() => res.redirect(back));
+            }
+            if (parsed && parsed.status === 200) setFlash(req, 'success', parsed.msg || 'Images uploaded.');
+            else                                 setFlash(req, 'error', (parsed && parsed.msg) || 'Could not upload images.');
+            return req.session.save(() => res.redirect(back));
+        } catch (e) {
+            setFlash(req, 'error', 'Could not upload images.');
+            return req.session.save(() => res.redirect(back));
+        }
+    });
+});
+
+/* ── Product images · delete one (POST — HTML forms can't DELETE) ── */
+router.post('/products/:id/images/:imageId/delete', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id); const imageId = Number(req.params.imageId);
+        const result = await api.del(req, `/products/${id}/images/${imageId}`);
+        if (apiOk(result)) setFlash(req, 'success', 'Image removed.');
+        else               setFlash(req, 'error', apiError(result, 'Could not remove image.'));
+        return req.session.save(() => res.redirect(`/products/${id}/edit`));
+    } catch (err) { next(err); }
+});
+
 /* Categories */
 router.get('/categories/:id/edit', async (req, res, next) => {
     try {
@@ -3993,13 +4722,83 @@ router.post('/:resource/:id/delete', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── PLATFORM ADMIN · e-Invoice GSP (super-admin only) ───────────
+ * Per-license GSP credentials (AES-encrypted server-side) + settings. */
+router.get('/einvoice-gsp', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const licenseId = req.query.license_id || res.locals.selectedLicenseId || '';
+    let gsp = { enc_configured: false, settings: {}, credentials: [] };
+    if (licenseId) {
+        const { body } = await api.get(req, `/super-admin/einvoice-gsp?license_id=${licenseId}`);
+        gsp = (body && body.data) || gsp;
+    }
+    res.render('einvoice-gsp/index', {
+        title: 'e-Invoice GSP',
+        activeMenu: 'einvoice-gsp',
+        breadcrumb: [ { label: 'Dashboard', href: '/' }, { label: 'e-Invoice GSP' } ],
+        gsp, licenseId, licenses: res.locals.licenses || [],
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/einvoice-gsp/credential', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const result = await api.post(req, '/super-admin/einvoice-gsp/credential', req.body);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Saved.') : apiError(result, 'Could not save credentials.'));
+    const lid = req.body.license_id ? ('?license_id=' + req.body.license_id) : '';
+    return req.session.save(() => res.redirect('/einvoice-gsp' + lid));
+  } catch (err) { next(err); }
+});
+
+router.post('/einvoice-gsp/settings', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const result = await api.post(req, '/super-admin/einvoice-gsp/settings', req.body);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Saved.') : apiError(result, 'Could not save settings.'));
+    const lid = req.body.license_id ? ('?license_id=' + req.body.license_id) : '';
+    return req.session.save(() => res.redirect('/einvoice-gsp' + lid));
+  } catch (err) { next(err); }
+});
+
+/* ── PLATFORM ADMIN · GPS tracking config (super-admin only) ─────
+ * Per-license: master switch, capture sources, hourly interval, time window,
+ * min-move de-dup + a view of the salesman location trail. */
+router.get('/gps-settings', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const licenseId = req.query.license_id || res.locals.selectedLicenseId || '';
+    let gps = {};
+    if (licenseId) {
+        const { body } = await api.get(req, `/super-admin/gps-settings?license_id=${licenseId}`);
+        gps = ((body && body.data && body.data.settings) || {});
+    }
+    res.render('gps-settings/index', {
+        title: 'GPS Tracking',
+        activeMenu: 'gps-settings',
+        breadcrumb: [ { label: 'Dashboard', href: '/' }, { label: 'GPS Tracking' } ],
+        gps, licenseId, licenses: res.locals.licenses || [],
+    });
+  } catch (err) { next(err); }
+});
+router.post('/gps-settings', requireSuperAdmin, async (req, res, next) => {
+  try {
+    const result = await api.post(req, '/super-admin/gps-settings', req.body);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Saved.') : apiError(result, 'Could not save.'));
+    const lid = req.body.license_id ? ('?license_id=' + req.body.license_id) : '';
+    return req.session.save(() => res.redirect('/gps-settings' + lid));
+  } catch (err) { next(err); }
+});
+
 /* ── PLATFORM ADMIN · Licenses (super-admin only) ────────────────
  * Cross-tenant licence management. Each route is gated by requireSuperAdmin
  * (the api also enforces super-admin, but we block here so nothing leaks).
  * The one-time license_key + auto-generated admin password are revealed on a
  * rendered success screen and are NEVER stored in the session/db/logs. */
 
-/* GET /licenses — paginated cross-tenant licence list. */
+/* GET /licenses — paginated cross-tenant licence list + a super-admin OVERVIEW
+ * strip (total licences, total companies, active, expiring, connected). This is
+ * the super-admin's landing/dashboard — their only "useful details" view. */
 router.get('/licenses', requireSuperAdmin, async (req, res, next) => {
     try {
         const { rows, meta } = await apiList(req, '/super-admin/licenses');
@@ -4017,11 +4816,37 @@ router.get('/licenses', requireSuperAdmin, async (req, res, next) => {
             machine_bound:    !!(r.machine_id || r.machine_bound_at),
             last_seen_at:     r.last_seen_at ? fmtDate(r.last_seen_at) : '',
         }));
+
+        // ── Overview metrics across ALL licences (not just this page). Licences
+        //    are few, so one extra all-rows fetch is cheap + keeps the cards exact.
+        let summary = { licenses: meta.total || licenseRows.length, companies: 0, active: 0, expiring: 0, expired: 0, connected: 0 };
+        try {
+            // per_page maxes at 100 in the licence list validator — 500 would 422.
+            const all = await apiList({ session: req.session, query: { per_page: '100' } }, '/super-admin/licenses');
+            const today = new Date(); today.setHours(0, 0, 0, 0);
+            const rowsAll = all.rows || [];
+            summary.licenses = (all.meta && all.meta.total != null) ? all.meta.total : rowsAll.length;
+            for (const r of rowsAll) {
+                summary.companies += Number(r.companies_count || 0);
+                if (r.status === 'active') summary.active += 1;
+                if (r.valid_until) {
+                    const vu = new Date(r.valid_until); vu.setHours(0, 0, 0, 0);
+                    const days = Math.floor((vu.getTime() - today.getTime()) / 86400000);
+                    if (days < 0) summary.expired += 1; else if (days <= 15) summary.expiring += 1;
+                }
+                if (r.last_seen_at) {
+                    const seen = new Date(r.last_seen_at);
+                    if ((Date.now() - seen.getTime()) < 7 * 86400000) summary.connected += 1;
+                }
+            }
+        } catch (_) { /* non-fatal — cards fall back to page data */ }
+
         res.render('licenses/list', {
             title: 'Licenses',
             activeMenu: 'licenses',
-            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Licenses' }],
+            breadcrumb: [{ label: 'Overview', href: '/licenses' }, { label: 'Licenses' }],
             licenseRows, licensesTotal: meta.total, page: meta.page, perPage: meta.per_page,
+            summary,
         });
     } catch (err) { next(err); }
 });
@@ -4266,6 +5091,12 @@ router.get('/licenses/:id', requireSuperAdmin, async (req, res, next) => {
             // The license-admin is always Active and never seat-gated.
             is_license_admin: !!u.is_license_admin,
         }));
+        // Reminder settings — Super-Admin per-licence Email/WhatsApp + auto switches.
+        let reminderSettings = {};
+        try {
+            const rr = await api.get(req, `/super-admin/licenses/${req.params.id}/reminders`);
+            reminderSettings = (rr.body && rr.body.data) || {};
+        } catch (_) { /* leave defaults; section renders with off state */ }
         res.render('licenses/detail', {
             title: 'License — ' + (license.holder_name || ('#' + license.id)),
             activeMenu: 'licenses',
@@ -4274,8 +5105,28 @@ router.get('/licenses/:id', requireSuperAdmin, async (req, res, next) => {
                 { label: 'Licenses', href: '/licenses' },
                 { label: license.holder_name || ('#' + license.id) },
             ],
-            license, companies, users, newLicenseKey,
+            license, companies, users, newLicenseKey, reminderSettings,
         });
+    } catch (err) { next(err); }
+});
+
+/* POST /licenses/:id/reminders — Super-Admin saves this licence's payment-
+ * reminder channel switches + auto schedule. Checkboxes arrive as 'on'/absent. */
+router.post('/licenses/:id/reminders', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const b = req.body || {};
+        const on = (v) => v === 'on' || v === 'true' || v === true;
+        const result = await api.put(req, `/super-admin/licenses/${id}/reminders`, {
+            email_enabled:    on(b.email_enabled),
+            whatsapp_enabled: on(b.whatsapp_enabled),
+            auto_enabled:     on(b.auto_enabled),
+            offsets:          b.offsets || '',
+            send_hour:        b.send_hour,
+        });
+        if (apiOk(result)) setFlash(req, 'success', 'Reminder settings saved.');
+        else setFlash(req, 'error', apiError(result, 'Could not save reminder settings.'));
+        return req.session.save(() => res.redirect(`/licenses/${id}`));
     } catch (err) { next(err); }
 });
 
@@ -4410,6 +5261,95 @@ router.get('/agent-releases', requireSuperAdmin, async (req, res, next) => {
             releaseDir,
         });
     } catch (err) { next(err); }
+});
+
+/* ── APP UPDATES (super-admin) — mirror of /agent-releases for the mobile APK.
+ * Reuses the same 200MB in-memory multer (agentUpload) + form-data forward. */
+router.get('/app-releases', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const { body } = await api.get(req, '/super-admin/app-release');
+        const data    = (body && body.data) || {};
+        const current = data.current || null;
+        const history = Array.isArray(data.history) ? data.history : [];
+        const mapRow = (r) => ({
+            id: r.id, version: r.version || '', version_code: r.version_code,
+            filename: r.filename || '', sha256: r.sha256 || '',
+            sha256_short: r.sha256 ? String(r.sha256).slice(0, 12) : '',
+            size: fmtBytes(r.size_bytes), notes: r.notes || '',
+            mandatory: !!r.mandatory, is_current: !!r.is_current,
+            created_at: r.created_at ? fmtDateTime(r.created_at) : '',
+        });
+        res.render('app-releases/index', {
+            title: 'App Updates', activeMenu: 'app-releases',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'App Updates' }],
+            current: current ? mapRow(current) : null,
+            historyRows: history.map(mapRow),
+            releaseDir: data.release_dir || '',
+            autoUpdate: data.auto_update !== false,
+        });
+    } catch (err) { next(err); }
+});
+
+/* POST /app-releases/auto-update — flip the GLOBAL app-auto-update master switch. */
+router.post('/app-releases/auto-update', requireSuperAdmin, async (req, res, next) => {
+    try {
+        const enabled = String((req.body || {}).enabled || '') === 'true';
+        const result = await api.post(req, '/super-admin/app-release/auto-update', { enabled });
+        if (apiOk(result)) setFlash(req, 'success', `App auto-update turned ${enabled ? 'ON' : 'OFF'}.`);
+        else               setFlash(req, 'error', apiError(result, 'Could not update the setting.'));
+        return req.session.save(() => res.redirect('/app-releases'));
+    } catch (err) { next(err); }
+});
+
+/* POST /app-releases/upload — receive the multipart apk in WEB, FORWARD it to the
+ * api /super-admin/app-release/upload (form-data + session bearer). */
+router.post('/app-releases/upload', requireSuperAdmin, (req, res) => {
+    agentUpload(req, res, async (mErr) => {
+        const back = '/app-releases';
+        if (mErr) {
+            const msg = mErr.code === 'LIMIT_FILE_SIZE' ? 'The file is too large (max 200MB).' : 'Could not read the uploaded file.';
+            setFlash(req, 'error', msg);
+            return req.session.save(() => res.redirect(back));
+        }
+        try {
+            const b = req.body || {};
+            const version     = String(b.version || '').trim();
+            const versionCode = String(b.version_code || '').trim();
+            if (!req.file || !req.file.buffer) { setFlash(req, 'error', 'Please choose the .apk file to upload.'); return req.session.save(() => res.redirect(back)); }
+            if (!/\.apk$/i.test(String(req.file.originalname || ''))) { setFlash(req, 'error', 'Only a .apk file may be uploaded.'); return req.session.save(() => res.redirect(back)); }
+            if (!version)     { setFlash(req, 'error', 'A release version is required.'); return req.session.save(() => res.redirect(back)); }
+            if (!versionCode) { setFlash(req, 'error', 'A build number (version code) is required.'); return req.session.save(() => res.redirect(back)); }
+
+            const form = new FormData();
+            form.append('file', req.file.buffer, {
+                filename:    req.file.originalname || `TallyCloudSync-${version}.apk`,
+                contentType: 'application/vnd.android.package-archive',
+                knownLength: req.file.buffer.length,
+            });
+            form.append('version', version);
+            form.append('version_code', versionCode);
+            if (b.notes != null && String(b.notes).trim() !== '') form.append('notes', String(b.notes));
+            if (asBool(b.mandatory)) form.append('mandatory', 'true');
+
+            const headers = Object.assign({ Accept: 'application/json' }, form.getHeaders());
+            if (req.session && req.session.token) headers.Authorization = `Bearer ${req.session.token}`;
+
+            let parsed = null;
+            try {
+                const resp = await fetch(`${api.API_URL}/super-admin/app-release/upload`, { method: 'POST', headers, body: form.getBuffer() });
+                try { parsed = await resp.json(); } catch { parsed = null; }
+            } catch (e) {
+                setFlash(req, 'error', 'Cannot reach the API server.');
+                return req.session.save(() => res.redirect(back));
+            }
+            if (parsed && parsed.status === 200) setFlash(req, 'success', parsed.msg || `Published app v${version}.`);
+            else                                 setFlash(req, 'error', (parsed && parsed.msg) || 'Could not publish the app release.');
+            return req.session.save(() => res.redirect(back));
+        } catch (e) {
+            setFlash(req, 'error', 'Could not publish the app release.');
+            return req.session.save(() => res.redirect(back));
+        }
+    });
 });
 
 /* POST /agent-releases/upload — receive the multipart exe in WEB, then FORWARD

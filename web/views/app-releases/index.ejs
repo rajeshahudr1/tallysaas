@@ -1,0 +1,202 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/app-releases/index.ejs — PLATFORM ADMIN · App Updates.
+ * Route: GET /app-releases · activeMenu: 'app-releases' · super-admin only.
+ *
+ * Upload a freshly-built app-release.apk and publish it as the CURRENT mobile
+ * app release. The master ON/OFF switch controls whether the app checks for /
+ * prompts updates at all (GLOBAL — system_settings.app_auto_update). A per-
+ * release "Mandatory" flag forces that specific update (user can't skip).
+ *
+ * Locals: current, historyRows, releaseDir, autoUpdate (bool).
+ * ─────────────────────────────────────────────────────────── */
+var _current = (typeof current !== 'undefined') ? current : null;
+var _history = (typeof historyRows !== 'undefined' && historyRows) ? historyRows : [];
+var _dir     = (typeof releaseDir !== 'undefined' && releaseDir) ? releaseDir : '';
+var _auto    = (typeof autoUpdate !== 'undefined') ? !!autoUpdate : true;
+%>
+
+<%- include('../partials/page-head', {
+    title: 'App Updates',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'App Updates' },
+    ],
+}) %>
+
+<!-- ════ Master switch ════ -->
+<div class="card mb-3">
+    <div class="card-body d-flex align-items-center justify-content-between flex-wrap gap-3">
+        <div>
+            <h2 class="form-section-title mb-1">
+                <i class="fa-solid fa-mobile-screen-button me-2 text-primary"></i>App Auto-Update
+            </h2>
+            <p class="text-muted small mb-0">Master switch for ALL app users. When <strong>OFF</strong>, the mobile app never checks or prompts for updates — even if a newer APK is published below.</p>
+        </div>
+        <form method="post" action="/app-releases/auto-update" class="mb-0">
+            <div class="form-check form-switch fs-4 mb-0 d-flex align-items-center gap-2">
+                <input class="form-check-input" type="checkbox" role="switch" id="app-au" name="enabled" value="true" <%= _auto ? 'checked' : '' %> onchange="this.form.submit()">
+                <label class="form-check-label fs-6 fw-semibold <%= _auto ? 'text-success' : 'text-muted' %>" for="app-au"><%= _auto ? 'ON' : 'OFF' %></label>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="row g-3">
+
+    <!-- ════ Current release ════ -->
+    <div class="col-12 col-xl-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h2 class="form-section-title mb-3">
+                    <i class="fa-solid fa-cloud-arrow-down me-2 text-primary"></i>Current Release
+                </h2>
+                <% if (_current) { %>
+                    <div class="d-flex align-items-center gap-2 mb-3">
+                        <span class="fs-4 fw-semibold">v<%= _current.version %></span>
+                        <span class="pill-status pill-status--muted" title="APK build number">build <%= _current.version_code %></span>
+                        <span class="pill-status pill-status--success">Current</span>
+                        <% if (_current.mandatory) { %>
+                            <span class="pill-status pill-status--danger" title="Users must update">Mandatory</span>
+                        <% } %>
+                    </div>
+                    <dl class="row mb-0 small">
+                        <dt class="col-4 text-muted">File</dt>
+                        <dd class="col-8"><code><%= _current.filename %></code></dd>
+                        <dt class="col-4 text-muted">Size</dt>
+                        <dd class="col-8"><%= _current.size %></dd>
+                        <dt class="col-4 text-muted">SHA-256</dt>
+                        <dd class="col-8"><code title="<%= _current.sha256 %>"><%= _current.sha256_short %>…</code></dd>
+                        <dt class="col-4 text-muted">Published</dt>
+                        <dd class="col-8"><%= _current.created_at || '—' %></dd>
+                        <% if (_current.notes) { %>
+                            <dt class="col-4 text-muted">Notes</dt>
+                            <dd class="col-8"><%= _current.notes %></dd>
+                        <% } %>
+                    </dl>
+                <% } else { %>
+                    <div class="text-muted py-4 text-center">
+                        <i class="fa-regular fa-circle-question d-block mb-2 fs-3"></i>
+                        No release published yet. Upload the built <code>app-release.apk</code> to publish the first one.
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+
+    <!-- ════ Upload & publish ════ -->
+    <div class="col-12 col-xl-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h2 class="form-section-title mb-3">
+                    <i class="fa-solid fa-upload me-2 text-primary"></i>Upload &amp; Publish
+                </h2>
+                <div class="alert alert-info py-2 px-3 small mb-3" role="note">
+                    <i class="fa-solid fa-circle-info me-1"></i>
+                    Build the release APK first (<code>flutter build apk --release</code>). Publishing makes it the current version — apps update on next launch (if the master switch is ON).
+                </div>
+                <form method="post" action="/app-releases/upload" enctype="multipart/form-data" autocomplete="off">
+                    <div class="form-group mb-3">
+                        <label class="form-label" for="ap-file">App file (.apk)<span class="req">*</span></label>
+                        <input type="file" class="form-control" id="ap-file" name="file" accept=".apk" required>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-7 form-group mb-3">
+                            <label class="form-label" for="ap-version">Version<span class="req">*</span></label>
+                            <input type="text" class="form-control" id="ap-version" name="version"
+                                   placeholder="e.g. 1.0.1" pattern="[A-Za-z0-9._-]+" required>
+                            <div class="form-hint">Shown to users. Saved as <code>TallyCloudSync-&lt;version&gt;.apk</code>.</div>
+                        </div>
+                        <div class="col-5 form-group mb-3">
+                            <label class="form-label" for="ap-code">Build no.<span class="req">*</span></label>
+                            <input type="number" min="1" step="1" class="form-control" id="ap-code" name="version_code"
+                                   placeholder="e.g. 2" required>
+                            <div class="form-hint">pubspec <code>+N</code> — must increase each release.</div>
+                        </div>
+                    </div>
+                    <div class="form-group mb-3">
+                        <label class="form-label" for="ap-notes">Release notes (what's new)</label>
+                        <textarea class="form-control" id="ap-notes" name="notes" rows="3"
+                                  placeholder="Shown to users in the update dialog"></textarea>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="ap-mandatory" name="mandatory" value="true">
+                        <label class="form-check-label" for="ap-mandatory">
+                            Mandatory update <span class="text-muted small">(users cannot skip — forced)</span>
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-gradient">
+                        <i class="fa-solid fa-cloud-arrow-up me-1"></i>Upload &amp; Publish
+                    </button>
+                </form>
+                <% if (_dir) { %>
+                    <div class="form-hint mt-3">
+                        <i class="fa-regular fa-folder-open me-1"></i>Release folder: <code><%= _dir %></code>
+                    </div>
+                <% } %>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /.row -->
+
+<!-- ════ Publish history ════ -->
+<div class="card mt-3">
+    <div class="card-body pb-0">
+        <h2 class="form-section-title mb-0">
+            <i class="fa-solid fa-clock-rotate-left me-2 text-muted"></i>Publish History
+        </h2>
+    </div>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="app-releases-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th class="text-start">Version</th>
+                    <th class="text-start">Build</th>
+                    <th class="text-start">File</th>
+                    <th class="text-start">Size</th>
+                    <th class="text-start">Mandatory</th>
+                    <th class="text-start">Status</th>
+                    <th class="text-start">Published</th>
+                    <th class="text-start">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_history.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="9">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            No app releases published yet.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _history.forEach(function (row, i) { %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td class="text-start fw-semibold">v<%= row.version %></td>
+                        <td class="text-start"><%= row.version_code %></td>
+                        <td class="text-start"><code><%= row.filename %></code></td>
+                        <td class="text-start"><%= row.size %></td>
+                        <td class="text-start">
+                            <% if (row.mandatory) { %>
+                                <span class="pill-status pill-status--danger">Yes</span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--muted">No</span>
+                            <% } %>
+                        </td>
+                        <td class="text-start">
+                            <% if (row.is_current) { %>
+                                <span class="pill-status pill-status--success">Current</span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--muted">Archived</span>
+                            <% } %>
+                        </td>
+                        <td class="text-start"><%= row.created_at || '—' %></td>
+                        <td class="text-start"><%= row.notes || '—' %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>

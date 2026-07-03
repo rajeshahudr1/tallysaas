@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 
 import '../../app/theme.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/auth/session.dart';
+import '../../core/gps/gps_tracker.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/repositories/invoice_repository.dart';
 import '../../shared/widgets/app_button.dart';
@@ -42,6 +44,16 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
   }
 
   @override
+  void initState() {
+    super.initState();
+    // SFA — capture location on opening the invoice create page (gated by the
+    // super-admin GPS config's track_on_create + window). Fire-and-forget.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(gpsTrackerProvider).captureOnCreate();
+    });
+  }
+
+  @override
   void dispose() {
     _notes.dispose();
     for (final r in _rows) {
@@ -73,7 +85,7 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
     }
   }
 
-  Future<void> _save() async {
+  Future<void> _save({bool asDraft = false}) async {
     if (_busy) return;
     if (_customerId == null) {
       _showError('Please select a customer.');
@@ -85,6 +97,11 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
       return;
     }
 
+    // SFA — a linked salesman's invoice goes for approval (or saves as a draft);
+    // an admin's saves straight through. Drives the confirmation message.
+    final session = ref.read(sessionProvider);
+    final isSalesman = session is SessionSignedIn && session.user.isSalesman;
+
     setState(() => _busy = true);
     try {
       await ref.read(invoiceRepositoryProvider).createSales({
@@ -94,12 +111,18 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
         'invoice_date': DateFormat('yyyy-MM-dd').format(_invoiceDate),
         if (_dueDate != null) 'due_date': DateFormat('yyyy-MM-dd').format(_dueDate!),
         if (_notes.text.trim().isNotEmpty) 'notes': _notes.text.trim(),
+        if (asDraft) 'save_as_draft': true,
         'items': lines,
       });
       if (!mounted) return;
+      final msg = asDraft
+          ? 'Draft saved.'
+          : isSalesman
+              ? 'Invoice submitted for approval.'
+              : 'Sales invoice created.';
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('Sales invoice created.')));
+        ..showSnackBar(SnackBar(content: Text(msg)));
       context.pop(true);
     } on ApiException catch (e) {
       _showError(e.message);
@@ -197,7 +220,24 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
           AppTextField(controller: _notes, label: 'Notes', maxLines: 2),
           const SizedBox(height: AppSpacing.xl24),
 
-          AppButton(label: 'Save Invoice', loading: _busy, onPressed: _save),
+          Builder(builder: (_) {
+            final session = ref.watch(sessionProvider);
+            final isSalesman = session is SessionSignedIn && session.user.isSalesman;
+            if (!isSalesman) {
+              return AppButton(label: 'Save Invoice', loading: _busy, onPressed: () => _save());
+            }
+            // Salesman — submit for approval, or keep an editable draft.
+            return Column(children: [
+              AppButton(label: 'Submit for Approval', loading: _busy, onPressed: () => _save()),
+              const SizedBox(height: AppSpacing.sm8),
+              OutlinedButton.icon(
+                onPressed: _busy ? null : () => _save(asDraft: true),
+                icon: const Icon(Icons.save_outlined, size: 18),
+                label: const Text('Save as Draft'),
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+              ),
+            ]);
+          }),
         ],
       ),
     );

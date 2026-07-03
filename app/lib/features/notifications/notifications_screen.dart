@@ -58,12 +58,43 @@ class NotificationsScreen extends ConsumerWidget {
   }
 }
 
-class _NotifCard extends StatelessWidget {
+class _NotifCard extends ConsumerWidget {
   const _NotifCard(this.n);
   final Map<String, dynamic> n;
 
+  // Top-level routes the app can actually open. A notification link outside this
+  // set (e.g. /sync-logs, /agent-releases) just marks read — no blank page.
+  static const _appRoutes = {
+    'customers', 'suppliers', 'products', 'categories', 'locations', 'sales-persons',
+    'sales-invoices', 'purchase-invoices', 'payments', 'receipts', 'journals',
+    'expenses', 'reminders', 'bank-reconciliation', 'recurring-invoices', 'einvoices',
+    'analytics', 'inventory', 'companies',
+  };
+
+  bool _canOpen(String link) {
+    if (link.isEmpty) return false;
+    final segs = link.split('/').where((s) => s.isNotEmpty).toList();
+    return segs.isNotEmpty && _appRoutes.contains(segs.first);
+  }
+
+  Future<void> _onTap(BuildContext context, WidgetRef ref) async {
+    final key = '${n['id'] ?? ''}';
+    final link = '${n['link'] ?? ''}';
+    // Mark read first (idempotent server-side) so the badge + read state update,
+    // THEN open the page only if the app has it — otherwise a tap just clears it
+    // instead of pushing an unknown route (a blank screen).
+    if (key.isNotEmpty && n['read'] != true) {
+      try {
+        await ref.read(apiClientProvider).post('/sync/notifications/read', body: {'key': key});
+      } catch (_) {}
+      ref.invalidate(notificationsProvider);
+      ref.invalidate(notificationsUnreadProvider);
+    }
+    if (context.mounted && _canOpen(link)) context.push(link);
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final tone = '${n['tone'] ?? ''}'.toLowerCase();
     final color = switch (tone) {
@@ -75,9 +106,9 @@ class _NotifCard extends StatelessWidget {
     final icon = _iconFor('${n['icon'] ?? ''}', '${n['title'] ?? ''}');
     final title = '${n['title'] ?? ''}';
     final sub = '${n['sub'] ?? ''}';
-    final link = '${n['link'] ?? ''}';
+    final read = n['read'] == true;
     return AppCard(
-      onTap: link.isNotEmpty ? () => context.push(link) : null,
+      onTap: () => _onTap(context, ref),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -92,7 +123,7 @@ class _NotifCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: theme.textTheme.titleSmall),
+                Text(title, style: theme.textTheme.titleSmall?.copyWith(fontWeight: read ? FontWeight.w500 : FontWeight.w700)),
                 if (sub.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(sub, style: theme.textTheme.bodySmall),
@@ -101,7 +132,16 @@ class _NotifCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: AppSpacing.sm8),
-          Text(Fmt.dateTime(n['when'] ?? n['at']), style: theme.textTheme.bodySmall),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(Fmt.dateTime(n['when'] ?? n['at']), style: theme.textTheme.bodySmall),
+              if (!read) ...[
+                const SizedBox(height: 6),
+                Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle)),
+              ],
+            ],
+          ),
         ],
       ),
     );

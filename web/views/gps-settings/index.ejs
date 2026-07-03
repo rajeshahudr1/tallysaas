@@ -1,0 +1,82 @@
+<%
+/* views/gps-settings/index.ejs — Platform Admin · per-license GPS tracking config. */
+var g = (typeof gps !== 'undefined' && gps) ? gps : {};
+var lid = (typeof licenseId !== 'undefined') ? licenseId : '';
+var lics = Array.isArray(licenses) ? licenses : [];
+function sel(a,b){ return String(a)===String(b) ? 'selected' : ''; }
+function chk(v){ return v ? 'checked' : ''; }
+%>
+<%- include('../partials/page-head', {
+    title: 'GPS Tracking',
+    breadcrumb: [ { label: 'Dashboard', href: '/' }, { label: 'GPS Tracking' } ],
+}) %>
+
+<% if (lics.length > 1) { %>
+<form method="get" action="/gps-settings" class="card p-3 mb-3 d-flex flex-row align-items-center gap-2">
+    <label class="fw-semibold mb-0">License</label>
+    <select name="license_id" class="form-select" style="max-width:340px" onchange="this.form.submit()">
+        <% lics.forEach(function(l){ %><option value="<%= l.id %>" <%= sel(l.id, lid) %>><%= l.company || l.name || ('License #'+l.id) %></option><% }); %>
+    </select>
+</form>
+<% } %>
+
+<form method="post" action="/gps-settings">
+    <input type="hidden" name="license_id" value="<%= lid %>">
+
+    <div class="card p-3 mb-3">
+        <div class="gps-master">
+            <div>
+                <h2 class="inv-section-title mb-1"><i class="fa-solid fa-location-crosshairs me-2 text-primary"></i>GPS Tracking</h2>
+                <div class="text-muted" style="font-size:13px">Master switch — off means the app never captures location.</div>
+            </div>
+            <label class="gps-switch"><input type="checkbox" name="gps_enabled" <%= chk(g.gps_enabled) %>><span></span></label>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <div class="card p-3 h-100">
+                <h3 class="inv-section-title mb-3" style="font-size:15px">Capture sources</h3>
+                <div class="gps-row"><div><b>Hourly auto-ping</b><div class="gps-sub">Background service pings every N minutes (true background)</div></div><label class="gps-switch"><input type="checkbox" name="track_hourly" <%= chk(g.track_hourly) %>><span></span></label></div>
+                <div class="gps-row gps-indent">
+                    <label class="mb-0">Interval (minutes)</label>
+                    <input type="number" name="hourly_interval_min" value="<%= g.hourly_interval_min || 60 %>" min="5" max="720" class="form-control form-control-sm" style="max-width:110px">
+                </div>
+                <div class="gps-row"><div><b>Part-visit</b><div class="gps-sub">Capture when salesman logs a beat/area part-visit</div></div><label class="gps-switch"><input type="checkbox" name="track_part_visit" <%= chk(g.track_part_visit !== false) %>><span></span></label></div>
+                <div class="gps-row"><div><b>Create pages</b><div class="gps-sub">Capture on Product / Invoice create + list pages</div></div><label class="gps-switch"><input type="checkbox" name="track_on_create" <%= chk(g.track_on_create) %>><span></span></label></div>
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="card p-3 h-100">
+                <h3 class="inv-section-title mb-3" style="font-size:15px">Window & optimisation</h3>
+                <div class="gps-row">
+                    <label class="mb-0"><b>Tracking window</b><div class="gps-sub">Only track between these times</div></label>
+                    <div class="d-flex align-items-center gap-1">
+                        <input type="time" name="time_from" value="<%= g.time_from || '07:00' %>" class="form-control form-control-sm" style="max-width:120px">
+                        <span>–</span>
+                        <input type="time" name="time_to" value="<%= g.time_to || '20:00' %>" class="form-control form-control-sm" style="max-width:120px">
+                    </div>
+                </div>
+                <div class="gps-row">
+                    <label class="mb-0"><b>Min-move distance (m)</b><div class="gps-sub">Same standing location isn't re-sent within this radius — saves API calls</div></label>
+                    <input type="number" name="min_move_m" value="<%= g.min_move_m || 100 %>" min="10" max="5000" class="form-control form-control-sm" style="max-width:110px">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-3"><button class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save GPS settings</button>
+        <a href="/field-tracking" class="btn btn-light ms-2"><i class="fa-solid fa-map-location-dot me-1"></i>View location trail</a></div>
+</form>
+
+<style>
+  .gps-master{display:flex;align-items:center;justify-content:space-between;gap:16px;}
+  .gps-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #f1f5f9;}
+  .gps-row:last-child{border-bottom:0;} .gps-indent{padding-left:12px;}
+  .gps-sub{font-size:11.5px;color:#94a3b8;margin-top:2px;}
+  .gps-switch{position:relative;display:inline-block;width:46px;height:26px;flex:0 0 auto;cursor:pointer;margin:0;}
+  .gps-switch input{opacity:0;width:0;height:0;}
+  .gps-switch span{position:absolute;inset:0;background:#cbd5e1;border-radius:999px;transition:.2s;}
+  .gps-switch span:before{content:'';position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;}
+  .gps-switch input:checked+span{background:#2563eb;} .gps-switch input:checked+span:before{transform:translateX(20px);}
+</style>

@@ -1,0 +1,253 @@
+<%
+/* views/einvoices/index.ejs — TRANSACTIONS · e-Invoice & e-Way Bill.
+ * Locals: rows [{id,invoice_no,invoice_date,total,customer,customer_gstin,irn,ack_no,ewb_no,einvoice_status,generated_at}],
+ *         gspConfigured (bool). */
+var _list = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _gsp = (typeof gspConfigured !== 'undefined') ? gspConfigured : false;
+var _total = (typeof total !== 'undefined') ? total : _list.length;
+var _page = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 20;
+var _search = (typeof search !== 'undefined' && search) ? search : '';
+var _status = (typeof statusFilter !== 'undefined' && statusFilter) ? statusFilter : '';
+var _dfrom = (typeof dateFrom !== 'undefined' && dateFrom) ? dateFrom : '';
+var _dto = (typeof dateTo !== 'undefined' && dateTo) ? dateTo : '';
+function _selStatus(v){ return v === _status ? 'selected' : ''; }
+function _money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—'; }
+%>
+
+<%- include('../partials/page-head', {
+    title: 'e-Invoice & e-Way Bill',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'e-Invoice' }],
+    actions: [],
+}) %>
+
+<% if (!_gsp) { %>
+    <div class="alert alert-info flash-banner mb-3" role="alert">
+        <i class="fa-solid fa-circle-info me-2"></i>
+        <strong>GSP not wired yet.</strong> "Generate" prepares the GST IRP payload; then create the IRN/e-Way on the GST portal and paste it via <strong>Manual entry</strong>. Add <code>EINVOICE_GSP_URL</code> / <code>EINVOICE_GSP_KEY</code> in the API <code>.env</code> to auto-mint IRNs.
+    </div>
+<% } %>
+
+<div class="card ei-card">
+    <div class="ei-head">
+        <h2 class="form-section-title mb-0">Sales Invoices <span class="ei-count"><%= _total %></span></h2>
+        <form method="get" action="/einvoices" class="ei-search">
+            <input type="text" name="search" value="<%= _search %>" placeholder="Search invoice / customer…" class="form-control form-control-sm">
+            <select name="status" class="form-select form-select-sm" style="max-width:150px">
+                <option value="">All status</option>
+                <option value="none" <%= _selStatus('none') %>>Not generated</option>
+                <option value="generated" <%= _selStatus('generated') %>>Generated</option>
+                <option value="pending" <%= _selStatus('pending') %>>Pending</option>
+                <option value="failed" <%= _selStatus('failed') %>>Failed</option>
+                <option value="cancelled" <%= _selStatus('cancelled') %>>Cancelled</option>
+                <option value="eway" <%= _selStatus('eway') %>>Has e-Way</option>
+            </select>
+            <input type="date" name="date_from" value="<%= _dfrom %>" class="form-control form-control-sm" style="max-width:140px" title="From date">
+            <input type="date" name="date_to" value="<%= _dto %>" class="form-control form-control-sm" style="max-width:140px" title="To date">
+            <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-filter"></i></button>
+            <% if (_search || _status || _dfrom || _dto) { %><a href="/einvoices" class="btn btn-light btn-sm" title="Clear filters">×</a><% } %>
+        </form>
+    </div>
+    <% if (!_list.length) { %>
+        <div class="ei-empty"><i class="fa-solid fa-file-invoice"></i><p>No sales invoices yet.</p></div>
+    <% } else { %>
+        <div class="table-wrap">
+            <table class="ei-table">
+                <thead><tr><th>Invoice</th><th>Customer</th><th>Date</th><th class="ei-right">Amount</th><th>e-Invoice (IRN)</th><th>e-Way</th><th class="ei-right">Actions</th></tr></thead>
+                <tbody>
+                    <% _list.forEach(function (r) { var st = r.einvoice_status || 'none'; %>
+                        <tr>
+                            <td><strong><%= r.invoice_no %></strong></td>
+                            <td class="ei-muted"><%= r.customer || '—' %><% if (r.customer_gstin) { %><br><span class="ei-sub"><%= r.customer_gstin %></span><% } %></td>
+                            <td class="ei-muted"><%= _date(r.invoice_date) %></td>
+                            <td class="ei-right"><%= _money(r.total) %></td>
+                            <td>
+                                <% if (st === 'cancelled') { %><span class="ei-pill ei-p-cancel">Cancelled</span>
+                                <% } else if (r.irn) { %><span class="ei-pill ei-p-ok" title="<%= r.irn %>"><i class="fa-solid fa-circle-check me-1"></i><%= String(r.irn).slice(0,14) %>…</span>
+                                <% } else if (st === 'pending') { %><span class="ei-pill ei-p-pending">Payload ready</span>
+                                <% } else if (st === 'failed') { %><span class="ei-pill ei-p-fail">Failed</span>
+                                <% } else { %><span class="ei-muted ei-sub">—</span><% } %>
+                            </td>
+                            <td><% if (r.ewb_no && st !== 'cancelled') { %><span class="ei-pill ei-p-ewb"><%= r.ewb_no %></span><% } else { %><span class="ei-muted ei-sub">—</span><% } %></td>
+                            <td class="ei-right">
+                                <% if (!r.irn) { %>
+                                    <form method="post" action="/einvoices/<%= r.id %>/generate" style="display:inline"><button class="ei-icon-btn ei-gen" title="Generate IRP payload"><i class="fa-solid fa-bolt"></i></button></form>
+                                <% } %>
+                                <button type="button" class="ei-icon-btn" title="Manual entry (paste IRN / e-Way)" onclick="eiManual(<%= r.id %>,'<%= r.invoice_no %>')"><i class="fa-solid fa-keyboard"></i></button>
+                                <button type="button" class="ei-icon-btn" title="View IRP payload" onclick="eiView(<%= r.id %>)"><i class="fa-solid fa-code"></i></button>
+                                <% if (r.irn || (st && st !== 'none')) { %>
+                                    <a class="ei-icon-btn" href="/einvoices/<%= r.id %>/view" title="Details (IRN / e-Way / API logs)"><i class="fa-solid fa-circle-info"></i></a>
+                                <% } %>
+                                <% if (r.irn) { %>
+                                    <a class="ei-icon-btn" href="/einvoices/<%= r.id %>/download" title="Download PDF"><i class="fa-solid fa-download"></i></a>
+                                    <form method="post" action="/einvoices/<%= r.id %>/email" class="d-inline" data-confirm="Email this e-Invoice PDF to the customer?" data-confirm-title="Send e-Invoice" data-confirm-ok="Send email"><button class="ei-icon-btn" title="Email to customer"><i class="fa-solid fa-envelope"></i></button></form>
+                                    <form method="post" action="/einvoices/<%= r.id %>/whatsapp" class="d-inline" data-confirm="Send this e-Invoice PDF on WhatsApp?" data-confirm-title="Send on WhatsApp" data-confirm-ok="Send"><button class="ei-icon-btn" title="Send on WhatsApp" style="color:#25D366"><i class="fa-brands fa-whatsapp"></i></button></form>
+                                <% } %>
+                                <% if (r.irn && !r.ewb_no && st !== 'cancelled') { %>
+                                    <button type="button" class="ei-icon-btn ei-ewb-btn" title="Generate e-Way Bill" onclick="eiEway(<%= r.id %>,'<%= r.invoice_no %>')"><i class="fa-solid fa-truck-fast"></i></button>
+                                <% } %>
+                                <% if (r.ewb_no && st !== 'cancelled') { %>
+                                    <button type="button" class="ei-icon-btn" title="Update vehicle (Part-B)" onclick="eiVehicle(<%= r.id %>,'<%= r.invoice_no %>')"><i class="fa-solid fa-truck-moving"></i></button>
+                                    <button type="button" class="ei-icon-btn" title="Extend e-Way validity" onclick="eiExtend(<%= r.id %>,'<%= r.invoice_no %>')"><i class="fa-solid fa-clock-rotate-left"></i></button>
+                                <% } %>
+                                <% if ((r.irn || st === 'pending') && st !== 'cancelled') { %>
+                                    <form method="post" action="/einvoices/<%= r.id %>/cancel" style="display:inline"><button class="ei-icon-btn ei-del" title="Cancel"><i class="fa-solid fa-ban"></i></button></form>
+                                <% } %>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+        <%- include('../partials/pagination', { page: _page, perPage: _perPage, total: _total }) %>
+    <% } %>
+</div>
+
+<!-- Manual entry modal -->
+<div id="ei-manual" class="ei-overlay">
+    <div class="ei-modal">
+        <h3>e-Invoice / e-Way — Manual entry <span id="ei-m-inv" class="ei-sub"></span></h3>
+        <p class="ei-muted" style="font-size:13px">Generate the IRN / e-Way Bill on the GST portal, then paste the details here.</p>
+        <form method="post" id="ei-manual-form" action="/einvoices/0/manual" autocomplete="off">
+            <div class="ei-grid">
+                <div class="form-group"><label class="form-label">IRN</label><input class="form-control" name="irn"></div>
+                <div class="form-group"><label class="form-label">Ack No.</label><input class="form-control" name="ack_no"></div>
+                <div class="form-group"><label class="form-label">Ack Date</label><input type="date" class="form-control" name="ack_date"></div>
+                <div class="form-group"><label class="form-label">e-Way Bill No.</label><input class="form-control" name="ewb_no"></div>
+                <div class="form-group"><label class="form-label">e-Way Date</label><input type="date" class="form-control" name="ewb_date"></div>
+                <div class="form-group"><label class="form-label">Valid Until</label><input type="date" class="form-control" name="ewb_valid_until"></div>
+                <div class="form-group"><label class="form-label">Transporter</label><input class="form-control" name="transporter"></div>
+                <div class="form-group"><label class="form-label">Vehicle No.</label><input class="form-control" name="vehicle_no"></div>
+                <div class="form-group"><label class="form-label">Distance (km)</label><input type="number" step="0.1" class="form-control" name="distance_km"></div>
+            </div>
+            <div class="form-group"><label class="form-label">Signed QR (optional)</label><input class="form-control" name="qr_code"></div>
+            <div class="ei-modal-actions"><button type="button" class="btn btn-light" onclick="eiClose('ei-manual')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save</button></div>
+        </form>
+    </div>
+</div>
+
+<!-- Generate e-Way modal -->
+<div id="ei-eway" class="ei-overlay">
+    <div class="ei-modal">
+        <h3>Generate e-Way Bill <span id="ei-e-inv" class="ei-sub"></span></h3>
+        <form method="post" id="ei-eway-form" action="/einvoices/0/eway" autocomplete="off">
+            <div class="ei-grid">
+                <div class="form-group"><label class="form-label">Vehicle No.</label><input class="form-control" name="vehicle_no" placeholder="MP09AB1234"></div>
+                <div class="form-group"><label class="form-label">Transport Mode</label>
+                    <select class="form-control" name="transport_mode"><option value="1">Road</option><option value="2">Rail</option><option value="3">Air</option><option value="4">Ship</option></select></div>
+                <div class="form-group"><label class="form-label">Vehicle Type</label>
+                    <select class="form-control" name="vehicle_type"><option value="R">Regular</option><option value="O">Over-Dimensional Cargo</option></select></div>
+                <div class="form-group"><label class="form-label">Transporter</label><input class="form-control" name="transporter"></div>
+                <div class="form-group"><label class="form-label">Transporter ID</label><input class="form-control" name="transporter_id" placeholder="GSTIN / TRANSIN"></div>
+                <div class="form-group"><label class="form-label">Distance (km)</label><input type="number" step="1" class="form-control" name="distance" placeholder="e.g. 420"></div>
+            </div>
+            <div class="ei-modal-actions"><button type="button" class="btn btn-light" onclick="eiClose('ei-eway')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-truck-fast me-1"></i>Generate e-Way</button></div>
+        </form>
+    </div>
+</div>
+
+<!-- Update vehicle modal -->
+<div id="ei-vehicle" class="ei-overlay">
+    <div class="ei-modal">
+        <h3>Update Vehicle (Part-B) <span id="ei-v-inv" class="ei-sub"></span></h3>
+        <form method="post" id="ei-vehicle-form" action="/einvoices/0/update-vehicle" autocomplete="off">
+            <div class="ei-grid">
+                <div class="form-group"><label class="form-label">New Vehicle No.</label><input class="form-control" name="vehicle_no" required></div>
+                <div class="form-group"><label class="form-label">Transport Mode</label>
+                    <select class="form-control" name="transport_mode"><option value="1">Road</option><option value="2">Rail</option><option value="3">Air</option><option value="4">Ship</option></select></div>
+                <div class="form-group"><label class="form-label">Reason</label>
+                    <select class="form-control" name="reason_code"><option value="1">Break Down</option><option value="2">Transshipment</option><option value="3">Others</option><option value="4">First Time</option></select></div>
+            </div>
+            <div class="form-group"><label class="form-label">Remarks</label><input class="form-control" name="remarks"></div>
+            <div class="ei-modal-actions"><button type="button" class="btn btn-light" onclick="eiClose('ei-vehicle')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-truck-moving me-1"></i>Update Vehicle</button></div>
+        </form>
+    </div>
+</div>
+
+<!-- Extend validity modal -->
+<div id="ei-extend" class="ei-overlay">
+    <div class="ei-modal">
+        <h3>Extend e-Way Validity <span id="ei-x-inv" class="ei-sub"></span></h3>
+        <form method="post" id="ei-extend-form" action="/einvoices/0/extend" autocomplete="off">
+            <div class="ei-grid">
+                <div class="form-group"><label class="form-label">Remaining Distance (km)</label><input type="number" step="1" class="form-control" name="distance"></div>
+                <div class="form-group"><label class="form-label">Vehicle No.</label><input class="form-control" name="vehicle_no"></div>
+                <div class="form-group"><label class="form-label">Reason</label><input class="form-control" name="reason_code" placeholder="e.g. Transit delay"></div>
+            </div>
+            <div class="form-group"><label class="form-label">Remarks</label><input class="form-control" name="remarks"></div>
+            <div class="ei-modal-actions"><button type="button" class="btn btn-light" onclick="eiClose('ei-extend')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-clock-rotate-left me-1"></i>Extend</button></div>
+        </form>
+    </div>
+</div>
+
+<!-- View payload modal -->
+<div id="ei-view" class="ei-overlay">
+    <div class="ei-modal">
+        <h3>IRP payload</h3>
+        <pre id="ei-view-body" class="ei-pre">Loading…</pre>
+        <div class="ei-modal-actions"><button type="button" class="btn btn-light" onclick="eiClose('ei-view')">Close</button></div>
+    </div>
+</div>
+
+<script>
+    function eiOpen(id) { document.getElementById(id).classList.add('open'); }
+    function eiClose(id) { document.getElementById(id).classList.remove('open'); }
+    document.querySelectorAll('.ei-overlay').forEach(function (o) { o.addEventListener('click', function (e) { if (e.target === o) o.classList.remove('open'); }); });
+    function eiManual(id, no) {
+        document.getElementById('ei-manual-form').action = '/einvoices/' + id + '/manual';
+        document.getElementById('ei-m-inv').textContent = '· ' + no;
+        eiOpen('ei-manual');
+    }
+    function eiEway(id, no) {
+        document.getElementById('ei-eway-form').action = '/einvoices/' + id + '/eway';
+        document.getElementById('ei-e-inv').textContent = '· ' + no;
+        eiOpen('ei-eway');
+    }
+    function eiVehicle(id, no) {
+        document.getElementById('ei-vehicle-form').action = '/einvoices/' + id + '/update-vehicle';
+        document.getElementById('ei-v-inv').textContent = '· ' + no;
+        eiOpen('ei-vehicle');
+    }
+    function eiExtend(id, no) {
+        document.getElementById('ei-extend-form').action = '/einvoices/' + id + '/extend';
+        document.getElementById('ei-x-inv').textContent = '· ' + no;
+        eiOpen('ei-extend');
+    }
+    function eiView(id) {
+        var b = document.getElementById('ei-view-body');
+        b.textContent = 'Loading…';
+        eiOpen('ei-view');
+        fetch('/einvoices/' + id + '/payload').then(function (r) { return r.json(); }).then(function (d) {
+            b.textContent = d && d.payload ? JSON.stringify(d.payload, null, 2) : 'No payload yet — click Generate first.';
+        }).catch(function () { b.textContent = 'Could not load.'; });
+    }
+</script>
+
+<style>
+    .card.ei-card { padding:20px; margin-bottom:18px; }
+    .form-section-title { margin:0 0 16px; }
+    .ei-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+    .ei-search { display:flex; gap:6px; align-items:center; }
+    .ei-search .form-control { max-width:260px; }
+    .ei-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .ei-empty { text-align:center; padding:32px 12px; color:#9CA3AF; } .ei-empty i { font-size:34px; opacity:.5; } .ei-empty p { margin:12px 0 0; }
+    .ei-table { width:100%; border-collapse:collapse; }
+    .ei-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 12px 12px; border-bottom:1px solid #EEF1F5; }
+    .ei-table td { padding:11px 12px; border-bottom:1px solid #F3F4F6; vertical-align:middle; }
+    .ei-table tr:last-child td { border-bottom:none; }
+    .ei-right { text-align:right; } .ei-muted { color:#6B7280; } .ei-sub { font-size:12px; color:#9CA3AF; }
+    .ei-pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; }
+    .ei-p-ok { background:rgba(22,163,74,.12); color:#16A34A; } .ei-p-pending { background:rgba(37,99,235,.12); color:#2563EB; }
+    .ei-p-cancel { background:rgba(107,114,128,.14); color:#6B7280; } .ei-p-fail { background:rgba(220,38,38,.12); color:#DC2626; } .ei-p-ewb { background:rgba(109,40,217,.10); color:#6D28D9; }
+    .ei-icon-btn { border:1px solid var(--border); background:#fff; color:#4B5563; width:31px; height:31px; border-radius:8px; cursor:pointer; margin-left:3px; }
+    .ei-icon-btn:hover { background:#F8FAFC; } .ei-gen { color:#2563EB; border-color:#BFDBFE; } .ei-del { color:#DC2626; border-color:#FECACA; } .ei-ewb-btn { color:#6D28D9; border-color:#DDD6FE; }
+    .ei-overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:2000; }
+    .ei-overlay.open { display:flex; }
+    .ei-modal { background:#fff; border-radius:16px; padding:24px; max-width:680px; width:92%; box-shadow:0 24px 70px rgba(0,0,0,.25); max-height:88vh; overflow:auto; }
+    .ei-modal h3 { margin:0 0 12px; font-size:18px; font-weight:700; color:#111827; }
+    .ei-modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+    .ei-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+    .ei-pre { background:#0F172A; color:#E2E8F0; border-radius:10px; padding:14px; font-size:12px; overflow:auto; max-height:60vh; }
+    @media (max-width:720px){ .ei-grid { grid-template-columns:1fr; } }
+</style>

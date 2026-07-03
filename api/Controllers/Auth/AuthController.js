@@ -121,16 +121,28 @@ async function login(req, res) {
 
         const isSuperAdmin = user.role_slug === 'super-admin';
 
-        // 4. Subscription gate (per-user). Super Admin (platform owner) bypasses.
-        //    Reject when there is no active, in-date subscription.
+        // 4. Access gate. The COMPANY LICENCE is the single source of truth for
+        //    validity — a salesman / company user is valid for as long as the
+        //    company's licence is, NOT a separate per-user expiry that can drift.
+        //    The per-user subscription row is only the SEAT marker (active = the
+        //    user is within the licence's seat cap). Super Admin bypasses both.
         if (!isSuperAdmin) {
             const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-            const sub = await db('subscriptions')
-                .where({ user_id: user.id, status: 'active' })
-                .where('valid_until', '>=', today)
-                .first();
-            if (!sub) {
+            const lic = user.license_id
+                ? await db('licenses').where('id', user.license_id).whereNull('deleted_at')
+                    .first('status', 'valid_until')
+                : null;
+            const licValid = !!(lic && lic.status === 'active'
+                && (!lic.valid_until || new Date(lic.valid_until).toISOString().slice(0, 10) >= today));
+            if (!licValid) {
                 return R.errorResponse(res, 'Your subscription has expired. Please contact your administrator.', 403);
+            }
+            // Active SEAT (within the licence's max_users) — provisioned by seat
+            // reconcile; NOT date-checked here (the licence owns the date).
+            const seat = await db('subscriptions')
+                .where({ user_id: user.id, status: 'active' }).first('id');
+            if (!seat) {
+                return R.errorResponse(res, 'Your account is inactive — the licence seat limit is reached. Please contact your administrator.', 403);
             }
         }
 
@@ -235,17 +247,50 @@ async function login(req, res) {
             permissions = permRows.map((r) => r.slug);
         }
 
+        // SFA — is this user a LINKED salesman? Drives the web/app draft +
+        // approval UI and the "see only my invoices" scoping. Stashed on the
+        // session at login so res.locals.isSalesman works without a /me round-trip.
+        let salesPersonId = null;
+        const adminish = ['super-admin', 'company-admin', 'admin', 'owner']
+            .includes(user.role_slug);
+        if (!adminish && user.company_id) {
+            const sp = await db('sales_persons')
+                .where({ user_id: user.id, company_id: user.company_id })
+                .whereNull('deleted_at').first('id');
+            if (sp) salesPersonId = Number(sp.id);
+        }
+
+        // License validity — powers the "your licence expires in N days" banner
+        // (and is the single source of truth for access after expiry).
+        let licenseInfo = null;
+        if (user.role_slug !== 'super-admin' && user.license_id) {
+            const lic = await db('licenses').where('id', user.license_id).whereNull('deleted_at')
+                .first('valid_until', 'status');
+            if (lic) {
+                let daysLeft = null;
+                if (lic.valid_until) {
+                    const vu = new Date(lic.valid_until);
+                    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+                    daysLeft = Math.floor((vu.getTime() - t0.getTime()) / 86400000);
+                }
+                licenseInfo = { valid_until: lic.valid_until, status: lic.status, days_left: daysLeft };
+            }
+        }
+
         // 7. Success envelope — never echo the password_hash.
         return R.successResponse(res, {
             token,
             user: {
-                id:          user.id,
-                name:        user.name,
-                email:       user.email,
-                role:        user.role_name,
-                role_slug:   user.role_slug,
-                company_id:  user.company_id,
+                id:              user.id,
+                name:            user.name,
+                email:           user.email,
+                role:            user.role_name,
+                role_slug:       user.role_slug,
+                company_id:      user.company_id,
                 permissions,
+                is_salesman:     !!salesPersonId,
+                sales_person_id: salesPersonId,
+                license:         licenseInfo,
             },
             expires_in: EXPIRES_IN,
         }, 'Login successful.');
@@ -277,6 +322,7 @@ async function me(req, res) {
             .select(
                 'u.id',
                 'u.company_id',
+                'u.license_id',
                 'u.role_id',
                 'u.location_id',
                 'u.name',
@@ -304,7 +350,49 @@ async function me(req, res) {
                 .where('rp.role_id', user.role_id)
                 .select('p.slug')
                 .orderBy('p.slug', 'asc');
-            permissions = rows.map((r) => r.slug);
+            let slugs = rows.map((r) => r.slug);
+            // PLAN GATE — effective permissions = role grants ∩ the licence's
+            // entitlement, so the menu/UI only shows features the plan includes
+            // (mirrors rbac.can()'s server-side block).
+            const licenseId = user.license_id || (req.user && req.user.license_id);
+            if (licenseId) {
+                const { entitledSlugSet } = require('../../Helpers/entitlements');
+                const entitled = await entitledSlugSet(licenseId);
+                if (entitled) slugs = slugs.filter((s) => entitled.has(s));
+            }
+            permissions = slugs;
+        }
+
+        // Field-sales (SFA): is this user a LINKED salesman (a sales_persons row
+        // points user_id at them)? Drives the app/web draft + approval UI and the
+        // "see only my created invoices" scoping. Admins/owners are never salesmen.
+        let salesPersonId = null;
+        const adminish = ['super-admin', 'company-admin', 'admin', 'owner']
+            .includes(user.role_slug);
+        if (!adminish && user.company_id) {
+            const sp = await db('sales_persons')
+                .where({ user_id: userId, company_id: user.company_id })
+                .whereNull('deleted_at')
+                .first('id');
+            if (sp) salesPersonId = Number(sp.id);
+        }
+
+        // License validity — so the app/web can warn the company before it
+        // expires (a top banner) and knows the licence is the single source of
+        // truth for access. Super Admin has no company licence.
+        let licenseInfo = null;
+        if (user.role_slug !== 'super-admin' && user.license_id) {
+            const lic = await db('licenses').where('id', user.license_id).whereNull('deleted_at')
+                .first('valid_until', 'status');
+            if (lic) {
+                let daysLeft = null;
+                if (lic.valid_until) {
+                    const vu = new Date(lic.valid_until);
+                    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+                    daysLeft = Math.floor((vu.getTime() - t0.getTime()) / 86400000);
+                }
+                licenseInfo = { valid_until: lic.valid_until, status: lic.status, days_left: daysLeft };
+            }
         }
 
         return R.successResponse(res, {
@@ -322,9 +410,54 @@ async function me(req, res) {
                 slug: user.role_slug,
             },
             permissions,
+            is_salesman:     !!salesPersonId,
+            sales_person_id: salesPersonId,
+            license:         licenseInfo,
         });
     } catch (err) {
         console.error('AuthController.me error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * POST /api/v1/account/change-password
+ *
+ * The LOGGED-IN user changes their OWN password. Requires the current password
+ * (so a stolen session can't silently reset it) + a new one. Available to EVERY
+ * role — it operates on req.user.sub only, never another account.
+ *   body: { current_password, new_password }
+ */
+async function changePassword(req, res) {
+    try {
+        const userId = req.user && req.user.sub;
+        if (!userId) return R.errorResponse(res, 'Please sign in again.', 401);
+
+        const currentPassword = String((req.body && req.body.current_password) || '');
+        const newPassword     = String((req.body && req.body.new_password) || '');
+        if (!currentPassword || !newPassword) {
+            return R.errorResponse(res, 'Enter your current and new password.', 422);
+        }
+        if (newPassword.length < 6) {
+            return R.errorResponse(res, 'The new password must be at least 6 characters.', 422);
+        }
+
+        const user = await db('users').where('id', userId).whereNull('deleted_at')
+            .first('id', 'password_hash');
+        if (!user) return R.errorResponse(res, 'Please sign in again.', 401);
+
+        const ok = await passwords.verify(currentPassword, user.password_hash);
+        if (!ok) return R.errorResponse(res, 'Your current password is incorrect.', 422);
+
+        if (await passwords.verify(newPassword, user.password_hash)) {
+            return R.errorResponse(res, 'The new password must be different from the current one.', 422);
+        }
+
+        const newHash = await passwords.hash(newPassword);
+        await db('users').where('id', userId).update({ password_hash: newHash, updated_at: new Date() });
+        return R.successResponse(res, null, 'Your password has been changed.');
+    } catch (err) {
+        console.error('AuthController.changePassword error:', err);
         return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
     }
 }
@@ -450,6 +583,7 @@ async function resetPassword(req, res) {
 module.exports = {
     login,
     me,
+    changePassword,
     logout,
     forgotPassword,
     resetPassword,

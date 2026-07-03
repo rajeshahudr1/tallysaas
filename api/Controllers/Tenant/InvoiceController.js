@@ -194,8 +194,29 @@ async function listByType(req, res, type) {
         // sees ONLY their location's invoices. Unrestricted (req.locationId null)
         // → all locations. Company scope stays the primary guard.
         if (req.locationId != null) qb = qb.where('invoices.location_id', req.locationId);
+        // Field-sales scoping: a salesman sees ONLY the invoices THEY created
+        // (not the whole company's / their location's). Admins are unrestricted.
+        if (req.isSalesman) qb = qb.where('invoices.created_by', req.user.sub);
 
         if (status)   qb = qb.where('invoices.status', status);
+        // Approval-status filter (SFA). The Sales list + register show REAL sales
+        // only — an un-approved invoice (pending/draft/rejected) must NOT appear
+        // here nor count in the totals until a company-admin approves it. So:
+        //   • no param      → hide pending/draft/rejected (approved + legacy/Tally
+        //                      rows, whose status is 'approved'/null, still show)
+        //   • approval=pending|draft|rejected|approved → exactly that state
+        //   • approval=all  → every state (used by an "All" tab)
+        const approval = (req.query.approval || '').trim();
+        if (approval === 'all') {
+            /* no approval filter */
+        } else if (approval) {
+            qb = qb.where('invoices.approval_status', approval);
+        } else {
+            qb = qb.where(function () {
+                this.whereNotIn('invoices.approval_status', ['pending', 'draft', 'rejected'])
+                    .orWhereNull('invoices.approval_status');
+            });
+        }
         if (partyId)  qb = qb.where(partyCol, partyId);
         if (dateFrom) qb = qb.where('invoices.invoice_date', '>=', dateFrom);
         if (dateTo)   qb = qb.where('invoices.invoice_date', '<=', dateTo);
@@ -304,8 +325,22 @@ async function monthlyByType(req, res, type) {
             .where('invoices.type', type)
             .whereNull('invoices.deleted_at');
         if (req.locationId != null) qb = qb.where('invoices.location_id', req.locationId);
+        if (req.isSalesman) qb = qb.where('invoices.created_by', req.user.sub);
         if (req.query.date_from) qb = qb.where('invoices.invoice_date', '>=', req.query.date_from);
         if (req.query.date_to)   qb = qb.where('invoices.invoice_date', '<=', req.query.date_to);
+        // Same approval gate as the list — the register's month totals + counts
+        // must exclude un-approved (pending/draft/rejected) invoices by default.
+        const approval = (req.query.approval || '').trim();
+        if (approval === 'all') {
+            /* no approval filter */
+        } else if (approval) {
+            qb = qb.where('invoices.approval_status', approval);
+        } else {
+            qb = qb.where(function () {
+                this.whereNotIn('invoices.approval_status', ['pending', 'draft', 'rejected'])
+                    .orWhereNull('invoices.approval_status');
+            });
+        }
         qb = excludeReturns(qb, type);
 
         const rows = await qb
@@ -355,6 +390,8 @@ async function get(req, res) {
             .where('invoices.id', id);
         // A location-restricted user cannot read another location's invoice by id.
         if (req.locationId != null) invoiceQ.where('invoices.location_id', req.locationId);
+        // A salesman can only open an invoice THEY created.
+        if (req.isSalesman) invoiceQ.where('invoices.created_by', req.user.sub);
         const invoice = await invoiceQ.select(...LIST_COLUMNS).first();
         if (!invoice) return R.errorResponse(res, NOT_FOUND_MSG, 404);
 
@@ -441,6 +478,18 @@ async function createByType(req, res, type) {
         const isSales = type === 'sales';
         const { items, totals } = computeTotals(body.items);
 
+        // Approval + draft (SFA). EVERY non-admin user's SALES invoice needs a
+        // company-admin's approval before it counts / syncs — not only linked
+        // salesmen. They may Save as Draft (approval_status='draft' → editable,
+        // stays OUT of the approval queue and Tally) or Submit (→ 'pending',
+        // locked, enters the admin approval queue). ONLY company-admin +
+        // super-admin (req.needsApproval=false) — and all purchases — go straight
+        // to 'approved' (the column default backfills historical rows too).
+        let approvalStatus = 'approved';
+        if (isSales && req.needsApproval) {
+            approvalStatus = body.save_as_draft ? 'draft' : 'pending';
+        }
+
         // Location scoping on create: a location-restricted user can only cut
         // invoices FOR their own location — force it, ignoring any body value.
         // Unrestricted users keep their chosen/blank location_id.
@@ -469,7 +518,9 @@ async function createByType(req, res, type) {
                 location_id:     effectiveLocationId,
                 customer_id:     isSales ? body.customer_id : null,
                 supplier_id:     isSales ? null : body.supplier_id,
-                sales_person_id: isSales ? (body.sales_person_id || null) : null,
+                sales_person_id: isSales
+                    ? ((req.isSalesman && req.salesPersonId) ? req.salesPersonId : (body.sales_person_id || null))
+                    : null,
                 supplier_bill_no: isSales ? null : (body.supplier_bill_no || null),
                 invoice_date:    body.invoice_date,
                 due_date:        body.due_date || null,
@@ -483,6 +534,7 @@ async function createByType(req, res, type) {
                 round_off:       totals.round_off,
                 total:           totals.total,
                 status:          body.status || 'pending_tally',
+                approval_status: approvalStatus,
                 notes:           body.notes || null,
                 created_by:      req.user && req.user.sub ? req.user.sub : null,
             };
@@ -513,7 +565,12 @@ async function createByType(req, res, type) {
             changed_by:  req.user ? req.user.sub : null,
         });
 
-        return R.successResponse(res, created, 'Invoice created.');
+        const okMsg = approvalStatus === 'draft'
+            ? 'Draft saved.'
+            : approvalStatus === 'pending'
+                ? 'Invoice submitted for approval.'
+                : 'Invoice created.';
+        return R.successResponse(res, created, okMsg);
     } catch (err) {
         console.error(`invoices.create(${type}) error:`, err);
         return R.errorResponse(res, OOPS_MSG, 500);
@@ -538,6 +595,13 @@ async function destroy(req, res) {
             .where('id', id);
         // A location-restricted user cannot delete another location's invoice.
         if (req.locationId != null) existingQ.where('location_id', req.locationId);
+        // A non-admin (whose invoices need approval) may delete ONLY their OWN
+        // invoice, and ONLY while it is still UN-APPROVED (draft / pending /
+        // rejected). Once APPROVED it counts + syncs, so it is locked to them.
+        // Company-admins bypass this and may delete any invoice.
+        if (req.needsApproval) {
+            existingQ.where('created_by', req.user.sub).whereNot('approval_status', 'approved');
+        }
         const existing = await existingQ.first();
         if (!existing) return R.errorResponse(res, NOT_FOUND_MSG, 404);
 
@@ -602,6 +666,165 @@ async function pdf(req, res) {
     }
 }
 
+/**
+ * POST /sales-invoices/:id/approve — a company admin approves a salesman's
+ * PENDING invoice. It then counts as a real invoice AND (if it was awaiting
+ * Tally) re-enters the sync queue. Salesmen cannot approve their own work.
+ */
+async function approve(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+    if (req.isSalesman) return R.errorResponse(res, 'You are not allowed to approve invoices.', 403);
+    try {
+        const inv = await db('invoices')
+            .where({ id, company_id: req.companyId, type: 'sales' })
+            .whereNull('deleted_at').first();
+        if (!inv) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+        if (inv.approval_status === 'approved') {
+            return R.successResponse(res, inv, 'Invoice is already approved.');
+        }
+        const now = new Date();
+        // Re-enter the Tally sync queue on approval (unless already synced).
+        const nextStatus = (inv.status === 'created' || inv.status === 'sent_to_tally')
+            ? inv.status : 'pending_tally';
+        const [row] = await db('invoices').where({ id, company_id: req.companyId }).update({
+            approval_status: 'approved',
+            approved_by:     req.user && req.user.sub ? req.user.sub : null,
+            approved_at:     now,
+            rejected_reason: null,
+            status:          nextStatus,
+            updated_at:      now,
+        }).returning('*');
+        await recordHistory(db, {
+            company_id: req.companyId, module: 'sales-invoices', record_type: 'sales-invoice',
+            record_id: id, action: 'approved', source: 'cloud',
+            before: inv, after: row, changed_by: req.user ? req.user.sub : null,
+        });
+        return R.successResponse(res, row, 'Invoice approved.');
+    } catch (err) {
+        console.error('invoices.approve error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * POST /sales-invoices/:id/reject — a company admin rejects a pending invoice
+ * with a reason (shown back to the salesman). It stays out of reports + Tally.
+ */
+async function reject(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+    if (req.isSalesman) return R.errorResponse(res, 'You are not allowed to reject invoices.', 403);
+    const reason = String(req.body.reason || req.body.rejected_reason || '').trim();
+    if (!reason) return R.errorResponse(res, 'Please give a reason for rejecting.', 422);
+    try {
+        const inv = await db('invoices')
+            .where({ id, company_id: req.companyId, type: 'sales' })
+            .whereNull('deleted_at').first();
+        if (!inv) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+        const now = new Date();
+        const [row] = await db('invoices').where({ id, company_id: req.companyId }).update({
+            approval_status: 'rejected',
+            rejected_reason: reason.slice(0, 500),
+            approved_by:     null,
+            approved_at:     null,
+            updated_at:      now,
+        }).returning('*');
+        await recordHistory(db, {
+            company_id: req.companyId, module: 'sales-invoices', record_type: 'sales-invoice',
+            record_id: id, action: 'rejected', source: 'cloud',
+            before: inv, after: row, changed_by: req.user ? req.user.sub : null,
+        });
+        return R.successResponse(res, row, 'Invoice rejected.');
+    } catch (err) {
+        console.error('invoices.reject error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * POST /sales-invoices/:id/submit — a salesman moves their own DRAFT into the
+ * approval queue ('draft' → 'pending'). Once submitted it is locked to them.
+ */
+async function submitDraft(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+    try {
+        const q = db('invoices')
+            .where({ id, company_id: req.companyId, type: 'sales' }).whereNull('deleted_at');
+        if (req.needsApproval) q.where('created_by', req.user.sub);
+        const inv = await q.first();
+        if (!inv) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+        if (inv.approval_status !== 'draft') {
+            return R.errorResponse(res, 'Only a draft can be submitted.', 422);
+        }
+        const now = new Date();
+        const [row] = await db('invoices').where({ id, company_id: req.companyId })
+            .update({ approval_status: 'pending', updated_at: now }).returning('*');
+        return R.successResponse(res, row, 'Invoice submitted for approval.');
+    } catch (err) {
+        console.error('invoices.submitDraft error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * PUT /sales-invoices/:id — edit an invoice that is still a DRAFT (the only
+ * editable state for a salesman; a submitted/approved invoice is locked). The
+ * header + line items are recomputed + rewritten atomically. Passing
+ * save_as_draft=false in the body ALSO submits it for approval in the same call.
+ */
+async function updateDraft(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+    const body = req.body;
+    try {
+        const q = db('invoices')
+            .where({ id, company_id: req.companyId, type: 'sales' }).whereNull('deleted_at');
+        if (req.needsApproval) q.where('created_by', req.user.sub);
+        const inv = await q.first();
+        if (!inv) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+        // Editable while UN-APPROVED (draft / pending / rejected). Once APPROVED
+        // the invoice counts + syncs to Tally, so it is locked from further edits.
+        if (inv.approval_status === 'approved') {
+            return R.errorResponse(res, 'This invoice is approved and locked — it can no longer be edited.', 422);
+        }
+        const { items, totals } = computeTotals(body.items);
+        const updated = await db.transaction(async (trx) => {
+            const now = new Date();
+            const header = {
+                customer_id:  body.customer_id != null ? body.customer_id : inv.customer_id,
+                location_id:  req.locationId != null
+                    ? req.locationId
+                    : (body.location_id != null ? body.location_id : inv.location_id),
+                invoice_date: body.invoice_date || inv.invoice_date,
+                due_date:     body.due_date || null,
+                subtotal:  totals.subtotal, discount: totals.discount, taxable: totals.taxable,
+                cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
+                tax_amount: totals.tax_amount, round_off: totals.round_off, total: totals.total,
+                notes: body.notes != null ? body.notes : inv.notes,
+                updated_at: now,
+            };
+            // "Submit" from the edit screen (save_as_draft=false) moves it out of
+            // draft in the same save.
+            if (body.save_as_draft === false) header.approval_status = 'pending';
+            await trx('invoices').where({ id, company_id: req.companyId }).update(header);
+            await trx('invoice_items').where({ invoice_id: id, company_id: req.companyId }).del();
+            const itemRows = items.map((it) => ({ company_id: req.companyId, invoice_id: id, ...it }));
+            const insertedItems = itemRows.length
+                ? await trx('invoice_items').insert(itemRows).returning('*') : [];
+            const hdr = await trx('invoices').where({ id, company_id: req.companyId }).first();
+            return { ...hdr, items: insertedItems };
+        });
+        const msg = updated.approval_status === 'pending'
+            ? 'Invoice submitted for approval.' : 'Draft updated.';
+        return R.successResponse(res, updated, msg);
+    } catch (err) {
+        console.error('invoices.updateDraft error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 module.exports = {
     listSales,
     listPurchase,
@@ -612,4 +835,10 @@ module.exports = {
     createSales,
     createPurchase,
     destroy,
+    approve,
+    reject,
+    submitDraft,
+    updateDraft,
+    // Reused by the recurring-invoice generator to build identical line/header math.
+    computeTotals,
 };

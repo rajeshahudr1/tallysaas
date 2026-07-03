@@ -1,0 +1,198 @@
+<%
+/* views/bank-reconciliation/index.ejs — TRANSACTIONS · Bank Reconciliation.
+ * Locals: transactions [{id,txn_date,description,reference,amount,direction,status,matched_voucher,matched_date}],
+ *         summary {total,matched,unmatched,ignored,credit,debit}. */
+var _list = (typeof transactions !== 'undefined' && transactions) ? transactions : [];
+var _s = (typeof summary !== 'undefined' && summary) ? summary : {};
+function _money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—'; }
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Bank Reconciliation',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Bank Reconciliation' }],
+    actions: '<button type="button" class="btn btn-gradient" onclick="bkOpen(\'bk-upload\')"><i class="fa-solid fa-file-arrow-up me-1"></i>Import Statement</button>',
+}) %>
+
+<!-- Summary -->
+<div class="card bk-card bk-summary">
+    <div class="bk-metric"><span class="bk-lbl">Transactions</span><span class="bk-val"><%= _s.total || 0 %></span></div>
+    <div class="bk-metric"><span class="bk-lbl">Matched</span><span class="bk-val bk-green"><%= _s.matched || 0 %></span></div>
+    <div class="bk-metric"><span class="bk-lbl">Unmatched</span><span class="bk-val bk-amber"><%= _s.unmatched || 0 %></span></div>
+    <div class="bk-metric"><span class="bk-lbl">Credits (in)</span><span class="bk-val bk-green"><%= _money(_s.credit) %></span></div>
+    <div class="bk-metric"><span class="bk-lbl">Debits (out)</span><span class="bk-val bk-red"><%= _money(_s.debit) %></span></div>
+</div>
+
+<!-- Transactions -->
+<div class="card bk-card">
+    <h2 class="form-section-title">Statement Lines <span class="bk-count"><%= _list.length %></span></h2>
+    <% if (!_list.length) { %>
+        <div class="bk-empty"><i class="fa-solid fa-building-columns"></i><p>No bank transactions yet. Use <strong>Import Statement</strong> to upload a CSV.</p></div>
+    <% } else { %>
+        <div class="table-wrap">
+            <table class="bk-table">
+                <thead><tr><th>Date</th><th>Description</th><th>Ref</th><th class="bk-right">Amount</th><th>Status</th><th class="bk-right">Actions</th></tr></thead>
+                <tbody>
+                    <% _list.forEach(function (r) { var credit = Number(r.amount) >= 0; %>
+                        <tr class="bk-row-<%= r.status %>">
+                            <td class="bk-muted"><%= _date(r.txn_date) %></td>
+                            <td><%= r.description || '—' %></td>
+                            <td class="bk-muted"><%= r.reference || '—' %></td>
+                            <td class="bk-right"><strong class="<%= credit ? 'bk-green' : 'bk-red' %>"><%= credit ? '+' : '' %><%= _money(r.amount) %></strong></td>
+                            <td>
+                                <% if (r.status === 'matched') { %><span class="bk-pill bk-p-matched"><i class="fa-solid fa-link me-1"></i><%= r.matched_voucher || 'Matched' %></span>
+                                <% } else if (r.status === 'ignored') { %><span class="bk-pill bk-p-ignored">Ignored</span>
+                                <% } else { %><span class="bk-pill bk-p-unmatched">Unmatched</span><% } %>
+                            </td>
+                            <td class="bk-right">
+                                <% if (r.status !== 'matched') { %>
+                                    <button type="button" class="bk-icon-btn bk-match" title="Match" onclick="bkMatch(<%= r.id %>)"><i class="fa-solid fa-link"></i></button>
+                                <% } else { %>
+                                    <form method="post" action="/bank-reconciliation/<%= r.id %>/unmatch" style="display:inline"><button class="bk-icon-btn" title="Unmatch"><i class="fa-solid fa-link-slash"></i></button></form>
+                                <% } %>
+                                <% if (r.status !== 'ignored') { %>
+                                    <form method="post" action="/bank-reconciliation/<%= r.id %>/ignore" style="display:inline"><button class="bk-icon-btn" title="Ignore"><i class="fa-solid fa-ban"></i></button></form>
+                                <% } %>
+                                <form method="post" action="/bank-reconciliation/<%= r.id %>/delete" style="display:inline" id="bkdel-<%= r.id %>"
+                                      data-confirm="Delete this bank line? This cannot be undone." data-confirm-title="Delete line?" data-confirm-ok="Delete" data-confirm-variant="danger">
+                                    <button type="submit" class="bk-icon-btn bk-del" title="Delete"><i class="fa-regular fa-trash-can"></i></button>
+                                </form>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
+
+<!-- Upload modal -->
+<div id="bk-upload" class="bk-overlay">
+    <div class="bk-modal">
+        <h3>Import Bank Statement (CSV)</h3>
+        <p class="bk-muted" style="font-size:13px">CSV with a header row. Recognised columns (any order): <code>Date</code>, <code>Description</code>, <code>Reference</code>, and either <code>Amount</code> (signed) or <code>Debit</code> + <code>Credit</code>. Dates: DD/MM/YYYY or YYYY-MM-DD.</p>
+        <input type="file" id="bk-file" accept=".csv,text/csv" class="form-control" onchange="bkParse(this)">
+        <div id="bk-preview" class="bk-preview"></div>
+        <form method="post" action="/bank-reconciliation/import" id="bk-import-form">
+            <input type="hidden" name="rows" id="bk-rows">
+            <div class="bk-modal-actions">
+                <button type="button" class="btn btn-light" onclick="bkClose('bk-upload')">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="bk-import-btn" disabled><i class="fa-solid fa-file-arrow-up me-1"></i>Import</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Match modal -->
+<div id="bk-match" class="bk-overlay">
+    <div class="bk-modal">
+        <h3>Match to a voucher</h3>
+        <div id="bk-match-body" class="bk-preview"><p class="bk-muted">Loading…</p></div>
+        <div class="bk-modal-actions"><button type="button" class="btn btn-light" onclick="bkClose('bk-match')">Close</button></div>
+    </div>
+</div>
+
+<script>
+    function bkOpen(id) { document.getElementById(id).classList.add('open'); }
+    function bkClose(id) { document.getElementById(id).classList.remove('open'); }
+    document.querySelectorAll('.bk-overlay').forEach(function (o) { o.addEventListener('click', function (e) { if (e.target === o) o.classList.remove('open'); }); });
+
+    // ── CSV parse (client-side) ──
+    function bkSplitCsvLine(line) {
+        var out = [], cur = '', q = false;
+        for (var i = 0; i < line.length; i++) {
+            var c = line[i];
+            if (c === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+            else if (c === ',' && !q) { out.push(cur); cur = ''; }
+            else cur += c;
+        }
+        out.push(cur);
+        return out.map(function (s) { return s.trim(); });
+    }
+    function bkToYmd(s) {
+        s = String(s || '').trim();
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+        var m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+        if (m) { var d = m[1].padStart(2, '0'), mo = m[2].padStart(2, '0'), y = m[3]; if (y.length === 2) y = '20' + y; return y + '-' + mo + '-' + d; }
+        return '';
+    }
+    function bkNum(s) { return Number(String(s || '').replace(/[^0-9.\-]/g, '')) || 0; }
+    function bkParse(input) {
+        var file = input.files && input.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function (e) {
+            var lines = String(e.target.result).split(/\r?\n/).filter(function (l) { return l.trim(); });
+            if (lines.length < 2) { document.getElementById('bk-preview').innerHTML = '<p class="bk-muted">Empty or header-only file.</p>'; return; }
+            var head = bkSplitCsvLine(lines[0]).map(function (h) { return h.toLowerCase(); });
+            function col() { for (var a = 0; a < arguments.length; a++) { var i = head.indexOf(arguments[a]); if (i !== -1) return i; } return -1; }
+            var iDate = col('date', 'txn date', 'transaction date', 'value date'), iDesc = col('description', 'narration', 'particulars', 'details'),
+                iRef = col('reference', 'ref', 'chq no', 'cheque no'), iAmt = col('amount'), iDeb = col('debit', 'withdrawal', 'dr'), iCr = col('credit', 'deposit', 'cr');
+            var rows = [];
+            for (var r = 1; r < lines.length; r++) {
+                var c = bkSplitCsvLine(lines[r]);
+                var amount = 0;
+                if (iAmt !== -1) amount = bkNum(c[iAmt]);
+                else amount = bkNum(iCr !== -1 ? c[iCr] : 0) - bkNum(iDeb !== -1 ? c[iDeb] : 0);
+                if (!amount) continue;
+                rows.push({ txn_date: iDate !== -1 ? bkToYmd(c[iDate]) : '', description: iDesc !== -1 ? c[iDesc] : '', reference: iRef !== -1 ? c[iRef] : '', amount: amount });
+            }
+            document.getElementById('bk-rows').value = JSON.stringify(rows);
+            document.getElementById('bk-import-btn').disabled = rows.length === 0;
+            var html = '<div class="bk-muted" style="margin:8px 0">Found <b>' + rows.length + '</b> transactions:</div>';
+            html += '<table class="bk-mini"><thead><tr><th>Date</th><th>Description</th><th class="bk-right">Amount</th></tr></thead><tbody>';
+            rows.slice(0, 8).forEach(function (x) { html += '<tr><td>' + (x.txn_date || '—') + '</td><td>' + (x.description || '—').slice(0, 40) + '</td><td class="bk-right ' + (x.amount >= 0 ? 'bk-green' : 'bk-red') + '">' + x.amount.toFixed(2) + '</td></tr>'; });
+            html += '</tbody></table>' + (rows.length > 8 ? '<div class="bk-muted" style="margin-top:6px">…and ' + (rows.length - 8) + ' more</div>' : '');
+            document.getElementById('bk-preview').innerHTML = html;
+        };
+        reader.readAsText(file);
+    }
+
+    // ── Manual match — fetch candidates + render ──
+    function bkMatch(id) {
+        bkOpen('bk-match');
+        var body = document.getElementById('bk-match-body');
+        body.innerHTML = '<p class="bk-muted">Loading candidates…</p>';
+        fetch('/bank-reconciliation/' + id + '/candidates').then(function (r) { return r.json(); }).then(function (d) {
+            var cands = (d && d.data) || [];
+            if (!cands.length) { body.innerHTML = '<p class="bk-muted">No matching vouchers found.</p>'; return; }
+            var html = '<table class="bk-mini"><thead><tr><th>Voucher</th><th>Party</th><th>Date</th><th class="bk-right">Amount</th><th></th></tr></thead><tbody>';
+            cands.forEach(function (c) {
+                html += '<tr><td>' + (c.voucher_no || '—') + '</td><td>' + (c.party || '—') + '</td><td>' + (c.payment_date ? String(c.payment_date).slice(0, 10).split("-").reverse().join("/") : "—") + '</td><td class="bk-right">' + Number(c.amount).toFixed(2) + '</td>' +
+                    '<td><form method="post" action="/bank-reconciliation/' + id + '/match" style="display:inline"><input type="hidden" name="payment_id" value="' + c.id + '"><button class="btn btn-sm btn-primary">Match</button></form></td></tr>';
+            });
+            body.innerHTML = html + '</tbody></table>';
+        }).catch(function () { body.innerHTML = '<p class="bk-muted">Could not load candidates.</p>'; });
+    }
+</script>
+
+<style>
+    .card.bk-card { padding:20px; margin-bottom:18px; }
+    .form-section-title { margin:0 0 16px; }
+    .bk-summary { display:flex; flex-wrap:wrap; gap:28px; }
+    .bk-metric { display:flex; flex-direction:column; gap:3px; }
+    .bk-lbl { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; }
+    .bk-val { font-size:22px; font-weight:800; color:#111827; }
+    .bk-green { color:#16A34A; } .bk-red { color:#DC2626; } .bk-amber { color:#B45309; }
+    .bk-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .bk-empty { text-align:center; padding:32px 12px; color:#9CA3AF; } .bk-empty i { font-size:34px; opacity:.5; } .bk-empty p { margin:12px 0 0; }
+    .bk-table { width:100%; border-collapse:collapse; }
+    .bk-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 12px 12px; border-bottom:1px solid #EEF1F5; }
+    .bk-table td { padding:11px 12px; border-bottom:1px solid #F3F4F6; }
+    .bk-table tr:last-child td { border-bottom:none; }
+    .bk-row-matched { background:rgba(22,163,74,.04); } .bk-row-ignored { opacity:.55; }
+    .bk-right { text-align:right; } .bk-muted { color:#6B7280; }
+    .bk-pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; }
+    .bk-p-matched { background:rgba(22,163,74,.12); color:#16A34A; } .bk-p-unmatched { background:rgba(180,83,9,.12); color:#B45309; } .bk-p-ignored { background:rgba(107,114,128,.14); color:#6B7280; }
+    .bk-icon-btn { border:1px solid var(--border); background:#fff; color:#4B5563; width:31px; height:31px; border-radius:8px; cursor:pointer; margin-left:3px; }
+    .bk-icon-btn:hover { background:#F8FAFC; } .bk-match { color:#2563EB; border-color:#BFDBFE; } .bk-del { color:#DC2626; border-color:#FECACA; }
+    .bk-overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:2000; }
+    .bk-overlay.open { display:flex; }
+    .bk-modal { background:#fff; border-radius:16px; padding:24px; max-width:640px; width:92%; box-shadow:0 24px 70px rgba(0,0,0,.25); max-height:88vh; overflow:auto; }
+    .bk-modal h3 { margin:0 0 12px; font-size:18px; font-weight:700; color:#111827; }
+    .bk-modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+    .bk-preview { margin:14px 0 0; }
+    .bk-mini { width:100%; border-collapse:collapse; font-size:13px; }
+    .bk-mini th { text-align:left; color:#9CA3AF; font-size:11px; text-transform:uppercase; padding:0 8px 8px; border-bottom:1px solid #EEF1F5; }
+    .bk-mini td { padding:8px; border-bottom:1px solid #F3F4F6; }
+</style>

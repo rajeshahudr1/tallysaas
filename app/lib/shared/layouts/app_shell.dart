@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/auth/session.dart';
+import '../../core/gps/gps_tracker.dart';
+import '../../core/update/app_update.dart';
 
 /// Bottom-nav scaffold wrapping the five primary tabs (Dashboard, Masters,
 /// Txns, Reports, Profile). Each tab keeps its own navigation stack via
@@ -29,11 +31,33 @@ class AppShell extends ConsumerWidget {
     'sales-invoices', 'purchase-invoices', 'payments', 'receipts', 'journals',
   ];
 
+  // Fires the cloud app-update check ONCE per app run (not on every rebuild).
+  static bool _updateChecked = false;
+  // Starts GPS tracking ONCE for a linked salesman (the config gates the rest).
+  static bool _gpsStarted = false;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
     bool show(bool gate) => user == null || gate;
+
+    // One-shot cloud app-update prompt once the shell is up (post-login).
+    if (!_updateChecked) {
+      _updateChecked = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) maybePromptAppUpdate(context, ref);
+      });
+    }
+
+    // Start GPS tracking once for a linked salesman. The super-admin config
+    // (GET /field/gps-config) gates whether anything actually captures.
+    if (!_gpsStarted && user != null && user.isSalesman) {
+      _gpsStarted = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(gpsTrackerProvider).start();
+      });
+    }
 
     // Each visible tab carries its REAL branch index (0–4).
     final tabs = <({int branch, NavigationDestination dest})>[

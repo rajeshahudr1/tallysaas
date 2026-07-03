@@ -386,6 +386,10 @@ async function pending(req, res) {
         const invoices = await db('invoices as i')
             .whereIn('i.company_id', companyIds).whereNull('i.deleted_at')
             .where('i.status', 'pending_tally')
+            // Field-sales approval gate: a salesman's invoice only reaches Tally
+            // AFTER a company admin approves it (default 'approved' → admin/web
+            // invoices + all historical rows sync exactly as before).
+            .andWhere('i.approval_status', 'approved')
             .leftJoin('customers as c', 'c.id', 'i.customer_id')
             .leftJoin('suppliers as s', 'i.supplier_id', 's.id')
             .limit(50)

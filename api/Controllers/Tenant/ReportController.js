@@ -61,6 +61,10 @@ function buildBase(req) {
 
     // Per-user location scoping: restrict to the user's location when set.
     if (req.locationId != null) qb = qb.where('invoices.location_id', req.locationId);
+    // Field-sales scoping: a salesman sees reports ONLY for invoices THEY created
+    // (mirrors the invoice/analytics scoping; RBAC blocks salesmen from Reports by
+    // default, so this is defence-in-depth).
+    if (req.isSalesman) qb = qb.where('invoices.created_by', req.user.sub);
 
     const status     = (req.query.status || '').trim();
     const customerId = req.query.customer_id;
@@ -141,6 +145,7 @@ async function dayBook(req, res) {
         // Location scoping: invoices carry location_id (payments do not, so the
         // receipt/payment side of the day book stays company-wide).
         if (req.locationId != null) invQ = invQ.where('invoices.location_id', req.locationId);
+        if (req.isSalesman) invQ = invQ.where('invoices.created_by', req.user.sub);
         if (df) invQ = invQ.where('invoices.invoice_date', '>=', df);
         if (dt) invQ = invQ.where('invoices.invoice_date', '<=', dt);
         const invoices = await invQ.select(

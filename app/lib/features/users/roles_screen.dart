@@ -166,6 +166,62 @@ class _RolePermissionsScreenState extends ConsumerState<RolePermissionsScreen> {
     return const [];
   }
 
+  // ── Quick-select helpers (Select all + per-action "All <Action>") ──────────
+  List<String> _actionsOf(Map<String, dynamic> m) =>
+      (m['actions'] is List) ? (m['actions'] as List).map((a) => '$a').toList() : const [];
+
+  /// Every grantable slug across every module.
+  List<String> get _allSlugs => [
+        for (final m in _modules)
+          for (final a in _actionsOf(m)) '${m['key']}.$a',
+      ];
+
+  /// Distinct actions (union of all modules), in a sensible fixed order.
+  List<String> get _distinctActions {
+    final set = <String>{};
+    for (final m in _modules) {
+      set.addAll(_actionsOf(m));
+    }
+    const order = ['view', 'create', 'add', 'edit', 'update', 'delete', 'export', 'import', 'print', 'approve'];
+    final list = set.toList()
+      ..sort((a, b) {
+        int ia = order.indexOf(a), ib = order.indexOf(b);
+        if (ia == -1) ia = 99;
+        if (ib == -1) ib = 99;
+        return ia != ib ? ia.compareTo(ib) : a.compareTo(b);
+      });
+    return list;
+  }
+
+  /// Slugs for one action across every module that exposes it.
+  List<String> _slugsForAction(String action) => [
+        for (final m in _modules)
+          if (_actionsOf(m).contains(action)) '${m['key']}.$action',
+      ];
+
+  bool get _allOn => _allSlugs.isNotEmpty && _allSlugs.every(_granted.contains);
+  bool _actionAllOn(String a) {
+    final s = _slugsForAction(a);
+    return s.isNotEmpty && s.every(_granted.contains);
+  }
+
+  void _setAll(bool on) => setState(() {
+        if (on) {
+          _granted.addAll(_allSlugs);
+        } else {
+          _allSlugs.forEach(_granted.remove);
+        }
+      });
+
+  void _setAction(String a, bool on) => setState(() {
+        final s = _slugsForAction(a);
+        if (on) {
+          _granted.addAll(s);
+        } else {
+          s.forEach(_granted.remove);
+        }
+      });
+
   Future<void> _save() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -209,6 +265,14 @@ class _RolePermissionsScreenState extends ConsumerState<RolePermissionsScreen> {
                         child: Text('System role — changes may be restricted by your licence.',
                             style: Theme.of(context).textTheme.bodySmall),
                       ),
+                    if (_modules.isNotEmpty)
+                      _QuickSelectCard(
+                        allOn: _allOn,
+                        actions: _distinctActions,
+                        actionAllOn: _actionAllOn,
+                        onToggleAll: _setAll,
+                        onToggleAction: _setAction,
+                      ),
                     for (final m in _modules) _ModuleCard(m, _granted, () => setState(() {})),
                   ],
                 ),
@@ -218,6 +282,76 @@ class _RolePermissionsScreenState extends ConsumerState<RolePermissionsScreen> {
               minimum: const EdgeInsets.all(AppSpacing.md12),
               child: AppButton(label: 'Save Permissions', icon: Icons.save_outlined, loading: _busy, onPressed: _save),
             ),
+    );
+  }
+}
+
+/// "Quick select" header — a master Select-all switch plus one "All <Action>"
+/// chip per distinct action, so a whole column (e.g. every module's View) can be
+/// granted in one tap. Mirrors the web.
+class _QuickSelectCard extends StatelessWidget {
+  const _QuickSelectCard({
+    required this.allOn,
+    required this.actions,
+    required this.actionAllOn,
+    required this.onToggleAll,
+    required this.onToggleAction,
+  });
+  final bool allOn;
+  final List<String> actions;
+  final bool Function(String) actionAllOn;
+  final ValueChanged<bool> onToggleAll;
+  final void Function(String, bool) onToggleAction;
+
+  static String _cap(String a) => a.isEmpty ? a : a[0].toUpperCase() + a.substring(1);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.sm8),
+      child: AppCard(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.bolt, size: 18, color: AppColors.primary),
+                const SizedBox(width: 6),
+                Expanded(child: Text('Quick select', style: Theme.of(context).textTheme.titleSmall)),
+                Text(allOn ? 'All on' : 'Select all',
+                    style: Theme.of(context).textTheme.bodySmall),
+                Switch.adaptive(value: allOn, onChanged: onToggleAll),
+              ],
+            ),
+            Text('Grant a whole column in one tap.',
+                style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: AppSpacing.sm8),
+            Wrap(
+              spacing: AppSpacing.sm8,
+              runSpacing: 4,
+              children: [
+                for (final a in actions)
+                  FilterChip(
+                    label: Text(
+                      'All ${_cap(a)}',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: actionAllOn(a) ? Colors.white : AppColors.text1,
+                      ),
+                    ),
+                    selected: actionAllOn(a),
+                    showCheckmark: false,
+                    backgroundColor: const Color(0xFFF1F5F9),
+                    selectedColor: AppColors.primary,
+                    side: BorderSide(color: actionAllOn(a) ? AppColors.primary : AppColors.border),
+                    onSelected: (on) => onToggleAction(a, on),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -233,6 +367,7 @@ class _ModuleCard extends StatelessWidget {
     final key = '${m['key'] ?? ''}';
     final label = '${m['label'] ?? key}';
     final actions = (m['actions'] is List) ? (m['actions'] as List).map((a) => '$a').toList() : <String>[];
+    final allModuleOn = actions.isNotEmpty && actions.every((a) => granted.contains('$key.$a'));
     return Padding(
       padding: const EdgeInsets.only(bottom: AppSpacing.sm8),
       child: AppCard(
@@ -245,10 +380,47 @@ class _ModuleCard extends StatelessWidget {
             spacing: AppSpacing.sm8,
             runSpacing: 4,
             children: [
+              // Per-module "All" — toggles every action in just this module.
+              FilterChip(
+                label: Text('All',
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        color: allModuleOn ? Colors.white : AppColors.primary)),
+                selected: allModuleOn,
+                showCheckmark: false,
+                backgroundColor: AppColors.primary.withOpacity(0.08),
+                selectedColor: AppColors.primary,
+                side: const BorderSide(color: AppColors.primary),
+                onSelected: (on) {
+                  for (final a in actions) {
+                    final slug = '$key.$a';
+                    if (on) {
+                      granted.add(slug);
+                    } else {
+                      granted.remove(slug);
+                    }
+                  }
+                  onChanged();
+                },
+              ),
               for (final a in actions)
                 FilterChip(
-                  label: Text(a),
+                  label: Text(
+                    a.isEmpty ? a : a[0].toUpperCase() + a.substring(1),
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: granted.contains('$key.$a') ? Colors.white : AppColors.text1,
+                    ),
+                  ),
                   selected: granted.contains('$key.$a'),
+                  showCheckmark: false,
+                  backgroundColor: const Color(0xFFF1F5F9),
+                  selectedColor: AppColors.primary,
+                  side: BorderSide(
+                    color: granted.contains('$key.$a') ? AppColors.primary : AppColors.border,
+                  ),
                   onSelected: (on) {
                     final slug = '$key.$a';
                     if (on) {

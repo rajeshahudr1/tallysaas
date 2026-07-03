@@ -1,0 +1,115 @@
+<%
+/* views/einvoices/details.ejs — e-Invoice detail with tabs. */
+var ei = (typeof ei !== 'undefined' && ei) ? ei : {};
+var inv = (typeof invoice !== 'undefined' && invoice) ? invoice : {};
+var cust = (typeof customer !== 'undefined') ? customer : null;
+var _items = Array.isArray(items) ? items : [];
+var _logs = Array.isArray(apiLogs) ? apiLogs : [];
+var _trans = Array.isArray(transport) ? transport : [];
+var _canc = Array.isArray(cancellations) ? cancellations : [];
+var _val = Array.isArray(validity) ? validity : [];
+function d(x){ if(!x) return '—'; try { return new Date(x).toLocaleString('en-IN'); } catch(e){ return x; } }
+function money(n){ return '₹' + Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function kv(k,v){ return '<div class="eidt-kv"><span>'+k+'</span><b>'+(v==null||v===''?'—':v)+'</b></div>'; }
+%>
+<%- include('../partials/page-head', {
+    title: 'e-Invoice Details',
+    breadcrumb: [ { label: 'Dashboard', href: '/' }, { label: 'e-Invoice', href: '/einvoices' }, { label: inv.invoice_no || 'Details' } ],
+    actions: [ { label: 'Back', icon: 'fa-arrow-left', variant: 'light', href: '/einvoices' } ],
+}) %>
+
+<div class="card p-3 mb-3">
+    <div class="d-flex align-items-center flex-wrap gap-2">
+        <h2 class="mb-0" style="font-size:18px;font-weight:800"><%= inv.invoice_no || '—' %></h2>
+        <span class="badge bg-<%= ei.irp_status==='generated'?'success':(ei.irp_status==='cancelled'?'secondary':(ei.irp_status==='failed'?'danger':'warning')) %>">IRP: <%= ei.irp_status || '—' %></span>
+        <span class="badge bg-<%= ei.ewb_status==='generated'?'primary':(ei.ewb_status==='expired'?'danger':'secondary') %>">EWB: <%= ei.ewb_status || '—' %></span>
+        <span class="ms-auto text-muted"><%= money(inv.total) %></span>
+    </div>
+</div>
+
+<div class="card p-0">
+    <div class="eidt-tabs">
+        <button class="eidt-tab is-active" data-tab="ov">Overview</button>
+        <button class="eidt-tab" data-tab="it">Items (<%= _items.length %>)</button>
+        <button class="eidt-tab" data-tab="tr">Transport (<%= _trans.length %>)</button>
+        <button class="eidt-tab" data-tab="lg">API Logs (<%= _logs.length %>)</button>
+        <button class="eidt-tab" data-tab="hi">History (<%= _canc.length + _val.length %>)</button>
+    </div>
+
+    <div class="eidt-pane is-active" data-pane="ov">
+        <div class="eidt-cols">
+            <div class="eidt-sec"><h3>Invoice</h3>
+                <%- kv('Invoice No', inv.invoice_no) %><%- kv('Date', inv.invoice_date ? new Date(inv.invoice_date).toLocaleDateString('en-IN') : '—') %><%- kv('Taxable', money(inv.taxable)) %><%- kv('Tax', money(inv.tax_amount)) %><%- kv('Total', money(inv.total)) %>
+            </div>
+            <div class="eidt-sec"><h3>Customer</h3>
+                <%- kv('Name', cust && cust.name) %><%- kv('GSTIN', cust && cust.gst_number) %><%- kv('City', cust && cust.city) %><%- kv('State', cust && cust.state) %>
+            </div>
+            <div class="eidt-sec"><h3>e-Invoice (IRN)</h3>
+                <%- kv('IRN', ei.irn ? '<span style="word-break:break-all;font-size:11px">'+ei.irn+'</span>' : '—') %><%- kv('Ack No', ei.ack_no) %><%- kv('Ack Date', d(ei.ack_date)) %><%- kv('Doc / Supply', (ei.doc_type||'—')+' / '+(ei.supply_type||'—')) %><%- kv('Provider / Env', (ei.provider||'—')+' / '+(ei.env||'—')) %>
+                <% if (ei.error) { %><div class="alert alert-danger py-1 px-2 mt-2 mb-0" style="font-size:12px"><%= ei.error %></div><% } %>
+            </div>
+            <div class="eidt-sec"><h3>e-Way Bill</h3>
+                <%- kv('EWB No', ei.ewb_no) %><%- kv('Valid Until', d(ei.ewb_valid_until)) %><%- kv('Vehicle', ei.vehicle_no) %><%- kv('Transporter', ei.transporter || ei.transporter_id) %><%- kv('Distance', ei.distance_km ? (ei.distance_km+' km') : '—') %>
+            </div>
+        </div>
+        <% if (ei.signed_qr) { %><div class="eidt-sec mt-2"><h3>Signed QR</h3><textarea class="form-control" rows="2" readonly style="font-size:10px"><%= ei.signed_qr %></textarea></div><% } %>
+    </div>
+
+    <div class="eidt-pane" data-pane="it">
+        <table class="table mb-0"><thead><tr><th>#</th><th>Description</th><th>HSN</th><th class="text-end">Qty</th><th class="text-end">Rate</th><th class="text-end">GST%</th><th class="text-end">Amount</th></tr></thead><tbody>
+        <% if (!_items.length) { %><tr><td colspan="7" class="text-center text-muted py-3">No line items.</td></tr><% } %>
+        <% _items.forEach(function(it,i){ %><tr><td><%= i+1 %></td><td><%= it.description || '—' %></td><td><%= it.hsn || '—' %></td><td class="text-end"><%= it.quantity %></td><td class="text-end"><%= money(it.rate) %></td><td class="text-end"><%= it.gst_rate || 0 %></td><td class="text-end"><%= money(it.amount) %></td></tr><% }); %>
+        </tbody></table>
+    </div>
+
+    <div class="eidt-pane" data-pane="tr">
+        <table class="table mb-0"><thead><tr><th>Vehicle</th><th>Mode</th><th>Reason</th><th>Remarks</th><th>When</th></tr></thead><tbody>
+        <% if (!_trans.length) { %><tr><td colspan="5" class="text-center text-muted py-3">No vehicle updates.</td></tr><% } %>
+        <% _trans.forEach(function(t){ %><tr><td><%= t.vehicle_no || '—' %></td><td><%= t.transport_mode || '—' %></td><td><%= t.reason_code || '—' %></td><td class="text-muted"><%= t.remarks || '—' %></td><td class="text-muted"><%= d(t.created_at) %></td></tr><% }); %>
+        </tbody></table>
+    </div>
+
+    <div class="eidt-pane" data-pane="lg">
+        <table class="table mb-0"><thead><tr><th>Action</th><th>OK</th><th>NIC</th><th>ms</th><th>Error</th><th>When</th></tr></thead><tbody>
+        <% if (!_logs.length) { %><tr><td colspan="6" class="text-center text-muted py-3">No API calls logged.</td></tr><% } %>
+        <% _logs.forEach(function(l){ %><tr><td><%= l.action %></td><td><%= l.success ? '<span class="text-success">✓</span>' : '<span class="text-danger">✗</span>' %></td><td><%= l.nic_status_code || '—' %></td><td><%= l.latency_ms || '—' %></td><td class="text-muted" style="max-width:220px;font-size:12px"><%= l.error || '—' %></td><td class="text-muted"><%= d(l.created_at) %></td></tr><% }); %>
+        </tbody></table>
+    </div>
+
+    <div class="eidt-pane" data-pane="hi">
+        <h3 class="px-3 pt-3" style="font-size:14px">Cancellations</h3>
+        <table class="table mb-0"><thead><tr><th>Kind</th><th>Ref</th><th>Reason</th><th>Remarks</th><th>When</th></tr></thead><tbody>
+        <% if (!_canc.length) { %><tr><td colspan="5" class="text-center text-muted py-2">—</td></tr><% } %>
+        <% _canc.forEach(function(c){ %><tr><td><%= c.kind %></td><td class="text-muted"><%= (c.doc_ref||'').slice(0,20) %></td><td><%= c.reason_code || '—' %></td><td class="text-muted"><%= c.remarks || '—' %></td><td class="text-muted"><%= d(c.created_at) %></td></tr><% }); %>
+        </tbody></table>
+        <h3 class="px-3 pt-3" style="font-size:14px">Validity Extensions</h3>
+        <table class="table mb-0"><thead><tr><th>EWB</th><th>Extended Until</th><th>Reason</th><th>When</th></tr></thead><tbody>
+        <% if (!_val.length) { %><tr><td colspan="4" class="text-center text-muted py-2">—</td></tr><% } %>
+        <% _val.forEach(function(v){ %><tr><td><%= v.ewb_no || '—' %></td><td><%= d(v.extended_until) %></td><td><%= v.reason_code || '—' %></td><td class="text-muted"><%= d(v.created_at) %></td></tr><% }); %>
+        </tbody></table>
+    </div>
+</div>
+
+<style>
+    .eidt-tabs{display:flex;gap:2px;border-bottom:1px solid #e2e8f0;padding:8px 10px 0;flex-wrap:wrap;}
+    .eidt-tab{border:0;background:none;padding:8px 14px;font-size:13px;font-weight:600;color:#64748b;border-bottom:2px solid transparent;cursor:pointer;}
+    .eidt-tab.is-active{color:#2563eb;border-bottom-color:#2563eb;}
+    .eidt-pane{display:none;padding:6px;} .eidt-pane.is-active{display:block;}
+    .eidt-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;padding:12px;}
+    .eidt-sec h3{font-size:13px;font-weight:700;color:#0f172a;margin:0 0 8px;}
+    .eidt-kv{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid #f1f5f9;font-size:13px;}
+    .eidt-kv span{color:#64748b;} .eidt-kv b{color:#0f172a;text-align:right;}
+</style>
+<script>
+(function(){
+  document.querySelectorAll('.eidt-tab').forEach(function(t){
+    t.addEventListener('click',function(){
+      document.querySelectorAll('.eidt-tab').forEach(function(x){x.classList.remove('is-active');});
+      document.querySelectorAll('.eidt-pane').forEach(function(x){x.classList.remove('is-active');});
+      t.classList.add('is-active');
+      var p=document.querySelector('.eidt-pane[data-pane="'+t.getAttribute('data-tab')+'"]');
+      if(p) p.classList.add('is-active');
+    });
+  });
+})();
+</script>

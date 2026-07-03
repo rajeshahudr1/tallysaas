@@ -45,6 +45,19 @@ class InvoiceRepository {
 
   Future<void> delete(String basePath, int id) => _api.delete('$basePath/$id');
 
+  // ── SFA · field-sales approval workflow (sales invoices only) ──────────
+  /// Admin approves a pending field invoice → it counts + becomes Tally-eligible.
+  Future<void> approve(int id) =>
+      _api.post('${Endpoints.salesInvoices}/$id/approve', body: const {});
+
+  /// Admin rejects a pending field invoice with a reason (shown to the salesman).
+  Future<void> reject(int id, String reason) =>
+      _api.post('${Endpoints.salesInvoices}/$id/reject', body: {'reason': reason});
+
+  /// Salesman submits their own DRAFT for approval ('draft' → 'pending').
+  Future<void> submitDraft(int id) =>
+      _api.post('${Endpoints.salesInvoices}/$id/submit', body: const {});
+
   // Convenience aliases for the two endpoints.
   Future<PagedResult<Invoice>> listSales({int page = 1, int perPage = 10, String? search, Map<String, String>? filters}) =>
       list(Endpoints.salesInvoices, page: page, perPage: perPage, search: search, filters: filters);

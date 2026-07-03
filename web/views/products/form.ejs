@@ -205,3 +205,79 @@ var headActions =
     </div>
 
 </form>
+
+<% if (_isEdit) { %>
+<% var _imgs = (_rec && Array.isArray(_rec.images)) ? _rec.images : []; %>
+<div class="card form-card product-images-card">
+    <div class="pi-head">
+        <div>
+            <h2 class="pi-title"><i class="fa-solid fa-images me-2"></i>Product Images</h2>
+            <p class="pi-sub">Up to 8 photos · JPG, PNG, WEBP or GIF · max 5MB each. Stored in your cloud — not synced to Tally.</p>
+        </div>
+        <span class="pi-count"><%= _imgs.length %> image<%= _imgs.length === 1 ? '' : 's' %></span>
+    </div>
+
+    <form class="pi-upload" method="post" action="/products/<%= _rec.id %>/images" enctype="multipart/form-data">
+        <label class="pi-drop" for="pi-file">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+            <span class="pi-drop-main">Choose images to upload</span>
+            <span class="pi-drop-sub" id="pi-chosen">No files selected</span>
+            <input type="file" id="pi-file" name="images" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+        </label>
+        <button type="submit" class="btn btn-primary pi-upload-btn" id="pi-upload-btn" disabled>
+            <i class="fa-solid fa-upload me-1"></i>Upload
+        </button>
+    </form>
+
+    <% if (_imgs.length) { %>
+    <div class="pi-gallery">
+        <% _imgs.forEach(function (img) { %>
+        <figure class="pi-item">
+            <a href="<%= img.url %>" target="_blank" rel="noopener"><img src="<%= img.url %>" alt="Product image" loading="lazy"></a>
+            <button type="button" class="pi-del-btn" title="Remove image"
+                    data-row-delete data-delete-url="/products/<%= _rec.id %>/images/<%= img.id %>"
+                    data-delete-label="this image">
+                <i class="fa-solid fa-trash"></i>
+            </button>
+        </figure>
+        <% }); %>
+    </div>
+    <% } else { %>
+    <div class="pi-empty"><i class="fa-regular fa-image me-1"></i> No images yet — upload the first one above.</div>
+    <% } %>
+</div>
+
+<style>
+.product-images-card { padding: 24px; margin-top: 20px; }
+.pi-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; }
+.pi-title { font-size:1.05rem; font-weight:600; margin:0 0 4px; }
+.pi-sub { font-size:.82rem; color:#6b7280; margin:0; }
+.pi-count { background:#eef2ff; color:#4338ca; font-size:.78rem; font-weight:600; padding:4px 12px; border-radius:999px; white-space:nowrap; }
+.pi-upload { display:flex; gap:12px; align-items:stretch; margin-bottom:20px; flex-wrap:wrap; }
+.pi-drop { flex:1; min-width:240px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:22px; border:2px dashed #cbd5e1; border-radius:12px; cursor:pointer; text-align:center; transition:border-color .15s, background .15s; }
+.pi-drop:hover { border-color:#6366f1; background:#f8faff; }
+.pi-drop i { font-size:1.6rem; color:#6366f1; }
+.pi-drop-main { font-weight:600; font-size:.9rem; }
+.pi-drop-sub { font-size:.78rem; color:#6b7280; }
+.pi-upload-btn { align-self:center; }
+.pi-gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:14px; }
+.pi-item { position:relative; margin:0; border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; aspect-ratio:1/1; background:#f9fafb; }
+.pi-item img { width:100%; height:100%; object-fit:cover; display:block; }
+.pi-del-btn { position:absolute; top:6px; right:6px; border:none; background:rgba(220,38,38,.92); color:#fff; width:30px; height:30px; border-radius:8px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:.8rem; box-shadow:0 1px 4px rgba(0,0,0,.25); z-index:2; }
+.pi-del-btn:hover { background:#b91c1c; }
+.pi-empty { padding:26px; text-align:center; color:#6b7280; font-size:.88rem; border:1px dashed #e5e7eb; border-radius:12px; }
+</style>
+<script>
+(function () {
+    var f = document.getElementById('pi-file');
+    if (!f) return;
+    var chosen = document.getElementById('pi-chosen');
+    var btn = document.getElementById('pi-upload-btn');
+    f.addEventListener('change', function () {
+        var n = f.files ? f.files.length : 0;
+        chosen.textContent = n ? (n + ' file' + (n === 1 ? '' : 's') + ' selected') : 'No files selected';
+        btn.disabled = n === 0;
+    });
+})();
+</script>
+<% } %>

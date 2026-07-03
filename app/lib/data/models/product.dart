@@ -3,6 +3,10 @@
 /// (`GET /products/:id`) sends every editable column so the Edit form can
 /// pre-fill. pg returns numeric/bigint columns as strings, so coercions are
 /// defensive.
+///
+/// Both list + detail also carry the image gallery: `image_url` (the primary
+/// photo, for a list thumbnail) and `images` (the full gallery, for detail).
+/// The API builds ABSOLUTE urls server-side so the app never composes paths.
 class Product {
   const Product({
     required this.id,
@@ -21,6 +25,8 @@ class Product {
     this.status,
     this.customFields = const {},
     this.createdAt,
+    this.imageUrl,
+    this.images = const [],
   });
 
   final int id;
@@ -39,6 +45,8 @@ class Product {
   final String? status;     // Active | Inactive | Blocked
   final Map<String, dynamic> customFields;
   final String? createdAt;
+  final String? imageUrl;              // primary gallery image (list thumbnail + detail)
+  final List<ProductImage> images;     // full image gallery (detail)
 
   factory Product.fromJson(Map<String, dynamic> j) => Product(
         id: _toInt(j['id']) ?? 0,
@@ -57,6 +65,8 @@ class Product {
         status: _sn(j['status']),
         customFields: _toMap(j['custom_fields']),
         createdAt: _sn(j['created_at']),
+        imageUrl: _sn(j['image_url']),
+        images: _toImages(j['images']),
       );
 
   /// GST rate as the config-dropdown LABEL ("18%"), or null. Whole numbers drop
@@ -100,4 +110,27 @@ class Product {
     if (v is Map) return v.cast<String, dynamic>();
     return const {};
   }
+
+  static List<ProductImage> _toImages(Object? v) {
+    if (v is List) {
+      return v
+          .whereType<Map>()
+          .map((m) => ProductImage.fromJson(m.cast<String, dynamic>()))
+          .toList();
+    }
+    return const [];
+  }
+}
+
+/// One gallery image for a product. The API always sends an ABSOLUTE `url`
+/// (built server-side) so the app can render it directly — no path building.
+class ProductImage {
+  const ProductImage({required this.id, required this.url});
+  final int id;
+  final String url;
+
+  factory ProductImage.fromJson(Map<String, dynamic> j) => ProductImage(
+        id: (j['id'] is num) ? (j['id'] as num).toInt() : int.tryParse('${j['id']}') ?? 0,
+        url: (j['url'] ?? '').toString(),
+      );
 }

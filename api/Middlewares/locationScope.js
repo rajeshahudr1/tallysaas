@@ -48,10 +48,17 @@ const db = require('../config/db').db;
 async function resolveLocation(req, res, next) {
     const user = req.user || {};
 
-    // Default: no location restriction.
+    // Defaults: no location restriction, not a field salesman, no approval gate.
     req.locationId = null;
+    req.salesPersonId = null;
+    req.isSalesman = false;
+    // needsApproval — TRUE for EVERY non-admin user (not only linked salesmen):
+    // their sales invoices must be approved by a company-admin before they count
+    // / sync to Tally. ONLY company-admin + super-admin (+ admin/owner) bypass.
+    req.needsApproval = false;
 
-    // Super Admin is never location-restricted (cross-company/branch operator).
+    // Super Admin is never location-restricted (cross-company/branch operator)
+    // and never needs approval.
     if (user.role_slug === 'super-admin') {
         return next();
     }
@@ -69,12 +76,38 @@ async function resolveLocation(req, res, next) {
             .first('location_id');
         const loc = row && row.location_id;
         req.locationId = (loc !== null && loc !== undefined) ? Number(loc) : null;
+
+        // Field-sales (SFA) scoping: a user LINKED to a sales_persons row is a
+        // field salesman → req.isSalesman/req.salesPersonId. Controllers use this
+        // to (a) restrict invoices/reports/analytics to ONLY the rows THEY
+        // created, and (b) make their field invoices need admin approval before
+        // they count / sync. Admins/owners are never treated as salesmen (they
+        // manage the whole company) even if a link somehow exists.
+        const adminish = ['super-admin', 'company-admin', 'admin', 'owner']
+            .includes(user.role_slug);
+        // Any non-admin's sales invoices go through the approval queue.
+        req.needsApproval = !adminish;
+        if (!adminish && req.companyId) {
+            const sp = await db('sales_persons')
+                .where({ user_id: userId, company_id: req.companyId })
+                .whereNull('deleted_at')
+                .first('id');
+            if (sp) {
+                req.isSalesman = true;
+                req.salesPersonId = Number(sp.id);
+            }
+        }
         return next();
     } catch (err) {
         console.error('resolveLocation lookup error:', err);
-        // Keep the safe default (null = company-wide). The request stays
-        // company-scoped, so this never leaks across companies.
+        // Keep safe defaults (null = company-wide, not a salesman). The request
+        // stays company-scoped, so this never leaks across companies. Approval is
+        // recomputed from the role alone so a non-admin never bypasses the queue.
         req.locationId = null;
+        req.salesPersonId = null;
+        req.isSalesman = false;
+        req.needsApproval = !['super-admin', 'company-admin', 'admin', 'owner']
+            .includes(user.role_slug);
         return next();
     }
 }

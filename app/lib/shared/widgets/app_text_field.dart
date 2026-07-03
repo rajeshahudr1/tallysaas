@@ -20,6 +20,7 @@ class AppTextField extends StatelessWidget {
     this.onChanged,
     this.enabled = true,
     this.maxLines = 1,
+    this.suffix,
   });
 
   final TextEditingController controller;
@@ -38,6 +39,8 @@ class AppTextField extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final bool enabled;
   final int maxLines;
+  /// Optional trailing widget (e.g. a show-password toggle).
+  final Widget? suffix;
 
   @override
   Widget build(BuildContext context) {
@@ -56,6 +59,7 @@ class AppTextField extends StatelessWidget {
             hintText: hint,
             prefixIcon:
                 prefixIcon == null ? null : Icon(prefixIcon, size: 18),
+            suffixIcon: suffix,
           ),
           validator: validator,
           keyboardType: keyboardType,

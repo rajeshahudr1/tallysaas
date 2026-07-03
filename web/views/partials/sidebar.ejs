@@ -20,7 +20,7 @@ var _isCompanyAdmin = (typeof isCompanyAdmin !== 'undefined') ? !!isCompanyAdmin
 // `href` of '#' marks not-yet-built screens (Phase-1 only ships 3 pages).
 var menu = [
     { label: null, items: [
-        { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/' },
+        { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/', perm: 'dashboard' },
     ]},
     { label: 'Masters', items: [
         { key: 'companies',  label: 'Companies',     icon: 'fa-building',      href: '/companies',     perm: 'companies' },
@@ -33,10 +33,18 @@ var menu = [
     ]},
     { label: 'Transactions', items: [
         { key: 'sales-inv',    label: 'Sales Invoices',    icon: 'fa-file-invoice',     href: '/sales-invoices',    perm: 'sales-invoices' },
+        { key: 'approvals',    label: 'Invoice Approvals', icon: 'fa-clipboard-check',  href: '/sales-invoices/approvals', approve: true },
+        { key: 'field-tracking', label: 'Field Tracking',  icon: 'fa-map-location-dot', href: '/field-tracking',           approve: true },
+        { key: 'recurring',    label: 'Recurring Invoices', icon: 'fa-repeat',          href: '/recurring-invoices', perm: 'recurring-invoices' },
+        { key: 'einvoice',     label: 'e-Invoice & e-Way', icon: 'fa-file-circle-check', href: '/einvoices',        perm: 'einvoice' },
+        { key: 'einvoice-dash', label: 'e-Invoice Dashboard', icon: 'fa-gauge-high',    href: '/einvoices/dashboard', perm: 'einvoice' },
         { key: 'purchase-inv', label: 'Purchase Invoices', icon: 'fa-file-import',      href: '/purchase-invoices', perm: 'purchase-invoices' },
         { key: 'payments',     label: 'Payments',          icon: 'fa-money-bill-wave',  href: '/payments',          perm: 'payments' },
         { key: 'receipts',     label: 'Receipts',          icon: 'fa-receipt',          href: '/receipts',          perm: 'receipts' },
+        { key: 'reminders',    label: 'Payment Reminders', icon: 'fa-bell',             href: '/reminders',         perm: 'payments' },
         { key: 'journals',     label: 'Journals',          icon: 'fa-book',             href: '/journals',          perm: 'journals' },
+        { key: 'expenses',     label: 'Expenses',          icon: 'fa-wallet',           href: '/expenses',          perm: 'expenses' },
+        { key: 'bank',         label: 'Bank Reconciliation', icon: 'fa-building-columns', href: '/bank-reconciliation', perm: 'bank-reconciliation' },
         { key: 'inventory',    label: 'Inventory',         icon: 'fa-warehouse',        href: '/inventory',         perm: 'inventory' },
     ]},
     { label: 'Tally Sync', items: [
@@ -45,11 +53,13 @@ var menu = [
         { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',  adminOnly: true },
     ]},
     { label: 'Reports', items: [
-        { key: 'reports', label: 'Reports', icon: 'fa-chart-column', href: '/reports', perm: 'reports' },
+        { key: 'analytics', label: 'Business Analytics', icon: 'fa-chart-pie',    href: '/analytics', perm: 'reports' },
+        { key: 'reports',   label: 'Reports',            icon: 'fa-chart-column', href: '/reports',   perm: 'reports' },
     ]},
     { label: 'Settings', items: [
         { key: 'users',    label: 'Users',                icon: 'fa-users',       href: '/users', perm: 'users' },
-        { key: 'settings', label: 'Settings',             icon: 'fa-gear',        href: '/settings' },
+        { key: 'accountant', label: 'Accountant Access',  icon: 'fa-user-tie',    href: '/accountant-access', perm: 'users' },
+        { key: 'settings', label: 'Settings',             icon: 'fa-gear',        href: '/settings', perm: 'settings' },
     ]},
 ];
 
@@ -71,6 +81,9 @@ if (_isSuperAdmin) {
     menu.splice(1, 0, { label: 'Platform Admin', items: [
         { key: 'licenses',       label: 'Licenses',       icon: 'fa-key',                href: '/licenses' },
         { key: 'agent-releases', label: 'Agent Updates',  icon: 'fa-cloud-arrow-up',     href: '/agent-releases' },
+        { key: 'app-releases',   label: 'App Updates',    icon: 'fa-mobile-screen-button', href: '/app-releases' },
+        { key: 'einvoice-gsp',   label: 'e-Invoice GSP',  icon: 'fa-file-invoice-dollar', href: '/einvoice-gsp' },
+        { key: 'gps-settings',   label: 'GPS Tracking',   icon: 'fa-location-crosshairs',  href: '/gps-settings' },
     ]});
 }
 
@@ -78,14 +91,51 @@ if (_isSuperAdmin) {
 // everything; a plain user sees a module ONLY when their role grants it
 // ('<module>.view'); Tally-Sync + Users are admin-only. Empty groups drop out. ──
 var _canMod = (typeof canModule === 'function') ? canModule : function () { return true; };
+var _canDo  = (typeof canDo === 'function') ? canDo : function () { return true; };
+var _isSalesman = (typeof isSalesman !== 'undefined') ? !!isSalesman : false;
+// SFA — "Invoice Approvals" is for APPROVERS only (admins/managers with the
+// sales-invoices edit action), never for a salesman (they can't self-approve).
+var _canApprove = _canDo('sales-invoices', 'edit') && !_isSalesman;
+// A salesman gets a "Field Sales · My Dashboard" group pinned right under Dashboard.
+if (_isSalesman) {
+    menu.splice(1, 0, { label: 'Field Sales', items: [
+        { key: 'my-field', label: 'My Dashboard', icon: 'fa-location-dot', href: '/my-field' },
+    ]});
+}
 menu = menu.map(function (g) {
     g.items = (g.items || []).filter(function (it) {
         if (it.adminOnly) return _isCompanyAdmin || _isSuperAdmin;
+        if (it.approve)   return _canApprove;
         if (it.perm)      return _canMod(it.perm);
-        return true;                                  // Dashboard / Settings = always
+        // No static menu items: everything in the BASE menu carries a `perm`
+        // (Dashboard/Settings included). The only perm-less items are the ones
+        // injected conditionally above for exactly the right user — a salesman's
+        // "My Dashboard", the admins' "Roles", the super-admin's Platform group —
+        // so they may always render once injected.
+        return true;
     });
     return g;
 }).filter(function (g) { return g.items.length > 0; });
+
+// ── Super Admin is a PLATFORM operator — they NEVER open a tenant's data. Strip
+// every tenant menu (Dashboard, Masters, Transactions, Tally Sync, Reports,
+// Users, Settings page) and leave ONLY the Platform Admin group + the global
+// Roles & Permissions item. Their landing + overview is the Licenses screen. ──
+if (_isSuperAdmin) {
+    menu = menu.map(function (g) {
+        if (g.label === 'Platform Admin') return g;
+        // Keep the Settings group — Roles & Permissions, Users, and the Settings
+        // page (full access) — the super-admin manages these across the platform.
+        if (g.label === 'Settings') {
+            g.items = (g.items || []).filter(function (it) {
+                return it.key === 'roles' || it.key === 'users' || it.key === 'settings';
+            });
+            return g;
+        }
+        g.items = [];
+        return g;
+    }).filter(function (g) { return g.items.length > 0; });
+}
 %>
 <div class="sidebar-inner">
 

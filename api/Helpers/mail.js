@@ -36,15 +36,19 @@ function getTransport() {
     return _transport;
 }
 
-/** Send an email. Returns the Nodemailer info, or {consoleOnly:true} in dev. */
-async function sendMail({ to, subject, html, text }) {
+/** Send an email. Returns the Nodemailer info, or {consoleOnly:true} in dev.
+ *  `attachments` is passed straight through to Nodemailer (e.g. a PDF buffer:
+ *  [{ filename, content: <Buffer>, contentType: 'application/pdf' }]). */
+async function sendMail({ to, subject, html, text, attachments }) {
     const t = getTransport();
     const from = `"${FROM_NAME}" <${FROM}>`;
     if (!t) {
-        console.log(`\n[mail:console] (MAIL_HOST not set — not actually sent)\n  to: ${to}\n  subject: ${subject}\n  ${text || ''}\n`);
+        const att = Array.isArray(attachments) && attachments.length
+            ? ` (+${attachments.length} attachment${attachments.length === 1 ? '' : 's'}: ${attachments.map((a) => a.filename).join(', ')})` : '';
+        console.log(`\n[mail:console] (MAIL_HOST not set — not actually sent)\n  to: ${to}\n  subject: ${subject}${att}\n  ${text || ''}\n`);
         return { consoleOnly: true };
     }
-    return t.sendMail({ from, to, subject, html, text });
+    return t.sendMail({ from, to, subject, html, text, attachments });
 }
 
 /** Branded password-reset code email. */
@@ -70,4 +74,65 @@ async function sendPasswordResetCode(to, code, name) {
     return sendMail({ to, subject, html, text });
 }
 
-module.exports = { sendMail, sendPasswordResetCode, getTransport };
+/** Branded "you've been invited as an Accountant" email — sent in the BACKGROUND
+ * when a company shares its books with a CA. Carries the sign-in email + the
+ * password the company set, and a note that access is read-only. */
+async function sendAccountantInvite(to, { name, companyName, email, password } = {}) {
+    const loginUrl = (process.env.WEB_URL || process.env.WEB_ORIGIN || '').trim();
+    const company = companyName || 'A business';
+    const subject = `${company} has invited you to Tally Cloud Sync`;
+    const linkText = loginUrl ? `Sign in at ${loginUrl}\n` : 'Sign in to your Tally Cloud Sync account\n';
+    const text =
+        `Hi ${name || 'there'},\n\n` +
+        `${company} has shared their books with you on Tally Cloud Sync. You have ` +
+        `READ-ONLY access — you can view & export their reports, ledgers, invoices ` +
+        `and outstanding, but cannot change anything.\n\n` +
+        linkText +
+        `  Email:    ${email}\n` +
+        `  Password: ${password}\n\n` +
+        `Please change your password after signing in.\n\n— Tally Cloud Sync`;
+    const btn = loginUrl
+        ? `<a href="${loginUrl}" style="display:inline-block;margin:6px 0 4px;background:linear-gradient(135deg,#2563EB,#6D28D9);color:#fff;text-decoration:none;font-weight:700;padding:11px 22px;border-radius:10px">Sign in</a>`
+        : '';
+    const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;padding:24px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2937">
+      <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(16,24,40,.12)">
+        <div style="background:linear-gradient(135deg,#2563EB,#6D28D9);padding:20px 24px;color:#fff;font-weight:700;font-size:17px">☁ Tally Cloud Sync</div>
+        <div style="padding:26px 24px">
+          <p style="margin:0 0 6px;font-size:15px">Hi ${name || 'there'},</p>
+          <p style="margin:0 0 16px;color:#6b7280;font-size:13.5px"><b>${company}</b> has shared their books with you. You have <b>read-only</b> access — you can <b>view &amp; export</b> reports, ledgers, invoices and outstanding, but cannot change anything.</p>
+          <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin:0 0 16px;font-size:14px">
+            <div style="margin-bottom:6px"><span style="color:#9ca3af">Email:</span> <b>${email}</b></div>
+            <div><span style="color:#9ca3af">Password:</span> <b>${password}</b></div>
+          </div>
+          ${btn}
+          <p style="margin:18px 0 0;color:#9ca3af;font-size:12px">Please change your password after signing in. If you didn't expect this, you can ignore this email.</p>
+        </div>
+      </div>
+    </body></html>`;
+    return sendMail({ to, subject, html, text });
+}
+
+/** Branded payment-reminder email to an overdue customer. `text` is the shared
+ * plain-text body (from reminders.reminderText); the HTML is a nicer version. */
+async function sendPaymentReminder(to, { customerName, companyName, outstanding, oldestDue, overdueCount, text } = {}) {
+    const money = '₹' + Number(outstanding || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const due = oldestDue ? new Date(oldestDue).toLocaleDateString('en-IN') : '';
+    const brand = companyName || 'Tally Cloud Sync';
+    const subject = `Payment reminder — ${brand}`;
+    const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;padding:24px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2937">
+      <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(16,24,40,.12)">
+        <div style="background:linear-gradient(135deg,#2563EB,#6D28D9);padding:20px 24px;color:#fff;font-weight:700;font-size:17px">${brand}</div>
+        <div style="padding:26px 24px">
+          <p style="margin:0 0 6px;font-size:15px">Dear ${customerName || 'Customer'},</p>
+          <p style="margin:0 0 14px;color:#6b7280;font-size:13.5px">This is a gentle payment reminder. Your account currently shows an outstanding balance of:</p>
+          <div style="font-size:26px;font-weight:800;color:#111827;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;text-align:center;padding:16px 0">${money}</div>
+          ${overdueCount ? `<p style="margin:14px 0 0;color:#6b7280;font-size:13px">${overdueCount} overdue invoice(s)${due ? ` &middot; oldest due ${due}` : ''}</p>` : ''}
+          <p style="margin:16px 0 0;color:#6b7280;font-size:13.5px">Kindly arrange the payment at your earliest convenience.</p>
+          <p style="margin:14px 0 0;color:#9ca3af;font-size:12px">If you have already paid, please ignore this email.</p>
+        </div>
+      </div>
+    </body></html>`;
+    return sendMail({ to, subject, html, text });
+}
+
+module.exports = { sendMail, sendPasswordResetCode, sendAccountantInvite, sendPaymentReminder, getTransport };

@@ -1,0 +1,133 @@
+<%
+/* views/reminders/index.ejs — TRANSACTIONS · Payment Reminders.
+ * Route: GET /reminders  ·  activeMenu: 'reminders'.
+ * Locals: reminders [{id,name,email,mobile,outstanding,overdue_count,days_overdue}],
+ *         channels {email,whatsapp}, totalOutstanding. */
+var _list  = (typeof reminders !== 'undefined' && reminders) ? reminders : [];
+var _ch    = (typeof channels !== 'undefined' && channels) ? channels : { email: false, whatsapp: false };
+var _total = (typeof totalOutstanding !== 'undefined' && totalOutstanding) ? totalOutstanding : 0;
+function _money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+var _anyChannel = _ch.email || _ch.whatsapp;
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Payment Reminders',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Payment Reminders' },
+    ],
+    actions: [],
+}) %>
+
+<!-- Summary + channel state -->
+<div class="card pr-card pr-summary-card">
+    <div class="pr-summary">
+        <div class="pr-metric">
+            <span class="pr-metric-label">Overdue customers</span>
+            <span class="pr-metric-val"><%= _list.length %></span>
+        </div>
+        <div class="pr-metric">
+            <span class="pr-metric-label">Total outstanding</span>
+            <span class="pr-metric-val pr-danger"><%= _money(_total) %></span>
+        </div>
+        <div class="pr-chips">
+            <span class="pr-ch <%= _ch.email ? 'is-on' : 'is-off' %>"><i class="fa-solid fa-envelope"></i> Email <%= _ch.email ? 'On' : 'Off' %></span>
+            <span class="pr-ch <%= _ch.whatsapp ? 'is-on' : 'is-off' %>"><i class="fa-brands fa-whatsapp"></i> WhatsApp <%= _ch.whatsapp ? 'On' : 'Off' %></span>
+        </div>
+    </div>
+    <% if (!_anyChannel) { %>
+        <p class="pr-note"><i class="fa-solid fa-circle-info me-1"></i>No reminder channel is enabled for your plan. Ask your administrator to enable Email / WhatsApp reminders.</p>
+    <% } %>
+</div>
+
+<!-- Overdue customers -->
+<div class="card pr-card">
+    <h2 class="form-section-title">Overdue Customers <span class="pr-count"><%= _list.length %></span></h2>
+    <% if (!_list.length) { %>
+        <div class="pr-empty">
+            <i class="fa-regular fa-face-smile"></i>
+            <p>No overdue customers — you're all caught up! 🎉</p>
+        </div>
+    <% } else { %>
+        <div class="table-wrap">
+            <table class="pr-table">
+                <thead>
+                    <tr><th>Customer</th><th>Contact</th><th>Overdue</th><th>Outstanding</th><th class="pr-right">Send Reminder</th></tr>
+                </thead>
+                <tbody>
+                    <% _list.forEach(function (r) { %>
+                        <tr>
+                            <td>
+                                <div class="pr-person">
+                                    <span class="pr-avatar"><%= (r.name || '?').charAt(0).toUpperCase() %></span>
+                                    <span class="pr-name"><%= r.name %></span>
+                                </div>
+                            </td>
+                            <td class="pr-muted">
+                                <%= r.email || '—' %>
+                                <% if (r.mobile) { %><br><span class="pr-sub"><%= r.mobile %></span><% } %>
+                            </td>
+                            <td><span class="pr-badge"><%= r.overdue_count %> inv · <%= r.days_overdue %>d</span></td>
+                            <td><strong class="pr-danger"><%= _money(r.outstanding) %></strong></td>
+                            <td class="pr-right">
+                                <div class="pr-actions">
+                                    <% if (_ch.email) { %>
+                                        <form method="post" action="/reminders/<%= r.id %>/send" class="pr-form">
+                                            <input type="hidden" name="channel" value="email">
+                                            <button type="submit" class="pr-btn pr-btn-email" <%= r.email ? '' : 'disabled title="No email on file"' %>><i class="fa-solid fa-envelope"></i> Email</button>
+                                        </form>
+                                    <% } %>
+                                    <% if (_ch.whatsapp) { %>
+                                        <form method="post" action="/reminders/<%= r.id %>/send" class="pr-form">
+                                            <input type="hidden" name="channel" value="whatsapp">
+                                            <button type="submit" class="pr-btn pr-btn-wa" <%= r.mobile ? '' : 'disabled title="No mobile on file"' %>><i class="fa-brands fa-whatsapp"></i> WhatsApp</button>
+                                        </form>
+                                    <% } %>
+                                    <% if (!_anyChannel) { %><span class="pr-muted pr-sub">Not enabled</span><% } %>
+                                </div>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
+
+<style>
+    .card.pr-card { padding:20px; margin-bottom:18px; }
+    .pr-summary { display:flex; flex-wrap:wrap; align-items:center; gap:28px; }
+    .pr-metric { display:flex; flex-direction:column; }
+    .pr-metric-label { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; }
+    .pr-metric-val { font-size:24px; font-weight:800; color:#111827; }
+    .pr-danger { color:#DC2626; }
+    .pr-chips { margin-left:auto; display:flex; gap:8px; }
+    .pr-ch { display:inline-flex; align-items:center; gap:6px; padding:5px 12px; border-radius:999px; font-size:12.5px; font-weight:700; }
+    .pr-ch.is-on  { background:rgba(22,163,74,.12); color:#16A34A; }
+    .pr-ch.is-off { background:rgba(107,114,128,.14); color:#6B7280; }
+    .pr-note { margin:14px 0 0; color:#B45309; background:#FFFBEB; border:1px solid #FDE68A; border-radius:10px; padding:10px 14px; font-size:13px; }
+    .form-section-title { margin:0 0 16px; }
+    .pr-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .pr-empty { text-align:center; padding:34px 12px; color:#9CA3AF; }
+    .pr-empty i { font-size:36px; opacity:.5; }
+    .pr-empty p { margin:12px 0 0; }
+    .pr-table { width:100%; border-collapse:collapse; }
+    .pr-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 14px 12px; border-bottom:1px solid #EEF1F5; }
+    .pr-table td { padding:14px; border-bottom:1px solid #F3F4F6; vertical-align:middle; }
+    .pr-table tr:last-child td { border-bottom:none; }
+    .pr-right { text-align:right; }
+    .pr-muted { color:#6B7280; }
+    .pr-sub { font-size:12px; color:#9CA3AF; }
+    .pr-person { display:flex; align-items:center; gap:10px; }
+    .pr-avatar { width:34px; height:34px; border-radius:50%; background:#2563EB; color:#fff; display:grid; place-items:center; font-weight:800; font-size:14px; }
+    .pr-name { font-weight:700; color:#111827; }
+    .pr-badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; background:rgba(234,88,12,.10); color:#EA580C; }
+    .pr-actions { display:inline-flex; gap:8px; justify-content:flex-end; }
+    .pr-form { display:inline; margin:0; }
+    .pr-btn { border:1px solid transparent; font-weight:600; font-size:13px; padding:7px 13px; border-radius:9px; cursor:pointer; transition:.15s; display:inline-flex; align-items:center; gap:6px; }
+    .pr-btn:disabled { opacity:.5; cursor:not-allowed; }
+    .pr-btn-email { border-color:#BFDBFE; background:#EFF6FF; color:#2563EB; }
+    .pr-btn-email:not(:disabled):hover { background:#DBEAFE; }
+    .pr-btn-wa { border-color:#BBF7D0; background:#F0FDF4; color:#16A34A; }
+    .pr-btn-wa:not(:disabled):hover { background:#DCFCE7; }
+</style>

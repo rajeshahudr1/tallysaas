@@ -771,6 +771,30 @@ def _push_voucher(tally: TallyConnector, v: dict, company: Optional[str] = None)
     return res
 
 
+# Optional per-record progress observer, installed by run_sync_loop ONLY when a
+# GUI is watching (on_status set). The headless console path leaves it None, so
+# nothing here changes for the plain agent. _report_progress throttles a high-
+# volume push to ~6 emits/sec (but the final record of a batch always fires).
+_PROGRESS_CB = None
+_PROGRESS_LAST = 0.0
+
+
+def _report_progress(done: int, total: int, phase: str = "Cloud -> Tally") -> None:
+    """Stream REAL sync progress (done/total) to the GUI bar. Best-effort."""
+    cb = _PROGRESS_CB
+    if cb is None:
+        return
+    global _PROGRESS_LAST
+    now = time.time()
+    if done < total and (now - _PROGRESS_LAST) < 0.15:
+        return
+    _PROGRESS_LAST = now
+    try:
+        cb(int(done), int(total), str(phase))
+    except Exception:
+        pass
+
+
 def _echo_record(index: int, total: int, kind: str, name: str, res: dict) -> None:
     """Echo a single per-record push line to the console (verbose only).
 
@@ -778,6 +802,9 @@ def _echo_record(index: int, total: int, kind: str, name: str, res: dict) -> Non
     ``  [3/9] voucher  INV-2026-0001   [x] <reason>`` on failure. No-op unless
     :data:`VERBOSE` so normal loop cycles stay quiet.
     """
+    # Live progress for the GUI bar — fires even when NOT verbose so every cycle
+    # animates the real percentage instead of a meaningless 0->100 sweep.
+    _report_progress(index, total, "Cloud -> Tally")
     if not VERBOSE:
         return
     label = (str(name) or "?")[:40]
@@ -1112,7 +1139,10 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
     if VERBOSE:
         echo(f"  Found {len(names)} company(ies) in Tally: {', '.join(names)}")
 
-    for cname in names:
+    for _pi, cname in enumerate(names, 1):
+        # Tally -> Cloud runs company-by-company; report coarse (but REAL) progress
+        # so the GUI bar moves through the pull phase, not a fake sweep.
+        _report_progress(_pi - 1, len(names), "Tally -> Cloud")
         if VERBOSE:
             echo(f"  [..] '{cname}': reading ledgers / stock / vouchers from Tally...")
         try:
@@ -1881,7 +1911,7 @@ def make_status_writer(cfg: Config, logger):
     """
     import json
 
-    state = {"last_sync": None}
+    state = {"last_sync": None, "progress": None}
     path = status_path(cfg)
 
     def write(payload: dict) -> None:
@@ -1890,6 +1920,17 @@ def make_status_writer(cfg: Config, logger):
             ok = payload.get("ok")
             if event == "cycle" and ok:
                 state["last_sync"] = payload.get("ts", time.time())
+            # Track the latest in-flight progress so the SERVICE-mode Dashboard
+            # (which reads this file, not the in-process queue) can show a REAL
+            # percentage bar. A completed / failed / stopped cycle clears it.
+            if event == "progress":
+                state["progress"] = {
+                    "done": payload.get("done"),
+                    "total": payload.get("total"),
+                    "phase": payload.get("phase"),
+                }
+            elif event in ("cycle", "stopped", "error"):
+                state["progress"] = None
             running = event not in ("stopped", "error")
             snapshot = {
                 "running": bool(running),
@@ -1898,6 +1939,7 @@ def make_status_writer(cfg: Config, logger):
                 "cycle": payload.get("cycle"),
                 "ts": payload.get("ts", time.time()),
                 "last_sync": state["last_sync"],
+                "progress": state["progress"],
                 "version": getattr(cfg, "agent_version", ""),
                 "pid": os.getpid(),
             }
@@ -2010,7 +2052,7 @@ def run_sync_loop(cfg: Config, logger, api: ApiClient,
     throughout. When driven from the GUI the console echo simply goes nowhere
     visible (no console window), which is harmless.
     """
-    global VERBOSE
+    global VERBOSE, _PROGRESS_CB
 
     def _emit(**payload) -> None:
         """Best-effort status callback — never lets an observer break the loop."""
@@ -2020,6 +2062,16 @@ def run_sync_loop(cfg: Config, logger, api: ApiClient,
             on_status(payload)
         except Exception:  # a buggy GUI observer must never stop the engine.
             pass
+
+    def _progress(done, total, phase) -> None:
+        """Forward a per-record/company tick to the observer as a 'progress' event."""
+        _emit(event="progress", done=done, total=total, phase=phase, ts=time.time())
+
+    # Install the module-level progress hook so the push/pull loops stream REAL
+    # percentages to the GUI. Only when a GUI is watching (on_status set); the
+    # console path keeps it None so the headless agent is unchanged. Set on every
+    # entry so a later console run resets a stale GUI callback.
+    _PROGRESS_CB = _progress if on_status is not None else None
 
     logger.info(
         "Agent started (v=%s, interval=%ss, machine_id=%s...).",

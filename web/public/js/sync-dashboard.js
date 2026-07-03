@@ -167,7 +167,26 @@
         applyVersion(d);
         applySyncStatus(d);
 
-        if (Array.isArray(d.modules)) d.modules.forEach(applyModuleRow);
+        if (Array.isArray(d.modules)) {
+            d.modules.forEach(applyModuleRow);
+            applyOverall(d.modules);
+        }
+    }
+
+    /* Overall sync progress = Σsynced / Σtotal across all modules — the same
+     * REAL percentage the agent + app show. Updated live each poll. */
+    function applyOverall(modules) {
+        var ts = 0, tt = 0;
+        modules.forEach(function (m) { ts += (Number(m.synced) || 0); tt += (Number(m.total) || 0); });
+        var pct = tt > 0 ? Math.round((ts / tt) * 100) : 0;
+        var bar = $('#sync-overall-bar');
+        if (bar) {
+            bar.style.width = pct + '%';
+            bar.classList.toggle('is-done', pct >= 100);
+        }
+        setText($('#sync-overall-pct'), pct + '%');
+        setText($('#sync-overall-sub'),
+            ts.toLocaleString('en-IN') + ' of ' + tt.toLocaleString('en-IN') + ' records synced to cloud');
     }
 
     function poll() {

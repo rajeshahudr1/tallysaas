@@ -59,6 +59,30 @@ async function grantAllToLicense(conn, licenseId) {
             perms.map((p) => ({ license_id: licenseId, permission_id: p.id })),
         );
     }
+    clearLicenseCache(licenseId);
+}
+
+// ── PLAN GATE ────────────────────────────────────────────────────────────────
+// The set of entitled permission slugs per licence, cached in-process (rbac's
+// can() checks it on every request). A licence with an EXPLICIT entitlement set
+// is gated to it; one with none resolves to ALL (backward-compatible). The cache
+// is cleared whenever a licence's entitlements change (setLicensePermissions /
+// grantAllToLicense).
+const _licenseSlugCache = new Map();   // String(licenseId) -> Set<slug>
+
+/** Entitled-slug Set for a licence (cached). null → no licence = no gate. */
+async function entitledSlugSet(licenseId) {
+    if (!licenseId) return null;
+    const key = String(licenseId);
+    if (_licenseSlugCache.has(key)) return _licenseSlugCache.get(key);
+    const set = new Set(await licensePermissionSlugs(licenseId));
+    _licenseSlugCache.set(key, set);
+    return set;
+}
+
+function clearLicenseCache(licenseId) {
+    if (licenseId === undefined) _licenseSlugCache.clear();
+    else _licenseSlugCache.delete(String(licenseId));
 }
 
 module.exports = {
@@ -66,4 +90,6 @@ module.exports = {
     licensePermissionIds,
     licensePermissionSlugs,
     grantAllToLicense,
+    entitledSlugSet,
+    clearLicenseCache,
 };

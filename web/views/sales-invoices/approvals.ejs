@@ -1,0 +1,128 @@
+<%
+/* views/sales-invoices/approvals.ejs — SFA · Invoice Approvals.
+ * Lists field invoices in approval_status='pending' with Approve / Reject.
+ * Approve → real invoice + Tally-eligible. Reject → needs a reason (modal). */
+function inr(n) {
+    return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+%>
+<%- include('../partials/page-head', {
+    title: 'Invoice Approvals',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Invoice Approvals' },
+    ],
+}) %>
+
+<div class="card">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title">
+            <i class="fa-solid fa-clipboard-check me-2 text-primary"></i>Pending Approvals
+            <span class="ap-count"><%= total %></span>
+        </h2>
+        <span class="text-muted" style="font-size:13px">Salesman-created invoices waiting for your approval</span>
+    </div>
+
+    <% if (!approvals.length) { %>
+        <div class="ap-empty">
+            <i class="fa-solid fa-circle-check"></i>
+            <div>All caught up — no invoices are waiting for approval.</div>
+        </div>
+    <% } else { %>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Invoice #</th>
+                    <th>Date</th>
+                    <th>Customer</th>
+                    <th>Salesman</th>
+                    <th>Location</th>
+                    <th class="text-end">Amount</th>
+                    <th class="text-end">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% approvals.forEach(function (a) { %>
+                    <tr>
+                        <td><strong><%= a.invoice_no %></strong></td>
+                        <td class="text-muted"><%= a.date %></td>
+                        <td><%= a.customer || '—' %></td>
+                        <td><%= a.sales_person || '—' %></td>
+                        <td class="text-muted"><%= a.location || '—' %></td>
+                        <td class="text-end"><strong><%= inr(a.total) %></strong></td>
+                        <td class="text-end">
+                            <form method="post" action="/sales-invoices/<%= a.id %>/approve" class="d-inline"
+                                  data-confirm="Approve <%= a.invoice_no %>? It will count as a real invoice and become eligible for Tally sync."
+                                  data-confirm-title="Approve invoice?" data-confirm-ok="Approve">
+                                <button type="submit" class="btn btn-success btn-sm">
+                                    <i class="fa-solid fa-check me-1"></i>Approve
+                                </button>
+                            </form>
+                            <button type="button" class="btn btn-outline-danger btn-sm ms-1 js-reject"
+                                    data-id="<%= a.id %>" data-no="<%= a.invoice_no %>">
+                                <i class="fa-solid fa-xmark me-1"></i>Reject
+                            </button>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+    <% } %>
+</div>
+
+<!-- Reject modal -->
+<div class="ap-backdrop" id="rejectModal" hidden>
+    <div class="ap-modal">
+        <h3 class="ap-modal-title">Reject invoice <span id="rejNo"></span></h3>
+        <form method="post" id="rejectForm">
+            <label class="ap-modal-label">Reason (shown to the salesman)</label>
+            <textarea name="reason" class="form-control" rows="3" required
+                      placeholder="e.g. Price mismatch — please re-check the rate and resubmit."></textarea>
+            <div class="ap-modal-actions">
+                <button type="button" class="btn btn-light btn-sm" id="rejCancel">Cancel</button>
+                <button type="submit" class="btn btn-danger btn-sm">
+                    <i class="fa-solid fa-xmark me-1"></i>Reject invoice
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+    .ap-count { display:inline-block; margin-left:8px; min-width:24px; padding:1px 9px;
+        font-size:12px; font-weight:700; color:#92400e; background:#fef3c7;
+        border:1px solid #fde68a; border-radius:999px; }
+    .ap-empty { padding:40px 16px; text-align:center; color:#64748b; }
+    .ap-empty i { font-size:34px; color:#16a34a; display:block; margin-bottom:10px; }
+    .ap-backdrop { position:fixed; inset:0; background:rgba(15,23,42,.45);
+        display:flex; align-items:center; justify-content:center; z-index:1080; }
+    .ap-backdrop[hidden] { display:none; }
+    .ap-modal { width:min(460px,92vw); background:#fff; border-radius:14px;
+        padding:20px; box-shadow:0 20px 60px rgba(0,0,0,.25); }
+    .ap-modal-title { font-size:16px; font-weight:700; margin:0 0 12px; }
+    .ap-modal-label { font-size:12.5px; font-weight:600; color:#475569; margin-bottom:6px; display:block; }
+    .ap-modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+</style>
+<script>
+(function () {
+    var modal = document.getElementById('rejectModal');
+    var form  = document.getElementById('rejectForm');
+    var noEl  = document.getElementById('rejNo');
+    if (!modal || !form) return;
+    function open(id, no) {
+        form.action = '/sales-invoices/' + id + '/reject';
+        noEl.textContent = no || '';
+        form.querySelector('textarea').value = '';
+        modal.hidden = false;
+        setTimeout(function () { form.querySelector('textarea').focus(); }, 30);
+    }
+    function close() { modal.hidden = true; }
+    document.querySelectorAll('.js-reject').forEach(function (b) {
+        b.addEventListener('click', function () { open(b.getAttribute('data-id'), b.getAttribute('data-no')); });
+    });
+    document.getElementById('rejCancel').addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+})();
+</script>

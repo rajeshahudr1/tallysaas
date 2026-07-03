@@ -31,6 +31,32 @@ class SyncRepository {
     );
     return PagedResult<SyncLog>.fromData(data, SyncLog.fromJson);
   }
+
+  // ── Manual actions (mirror the web Sync Dashboard buttons) ──────────
+  /// Retry failed records. Default 'push' re-queues failed rows TO Tally;
+  /// 'pull' re-imports FROM Tally. [module] scopes to one module (else all).
+  Future<dynamic> retry({String? module, String? direction}) => _api.post('/sync/retry', body: {
+        if (module != null) 'module': module,
+        if (direction != null) 'direction': direction,
+      });
+
+  /// Pull everything from Tally now ("Sync Now").
+  Future<dynamic> pull() => _api.post('/sync/pull', body: const {});
+
+  /// Flip the per-license auto-sync toggles (master + per-direction).
+  Future<dynamic> setDirection({bool? syncEnabled, bool? pushEnabled, bool? pullEnabled}) =>
+      _api.patch('/account/sync-direction', body: {
+        if (syncEnabled != null) 'sync_enabled': syncEnabled,
+        if (pushEnabled != null) 'push_enabled': pushEnabled,
+        if (pullEnabled != null) 'pull_enabled': pullEnabled,
+      });
+
+  /// Flip the per-license agent auto-update toggle.
+  Future<dynamic> setAutoUpdate(bool enabled) =>
+      _api.patch('/account/agent/auto-update', body: {'enabled': enabled});
+
+  /// Force the desktop agent to self-update now ("Update" button).
+  Future<dynamic> selfUpdate() => _api.post('/account/agent/self-update', body: const {});
 }
 
 final syncRepositoryProvider = Provider<SyncRepository>((ref) {

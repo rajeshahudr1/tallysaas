@@ -40,7 +40,7 @@ const express = require('express');
 const { authenticate, requireSuperAdmin, authenticateAgent } = require('../Middlewares/auth');
 const { resolveCompany }  = require('../Middlewares/companyScope');
 const { resolveLocation } = require('../Middlewares/locationScope');
-const { can }             = require('../Middlewares/rbac');
+const { can, canField }   = require('../Middlewares/rbac');
 const { validate }        = require('../Middlewares/validate');
 
 // ── Validators ────────────────────────────────────────────────────
@@ -101,6 +101,7 @@ const {
     updateRoleSchema,
     setRolePermissionsSchema,
 } = require('../Validators/role');
+const { inviteAccountantSchema } = require('../Validators/accountant');
 const { createCompanySchema, listCompanySchema } = require('../Validators/company');
 const { createJournalSchema, listJournalSchema } = require('../Validators/journal');
 const { createAdjustmentSchema }                 = require('../Validators/inventory');
@@ -112,6 +113,17 @@ const LocationController      = require('../Controllers/Tenant/LocationControlle
 const SalesPersonController   = require('../Controllers/Tenant/SalesPersonController');
 const SupplierController      = require('../Controllers/Tenant/SupplierController');
 const CategoryController      = require('../Controllers/Tenant/CategoryController');
+const ExpenseCategoryController = require('../Controllers/Tenant/ExpenseCategoryController');
+const ExpenseController         = require('../Controllers/Tenant/ExpenseController');
+const { createExpenseCategorySchema, updateExpenseCategorySchema } = require('../Validators/expenseCategory');
+const { createExpenseSchema, updateExpenseSchema } = require('../Validators/expense');
+const RecurringInvoiceController = require('../Controllers/Tenant/RecurringInvoiceController');
+const { createRecurringSchema, updateRecurringSchema } = require('../Validators/recurringInvoice');
+const BankController = require('../Controllers/Tenant/BankController');
+const { importBankSchema } = require('../Validators/bank');
+const EInvoiceController = require('../Controllers/Tenant/EInvoiceController');
+const ProductImageController = require('../Controllers/Tenant/ProductImageController');
+const { productImagesMiddleware } = require('../Helpers/uploads');
 const ProductController       = require('../Controllers/Tenant/ProductController');
 const CustomerGroupController = require('../Controllers/Tenant/CustomerGroupController');
 const InvoiceController       = require('../Controllers/Tenant/InvoiceController');
@@ -120,8 +132,12 @@ const LicenseController       = require('../Controllers/SuperAdmin/LicenseContro
 const CompanyController       = require('../Controllers/SuperAdmin/CompanyController');
 const AgentController         = require('../Controllers/Agent/AgentController');
 const AgentReleaseController   = require('../Controllers/SuperAdmin/AgentReleaseController');
+const AppReleaseController     = require('../Controllers/SuperAdmin/AppReleaseController');
+const EInvoiceGspController    = require('../Controllers/SuperAdmin/EInvoiceGspController');
+const GpsSettingsController    = require('../Controllers/SuperAdmin/GpsSettingsController');
 const AgentCommandController  = require('../Controllers/Tenant/AgentCommandController');
 const DashboardController     = require('../Controllers/Tenant/DashboardController');
+const FieldController         = require('../Controllers/Tenant/FieldController');
 const InventoryController     = require('../Controllers/Tenant/InventoryController');
 const UserController          = require('../Controllers/Tenant/UserController');
 const SettingsController      = require('../Controllers/Tenant/SettingsController');
@@ -129,10 +145,14 @@ const SyncController          = require('../Controllers/Tenant/SyncController');
 const HistoryController       = require('../Controllers/Tenant/HistoryController');
 const ReportController        = require('../Controllers/Tenant/ReportController');
 const RoleController          = require('../Controllers/Tenant/RoleController');
+const AccountantController    = require('../Controllers/Tenant/AccountantController');
+const ReminderTenantController = require('../Controllers/Tenant/ReminderController');
+const AnalyticsController      = require('../Controllers/Tenant/AnalyticsController');
 const MyCompaniesController   = require('../Controllers/Tenant/MyCompaniesController');
 const ConfigController        = require('../Controllers/Tenant/ConfigController');
 const TenantCompanyController = require('../Controllers/Tenant/CompanyController');
 const RbacController          = require('../Controllers/SuperAdmin/RbacController');
+const ReminderController      = require('../Controllers/SuperAdmin/ReminderController');
 const JournalController       = require('../Controllers/Tenant/JournalController');
 
 // ── DB (for the /health probe) ────────────────────────────────────
@@ -192,6 +212,10 @@ router.post('/auth/logout', authenticate, AuthController.logout);
 // may read their own profile).
 router.get('/me', authenticate, AuthController.me);
 
+// Every logged-in user may change THEIR OWN password (all roles). No company
+// scope / RBAC — it acts only on req.user.sub.
+router.post('/account/change-password', authenticate, AuthController.changePassword);
+
 // Companies the caller may switch between (license-scoped; super-admin = all).
 router.get('/my-companies', authenticate, MyCompaniesController.list);
 
@@ -227,6 +251,12 @@ router.post('/agent/commands/:id/result', authenticateAgent, AgentController.com
 router.get('/agent/version',  authenticateAgent, AgentController.getVersion);
 router.get('/agent/download', authenticateAgent, AgentController.download);
 
+// Mobile-app auto-update: PUBLIC so the app can check (and force-update) even at
+// the login screen. /app/version → published-latest apk + the GLOBAL on/off;
+// /app/download → streams the single is_current apk.
+router.get('/app/version',  AppReleaseController.getVersion);
+router.get('/app/download', AppReleaseController.download);
+
 // ───────────────────────────────────────────────────────────────────
 // Super-Admin · License management
 // ───────────────────────────────────────────────────────────────────
@@ -243,6 +273,21 @@ router.put('/super-admin/licenses/:id',
     authenticate, requireSuperAdmin, validate(updateLicenseSchema), LicenseController.update);
 router.delete('/super-admin/licenses/:id',
     authenticate, requireSuperAdmin, LicenseController.remove);
+
+// e-Invoice GSP integration (per-license, super-admin). Credentials are AES-GCM
+// encrypted before storage; secrets are never returned.
+router.get('/super-admin/einvoice-gsp',
+    authenticate, requireSuperAdmin, EInvoiceGspController.get);
+router.post('/super-admin/einvoice-gsp/credential',
+    authenticate, requireSuperAdmin, EInvoiceGspController.saveCredential);
+router.post('/super-admin/einvoice-gsp/settings',
+    authenticate, requireSuperAdmin, EInvoiceGspController.saveSettings);
+
+// GPS tracking config (per-license, super-admin).
+router.get('/super-admin/gps-settings',
+    authenticate, requireSuperAdmin, GpsSettingsController.get);
+router.post('/super-admin/gps-settings',
+    authenticate, requireSuperAdmin, GpsSettingsController.save);
 router.post('/super-admin/licenses/:id/reset-machine',
     authenticate, requireSuperAdmin, LicenseController.resetMachine);
 router.post('/super-admin/licenses/:id/suspend',
@@ -271,6 +316,13 @@ router.get('/super-admin/licenses/:id/permissions',
 router.put('/super-admin/licenses/:id/permissions',
     authenticate, requireSuperAdmin, RbacController.setLicensePermissions);
 
+// Super-Admin · per-license payment-reminder settings (Email/WhatsApp channel
+// switches + auto scheduler). A licence gets a channel only when flipped on here.
+router.get('/super-admin/licenses/:id/reminders',
+    authenticate, requireSuperAdmin, ReminderController.get);
+router.put('/super-admin/licenses/:id/reminders',
+    authenticate, requireSuperAdmin, ReminderController.update);
+
 // Super-Admin · publish the agent auto-update RELEASE (drop the exe into
 // AGENT_RELEASE_DIR, then POST its version → marks the single is_current row).
 router.get('/super-admin/agent-release',
@@ -282,6 +334,16 @@ router.post('/super-admin/agent-release',
 // the filename-based publish above). Distinct exact path → no shadowing.
 router.post('/super-admin/agent-release/upload',
     authenticate, requireSuperAdmin, AgentReleaseController.upload);
+
+// Super-Admin · mobile-app auto-update: upload a built .apk (multipart file +
+// version + version_code) → marks the single is_current row; list the catalogue;
+// flip the GLOBAL app-auto-update master switch the app's /app/version honours.
+router.get('/super-admin/app-release',
+    authenticate, requireSuperAdmin, AppReleaseController.list);
+router.post('/super-admin/app-release/upload',
+    authenticate, requireSuperAdmin, AppReleaseController.upload);
+router.post('/super-admin/app-release/auto-update',
+    authenticate, requireSuperAdmin, AppReleaseController.setAutoUpdate);
 
 // Super-Admin · per-company concurrent web-session cap (max_sessions_per_user).
 router.get('/super-admin/companies',
@@ -503,6 +565,71 @@ router.delete(
 );
 
 // ───────────────────────────────────────────────────────────────────
+// Expense Categories + Expenses (protected tenant CRUD)
+// ───────────────────────────────────────────────────────────────────
+router.get('/expense-categories',        authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseCategoryController.list);
+router.get('/expense-categories/:id',     authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseCategoryController.get);
+router.post('/expense-categories',        authenticate, resolveCompany, resolveLocation, can('expenses', 'create'), validate(createExpenseCategorySchema), ExpenseCategoryController.create);
+router.put('/expense-categories/:id',     authenticate, resolveCompany, resolveLocation, can('expenses', 'edit'),   validate(updateExpenseCategorySchema), ExpenseCategoryController.update);
+router.delete('/expense-categories/:id',  authenticate, resolveCompany, resolveLocation, can('expenses', 'delete'), ExpenseCategoryController.destroy);
+
+router.get('/expenses',        authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseController.list);
+router.get('/expenses/:id',    authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseController.get);
+router.post('/expenses',       authenticate, resolveCompany, resolveLocation, can('expenses', 'create'), validate(createExpenseSchema), ExpenseController.create);
+router.put('/expenses/:id',    authenticate, resolveCompany, resolveLocation, can('expenses', 'edit'),   validate(updateExpenseSchema), ExpenseController.update);
+router.delete('/expenses/:id', authenticate, resolveCompany, resolveLocation, can('expenses', 'delete'), ExpenseController.destroy);
+
+// ───────────────────────────────────────────────────────────────────
+// Recurring Invoices (protected tenant CRUD + generate-now)
+// ───────────────────────────────────────────────────────────────────
+router.get('/recurring-invoices',        authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'view'),   RecurringInvoiceController.list);
+router.get('/recurring-invoices/:id',     authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'view'),   RecurringInvoiceController.get);
+router.post('/recurring-invoices',        authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'create'), validate(createRecurringSchema), RecurringInvoiceController.create);
+router.put('/recurring-invoices/:id',     authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'edit'),   validate(updateRecurringSchema), RecurringInvoiceController.update);
+router.delete('/recurring-invoices/:id',  authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'delete'), RecurringInvoiceController.destroy);
+router.post('/recurring-invoices/:id/generate', authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'create'), RecurringInvoiceController.generate);
+
+// ───────────────────────────────────────────────────────────────────
+// Bank Reconciliation — import statement + auto/manual match
+// ───────────────────────────────────────────────────────────────────
+router.post('/bank/import',                         authenticate, resolveCompany, can('bank-reconciliation', 'create'), validate(importBankSchema), BankController.importTxns);
+router.get('/bank/transactions',                    authenticate, resolveCompany, can('bank-reconciliation', 'view'),   BankController.list);
+router.get('/bank/transactions/:id/candidates',     authenticate, resolveCompany, can('bank-reconciliation', 'view'),   BankController.candidates);
+router.post('/bank/transactions/:id/match',         authenticate, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.match);
+router.post('/bank/transactions/:id/unmatch',       authenticate, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.unmatch);
+router.post('/bank/transactions/:id/ignore',        authenticate, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.ignore);
+router.delete('/bank/transactions/:id',             authenticate, resolveCompany, can('bank-reconciliation', 'delete'), BankController.remove);
+
+// ───────────────────────────────────────────────────────────────────
+// e-Invoice (GST IRN) + e-Way Bill — GSP-ready
+// ───────────────────────────────────────────────────────────────────
+router.get('/einvoices',              authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.list);
+// Dashboard + reports — MUST precede '/einvoices/:id' so they aren't read as ids.
+router.get('/einvoices/dashboard',    authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.dashboard);
+router.get('/einvoices/report',       authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.report);
+router.get('/einvoices/:id',          authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.get);
+router.get('/einvoices/:id/details',  authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.details);
+router.post('/einvoices/bulk-generate', authenticate, resolveCompany, can('einvoice', 'create'), EInvoiceController.bulkGenerate);
+router.post('/einvoices/:id/generate', authenticate, resolveCompany, can('einvoice', 'create'), EInvoiceController.generate);
+router.post('/einvoices/:id/manual',  authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.manual);
+router.post('/einvoices/:id/cancel',  authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.cancel);
+// e-Way Bill lifecycle (from an existing IRN).
+router.post('/einvoices/:id/eway',            authenticate, resolveCompany, can('einvoice', 'create'), EInvoiceController.generateEway);
+router.post('/einvoices/:id/update-vehicle',  authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.updateVehicle);
+router.post('/einvoices/:id/extend',          authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.extendValidity);
+// Delivery — Download (JSON) / Email / WhatsApp (no browser print).
+router.get('/einvoices/:id/download',         authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.download);
+router.post('/einvoices/:id/email',           authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.email);
+router.post('/einvoices/:id/whatsapp',        authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.whatsapp);
+
+// ───────────────────────────────────────────────────────────────────
+// Product images (multi-image gallery, local upload — NOT synced to Tally)
+// ───────────────────────────────────────────────────────────────────
+router.get('/products/:id/images',             authenticate, resolveCompany, can('products', 'view'), ProductImageController.list);
+router.post('/products/:id/images',            authenticate, resolveCompany, can('products', 'edit'), productImagesMiddleware, ProductImageController.upload);
+router.delete('/products/:id/images/:imageId', authenticate, resolveCompany, can('products', 'edit'), ProductImageController.remove);
+
+// ───────────────────────────────────────────────────────────────────
 // Products (protected tenant CRUD)
 // ───────────────────────────────────────────────────────────────────
 
@@ -612,6 +739,35 @@ router.post(
     authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
     validate(createSalesInvoiceSchema),
     InvoiceController.createSales,
+);
+
+// SFA — a salesman edits their own DRAFT (view+create role; controller enforces
+// draft-only + ownership). save_as_draft=false in the body ALSO submits it.
+router.put(
+    '/sales-invoices/:id',
+    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    validate(createSalesInvoiceSchema),
+    InvoiceController.updateDraft,
+);
+
+// SFA — a salesman submits their own draft for approval ('draft' → 'pending').
+router.post(
+    '/sales-invoices/:id/submit',
+    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    InvoiceController.submitDraft,
+);
+
+// SFA — a company admin (edit perm) approves / rejects a pending field invoice.
+// The controller additionally blocks salesmen (403) so they can't self-approve.
+router.post(
+    '/sales-invoices/:id/approve',
+    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'edit'),
+    InvoiceController.approve,
+);
+router.post(
+    '/sales-invoices/:id/reject',
+    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'edit'),
+    InvoiceController.reject,
 );
 
 router.delete(
@@ -775,6 +931,31 @@ router.get(
     DashboardController.summary,
 );
 
+// SFA — the logged-in salesman's field dashboard (assigned locations + their
+// customer/invoice tallies + approval-status counts). resolveLocation sets
+// req.isSalesman/req.salesPersonId that the controller scopes on.
+router.get(
+    '/field/my-dashboard',
+    authenticate, resolveCompany, resolveLocation, canField,
+    FieldController.myDashboard,
+);
+
+// SFA Phase 2 — GPS field tracking. Attendance (Start/End Day) + outlet
+// check-in/out. resolveLocation sets req.isSalesman/req.salesPersonId; the
+// controller enforces salesman-only writes + own-row scoping.
+router.post('/field/day/start',            authenticate, resolveCompany, resolveLocation, canField, FieldController.startDay);
+router.post('/field/day/end',              authenticate, resolveCompany, resolveLocation, canField, FieldController.endDay);
+router.post('/field/visits/checkin',       authenticate, resolveCompany, resolveLocation, canField, FieldController.checkin);
+router.post('/field/visits/:id/checkout',  authenticate, resolveCompany, resolveLocation, canField, FieldController.checkout);
+router.get('/field/visits',                authenticate, resolveCompany, resolveLocation, canField, FieldController.visits);
+
+// SFA — configurable GPS tracking. The app reads its config, then pings location
+// (de-duped by min-move) + logs part-visits; admins read the trail.
+router.get('/field/gps-config',            authenticate, resolveCompany, resolveLocation, canField, FieldController.gpsConfig);
+router.post('/field/locations',            authenticate, resolveCompany, resolveLocation, canField, FieldController.ping);
+router.post('/field/part-visits',          authenticate, resolveCompany, resolveLocation, canField, FieldController.partVisit);
+router.get('/field/locations',             authenticate, resolveCompany, resolveLocation, canField, FieldController.locations);
+
 // Inventory — stock view derived from products + manual stock adjustment.
 router.get(
     '/inventory',
@@ -812,6 +993,29 @@ router.put('/account/roles/:id/permissions',
     authenticate, can('users', 'edit'), validate(setRolePermissionsSchema), RoleController.setPermissions);
 router.delete('/account/roles/:id',
     authenticate, can('users', 'delete'), RoleController.remove);
+
+// Account · "Share with Accountant" (CA collaboration). Company-scoped (the CA
+// login is created under req.companyId); the curated read-only Accountant role
+// is licence-scoped via req.user.license_id. Validated + seat-reconciled.
+router.post('/account/accountants',
+    authenticate, resolveCompany, resolveLocation, can('users', 'create'),
+    validate(inviteAccountantSchema), AccountantController.invite);
+router.get('/account/accountants',
+    authenticate, resolveCompany, can('users', 'view'), AccountantController.list);
+router.delete('/account/accountants/:id',
+    authenticate, resolveCompany, can('users', 'edit'), AccountantController.revoke);
+
+// Account · payment reminders — overdue customers list + manual send. List is
+// view-gated; sending is edit-gated (a read-only accountant can see but not send).
+router.get('/account/reminders',
+    authenticate, resolveCompany, can('customers', 'view'), ReminderTenantController.overdue);
+router.post('/account/reminders/:id/send',
+    authenticate, resolveCompany, resolveLocation, can('customers', 'edit'), ReminderTenantController.send);
+
+// Account · Business Analytics — one read-only insights bundle (sales trend,
+// cash-flow, top customers/products, receivables aging, KPIs).
+router.get('/account/analytics',
+    authenticate, resolveCompany, can('reports', 'view'), AnalyticsController.overview);
 
 // Account · cloud→agent command channel (user-auth, license-scoped). A user
 // queues "open this company in Tally"; the local agent drains it via /agent/*.

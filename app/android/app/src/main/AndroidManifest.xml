@@ -3,6 +3,13 @@
          needed in the main manifest for release builds; usesCleartextTraffic lets
          the app reach a plain-HTTP LAN/dev api (Android 9+ blocks cleartext by default). -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Self-install a downloaded APK update (sideloaded app; the user grants
+         "install unknown apps" once). Used by the app auto-update flow. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- SFA Phase 2 — GPS field tracking: salesman Start/End-Day punch + outlet
+         check-in geofence verification. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <application
         android:label="Tally Cloud Sync"
         android:name="${applicationName}"

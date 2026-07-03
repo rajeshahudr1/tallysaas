@@ -1,4 +1,8 @@
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http_parser/http_parser.dart';
 
 import '../../core/api/api_client.dart';
 import '../../core/api/endpoints.dart';
@@ -14,6 +18,11 @@ import '../models/product.dart';
 ///   • POST   /products                               (create)          [products.create]
 ///   • PUT    /products/:id                           (update)          [products.edit]
 ///   • DELETE /products/:id                           (soft delete)     [products.delete]
+///
+/// Image gallery (local storage; NOT synced to Tally — absolute urls):
+///   • GET    /products/:id/images                     → [{ id, url }]    [products.view]
+///   • POST   /products/:id/images        (multipart `images`)           [products.edit]
+///   • DELETE /products/:id/images/:imageId                              [products.edit]
 class ProductRepository {
   ProductRepository(this._api);
   final ApiClient _api;
@@ -48,6 +57,62 @@ class ProductRepository {
       _api.put('${Endpoints.products}/$id', body: body);
 
   Future<void> delete(int id) => _api.delete('${Endpoints.products}/$id');
+
+  // ── Image gallery ──────────────────────────────────────────────
+
+  /// The product's full gallery (absolute urls, sorted).
+  Future<List<ProductImage>> images(int id) async {
+    final data = await _api.get(Endpoints.productImages(id));
+    return _parseImages(data);
+  }
+
+  /// Upload one or more picked images as multipart (`images` field, repeated).
+  /// A matching image content-type is set per file so the API's mime filter
+  /// accepts them (Dio would otherwise send `application/octet-stream`).
+  /// Returns the newly-created rows.
+  Future<List<ProductImage>> uploadImages(int id, List<PickedImage> files) async {
+    final form = FormData();
+    for (final f in files) {
+      form.files.add(MapEntry(
+        'images',
+        MultipartFile.fromBytes(f.bytes, filename: f.name, contentType: _mediaType(f.name)),
+      ));
+    }
+    final data = await _api.uploadMultipart(Endpoints.productImages(id), form: form);
+    return _parseImages(data);
+  }
+
+  /// Remove one image (soft-delete + file unlink server-side).
+  Future<void> deleteImage(int id, int imageId) =>
+      _api.delete(Endpoints.productImage(id, imageId));
+
+  /// Both the list + upload endpoints wrap the array as `{ data: [...] }`.
+  static List<ProductImage> _parseImages(dynamic data) {
+    final list = (data is Map && data['data'] is List)
+        ? data['data'] as List
+        : (data is List ? data : const <dynamic>[]);
+    return list
+        .whereType<Map>()
+        .map((m) => ProductImage.fromJson(m.cast<String, dynamic>()))
+        .toList();
+  }
+
+  static MediaType _mediaType(String filename) {
+    final f = filename.toLowerCase();
+    if (f.endsWith('.png')) return MediaType('image', 'png');
+    if (f.endsWith('.webp')) return MediaType('image', 'webp');
+    if (f.endsWith('.gif')) return MediaType('image', 'gif');
+    return MediaType('image', 'jpeg');
+  }
+}
+
+/// A picked image ready to upload — bytes + a filename (extension drives the
+/// content-type). Framework-agnostic so the data layer stays free of
+/// image_picker types.
+class PickedImage {
+  const PickedImage(this.bytes, this.name);
+  final Uint8List bytes;
+  final String name;
 }
 
 final productRepositoryProvider = Provider<ProductRepository>((ref) {

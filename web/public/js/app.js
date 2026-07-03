@@ -24,12 +24,14 @@
     function init() {
         initSidebarGroups();
         initTableDropdowns();
+        initConfirms();
         initRowActions();
         initListControls();
         initExport();
         initSelectAll();
         initCheckGroups();
         initCharCounters();
+        initSearchableSelects();
         initSameAsShipping();
         initSyncButtons();
         initNotifications();
@@ -38,6 +40,149 @@
         // Bootstrap's collapse already toggles aria-expanded on the
         // filter-card header (it is the [data-bs-toggle] element), so the
         // chevron rotation is pure CSS. Nothing to wire here.
+    }
+
+    /* ── Searchable selects — turn any big native <select> into a filterable
+     * dropdown so long dynamic lists (customers, products, …) are typeable.
+     * Auto-applies to any single <select> with more than 8 options; opt OUT
+     * with class "no-search", force ON a small one with "searchable-select".
+     * The native <select> stays in the DOM (visually hidden) so form submit +
+     * the option values are unchanged — selection is mirrored onto it and its
+     * 'change' event fired. ─────────────────────────────────────────── */
+    var _ssStyled = false;
+    function _ssInjectStyle() {
+        if (_ssStyled) return;
+        _ssStyled = true;
+        var css =
+            '.ss-wrap{position:relative}' +
+            '.ss-native{position:absolute!important;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}' +
+            '.ss-trigger{text-align:left;display:flex;align-items:center;width:100%;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+            '.ss-trigger.ss-placeholder{color:#9aa2b1}' +
+            '.ss-panel{display:none;position:absolute;z-index:1055;left:0;right:0;top:calc(100% + 4px);background:#fff;border:1px solid #e2e6ee;border-radius:10px;box-shadow:0 8px 24px rgba(20,25,40,.12);overflow:hidden}' +
+            '.ss-wrap.is-open .ss-panel{display:block}' +
+            '.ss-search-wrap{padding:8px;border-bottom:1px solid #eef0f4}' +
+            '.ss-search{width:100%;border:1px solid #dfe3ea;border-radius:8px;padding:7px 10px;font-size:.9rem;outline:none}' +
+            '.ss-search:focus{border-color:#6366f1}' +
+            '.ss-list{list-style:none;margin:0;padding:4px;max-height:260px;overflow-y:auto}' +
+            '.ss-item{padding:8px 10px;border-radius:7px;cursor:pointer;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '.ss-item:hover,.ss-item.is-active{background:#f1f3f9}' +
+            '.ss-item.is-selected{background:#eef2ff;color:#4338ca;font-weight:600}' +
+            '.ss-item.is-disabled{color:#b6bcc9;cursor:default}' +
+            '.ss-empty{padding:12px 10px;color:#9aa2b1;font-size:.88rem;text-align:center}';
+        var st = document.createElement('style');
+        st.textContent = css;
+        document.head.appendChild(st);
+    }
+
+    function initSearchableSelects() {
+        _ssInjectStyle();
+        document.querySelectorAll('select').forEach(function (sel) {
+            if (sel.dataset.ssEnhanced) return;
+            if (sel.multiple) return;
+            if (sel.classList.contains('no-search')) return;
+            var force = sel.classList.contains('searchable-select');
+            if (!force && sel.options.length <= 8) return;
+            _ssEnhance(sel);
+        });
+    }
+
+    function _ssEnhance(sel) {
+        sel.dataset.ssEnhanced = '1';
+
+        var wrap = document.createElement('div');
+        wrap.className = 'ss-wrap';
+        sel.parentNode.insertBefore(wrap, sel);
+        wrap.appendChild(sel);
+        sel.classList.add('ss-native');
+
+        var trigger = document.createElement('button');
+        trigger.type = 'button';
+        trigger.className = 'ss-trigger form-select';
+        wrap.appendChild(trigger);
+
+        var panel = document.createElement('div');
+        panel.className = 'ss-panel';
+        panel.innerHTML =
+            '<div class="ss-search-wrap"><input type="text" class="ss-search" placeholder="Type to search…" autocomplete="off"></div>' +
+            '<ul class="ss-list" role="listbox"></ul>';
+        wrap.appendChild(panel);
+
+        var search = panel.querySelector('.ss-search');
+        var list = panel.querySelector('.ss-list');
+
+        function syncTrigger() {
+            var o = sel.options[sel.selectedIndex];
+            trigger.textContent = o ? o.textContent : '';
+            trigger.classList.toggle('ss-placeholder', !!(o && (o.disabled || o.value === '')));
+        }
+
+        function buildList(filter) {
+            list.innerHTML = '';
+            var q = (filter || '').toLowerCase();
+            for (var i = 0; i < sel.options.length; i++) {
+                var o = sel.options[i];
+                if (o.hidden) continue;
+                var txt = o.textContent;
+                if (q && txt.toLowerCase().indexOf(q) === -1) continue;
+                var li = document.createElement('li');
+                li.className = 'ss-item' + (i === sel.selectedIndex ? ' is-selected' : '') + (o.disabled ? ' is-disabled' : '');
+                li.textContent = txt;
+                li.dataset.idx = String(i);
+                list.appendChild(li);
+            }
+            if (!list.children.length) {
+                var empty = document.createElement('li');
+                empty.className = 'ss-empty';
+                empty.textContent = 'No matches';
+                list.appendChild(empty);
+            }
+        }
+
+        function openPanel() {
+            wrap.classList.add('is-open');
+            search.value = '';
+            buildList('');
+            setTimeout(function () { search.focus(); }, 0);
+            var selEl = list.querySelector('.is-selected');
+            if (selEl) selEl.scrollIntoView({ block: 'nearest' });
+        }
+        function closePanel() { wrap.classList.remove('is-open'); }
+        function choose(i) {
+            if (!sel.options[i] || sel.options[i].disabled) return;
+            sel.selectedIndex = i;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            syncTrigger();
+            closePanel();
+            trigger.focus();
+        }
+
+        trigger.addEventListener('click', function (e) {
+            e.preventDefault();
+            if (wrap.classList.contains('is-open')) closePanel(); else openPanel();
+        });
+        search.addEventListener('input', function () { buildList(search.value); });
+        list.addEventListener('click', function (e) {
+            var li = e.target.closest('.ss-item');
+            if (li && li.dataset.idx != null) choose(parseInt(li.dataset.idx, 10));
+        });
+        search.addEventListener('keydown', function (e) {
+            var items = Array.prototype.slice.call(list.querySelectorAll('.ss-item:not(.is-disabled)'));
+            var active = list.querySelector('.ss-item.is-active');
+            var idx = items.indexOf(active);
+            if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min(items.length - 1, idx + 1); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(0, idx - 1); }
+            else if (e.key === 'Enter') { e.preventDefault(); if (active) choose(parseInt(active.dataset.idx, 10)); return; }
+            else if (e.key === 'Escape') { closePanel(); trigger.focus(); return; }
+            else return;
+            items.forEach(function (it) { it.classList.remove('is-active'); });
+            if (items[idx]) { items[idx].classList.add('is-active'); items[idx].scrollIntoView({ block: 'nearest' }); }
+        });
+        document.addEventListener('click', function (e) {
+            if (!wrap.contains(e.target)) closePanel();
+        });
+
+        sel.addEventListener('change', syncTrigger);
+        syncTrigger();
     }
 
     /* ── Sidebar group collapse / expand ──────────────────────────
@@ -92,6 +237,45 @@
                 },
             });
         });
+    }
+
+    /* ── Generic custom confirm — replaces the native confirm() dialog ──
+     * Any <form data-confirm="Message?"> shows the on-brand #confirmActionModal
+     * instead of the ugly "localhost says…" box. On Confirm the form submits
+     * (and only THEN does the action-loader spin — cancelling leaves the button
+     * untouched). Optional data-confirm-title / data-confirm-ok customise it.
+     * ─────────────────────────────────────────────────────────── */
+    function initConfirms() {
+        var BS = window.bootstrap;
+        var el = document.getElementById('confirmActionModal');
+        if (!BS || !el) return;
+        var modal   = BS.Modal.getOrCreateInstance(el);
+        var titleEl = document.getElementById('confirmActionTitle');
+        var textEl  = document.getElementById('confirmActionText');
+        var okBtn   = document.getElementById('confirmActionBtn');
+        var pending = null;   // the form waiting on confirmation
+
+        okBtn.addEventListener('click', function () {
+            var form = pending; pending = null;
+            modal.hide();
+            if (form) { form.dataset._confirmed = '1'; form.submit(); }
+        });
+        el.addEventListener('hidden.bs.modal', function () { pending = null; });
+
+        // Capture phase → runs BEFORE the bubble-phase action-loader, so a
+        // cancelled confirm never spins the button.
+        document.addEventListener('submit', function (e) {
+            var form = e.target;
+            if (!form || form.tagName !== 'FORM' || form.dataset.confirm == null) return;
+            if (form.dataset._confirmed === '1') { delete form.dataset._confirmed; return; }
+            e.preventDefault();
+            if (titleEl) titleEl.textContent = form.dataset.confirmTitle || 'Are you sure?';
+            if (textEl)  textEl.textContent  = form.dataset.confirm;
+            okBtn.textContent = form.dataset.confirmOk || 'Confirm';
+            okBtn.className = 'btn px-4 ' + (form.dataset.confirmVariant === 'danger' ? 'btn-danger' : 'btn-primary');
+            pending = form;
+            modal.show();
+        }, true);
     }
 
     /* ── Row actions: custom View / Delete popups ─────────────────
@@ -587,13 +771,18 @@
         delete el.dataset._busy; delete el.dataset._html;
     }
     document.addEventListener('submit', function (e) {
+        // BUBBLE phase (not capture) + defaultPrevented guard: this runs AFTER any
+        // inline onsubmit / data-confirm handler, so if the user CANCELS a confirm
+        // (submit is prevented) we never spin a button that will just sit stuck on
+        // "Please wait…". Only spin when the form is genuinely about to submit.
+        if (e.defaultPrevented) return;
         var form = e.target;
         if (!form || form.tagName !== 'FORM' || form.dataset.noLoader != null) return;
         if (typeof form.checkValidity === 'function' && !form.checkValidity()) return;
         var btn = form.querySelector('button[type="submit"], input[type="submit"]');
         if (!btn && document.activeElement && document.activeElement.type === 'submit') btn = document.activeElement;
         _spin(btn);
-    }, true);
+    }, false);
     document.addEventListener('click', function (e) {
         var el = e.target.closest('a.btn, button[data-loader], a[data-loader]');
         if (!el || el.matches('[data-bs-toggle], [data-bs-dismiss]')) return;

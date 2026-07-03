@@ -130,6 +130,7 @@ class SyncSummary {
 /// One row of the `modules` array — a per-module sync tally.
 class SyncModule {
   const SyncModule({
+    required this.key,
     required this.module,
     required this.total,
     required this.synced,
@@ -138,14 +139,19 @@ class SyncModule {
     this.lastSync,
   });
 
-  final String module;
+  final String key;     // action key (e.g. "customers") — drives From/To Tally
+  final String module;  // display label (e.g. "Customers")
   final int total;
   final int synced;
   final int pending;
   final int failed;
   final String? lastSync;
 
+  /// Synced fraction 0..1 (for the progress bar).
+  double get progress => total > 0 ? (synced / total).clamp(0.0, 1.0) : 0.0;
+
   factory SyncModule.fromJson(Map<String, dynamic> j) => SyncModule(
+        key: _s(j['key']),
         module: _s(j['module']),
         total: _toInt(j['total']) ?? 0,
         synced: _toInt(j['synced']) ?? 0,
@@ -175,6 +181,7 @@ class SyncModule {
 class SyncRecent {
   const SyncRecent({
     this.module,
+    this.message,
     this.recordType,
     this.recordId,
     this.status,
@@ -182,13 +189,23 @@ class SyncRecent {
   });
 
   final String? module;
+  final String? message;   // friendly record name (e.g. "TestDebtorX"), when present
   final String? recordType;
   final int? recordId;
   final String? status;
   final String? createdAt;
 
+  /// Best label for the row: the message/name if the API sends one, else
+  /// "<record_type> #<record_id>".
+  String get label {
+    if (message != null && message!.isNotEmpty) return message!;
+    final parts = [if (recordType != null) recordType!, if (recordId != null) '#$recordId'];
+    return parts.isEmpty ? '—' : parts.join(' ');
+  }
+
   factory SyncRecent.fromJson(Map<String, dynamic> j) => SyncRecent(
         module: _sn(j['module']),
+        message: _sn(j['message']),
         recordType: _sn(j['record_type']),
         recordId: _toInt(j['record_id']),
         status: _sn(j['status']),

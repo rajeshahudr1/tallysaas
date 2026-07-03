@@ -572,8 +572,9 @@ a { text-decoration: none; }
 /* ── 11. Pagination ─────────────────────────────────────────────── */
 .pagination-bar {
     display: flex; align-items: center; justify-content: space-between;
-    flex-wrap: wrap; gap: 14px;
-    padding: 16px 20px;
+    flex-wrap: wrap; gap: 18px;
+    padding: 22px 24px;
+    margin-top: 6px;
     border-top: 1px solid var(--border);
 }
 .pagination-show, .pagination-info { font-size: 13px; color: var(--text-muted); }
@@ -584,9 +585,10 @@ a { text-decoration: none; }
     color: var(--text);
     border-color: var(--border);
     font-size: 13px;
-    margin: 0 2px;
+    margin: 0 4px;
+    padding: 7px 12px;
     border-radius: 8px !important;
-    min-width: 36px;
+    min-width: 38px;
     text-align: center;
 }
 .pagination-nav .page-link:hover { background: #F3F4F6; color: var(--primary); }
@@ -1095,6 +1097,11 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
     width: 56px; height: 56px; margin: 0 auto; border-radius: 50%;
     display: grid; place-items: center; font-size: 24px;
     background: #FEE2E2; color: #DC2626;
+}
+.confirm-action-icon {
+    width: 56px; height: 56px; margin: 0 auto; border-radius: 50%;
+    display: grid; place-items: center; font-size: 24px;
+    background: #DBEAFE; color: #2563EB;
 }
 .record-detail { margin: 0; }
 .record-detail-row {

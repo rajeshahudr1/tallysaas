@@ -123,17 +123,27 @@ class _ProductFormScreenState extends ConsumerState<ProductFormScreen> {
     };
     try {
       final repo = ref.read(productRepositoryProvider);
+      int? newId;
       if (widget.isEdit) {
         await repo.update(widget.productId!, body);
       } else {
-        await repo.create(body);
+        final created = await repo.create(body);
+        if (created is Map && created['id'] is num) newId = (created['id'] as num).toInt();
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(
-            content: Text(widget.isEdit ? 'Product updated.' : 'Product created.')));
-      context.pop(true);
+            content: Text(widget.isEdit
+                ? 'Product updated.'
+                : 'Product created — add images below (optional).')));
+      // On CREATE, land on the new product's detail so images (which need a saved
+      // product id) can be added right away; on EDIT, just pop back.
+      if (!widget.isEdit && newId != null) {
+        context.pushReplacement('/products/$newId');
+      } else {
+        context.pop(true);
+      }
     } on ApiException catch (e) {
       _showError(e.message);
     } catch (e) {

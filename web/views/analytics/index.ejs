@@ -1,0 +1,154 @@
+<%
+/* views/analytics/index.ejs — REPORTS · Business Analytics.
+ * Route: GET /analytics  ·  activeMenu: 'analytics'.
+ * Locals: analytics { kpis, sales_trend, cashflow, top_customers, top_products, aging }. */
+var _a = (typeof analytics !== 'undefined' && analytics) ? analytics : {};
+var _k = _a.kpis || {};
+var _tc = _a.top_customers || [];
+var _tp = _a.top_products || [];
+var _ag = _a.aging || [];
+function _money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 }); }
+function _money2(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+var _tcMax = _tc.reduce(function (m, x) { return Math.max(m, Number(x.total || 0)); }, 0) || 1;
+var _tpMax = _tp.reduce(function (m, x) { return Math.max(m, Number(x.value || 0)); }, 0) || 1;
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Business Analytics',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Business Analytics' },
+    ],
+    actions: [],
+}) %>
+
+<!-- KPI cards -->
+<div class="an-kpis">
+    <div class="an-kpi"><span class="an-kpi-label">Total Sales</span><span class="an-kpi-val"><%= _money(_k.total_sales) %></span></div>
+    <div class="an-kpi"><span class="an-kpi-label">Sales This Month</span><span class="an-kpi-val an-blue"><%= _money(_k.sales_this_month) %></span></div>
+    <div class="an-kpi"><span class="an-kpi-label">Receipts (total)</span><span class="an-kpi-val an-green"><%= _money(_k.total_receipts) %></span></div>
+    <div class="an-kpi"><span class="an-kpi-label">Outstanding Receivable</span><span class="an-kpi-val an-red"><%= _money(_k.total_receivable) %></span></div>
+</div>
+
+<!-- Sales trend + Aging -->
+<div class="an-row">
+    <div class="card an-card an-2">
+        <h2 class="form-section-title">Sales Trend <span class="an-sub">last 12 months</span></h2>
+        <div class="an-canvas"><canvas id="salesTrendChart"></canvas></div>
+    </div>
+    <div class="card an-card an-1">
+        <h2 class="form-section-title">Receivables Aging</h2>
+        <div class="an-canvas an-canvas-sm"><canvas id="agingChart"></canvas></div>
+        <div class="an-aging-legend">
+            <% _ag.forEach(function (b, i) { %>
+                <span class="an-aging-item"><i class="an-dot an-dot-<%= i %>"></i><%= b.label %> · <strong><%= _money(b.amount) %></strong></span>
+            <% }); %>
+        </div>
+    </div>
+</div>
+
+<!-- Cashflow -->
+<div class="card an-card">
+    <h2 class="form-section-title">Cash Flow <span class="an-sub">money in vs out · 12 months</span></h2>
+    <div class="an-canvas"><canvas id="cashflowChart"></canvas></div>
+</div>
+
+<!-- Top customers + products -->
+<div class="an-row">
+    <div class="card an-card an-1">
+        <h2 class="form-section-title">Top Customers <span class="an-sub">by sales</span></h2>
+        <% if (!_tc.length) { %><p class="an-empty">No sales yet.</p><% } else { %>
+            <% _tc.forEach(function (x) { %>
+                <div class="an-bar-row">
+                    <span class="an-bar-name" title="<%= x.name %>"><%= x.name %></span>
+                    <span class="an-bar-track"><span class="an-bar-fill an-bar-blue" style="width:<%= Math.max(4, Math.round(Number(x.total) / _tcMax * 100)) %>%"></span></span>
+                    <span class="an-bar-val"><%= _money(x.total) %></span>
+                </div>
+            <% }); %>
+        <% } %>
+    </div>
+    <div class="card an-card an-1">
+        <h2 class="form-section-title">Top Products <span class="an-sub">by sale value</span></h2>
+        <% if (!_tp.length) { %><p class="an-empty">No line items yet.</p><% } else { %>
+            <% _tp.forEach(function (x) { %>
+                <div class="an-bar-row">
+                    <span class="an-bar-name" title="<%= x.name %>"><%= x.name %></span>
+                    <span class="an-bar-track"><span class="an-bar-fill an-bar-green" style="width:<%= Math.max(4, Math.round(Number(x.value) / _tpMax * 100)) %>%"></span></span>
+                    <span class="an-bar-val"><%= _money(x.value) %></span>
+                </div>
+            <% }); %>
+        <% } %>
+    </div>
+</div>
+
+<script>
+    // Chart.js is loaded in the layout; wait for `load` so the CDN has executed.
+    window.addEventListener('load', function () {
+        if (typeof Chart === 'undefined') return;
+        var A = <%- JSON.stringify(_a) %>;
+        var money = function (v) { return '₹' + Number(v || 0).toLocaleString('en-IN'); };
+        var baseOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+            scales: { y: { ticks: { callback: function (v) { return money(v); } } } } };
+
+        var st = A.sales_trend || { labels: [], data: [] };
+        new Chart(document.getElementById('salesTrendChart'), {
+            type: 'line',
+            data: { labels: st.labels, datasets: [{ label: 'Sales', data: st.data, borderColor: '#2563EB',
+                backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.35, pointRadius: 2 }] },
+            options: baseOpts,
+        });
+
+        var cf = A.cashflow || { labels: [], inflow: [], outflow: [] };
+        new Chart(document.getElementById('cashflowChart'), {
+            type: 'bar',
+            data: { labels: cf.labels, datasets: [
+                { label: 'In', data: cf.inflow, backgroundColor: '#16A34A' },
+                { label: 'Out', data: cf.outflow, backgroundColor: '#DC2626' },
+            ] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, position: 'bottom' } },
+                scales: { y: { ticks: { callback: function (v) { return money(v); } } } } },
+        });
+
+        var ag = A.aging || [];
+        new Chart(document.getElementById('agingChart'), {
+            type: 'doughnut',
+            data: { labels: ag.map(function (x) { return x.label; }),
+                datasets: [{ data: ag.map(function (x) { return x.amount; }),
+                    backgroundColor: ['#16A34A', '#F59E0B', '#EA580C', '#DC2626'] }] },
+            options: { responsive: true, maintainAspectRatio: false, cutout: '60%', plugins: { legend: { display: false } } },
+        });
+    });
+</script>
+
+<style>
+    .an-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px; }
+    .an-kpi { background:#fff; border:1px solid var(--border); border-radius:14px; padding:16px 18px; display:flex; flex-direction:column; gap:4px; }
+    .an-kpi-label { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; }
+    .an-kpi-val { font-size:22px; font-weight:800; color:#111827; }
+    .an-blue { color:#2563EB; } .an-green { color:#16A34A; } .an-red { color:#DC2626; }
+    .card.an-card { padding:20px; margin-bottom:18px; }
+    .form-section-title { margin:0 0 14px; }
+    .an-sub { font-size:12px; font-weight:500; color:#9CA3AF; margin-left:6px; }
+    .an-row { display:grid; grid-template-columns:2fr 1fr; gap:18px; }
+    .an-row .an-card { margin-bottom:0; }
+    .an-row + .an-card, .an-row + .an-row { margin-top:18px; }
+    .an-canvas { position:relative; height:280px; }
+    .an-canvas-sm { height:200px; }
+    .an-aging-legend { display:flex; flex-wrap:wrap; gap:10px 16px; margin-top:14px; font-size:13px; color:#4B5563; }
+    .an-aging-item { display:inline-flex; align-items:center; gap:6px; }
+    .an-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+    .an-dot-0 { background:#16A34A; } .an-dot-1 { background:#F59E0B; } .an-dot-2 { background:#EA580C; } .an-dot-3 { background:#DC2626; }
+    .an-empty { color:#9CA3AF; text-align:center; padding:24px 0; }
+    .an-bar-row { display:flex; align-items:center; gap:12px; padding:8px 0; }
+    .an-bar-name { flex:0 0 34%; font-weight:600; color:#111827; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .an-bar-track { flex:1; height:10px; background:#F1F5F9; border-radius:999px; overflow:hidden; }
+    .an-bar-fill { display:block; height:100%; border-radius:999px; }
+    .an-bar-blue { background:linear-gradient(90deg,#2563EB,#6D28D9); }
+    .an-bar-green { background:linear-gradient(90deg,#16A34A,#22C55E); }
+    .an-bar-val { flex:0 0 auto; font-weight:700; color:#111827; font-size:13px; min-width:72px; text-align:right; }
+    @media (max-width: 900px) {
+        .an-kpis { grid-template-columns:repeat(2,1fr); }
+        .an-row { grid-template-columns:1fr; }
+        .an-row .an-card { margin-bottom:18px; }
+    }
+</style>

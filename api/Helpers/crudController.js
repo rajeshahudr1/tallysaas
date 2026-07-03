@@ -106,6 +106,10 @@ function build(config) {
         buildInsert,
         buildUpdate,
         extraScope,
+        // Optional post-fetch hook: `decorate(rows, req) => rows` lets a resource
+        // enrich list/get rows (e.g. attach product image URLs). Runs with req so
+        // it can build absolute URLs. Backward-compatible (skipped when absent).
+        decorate,
     } = config;
 
     // Whitelist of sortable UI keys → SQL columns. `name`/`status`/`created_at`
@@ -231,7 +235,8 @@ function build(config) {
             } else {
                 for (const [col, dir] of listOrder) rowQb = rowQb.orderBy(col, dir);
             }
-            const rows = await rowQb;
+            let rows = await rowQb;
+            if (typeof decorate === 'function') rows = await decorate(rows, req);
 
             return R.successResponse(res, {
                 data: rows,
@@ -249,9 +254,10 @@ function build(config) {
         try {
             const qb = freshQb();
             await applyScope(req, qb);
-            const row = await qb.where(idColQualified, id)
+            let row = await qb.where(idColQualified, id)
                 .select(...listColumns).first();
             if (!row) return R.errorResponse(res, notFound, 404);
+            if (typeof decorate === 'function') { const [d] = await decorate([row], req); row = d || row; }
             return R.successResponse(res, row);
         } catch (err) {
             console.error(`${table}.get error:`, err);

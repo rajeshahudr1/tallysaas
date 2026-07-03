@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
 import '../notifications/notifications_screen.dart';
+import '../field/field_dashboard_screen.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/endpoints.dart';
 import '../../core/auth/session.dart';
@@ -30,7 +31,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    // A salesman sees their FIELD dashboard here (below), so skip the company
+    // dashboard fetch — they lack 'dashboard' permission and it would 403.
+    final session = ref.read(sessionProvider);
+    final isSalesman = session is SessionSignedIn && session.user.isSalesman;
+    if (!isSalesman) _future = _load();
   }
 
   String _ymd(DateTime d) =>
@@ -80,6 +85,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Widget build(BuildContext context) {
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
+
+    // Role-based landing: a field salesman gets THEIR dashboard (My Field) — the
+    // company KPI dashboard needs a 'dashboard' permission they don't have, which
+    // is why it showed "Could not load the dashboard." for them.
+    if (user != null && user.isSalesman) {
+      return const FieldDashboardScreen();
+    }
 
     return Scaffold(
       appBar: AppBar(

@@ -22,6 +22,20 @@ class TransactionsHubScreen extends ConsumerWidget {
       module: 'sales-invoices',
     ),
     _TxnEntry(
+      title: 'Recurring Invoices',
+      subtitle: 'Auto-generate on a schedule',
+      icon: Icons.repeat,
+      route: '/recurring-invoices',
+      module: 'recurring-invoices',
+    ),
+    _TxnEntry(
+      title: 'e-Invoice & e-Way',
+      subtitle: 'GST IRN + e-Way Bill',
+      icon: Icons.verified_outlined,
+      route: '/einvoices',
+      module: 'einvoice',
+    ),
+    _TxnEntry(
       title: 'Purchase Invoices',
       subtitle: 'Inward — bills from suppliers',
       icon: Icons.shopping_bag_outlined,
@@ -43,11 +57,32 @@ class TransactionsHubScreen extends ConsumerWidget {
       module: 'receipts',
     ),
     _TxnEntry(
+      title: 'Payment Reminders',
+      subtitle: 'Nudge overdue customers',
+      icon: Icons.notifications_active_outlined,
+      route: '/reminders',
+      module: 'customers',
+    ),
+    _TxnEntry(
       title: 'Journals',
       subtitle: 'Adjustment entries',
       icon: Icons.swap_horiz,
       route: '/journals',
       module: 'journals',
+    ),
+    _TxnEntry(
+      title: 'Expenses',
+      subtitle: 'Business expense book',
+      icon: Icons.account_balance_wallet_outlined,
+      route: '/expenses',
+      module: 'expenses',
+    ),
+    _TxnEntry(
+      title: 'Bank Reconciliation',
+      subtitle: 'Match statement to vouchers',
+      icon: Icons.account_balance_outlined,
+      route: '/bank-reconciliation',
+      module: 'bank-reconciliation',
     ),
     _TxnEntry(
       title: 'Inventory / Stock',
@@ -62,7 +97,25 @@ class TransactionsHubScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
-    final items = [
+    final items = <_TxnEntry>[
+      // SFA — a linked salesman's field home (My Field) is pinned first.
+      if (user != null && user.isSalesman)
+        const _TxnEntry(
+          title: 'My Field',
+          subtitle: 'My locations, customers & invoices',
+          icon: Icons.location_on,
+          module: 'sales-invoices',
+          route: '/my-field',
+        ),
+      // SFA — Invoice Approvals for approvers (edit perm, not a field salesman).
+      if (user != null && user.can('sales-invoices', 'edit') && !user.isSalesman)
+        const _TxnEntry(
+          title: 'Invoice Approvals',
+          subtitle: 'Approve or reject salesman invoices',
+          icon: Icons.fact_check,
+          module: 'sales-invoices',
+          route: '/sales-invoices/approvals',
+        ),
       for (final e in _items)
         if (user == null || user.canModule(e.module)) e,
     ];

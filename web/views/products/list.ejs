@@ -37,8 +37,8 @@ var filterFields = [
 
 /* ── Table config ───────────────────────────────────────────── */
 var tableColumns = [
+    { key: 'image_url',      label: '',              sortable: false, type: 'thumb', align: 'center' },
     { key: 'name',           label: 'Product Name',  sortable: true, type: 'text' },
-    { key: 'sku',            label: 'SKU',           sortable: true, type: 'badge' },
     { key: 'category',       label: 'Category',      sortable: true, type: 'text' },
     { key: 'hsn',            label: 'HSN',           sortable: true, type: 'text' },
     { key: 'gst_rate',       label: 'GST',           sortable: true, type: 'badge', align: 'center' },
@@ -111,6 +111,15 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
 </div>
 
 <style>
+    .data-table-thumb { width:40px; height:40px; border-radius:8px; object-fit:cover; border:1px solid #e5e7eb; background:#f9fafb; display:inline-block; vertical-align:middle; }
+    .data-table-thumb--empty { display:inline-flex; align-items:center; justify-content:center; color:#cbd5e1; }
+    .data-table-thumb-btn { border:none; background:none; padding:0; cursor:pointer; line-height:0; border-radius:8px; }
+    .data-table-thumb-btn:hover .data-table-thumb { outline:2px solid #6366f1; }
+    #imgGalleryModal .ig-main { width:100%; background:#0b0b0c; border-radius:10px; display:flex; align-items:center; justify-content:center; min-height:260px; max-height:60vh; overflow:hidden; }
+    #imgGalleryModal .ig-main img { max-width:100%; max-height:60vh; object-fit:contain; display:block; }
+    #imgGalleryModal .ig-thumbs { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+    #imgGalleryModal .ig-thumb { width:56px; height:56px; object-fit:cover; border-radius:8px; cursor:pointer; border:2px solid transparent; }
+    #imgGalleryModal .ig-thumb.is-active { border-color:#6366f1; }
     @media (min-width: 992px) {
         .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
     }
@@ -124,3 +133,59 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
         .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
     }
 </style>
+
+<!-- Product image gallery lightbox — opened by clicking a list thumbnail -->
+<div class="modal fade" id="imgGalleryModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="imgGalleryTitle">Product Images</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="ig-main"><img id="imgGalleryMain" src="" alt="Product image"></div>
+                <div class="ig-thumbs" id="imgGalleryThumbs"></div>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+(function () {
+    var modalEl = document.getElementById('imgGalleryModal');
+    if (!modalEl || !window.bootstrap) return;
+    var modal   = bootstrap.Modal.getOrCreateInstance(modalEl);
+    var mainImg = document.getElementById('imgGalleryMain');
+    var thumbs  = document.getElementById('imgGalleryThumbs');
+    var titleEl = document.getElementById('imgGalleryTitle');
+
+    function render(images, title) {
+        titleEl.textContent = title || 'Product Images';
+        mainImg.src = images[0] || '';
+        thumbs.textContent = '';
+        images.forEach(function (url, i) {
+            var t = document.createElement('img');
+            t.src = url;
+            t.className = 'ig-thumb' + (i === 0 ? ' is-active' : '');
+            t.addEventListener('click', function () {
+                mainImg.src = url;
+                thumbs.querySelectorAll('.ig-thumb').forEach(function (x) { x.classList.remove('is-active'); });
+                t.classList.add('is-active');
+            });
+            thumbs.appendChild(t);
+        });
+        thumbs.style.display = images.length > 1 ? 'flex' : 'none';
+    }
+
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-gallery]');
+        if (!btn) return;
+        e.preventDefault();
+        var images = [];
+        try { images = JSON.parse(btn.getAttribute('data-gallery-images') || '[]'); } catch (err) { images = []; }
+        images = images.filter(Boolean);
+        if (!images.length) return;
+        render(images, btn.getAttribute('data-gallery-title'));
+        modal.show();
+    });
+})();
+</script>

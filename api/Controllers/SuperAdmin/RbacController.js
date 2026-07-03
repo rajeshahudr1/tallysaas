@@ -168,6 +168,9 @@ async function setLicensePermissions(req, res) {
             }
         });
 
+        // Invalidate the plan-gate cache so the new entitlements apply immediately.
+        require('../../Helpers/entitlements').clearLicenseCache(id);
+
         return R.successResponse(res, { license_id: id, count: permIds.length },
             `Module access updated for ${license.holder_name}.`);
     } catch (err) {

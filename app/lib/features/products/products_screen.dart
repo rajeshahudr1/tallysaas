@@ -14,6 +14,7 @@ import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
 import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
+import '../../shared/widgets/image_viewer.dart';
 import '../../shared/widgets/status_pill.dart';
 import 'products_controller.dart';
 
@@ -48,7 +49,8 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
   }
 
   void _onScroll() {
-    if (_scrollCtl.position.pixels >= _scrollCtl.position.maxScrollExtent - 240) {
+    if (_scrollCtl.position.pixels >=
+        _scrollCtl.position.maxScrollExtent - 240) {
       ref.read(productsControllerProvider.notifier).loadMore();
     }
   }
@@ -61,14 +63,16 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
   }
 
   static const _fields = [
-    FilterField('status', 'Status', FType.select, options: ['Active', 'Inactive']),
+    FilterField('status', 'Status', FType.select,
+        options: ['Active', 'Inactive']),
     FilterField('created_from', 'Created From', FType.dateFrom),
     FilterField('created_to', 'Created To', FType.dateTo),
   ];
 
   Future<void> _openFilter() async {
     final ctrl = ref.read(productsControllerProvider.notifier);
-    final res = await showAdvancedFilter(context, ref, title: 'Products filter', fields: _fields, current: ctrl.adv);
+    final res = await showAdvancedFilter(context, ref,
+        title: 'Products filter', fields: _fields, current: ctrl.adv);
     if (res != null) ctrl.setAdvFilter(res);
   }
 
@@ -78,7 +82,8 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
     final canCreate = user?.can('products', 'create') ?? false;
-    final hasFilter = ref.read(productsControllerProvider.notifier).adv.isNotEmpty;
+    final hasFilter =
+        ref.read(productsControllerProvider.notifier).adv.isNotEmpty;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Products'),
@@ -127,18 +132,24 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
       case ProductsError(:final message):
         return ErrorState(
           message,
-          onRetry: () => ref.read(productsControllerProvider.notifier).refresh(),
+          onRetry: () =>
+              ref.read(productsControllerProvider.notifier).refresh(),
         );
       case ProductsReady(:final items, :final hasMore, :final loadingMore):
         if (items.isEmpty) {
-          return const EmptyState('No products found.', icon: Icons.inventory_2_outlined);
+          return const EmptyState('No products found.',
+              icon: Icons.inventory_2_outlined);
         }
         return RefreshIndicator(
-          onRefresh: () => ref.read(productsControllerProvider.notifier).refresh(),
+          onRefresh: () =>
+              ref.read(productsControllerProvider.notifier).refresh(),
           child: ListView.separated(
             controller: _scrollCtl,
             padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md12, 0, AppSpacing.md12, AppSpacing.xxl32,
+              AppSpacing.md12,
+              0,
+              AppSpacing.md12,
+              AppSpacing.xxl32,
             ),
             itemCount: items.length + (hasMore ? 1 : 0),
             separatorBuilder: (_, __) => const SizedBox(height: AppSpacing.sm8),
@@ -149,7 +160,8 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
                   child: Center(
                     child: loadingMore
                         ? const SizedBox(
-                            width: 22, height: 22,
+                            width: 22,
+                            height: 22,
                             child: CircularProgressIndicator(strokeWidth: 2.4),
                           )
                         : const SizedBox.shrink(),
@@ -182,7 +194,6 @@ class _ProductCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final bits = <String>[
-      if (p.sku != null) 'SKU ${p.sku}',
       if (p.category != null) p.category!,
       if (p.unit != null) p.unit!,
     ];
@@ -190,6 +201,8 @@ class _ProductCard extends StatelessWidget {
       onTap: onTap,
       child: Row(
         children: [
+          _thumb(context, p),
+          const SizedBox(width: AppSpacing.md12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -201,7 +214,8 @@ class _ProductCard extends StatelessWidget {
                 ],
                 if (p.gstRate != null) ...[
                   const SizedBox(height: 2),
-                  Text('GST ${Fmt.num0(p.gstRate)}%', style: theme.textTheme.bodySmall),
+                  Text('GST ${Fmt.num0(p.gstRate)}%',
+                      style: theme.textTheme.bodySmall),
                 ],
               ],
             ),
@@ -225,6 +239,40 @@ class _ProductCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _thumb(BuildContext context, Product p) {
+    final url = p.imageUrl;
+    final gallery = p.images.map((im) => im.url).toList();
+    final img = ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: (url == null || url.isEmpty)
+          ? Container(
+              width: 44,
+              height: 44,
+              color: Colors.black12,
+              child: const Icon(Icons.image_outlined,
+                  size: 20, color: Colors.black26),
+            )
+          : Image.network(
+              url,
+              width: 44,
+              height: 44,
+              fit: BoxFit.cover,
+              errorBuilder: (c, e, s) => Container(
+                width: 44,
+                height: 44,
+                color: Colors.black12,
+                child: const Icon(Icons.broken_image_outlined, size: 20),
+              ),
+            ),
+    );
+    if (gallery.isEmpty) return img;
+    // Tapping the thumbnail opens the full gallery (card tap still opens detail).
+    return GestureDetector(
+      onTap: () => showImageGallery(context, gallery, title: p.name),
+      child: img,
     );
   }
 }

@@ -1,0 +1,58 @@
+<%
+/* views/einvoices/dashboard.ejs — e-Invoice / e-Way Bill dashboard. */
+var d = (typeof d !== 'undefined' && d) ? d : {};
+var t = d.today || {}; var api = d.api_status || {};
+function n0(x){ return Number(x||0).toLocaleString('en-IN'); }
+function stMap(s){ return ({generated:'ok',failed:'fail',cancelled:'cancel',pending:'warn',generating:'warn'})[s] || 'muted'; }
+%>
+<%- include('../partials/page-head', {
+    title: 'e-Invoice Dashboard',
+    breadcrumb: [ { label: 'Dashboard', href: '/' }, { label: 'e-Invoice Dashboard' } ],
+    actions: [ { label: 'All e-Invoices', icon: 'fa-list', variant: 'light', href: '/einvoices' }, { label: 'Reports', icon: 'fa-chart-column', gradient: true, href: '/einvoices/reports' } ],
+}) %>
+
+<section class="eid-grid">
+    <article class="eid-card eid-c-ok"><span class="eid-ico"><i class="fa-solid fa-circle-check"></i></span><div><div class="eid-val"><%= n0(t.generated) %></div><div class="eid-lbl">Generated Today</div></div></article>
+    <article class="eid-card eid-c-fail"><span class="eid-ico"><i class="fa-solid fa-circle-xmark"></i></span><div><div class="eid-val"><%= n0(t.failed) %></div><div class="eid-lbl">Failed Today</div></div></article>
+    <article class="eid-card eid-c-cancel"><span class="eid-ico"><i class="fa-solid fa-ban"></i></span><div><div class="eid-val"><%= n0(t.cancelled) %></div><div class="eid-lbl">Cancelled Today</div></div></article>
+    <article class="eid-card eid-c-warn"><span class="eid-ico"><i class="fa-solid fa-hourglass-half"></i></span><div><div class="eid-val"><%= n0(d.pending) %></div><div class="eid-lbl">Pending</div></div></article>
+    <article class="eid-card eid-c-exp"><span class="eid-ico"><i class="fa-solid fa-clock"></i></span><div><div class="eid-val"><%= n0(d.expiry_today) %></div><div class="eid-lbl">e-Way Expiring Today</div></div></article>
+    <article class="eid-card eid-c-api"><span class="eid-ico"><i class="fa-solid fa-plug-circle-check"></i></span><div><div class="eid-val"><%= n0(api.ok) %> / <span style="color:#DC2626"><%= n0(api.fail) %></span></div><div class="eid-lbl">API OK / Fail (today)</div></div></article>
+</section>
+
+<div class="card mt-3">
+    <div class="inv-section-head"><h2 class="inv-section-title"><i class="fa-solid fa-clock-rotate-left me-2 text-primary"></i>Recent Activity</h2><a href="/einvoices" class="btn btn-light btn-sm">View all</a></div>
+    <% var recent = Array.isArray(d.recent) ? d.recent : []; %>
+    <% if (!recent.length) { %>
+        <div class="p-4 text-center text-muted">No e-Invoice activity yet.</div>
+    <% } else { %>
+    <div class="table-responsive"><table class="table align-middle mb-0">
+        <thead><tr><th>Invoice</th><th>IRN</th><th>e-Way</th><th>IRP</th><th>EWB</th></tr></thead>
+        <tbody>
+        <% recent.forEach(function(r){ %>
+            <tr>
+                <td><strong><%= r.invoice_no || '—' %></strong></td>
+                <td class="text-muted"><%= r.irn ? (String(r.irn).slice(0,16)+'…') : '—' %></td>
+                <td class="text-muted"><%= r.ewb_no || '—' %></td>
+                <td><span class="eid-pill eid-<%= stMap(r.irp_status) %>"><%= r.irp_status || '—' %></span></td>
+                <td><span class="eid-pill eid-<%= stMap(r.ewb_status) %>"><%= r.ewb_status || '—' %></span></td>
+            </tr>
+        <% }); %>
+        </tbody>
+    </table></div>
+    <% } %>
+</div>
+
+<style>
+    .eid-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;}
+    .eid-card{display:flex;align-items:center;gap:12px;padding:16px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;}
+    .eid-ico{width:42px;height:42px;border-radius:11px;display:inline-flex;align-items:center;justify-content:center;font-size:18px;flex:0 0 auto;}
+    .eid-val{font-size:22px;font-weight:800;color:#0f172a;line-height:1;}
+    .eid-lbl{font-size:11.5px;color:#64748b;font-weight:600;margin-top:3px;}
+    .eid-c-ok .eid-ico{background:#dcfce7;color:#16a34a;} .eid-c-fail .eid-ico{background:#fee2e2;color:#dc2626;}
+    .eid-c-cancel .eid-ico{background:#f3f4f6;color:#6b7280;} .eid-c-warn .eid-ico{background:#fef3c7;color:#b45309;}
+    .eid-c-exp .eid-ico{background:#ede9fe;color:#6d28d9;} .eid-c-api .eid-ico{background:#dbeafe;color:#2563eb;}
+    .eid-pill{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;}
+    .eid-ok{background:#dcfce7;color:#166534;} .eid-fail{background:#fee2e2;color:#991b1b;} .eid-cancel{background:#f3f4f6;color:#6b7280;}
+    .eid-warn{background:#fef3c7;color:#92400e;} .eid-muted{background:#f1f5f9;color:#94a3b8;}
+</style>

@@ -57,7 +57,10 @@ var _notifs = [
     { id: 'n-daily', label: 'Daily summary email',     desc: 'A daily digest of sales, payments and sync.',      on: false },
 ];
 
-var headActions =
+// Super Admin has no company, so there is nothing to save here — drop the
+// Save/Reset actions and (below) show a clean empty-state instead of the tabs.
+var _isSuper = (typeof isSuperAdmin !== 'undefined') && isSuperAdmin;
+var headActions = _isSuper ? '' :
     '<button type="reset" form="settings-form" class="btn btn-light">' +
         '<i class="fa-solid fa-rotate-left me-1"></i>Reset' +
     '</button>' +
@@ -74,6 +77,21 @@ var headActions =
     ],
     actions: headActions,
 }) %>
+
+<% if (_isSuper) { %>
+<%# Super Admin — the company-only settings (profile, tax, sync, branding) don't
+    apply to a platform operator, so show a clean empty-state, not blank tabs. %>
+<div class="card" style="padding:44px 24px; text-align:center; color:#64748b">
+    <i class="fa-solid fa-building-circle-xmark" style="font-size:36px; color:#94a3b8; display:block; margin-bottom:14px"></i>
+    <h3 style="font-size:17px; color:#334155; margin:0 0 8px">No company settings here</h3>
+    <p style="font-size:13.5px; max-width:560px; margin:0 auto; line-height:1.6">
+        These settings (company profile, tax, sync, branding) belong to a tenant company —
+        as the platform operator you don't own one. Manage
+        <a href="/licenses">Licenses</a>, or per-license config in
+        <a href="/gps-settings">GPS Tracking</a> and <a href="/einvoice-gsp">e-Invoice GSP</a>.
+    </p>
+</div>
+<% } else { %>
 
 <form id="settings-form" class="card form-card" method="post" action="/settings" autocomplete="off" novalidate>
 
@@ -346,3 +364,4 @@ var headActions =
     </div>
 
 </form>
+<% } %>

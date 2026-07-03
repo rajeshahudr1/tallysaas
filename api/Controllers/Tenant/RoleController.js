@@ -33,10 +33,15 @@ const entitlements = require('../../Helpers/entitlements');
 const OOPS      = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND = 'Role not found.';
 
-// Platform/admin roles a tenant can never assign or clone. These are also the
-// two PROTECTED system roles that can never be edited or deleted by anyone
-// (super-admin OR company-admin) — they are the fixed default roles.
+// Platform/admin roles a TENANT (license-admin) can never assign or clone.
 const PROTECTED_SLUGS = ['super-admin', 'company-admin'];
+
+// Of those, ONLY the platform super-admin role is truly FIXED — it is always
+// "all permissions" and must never be narrowed or shown as editable. The
+// company-admin role IS editable by the SUPER ADMIN (so the platform operator
+// can define, platform-wide, what a company admin may do). A license-admin still
+// can't touch either (they only edit their own custom roles).
+const NEVER_EDITABLE = ['super-admin'];
 
 // True when the authenticated caller is the platform Super Admin. The super-
 // admin manages roles ACROSS every license (templates + any license's custom
@@ -84,7 +89,7 @@ async function editableRole(req, id) {
     if (isSuper(req)) {
         const role = await db('roles').where({ id }).first();
         if (!role) return null;
-        if (PROTECTED_SLUGS.includes(role.slug)) return null;   // never editable
+        if (NEVER_EDITABLE.includes(role.slug)) return null;   // only the super-admin role is fixed
         return role;
     }
     const licenseId = req.user && req.user.license_id;
@@ -111,8 +116,11 @@ async function manageList(req, res) {
     try {
         const licenseId = req.user && req.user.license_id;
         const super_    = isSuper(req);
-        const rows = await visibleRolesQuery(licenseId, super_)
+        let rows = await visibleRolesQuery(licenseId, super_)
             .orderBy('id', 'asc').select('id', 'name', 'slug', 'is_system', 'license_id');
+        // The Super Admin never manages its OWN fixed role — hide the super-admin
+        // card from the management screen.
+        if (super_) rows = rows.filter((r) => r.slug !== 'super-admin');
 
         // Counts: a super-admin sees the GLOBAL user count per role (they manage
         // across every license); a license-admin sees only their own license's
@@ -126,10 +134,10 @@ async function manageList(req, res) {
         const data = rows.map((r) => ({
             id: r.id, name: r.name, slug: r.slug, is_system: r.is_system,
             license_id: r.license_id,
-            // Super-admin may edit any NON-protected role (custom of any license OR
-            // a global template). License-admin may edit only their own custom roles.
+            // Super-admin may edit ANY role except the fixed super-admin role
+            // (company-admin INCLUDED). License-admin edits only their own custom roles.
             editable: super_
-                ? !PROTECTED_SLUGS.includes(r.slug)
+                ? !NEVER_EDITABLE.includes(r.slug)
                 : (!r.is_system && r.license_id === licenseId),
             user_count: byRole[r.id] || 0,
         }));
@@ -206,7 +214,7 @@ async function get(req, res) {
             id: role.id, name: role.name, slug: role.slug, is_system: role.is_system,
             license_id: role.license_id,
             editable: super_
-                ? !PROTECTED_SLUGS.includes(role.slug)
+                ? !NEVER_EDITABLE.includes(role.slug)
                 : (!role.is_system && role.license_id === licenseId),
             permissions: perms.map((p) => p.slug),
         });

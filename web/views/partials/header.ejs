@@ -53,7 +53,8 @@ function _relTime(v) {
             <i class="fa-solid fa-bars"></i>
         </button>
 
-        <!-- Desktop: full search box -->
+        <!-- Desktop: full search box (customer search = tenant data → not for Super Admin) -->
+        <% if (!_isSuper) { %>
         <form class="topbar-search d-none d-lg-flex" role="search" method="get" action="/customers">
             <i class="fa-solid fa-magnifying-glass topbar-search-icon" aria-hidden="true"></i>
             <input type="search" name="search" class="topbar-search-input"
@@ -66,11 +67,16 @@ function _relTime(v) {
                 aria-controls="sidebarOffcanvas" aria-label="Search">
             <i class="fa-solid fa-magnifying-glass"></i>
         </button>
+        <% } %>
     </div>
 
     <!-- Right: company picker, install, notifications, settings, profile -->
     <div class="topbar-right">
 
+        <%# Company/License switcher, mobile switcher + Install App are all TENANT
+            controls — Super Admin operates on the platform (license-scoped pages
+            carry their own license picker), so hide this whole block for them. %>
+        <% if (!_isSuper) { %>
         <!-- ── Top switcher ───────────────────────────────────────────
              Desktop (≥lg): inline License (super-admin) + Company dropdowns.
              Mobile  (<lg): ONE compact button → #switcherModal popup, because
@@ -145,6 +151,7 @@ function _relTime(v) {
         <button class="btn btn-install" id="installAppBtn" type="button" hidden>
             <i class="fa-solid fa-download me-1"></i>Install App
         </button>
+        <% } %>
 
         <!-- Offline indicator dot (toggled by app.js) -->
         <span class="offline-indicator" id="offlineIndicator" title="You are offline" hidden>
@@ -152,7 +159,9 @@ function _relTime(v) {
             <span class="offline-indicator-label">Offline</span>
         </span>
 
-        <!-- Notifications (dropdown) — desktop only; on mobile it lives in the drawer -->
+        <!-- Notifications (dropdown) — desktop only; on mobile it lives in the drawer.
+             HIDDEN for Super Admin: tenant sync/sale notifications aren't theirs. -->
+        <% if (typeof isSuperAdmin === 'undefined' || !isSuperAdmin) { %>
         <div class="dropdown d-none d-lg-block">
             <button class="topbar-icon-btn" type="button" aria-label="Notifications"
                     data-bs-toggle="dropdown" data-bs-auto-close="true" aria-expanded="false">
@@ -200,6 +209,7 @@ function _relTime(v) {
                 <% } %>
             </div>
         </div>
+        <% } %>
 
 
         <!-- User profile -->
@@ -222,7 +232,7 @@ function _relTime(v) {
                 <i class="fa-solid fa-chevron-down topbar-profile-caret"></i>
             </button>
             <ul class="dropdown-menu dropdown-menu-end">
-                <li><a class="dropdown-item" href="/settings"><i class="fa-solid fa-user me-2 text-muted"></i>Profile</a></li>
+                <li><a class="dropdown-item" href="/profile"><i class="fa-solid fa-user me-2 text-muted"></i>My Profile</a></li>
                 <li><a class="dropdown-item" href="/settings"><i class="fa-solid fa-gear me-2 text-muted"></i>Settings</a></li>
                 <li><hr class="dropdown-divider"></li>
                 <li><a class="dropdown-item text-danger" href="/logout"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Sign out</a></li>

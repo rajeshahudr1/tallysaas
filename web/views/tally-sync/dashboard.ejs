@@ -176,6 +176,43 @@ function _statId(label) {
   @media (max-width:720px){.sync-compact-sep{display:none;}.sync-compact-settings{margin-left:0;}}
 </style>
 
+<!-- ── Overall sync progress (LIVE — real %, updated by the 15s poller) ── -->
+<%
+  var _tSync = 0, _tTot = 0;
+  _modules.forEach(function (m) { _tSync += (Number(m.synced) || 0); _tTot += (Number(m.total) || 0); });
+  var _ovPct = _tTot > 0 ? Math.round((_tSync / _tTot) * 100) : 0;
+%>
+<div class="card sync-overall-card mb-3">
+    <div class="sync-overall-head">
+        <span class="sync-overall-title">
+            <i class="fa-solid fa-gauge-high me-2 text-primary"></i>Overall Sync Progress
+        </span>
+        <span class="sync-overall-pct" id="sync-overall-pct"><%= _ovPct %>%</span>
+    </div>
+    <div class="sync-overall-track">
+        <span class="sync-overall-fill<%= _ovPct >= 100 ? ' is-done' : '' %>" id="sync-overall-bar" style="width:<%= _ovPct %>%"></span>
+    </div>
+    <div class="sync-overall-sub" id="sync-overall-sub">
+        <%= _tSync.toLocaleString('en-IN') %> of <%= _tTot.toLocaleString('en-IN') %> records synced to cloud
+    </div>
+</div>
+<style>
+  .sync-overall-card{padding:16px 18px;}
+  .sync-overall-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+  .sync-overall-title{font-size:15px;font-weight:700;color:#0f172a;}
+  .sync-overall-pct{font-size:20px;font-weight:800;color:#2563eb;line-height:1;}
+  .sync-overall-track{height:12px;border-radius:999px;background:#e2e8f0;overflow:hidden;}
+  .sync-overall-fill{display:block;height:100%;width:0;border-radius:999px;
+      background:linear-gradient(90deg,#2563eb,#3b82f6);
+      transition:width .5s ease;
+      background-size:28px 28px;
+      background-image:linear-gradient(45deg,rgba(255,255,255,.18) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.18) 50%,rgba(255,255,255,.18) 75%,transparent 75%,transparent),linear-gradient(90deg,#2563eb,#3b82f6);
+      animation:syncBarStripes 1s linear infinite;}
+  .sync-overall-fill.is-done{background-image:linear-gradient(90deg,#16a34a,#22c55e);animation:none;}
+  @keyframes syncBarStripes{from{background-position:0 0;}to{background-position:28px 0;}}
+  .sync-overall-sub{margin-top:8px;font-size:12.5px;color:#64748b;}
+</style>
+
 <!-- ── Headline stat cards ───────────────────────────────────── -->
 <section class="stat-grid mb-3">
     <% _stats.forEach(function (s) { %>

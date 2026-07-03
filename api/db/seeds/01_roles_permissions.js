@@ -60,6 +60,7 @@ const MODULES = [
     { name: 'Purchase Invoices', slug: 'purchase-invoices' },
     { name: 'Payments',          slug: 'payments' },
     { name: 'Receipts',          slug: 'receipts' },
+    { name: 'Expenses',          slug: 'expenses' },
     { name: 'Inventory',         slug: 'inventory' },
     { name: 'Tally Sync',        slug: 'tally-sync' },
     { name: 'Reports',           slug: 'reports' },

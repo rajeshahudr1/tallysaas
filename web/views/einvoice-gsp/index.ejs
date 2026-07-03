@@ -1,0 +1,117 @@
+<%
+/* views/einvoice-gsp/index.ejs — Platform Admin · e-Invoice GSP integration.
+ * Per-license GSP credentials (encrypted server-side) + settings. */
+var g   = (typeof gsp !== 'undefined' && gsp) ? gsp : { enc_configured:false, settings:{}, credentials:[] };
+var s   = g.settings || {};
+var creds = Array.isArray(g.credentials) ? g.credentials : [];
+var lid = (typeof licenseId !== 'undefined') ? licenseId : '';
+var lics = Array.isArray(licenses) ? licenses : [];
+function sel(a,b){ return String(a)===String(b) ? 'selected' : ''; }
+function chk(v){ return v ? 'checked' : ''; }
+%>
+<%- include('../partials/page-head', {
+    title: 'e-Invoice GSP',
+    breadcrumb: [ { label: 'Dashboard', href: '/' }, { label: 'e-Invoice GSP' } ],
+}) %>
+
+<% if (lics.length > 1) { %>
+<form method="get" action="/einvoice-gsp" class="card p-3 mb-3 d-flex flex-row align-items-center gap-2">
+    <label class="fw-semibold mb-0">License</label>
+    <select name="license_id" class="form-select" style="max-width:340px" onchange="this.form.submit()">
+        <% lics.forEach(function(l){ %><option value="<%= l.id %>" <%= sel(l.id, lid) %>><%= l.company || l.name || ('License #'+l.id) %></option><% }); %>
+    </select>
+</form>
+<% } %>
+
+<% if (!g.enc_configured) { %>
+<div class="alert alert-warning"><i class="fa-solid fa-triangle-exclamation me-2"></i>
+    <b>EINVOICE_ENC_KEY not set.</b> Add a 32-byte key (64 hex chars) to the API <code>.env</code> before saving GSP credentials — secrets are AES-256-GCM encrypted at rest and cannot be stored without it.
+</div>
+<% } %>
+
+<div class="row g-3">
+    <!-- Settings -->
+    <div class="col-lg-5">
+        <div class="card p-3">
+            <h2 class="inv-section-title mb-3"><i class="fa-solid fa-sliders me-2 text-primary"></i>Settings</h2>
+            <form method="post" action="/einvoice-gsp/settings">
+                <input type="hidden" name="license_id" value="<%= lid %>">
+                <div class="mb-2">
+                    <label class="form-label">Default provider</label>
+                    <select name="default_provider" class="form-select">
+                        <% ['nic','cleartax','mastersindia','vayana','adequare','avalara'].forEach(function(p){ %>
+                            <option value="<%= p %>" <%= sel(p, s.default_provider||'nic') %>><%= p %></option>
+                        <% }); %>
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <label class="form-label">Environment</label>
+                    <select name="env" class="form-select">
+                        <option value="sandbox" <%= sel('sandbox', s.env||'sandbox') %>>Sandbox</option>
+                        <option value="production" <%= sel('production', s.env) %>>Production</option>
+                    </select>
+                </div>
+                <div class="form-check mb-1"><input class="form-check-input" type="checkbox" name="auto_generate" id="ag" <%= chk(s.auto_generate) %>><label class="form-check-label" for="ag">Auto-generate IRN on invoice approval</label></div>
+                <div class="form-check mb-1"><input class="form-check-input" type="checkbox" name="auto_eway" id="ae" <%= chk(s.auto_eway) %>><label class="form-check-label" for="ae">Auto-generate e-Way when transport present</label></div>
+                <div class="form-check mb-3"><input class="form-check-input" type="checkbox" name="auto_distance" id="ad" <%= chk(s.auto_distance !== false) %>><label class="form-check-label" for="ad">Auto PIN-to-PIN distance (NIC)</label></div>
+                <button class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save settings</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Add / update credential -->
+    <div class="col-lg-7">
+        <div class="card p-3">
+            <h2 class="inv-section-title mb-3"><i class="fa-solid fa-key me-2 text-primary"></i>GSP Credential (encrypted)</h2>
+            <form method="post" action="/einvoice-gsp/credential">
+                <input type="hidden" name="license_id" value="<%= lid %>">
+                <div class="row g-2">
+                    <div class="col-md-4"><label class="form-label">Provider</label>
+                        <select name="provider" class="form-select">
+                            <% ['nic','cleartax','mastersindia','vayana','adequare','avalara'].forEach(function(p){ %><option value="<%= p %>"><%= p %></option><% }); %>
+                        </select></div>
+                    <div class="col-md-4"><label class="form-label">Environment</label>
+                        <select name="env" class="form-select"><option value="sandbox">Sandbox</option><option value="production">Production</option></select></div>
+                    <div class="col-md-4"><label class="form-label">GSTIN (optional)</label><input name="gstin" class="form-control" maxlength="15" placeholder="27AAAAA0000A1Z5"></div>
+                    <div class="col-md-12"><label class="form-label">Base URL</label><input name="base_url" class="form-control" placeholder="https://gsp.example.com/api"></div>
+                    <div class="col-md-6"><label class="form-label">Username / Client ID</label><input name="username" class="form-control" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Password</label><input name="password" type="password" class="form-control" autocomplete="new-password" placeholder="leave blank to keep existing"></div>
+                    <div class="col-md-6"><label class="form-label">Client ID (GSP)</label><input name="client_id" class="form-control" autocomplete="off"></div>
+                    <div class="col-md-6"><label class="form-label">Client Secret</label><input name="client_secret" type="password" class="form-control" autocomplete="new-password" placeholder="blank = keep"></div>
+                    <div class="col-md-12"><label class="form-label">API Key</label><input name="api_key" type="password" class="form-control" autocomplete="new-password" placeholder="blank = keep"></div>
+                </div>
+                <button class="btn btn-primary mt-3" <%= g.enc_configured ? '' : 'disabled' %>><i class="fa-solid fa-lock me-1"></i>Save credential (encrypted)</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Existing credentials (masked) -->
+<div class="card mt-3">
+    <div class="inv-section-head"><h2 class="inv-section-title"><i class="fa-solid fa-list me-2 text-primary"></i>Stored Credentials</h2></div>
+    <% if (!creds.length) { %>
+        <div class="p-4 text-center text-muted">No GSP credentials saved for this license yet.</div>
+    <% } else { %>
+    <div class="table-responsive"><table class="table align-middle mb-0">
+        <thead><tr><th>Provider</th><th>Env</th><th>GSTIN</th><th>Base URL</th><th>Username</th><th class="text-center">Secrets</th><th class="text-center">Active</th></tr></thead>
+        <tbody>
+        <% creds.forEach(function(c){ %>
+            <tr>
+                <td><strong><%= c.provider %></strong></td>
+                <td><span class="badge bg-<%= c.env==='production'?'success':'secondary' %>"><%= c.env %></span></td>
+                <td class="text-muted"><%= c.gstin || '—' %></td>
+                <td class="text-muted" style="max-width:220px;overflow:hidden;text-overflow:ellipsis"><%= c.base_url || '—' %></td>
+                <td class="text-muted"><%= c.username || '—' %></td>
+                <td class="text-center">
+                    <% if (c.has_password) { %><span class="badge bg-dark">pwd</span> <% } %>
+                    <% if (c.has_client_secret) { %><span class="badge bg-dark">secret</span> <% } %>
+                    <% if (c.has_api_key) { %><span class="badge bg-dark">key</span><% } %>
+                    <% if (!c.has_password && !c.has_client_secret && !c.has_api_key) { %>—<% } %>
+                </td>
+                <td class="text-center"><%= c.active ? '✓' : '—' %></td>
+            </tr>
+        <% }); %>
+        </tbody>
+    </table></div>
+    <% } %>
+</div>

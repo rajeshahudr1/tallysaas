@@ -25,6 +25,27 @@
 
 const crud = require('../../Helpers/crudController');
 const db   = require('../../config/db').db;
+const { fullUrl } = require('../../Helpers/uploads');
+
+/** Attach each product's image gallery (absolute URLs) + a primary `image_url`,
+ * fetched in one query for the whole page. So the web/app get ready-to-use
+ * image URLs from the list AND the detail — no path building client-side. */
+async function decorate(rows, req) {
+    if (!rows.length) return rows;
+    const ids = rows.map((r) => r.id);
+    const imgs = await db('product_images')
+        .whereIn('product_id', ids).whereNull('deleted_at')
+        .orderBy('sort_order', 'asc').orderBy('id', 'asc')
+        .select('id', 'product_id', 'file_path');
+    const byProduct = {};
+    for (const im of imgs) {
+        (byProduct[im.product_id] = byProduct[im.product_id] || []).push({ id: im.id, url: fullUrl(req, im.file_path) });
+    }
+    return rows.map((r) => {
+        const gallery = byProduct[r.id] || [];
+        return { ...r, images: gallery, image_url: gallery.length ? gallery[0].url : null };
+    });
+}
 
 // Columns returned by list/get. `products.*` gives every base column; the
 // aliased join adds a human-readable label for the category FK.
@@ -134,6 +155,7 @@ const controller = crud.build({
     baseQuery,
     buildInsert,
     buildUpdate,
+    decorate,
 });
 
 module.exports = {

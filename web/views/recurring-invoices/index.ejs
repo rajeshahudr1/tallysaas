@@ -1,0 +1,185 @@
+<%
+/* views/recurring-invoices/index.ejs — TRANSACTIONS · Recurring Invoices.
+ * Locals: templates [{id,title,description,customer,customer_id,amount,gst_rate,frequency,due_days,next_run_date,start_date,end_date,status,generated_count}],
+ *         customers [{id,name}]. */
+var _list = (typeof templates !== 'undefined' && templates) ? templates : [];
+var _custs = (typeof customers !== 'undefined' && customers) ? customers : [];
+function _money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _d(d) { return d ? String(d).slice(0, 10).split('-').reverse().join('/') : '—'; }
+function _cap(s) { s = String(s || ''); return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
+var FREQ = ['monthly', 'quarterly', 'yearly'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Recurring Invoices',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Recurring Invoices' }],
+    actions: [],
+}) %>
+
+<!-- Add template -->
+<div class="card rc-card">
+    <h2 class="form-section-title">New Recurring Invoice</h2>
+    <form method="post" action="/recurring-invoices" autocomplete="off">
+        <div class="form-grid">
+            <div class="form-group"><label class="form-label">Title <span class="req">*</span></label>
+                <input type="text" class="form-control" name="title" placeholder="e.g. Monthly Rent" required></div>
+            <div class="form-group"><label class="form-label">Customer</label>
+                <select class="form-select" name="customer_id"><option value="">— Select —</option><% _custs.forEach(function (c) { %><option value="<%= c.id %>"><%= c.name %></option><% }); %></select></div>
+            <div class="form-group"><label class="form-label">Amount <span class="req">*</span></label>
+                <input type="number" step="0.01" min="0" class="form-control" name="amount" placeholder="0.00" required></div>
+            <div class="form-group"><label class="form-label">GST %</label>
+                <input type="number" step="0.01" min="0" max="100" class="form-control" name="gst_rate" value="0"></div>
+            <div class="form-group"><label class="form-label">Frequency</label>
+                <select class="form-select" name="frequency"><% FREQ.forEach(function (f) { %><option value="<%= f %>"><%= _cap(f) %></option><% }); %></select></div>
+            <div class="form-group"><label class="form-label">Due in (days)</label>
+                <input type="number" min="0" class="form-control" name="due_days" value="0"></div>
+            <div class="form-group"><label class="form-label">Start Date <span class="req">*</span></label>
+                <input type="date" class="form-control" name="start_date" required></div>
+            <div class="form-group"><label class="form-label">End Date <span class="rc-opt">(optional)</span></label>
+                <input type="date" class="form-control" name="end_date"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Description (invoice line)</label>
+            <input type="text" class="form-control" name="description" placeholder="e.g. Office rent for the month"></div>
+        <div class="rc-form-actions">
+            <button type="submit" class="btn btn-gradient"><i class="fa-solid fa-plus"></i> Create Recurring</button>
+        </div>
+    </form>
+</div>
+
+<!-- List -->
+<div class="card rc-card">
+    <h2 class="form-section-title">Templates <span class="rc-count"><%= _list.length %></span></h2>
+    <% if (!_list.length) { %>
+        <div class="rc-empty"><i class="fa-solid fa-repeat"></i><p>No recurring invoices yet. Create one above — it will auto-generate on schedule.</p></div>
+    <% } else { %>
+        <div class="table-wrap">
+            <table class="rc-table">
+                <thead><tr><th>Title</th><th>Customer</th><th class="rc-right">Amount</th><th>Frequency</th><th>Next Run</th><th>Status</th><th class="rc-right">Actions</th></tr></thead>
+                <tbody>
+                    <% _list.forEach(function (r) { var _active = (r.status === 'Active'); %>
+                        <tr>
+                            <td><strong><%= r.title %></strong><% if (r.generated_count) { %><br><span class="rc-sub"><%= r.generated_count %> generated</span><% } %></td>
+                            <td class="rc-muted"><%= r.customer || '—' %></td>
+                            <td class="rc-right"><%= _money(r.amount) %><% if (Number(r.gst_rate)) { %> <span class="rc-sub">+<%= r.gst_rate %>%</span><% } %></td>
+                            <td><span class="rc-freq"><%= _cap(r.frequency) %></span></td>
+                            <td class="rc-muted"><%= _d(r.next_run_date) %></td>
+                            <td><span class="rc-pill <%= _active ? 'rc-on' : 'rc-off' %>"><%= r.status %></span></td>
+                            <td class="rc-right">
+                                <form method="post" action="/recurring-invoices/<%= r.id %>/generate" style="display:inline" id="rcgen-<%= r.id %>"></form>
+                                <button type="button" class="rc-icon-btn rc-gen" title="Generate now" onclick="rcAskGen('rcgen-<%= r.id %>', '<%= r.title %>')"><i class="fa-solid fa-bolt"></i></button>
+                                <button type="button" class="rc-icon-btn" title="Edit"
+                                    data-id="<%= r.id %>" data-title="<%= r.title %>" data-customer_id="<%= r.customer_id || '' %>" data-description="<%= r.description || '' %>"
+                                    data-amount="<%= r.amount %>" data-gst_rate="<%= r.gst_rate %>" data-frequency="<%= r.frequency %>" data-due_days="<%= r.due_days %>"
+                                    data-start_date="<%= r.start_date ? String(r.start_date).slice(0,10) : '' %>" data-end_date="<%= r.end_date ? String(r.end_date).slice(0,10) : '' %>" data-status="<%= r.status %>"
+                                    onclick="rcEdit(this)"><i class="fa-solid fa-pen"></i></button>
+                                <form method="post" action="/recurring-invoices/<%= r.id %>/delete" style="display:inline" id="rcdel-<%= r.id %>"></form>
+                                <button type="button" class="rc-icon-btn rc-del" title="Delete" onclick="rcAskDelete('rcdel-<%= r.id %>')"><i class="fa-regular fa-trash-can"></i></button>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
+
+<!-- Edit modal -->
+<div id="rc-edit" class="rc-overlay">
+    <div class="rc-modal">
+        <h3>Edit Recurring Invoice</h3>
+        <form method="post" id="rc-edit-form" action="/recurring-invoices/0" autocomplete="off">
+            <div class="form-grid">
+                <div class="form-group"><label class="form-label">Title</label><input class="form-control" name="title" id="rc-e-title"></div>
+                <div class="form-group"><label class="form-label">Customer</label>
+                    <select class="form-select" name="customer_id" id="rc-e-cust"><option value="">— Select —</option><% _custs.forEach(function (c) { %><option value="<%= c.id %>"><%= c.name %></option><% }); %></select></div>
+                <div class="form-group"><label class="form-label">Amount</label><input type="number" step="0.01" min="0" class="form-control" name="amount" id="rc-e-amount"></div>
+                <div class="form-group"><label class="form-label">GST %</label><input type="number" step="0.01" min="0" max="100" class="form-control" name="gst_rate" id="rc-e-gst"></div>
+                <div class="form-group"><label class="form-label">Frequency</label>
+                    <select class="form-select" name="frequency" id="rc-e-freq"><% FREQ.forEach(function (f) { %><option value="<%= f %>"><%= _cap(f) %></option><% }); %></select></div>
+                <div class="form-group"><label class="form-label">Due in (days)</label><input type="number" min="0" class="form-control" name="due_days" id="rc-e-due"></div>
+                <div class="form-group"><label class="form-label">Next Run</label><input type="date" class="form-control" name="next_run_date" id="rc-e-next"></div>
+                <div class="form-group"><label class="form-label">End Date</label><input type="date" class="form-control" name="end_date" id="rc-e-end"></div>
+                <div class="form-group"><label class="form-label">Status</label>
+                    <select class="form-select" name="status" id="rc-e-status"><option value="Active">Active</option><option value="Paused">Paused</option></select></div>
+            </div>
+            <div class="form-group"><label class="form-label">Description</label><input class="form-control" name="description" id="rc-e-desc"></div>
+            <div class="rc-modal-actions"><button type="button" class="btn btn-light" onclick="rcClose('rc-edit')">Cancel</button><button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save</button></div>
+        </form>
+    </div>
+</div>
+
+<!-- Generate confirm -->
+<div id="rc-gen" class="rc-overlay">
+    <div class="rc-modal rc-modal-sm">
+        <div class="rc-gen-icon"><i class="fa-solid fa-bolt"></i></div>
+        <h3>Generate invoice now?</h3>
+        <p class="rc-muted" id="rc-gen-msg">A new sales invoice will be created from this template.</p>
+        <div class="rc-modal-actions"><button type="button" class="btn btn-light" onclick="rcClose('rc-gen')">Cancel</button><button type="button" class="btn btn-primary" onclick="rcConfirmGen()">Generate</button></div>
+    </div>
+</div>
+
+<!-- Delete confirm -->
+<div id="rc-del" class="rc-overlay">
+    <div class="rc-modal rc-modal-sm">
+        <div class="rc-del-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <h3>Delete this template?</h3>
+        <p class="rc-muted">Already-generated invoices are kept.</p>
+        <div class="rc-modal-actions"><button type="button" class="btn btn-light" onclick="rcClose('rc-del')">Cancel</button><button type="button" class="btn btn-danger" onclick="rcConfirmDelete()">Delete</button></div>
+    </div>
+</div>
+
+<script>
+    function rcOpen(id) { document.getElementById(id).classList.add('open'); }
+    function rcClose(id) { document.getElementById(id).classList.remove('open'); }
+    function rcEdit(b) {
+        var f = document.getElementById('rc-edit-form');
+        f.action = '/recurring-invoices/' + b.getAttribute('data-id');
+        document.getElementById('rc-e-title').value = b.getAttribute('data-title') || '';
+        document.getElementById('rc-e-cust').value = b.getAttribute('data-customer_id') || '';
+        document.getElementById('rc-e-amount').value = b.getAttribute('data-amount') || '';
+        document.getElementById('rc-e-gst').value = b.getAttribute('data-gst_rate') || '0';
+        document.getElementById('rc-e-freq').value = b.getAttribute('data-frequency') || 'monthly';
+        document.getElementById('rc-e-due').value = b.getAttribute('data-due_days') || '0';
+        document.getElementById('rc-e-next').value = b.getAttribute('data-start_date') || '';
+        document.getElementById('rc-e-end').value = b.getAttribute('data-end_date') || '';
+        document.getElementById('rc-e-status').value = b.getAttribute('data-status') || 'Active';
+        document.getElementById('rc-e-desc').value = b.getAttribute('data-description') || '';
+        rcOpen('rc-edit');
+    }
+    var _rcGenForm = null, _rcDelForm = null;
+    function rcAskGen(f, title) { _rcGenForm = f; document.getElementById('rc-gen-msg').textContent = 'A new sales invoice will be created from "' + title + '".'; rcOpen('rc-gen'); }
+    function rcConfirmGen() { if (_rcGenForm) document.getElementById(_rcGenForm).submit(); }
+    function rcAskDelete(f) { _rcDelForm = f; rcOpen('rc-del'); }
+    function rcConfirmDelete() { if (_rcDelForm) document.getElementById(_rcDelForm).submit(); }
+    document.querySelectorAll('.rc-overlay').forEach(function (o) { o.addEventListener('click', function (e) { if (e.target === o) o.classList.remove('open'); }); });
+</script>
+
+<style>
+    .card.rc-card { padding:20px; margin-bottom:18px; }
+    .form-section-title { margin:0 0 16px; }
+    .rc-form-actions { margin-top:22px; padding-top:18px; border-top:1px solid #edeff3; }
+    .rc-opt { font-weight:400; color:#9CA3AF; font-size:12px; }
+    .rc-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .rc-empty { text-align:center; padding:32px 12px; color:#9CA3AF; } .rc-empty i { font-size:34px; opacity:.5; } .rc-empty p { margin:12px 0 0; }
+    .rc-table { width:100%; border-collapse:collapse; }
+    .rc-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 12px 12px; border-bottom:1px solid #EEF1F5; }
+    .rc-table td { padding:12px; border-bottom:1px solid #F3F4F6; vertical-align:middle; }
+    .rc-table tr:last-child td { border-bottom:none; }
+    .rc-right { text-align:right; } .rc-muted { color:#6B7280; } .rc-sub { font-size:12px; color:#9CA3AF; }
+    .rc-freq { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; font-weight:700; background:rgba(37,99,235,.10); color:#2563EB; }
+    .rc-pill { display:inline-block; padding:3px 11px; border-radius:999px; font-size:12px; font-weight:700; }
+    .rc-on { background:rgba(22,163,74,.12); color:#16A34A; } .rc-off { background:rgba(107,114,128,.14); color:#6B7280; }
+    .rc-icon-btn { border:1px solid var(--border); background:#fff; color:#4B5563; width:32px; height:32px; border-radius:8px; cursor:pointer; margin-left:4px; }
+    .rc-icon-btn:hover { background:#F8FAFC; } .rc-gen { color:#2563EB; border-color:#BFDBFE; } .rc-gen:hover { background:#EFF6FF; }
+    .rc-del { color:#DC2626; border-color:#FECACA; } .rc-del:hover { background:#FEF2F2; }
+    .rc-overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:2000; }
+    .rc-overlay.open { display:flex; }
+    .rc-modal { background:#fff; border-radius:16px; padding:24px; max-width:680px; width:92%; box-shadow:0 24px 70px rgba(0,0,0,.25); max-height:88vh; overflow:auto; }
+    .rc-modal-sm { max-width:400px; text-align:center; }
+    .rc-modal h3 { margin:0 0 16px; font-size:18px; font-weight:700; color:#111827; }
+    .rc-modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+    .rc-modal-sm .rc-modal-actions { justify-content:center; }
+    .rc-gen-icon { width:52px; height:52px; margin:0 auto 14px; border-radius:50%; background:rgba(37,99,235,.12); color:#2563EB; display:grid; place-items:center; font-size:22px; }
+    .rc-del-icon { width:52px; height:52px; margin:0 auto 14px; border-radius:50%; background:rgba(220,38,38,.12); color:#DC2626; display:grid; place-items:center; font-size:22px; }
+    .req { color:#DC2626; }
+</style>

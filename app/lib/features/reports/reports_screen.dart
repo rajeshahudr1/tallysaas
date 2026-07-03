@@ -17,6 +17,14 @@ class ReportsScreen extends ConsumerWidget {
   const ReportsScreen({super.key});
 
   static const _groups = <_ReportGroup>[
+    _ReportGroup('Insights', [
+      _ReportEntry(
+        title: 'Business Analytics',
+        subtitle: 'Sales trend, cash flow, aging, top customers & products',
+        icon: Icons.insights_outlined,
+        route: '/analytics',
+      ),
+    ]),
     _ReportGroup('Registers', [
       _ReportEntry(
         title: 'Sales Register',

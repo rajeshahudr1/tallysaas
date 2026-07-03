@@ -50,6 +50,10 @@ class SalesInvoicesController extends StateNotifier<SalesInvoicesState> {
   String _search = '';
   Map<String, String> _adv = {};
   Map<String, String> get adv => _adv;
+  // SFA approval tab: 'approved' (default — real, counted sales) | 'pending'
+  // (awaiting a company-admin's approval) | 'all'. Mirrors the web tabs.
+  String _approval = 'approved';
+  String get approval => _approval;
   int _page = 1;
   bool _hasMore = true;
   final List<Invoice> _all = [];
@@ -64,7 +68,8 @@ class SalesInvoicesController extends StateNotifier<SalesInvoicesState> {
 
   Future<void> _fetch() async {
     try {
-      final res = await _repo.listSales(page: _page, perPage: _perPage, search: _search, filters: _adv);
+      final filters = <String, String>{..._adv, 'approval': _approval};
+      final res = await _repo.listSales(page: _page, perPage: _perPage, search: _search, filters: filters);
       _all.addAll(res.items);
       _hasMore = res.hasMore;
       if (!mounted) return;
@@ -83,6 +88,13 @@ class SalesInvoicesController extends StateNotifier<SalesInvoicesState> {
 
   Future<void> setAdvFilter(Map<String, String> f) async {
     _adv = f;
+    await _reload();
+  }
+
+  /// Switch the approval tab ('approved' | 'pending' | 'all') and reload.
+  Future<void> setApproval(String a) async {
+    if (a == _approval) return;
+    _approval = a;
     await _reload();
   }
 

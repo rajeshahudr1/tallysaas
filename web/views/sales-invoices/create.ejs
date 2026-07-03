@@ -46,20 +46,27 @@ _products.forEach(function (p) {
         ' data-gst="'  + (p.gst || 0)   + '">' + p.name + '</option>';
 });
 
+// SFA — EVERY non-admin submits for approval (can't send straight to Tally); the
+// "Save as Draft" buttons carry save_as_draft=1 so the api keeps it editable.
+// Only a company-admin (needsApproval=false) saves straight through to Tally.
+var _needsApproval = (typeof needsApproval !== 'undefined') ? !!needsApproval : false;
+var _primaryLabel = _needsApproval
+    ? '<i class="fa-solid fa-paper-plane me-1"></i>Submit for Approval'
+    : '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally';
 var headActions =
     '<a class="btn btn-light" href="/sales-invoices">' +
         '<i class="fa-solid fa-arrow-left me-1"></i>Back to Invoices' +
     '</a>' +
     '<div class="btn-group">' +
         '<button type="submit" form="invoice-form" class="btn btn-primary">' +
-            '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally' +
+            _primaryLabel +
         '</button>' +
         '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
                 'data-bs-toggle="dropdown" aria-expanded="false">' +
             '<span class="visually-hidden">Toggle save options</span>' +
         '</button>' +
         '<ul class="dropdown-menu dropdown-menu-end">' +
-            '<li><button type="submit" form="invoice-form" class="dropdown-item">' +
+            '<li><button type="submit" form="invoice-form" name="save_as_draft" value="1" class="dropdown-item">' +
                 '<i class="fa-regular fa-floppy-disk me-2 text-muted"></i>Save as Draft</button></li>' +
             '<li><button type="submit" form="invoice-form" class="dropdown-item">' +
                 '<i class="fa-solid fa-print me-2 text-muted"></i>Save &amp; Print</button></li>' +
@@ -206,11 +213,15 @@ var headActions =
     <div class="card">
         <div class="form-card-footer" style="border-top:0; background:#fff;">
             <a class="btn btn-light" href="/sales-invoices">Cancel</a>
-            <button type="submit" class="btn btn-light">
+            <button type="submit" name="save_as_draft" value="1" class="btn btn-light">
                 <i class="fa-regular fa-floppy-disk me-1"></i>Save as Draft
             </button>
             <button type="submit" class="btn btn-primary">
-                <i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally
+                <% if (typeof isSalesman !== 'undefined' && isSalesman) { %>
+                    <i class="fa-solid fa-paper-plane me-1"></i>Submit for Approval
+                <% } else { %>
+                    <i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally
+                <% } %>
             </button>
         </div>
     </div>

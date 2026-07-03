@@ -30,6 +30,8 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
   final _searchCtl = TextEditingController();
   final _scrollCtl = ScrollController();
   Timer? _debounce;
+  // SFA approval tab — 'approved' (default, real sales) | 'pending' | 'all'.
+  String _tab = 'approved';
 
   @override
   void initState() {
@@ -106,8 +108,9 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
             ),
       body: Column(
         children: [
+          _approvalTabs(),
           Padding(
-            padding: const EdgeInsets.all(AppSpacing.md12),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.md12, 0, AppSpacing.md12, AppSpacing.md12),
             child: AppTextField(
               controller: _searchCtl,
               hint: 'Search by invoice no, customer…',
@@ -116,6 +119,48 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
             ),
           ),
           Expanded(child: _body(state)),
+        ],
+      ),
+    );
+  }
+
+  /// Approval tabs: only APPROVED invoices are the real, counted sales; PENDING
+  /// are awaiting a company-admin's approval. Mirrors the web tabs.
+  Widget _approvalTabs() {
+    const tabs = [('approved', 'Approved'), ('pending', 'Pending'), ('all', 'All')];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(AppSpacing.md12, AppSpacing.md12, AppSpacing.md12, AppSpacing.sm8),
+      child: Row(
+        children: [
+          for (final t in tabs) ...[
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  if (_tab == t.$1) return;
+                  setState(() => _tab = t.$1);
+                  ref.read(salesInvoicesControllerProvider.notifier).setApproval(t.$1);
+                },
+                child: Container(
+                  height: 38,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: _tab == t.$1 ? AppColors.primary : Colors.white,
+                    borderRadius: BorderRadius.circular(AppRadius.sm8),
+                    border: Border.all(color: _tab == t.$1 ? AppColors.primary : AppColors.border),
+                  ),
+                  child: Text(
+                    t.$2,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _tab == t.$1 ? Colors.white : AppColors.text2,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            if (t.$1 != 'all') const SizedBox(width: AppSpacing.sm8),
+          ],
         ],
       ),
     );

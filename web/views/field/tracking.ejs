@@ -1,0 +1,107 @@
+<%
+/* views/field/tracking.ejs — SFA Phase 2 · Field Tracking (GPS visit log).
+ * Admin sees every salesman's check-ins; a salesman sees their own. */
+var _visits = Array.isArray(visits) ? visits : [];
+%>
+<%- include('../partials/page-head', {
+    title: 'Field Tracking',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Field Tracking' },
+    ],
+}) %>
+
+<div class="card">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title">
+            <i class="fa-solid fa-map-location-dot me-2 text-primary"></i>Visit Log
+            <span class="ft-count"><%= _visits.length %></span>
+        </h2>
+        <form method="get" action="/field-tracking" class="ft-filter">
+            <input type="date" name="date" value="<%= date || '' %>" class="form-control form-control-sm" />
+            <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-filter me-1"></i>Filter</button>
+            <% if (date) { %><a href="/field-tracking" class="btn btn-light btn-sm">Clear</a><% } %>
+        </form>
+    </div>
+
+    <% if (!_visits.length) { %>
+        <div class="ft-empty">
+            <i class="fa-solid fa-location-dot"></i>
+            <div>No check-ins<%= date ? ' for this day' : ' yet' %>.</div>
+        </div>
+    <% } else { %>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Salesman</th>
+                    <th>Customer</th>
+                    <th>Location</th>
+                    <th>Check-in</th>
+                    <th class="text-center">GPS</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _visits.forEach(function (v) { %>
+                    <tr>
+                        <td><%= v.sales_person %></td>
+                        <td><strong><%= v.customer %></strong></td>
+                        <td class="text-muted"><%= v.location %></td>
+                        <td class="text-muted"><%= v.checkin %></td>
+                        <td class="text-center">
+                            <% if (v.within) { %>
+                                <span class="ft-badge ft-badge--ok"><i class="fa-solid fa-circle-check me-1"></i>Verified<% if (v.distance != null) { %> · <%= v.distance %>m<% } %></span>
+                            <% } else if (v.distance != null) { %>
+                                <span class="ft-badge ft-badge--far"><i class="fa-solid fa-triangle-exclamation me-1"></i><%= v.distance %>m away</span>
+                            <% } else { %>
+                                <span class="ft-badge ft-badge--none">No GPS</span>
+                            <% } %>
+                        </td>
+                        <td class="text-muted" style="max-width:220px"><%= v.note %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+    <% } %>
+</div>
+
+<% var _pings = Array.isArray(pings) ? pings : []; %>
+<div class="card mt-3">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-location-crosshairs me-2 text-primary"></i>GPS Location Trail <span class="ft-count"><%= _pings.length %></span></h2>
+        <span class="text-muted" style="font-size:12.5px">Auto/part-visit/create pings (de-duped by min-move)</span>
+    </div>
+    <% if (!_pings.length) { %>
+        <div class="ft-empty"><i class="fa-solid fa-satellite-dish"></i><div>No location pings<%= date ? ' for this day' : ' yet' %> (GPS tracking off or salesman inactive).</div></div>
+    <% } else { %>
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0">
+            <thead><tr><th>Salesman</th><th>Source</th><th>Lat, Lng</th><th class="text-center">Moved</th><th>When</th></tr></thead>
+            <tbody>
+                <% _pings.forEach(function(p){ %>
+                    <tr>
+                        <td><%= p.sales_person %></td>
+                        <td><span class="ft-badge ft-badge--<%= p.source==='part_visit'?'ok':(p.source==='hourly'?'far':'none') %>"><%= p.source %></span></td>
+                        <td class="text-muted"><a href="https://maps.google.com/?q=<%= p.lat %>,<%= p.lng %>" target="_blank" rel="noopener"><%= p.lat %>, <%= p.lng %></a></td>
+                        <td class="text-center text-muted"><%= p.moved != null ? (p.moved + ' m') : '—' %></td>
+                        <td class="text-muted"><%= p.at %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+    <% } %>
+</div>
+
+<style>
+    .ft-count{display:inline-block;margin-left:8px;min-width:24px;padding:1px 9px;font-size:12px;font-weight:700;color:#1e40af;background:#dbeafe;border:1px solid #bfdbfe;border-radius:999px;}
+    .ft-filter{display:flex;align-items:center;gap:8px;}
+    .ft-empty{padding:40px 16px;text-align:center;color:#64748b;}
+    .ft-empty i{font-size:32px;color:#94a3b8;display:block;margin-bottom:10px;}
+    .ft-badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;}
+    .ft-badge--ok{color:#166534;background:#dcfce7;border:1px solid #bbf7d0;}
+    .ft-badge--far{color:#92400e;background:#fef3c7;border:1px solid #fde68a;}
+    .ft-badge--none{color:#6b7280;background:#f3f4f6;border:1px solid #e5e7eb;}
+</style>

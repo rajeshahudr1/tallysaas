@@ -90,6 +90,11 @@ const createSalesInvoiceSchema = Joi.object({
 
     status:          Joi.string().valid(...STATUSES).default('pending_tally'),
 
+    // Field-sales (SFA): a salesman may Save as Draft (true) instead of
+    // submitting for approval. Admins/web ignore it. Optional, no default so the
+    // controller can tell "not sent" apart from an explicit false.
+    save_as_draft:   Joi.boolean(),
+
     items:           itemsArray,
 });
 
@@ -129,6 +134,10 @@ const createPurchaseInvoiceSchema = Joi.object({
 const listInvoiceSchema = Joi.object({
     search:      Joi.string().trim().max(191).allow('', null),
     status:      Joi.string().valid(...STATUSES),
+    // SFA approval-status filter — the Invoice Approvals screen passes
+    // ?approval=pending. Without this the strict query validator rejects it with
+    // 422 ("approval is not allowed"), so the admin's queue always came back empty.
+    approval:    Joi.string().valid('draft', 'pending', 'approved', 'rejected'),
     page:        Joi.number().integer().min(1).default(1),
     per_page:    Joi.number().integer().min(1).max(100).default(10),
     customer_id: fkId,

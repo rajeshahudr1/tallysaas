@@ -26,8 +26,10 @@ from __future__ import annotations
 # --------------------------------------------------------------------------- #
 # PRODUCTION: set your domain here before building the distributable exe; this
 # is the ONLY place. e.g. "https://app.yourdomain.com/api/v1".
-# The value below is the PRODUCTION server. It is never written to config.ini.
-API_BASE_URL = "https://tallysaasapi.dukansetu.in/api/v1"
+# LOCAL TESTING (current): pointed at the dev machine's LAN IP so the agent syncs
+# with the local API. RESTORE the production URL below before a LIVE build:
+#   PRODUCTION = "https://tallysaasapi.dukansetu.in/api/v1"
+API_BASE_URL = "http://192.168.4.10:4500/api/v1"
 
 
 # --------------------------------------------------------------------------- #

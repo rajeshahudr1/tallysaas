@@ -34,15 +34,36 @@ function _statusClass(v) {
 %>
 
 <%- include('../partials/page-head', {
-    title: 'Licenses',
+    title: 'Platform Overview',
     breadcrumb: [
-        { label: 'Dashboard', href: '/' },
         { label: 'Licenses' },
     ],
     actions: [
         { label: 'Register License', icon: 'fa-plus', gradient: true, href: '/licenses/register' },
     ],
 }) %>
+
+<%# ── Super-admin overview cards: total licences, companies, active, expiring,
+     connected. The super-admin's "useful details" at a glance. ── %>
+<% var _s = (typeof summary !== 'undefined' && summary) ? summary : { licenses:_total, companies:0, active:0, expiring:0, expired:0, connected:0 }; %>
+<div class="sa-overview">
+    <div class="sa-card"><div class="sa-ic sa-blue"><i class="fa-solid fa-key"></i></div><div><div class="sa-val"><%= _s.licenses %></div><div class="sa-lbl">Total Licenses</div></div></div>
+    <div class="sa-card"><div class="sa-ic sa-violet"><i class="fa-solid fa-building"></i></div><div><div class="sa-val"><%= _s.companies %></div><div class="sa-lbl">Total Companies</div></div></div>
+    <div class="sa-card"><div class="sa-ic sa-green"><i class="fa-solid fa-circle-check"></i></div><div><div class="sa-val"><%= _s.active %></div><div class="sa-lbl">Active</div></div></div>
+    <div class="sa-card"><div class="sa-ic sa-amber"><i class="fa-solid fa-hourglass-half"></i></div><div><div class="sa-val"><%= _s.expiring %></div><div class="sa-lbl">Expiring ≤15d</div></div></div>
+    <div class="sa-card"><div class="sa-ic sa-red"><i class="fa-solid fa-circle-xmark"></i></div><div><div class="sa-val"><%= _s.expired %></div><div class="sa-lbl">Expired</div></div></div>
+    <div class="sa-card"><div class="sa-ic sa-teal"><i class="fa-solid fa-rotate"></i></div><div><div class="sa-val"><%= _s.connected %></div><div class="sa-lbl">Synced (7d)</div></div></div>
+</div>
+<style>
+    .sa-overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin-bottom:16px; }
+    .sa-card { display:flex; align-items:center; gap:12px; background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px 16px; }
+    .sa-ic { width:42px; height:42px; border-radius:10px; display:grid; place-items:center; font-size:18px; flex-shrink:0; }
+    .sa-blue{background:#DBEAFE;color:#2563EB} .sa-violet{background:#EDE9FE;color:#7C3AED}
+    .sa-green{background:#DCFCE7;color:#16A34A} .sa-amber{background:#FEF3C7;color:#B45309}
+    .sa-red{background:#FEE2E2;color:#DC2626} .sa-teal{background:#CCFBF1;color:#0D9488}
+    .sa-val { font-size:22px; font-weight:800; color:var(--text); line-height:1.1; }
+    .sa-lbl { font-size:11.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.03em; margin-top:2px; }
+</style>
 
 <div class="card">
 

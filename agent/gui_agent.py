@@ -68,6 +68,20 @@ import sync_agent
 
 
 APP_TITLE = "Tally Cloud Sync"
+
+# Brand palette (web-matched) — drives the ttk theme + the header/status cards
+# so the windowed agent looks like the cloud UI, not a bare tkinter form.
+BRAND = "#2563EB"
+BRAND_DEEP = "#1D4ED8"
+BG = "#F1F5F9"
+CARD = "#FFFFFF"
+TXT = "#0F172A"
+SUB = "#64748B"
+BORDER = "#E2E8F0"
+OK_GREEN = "#16A34A"
+BAD_RED = "#DC2626"
+WARN_AMBER = "#D97706"
+
 INSTALLED_EXE_NAME = "TallyCloudSync.exe"
 STARTUP_VBS_NAME = "TallyCloudSync.vbs"
 SHORTCUT_NAME = "Tally Cloud Sync.lnk"
@@ -107,6 +121,20 @@ def app_dir() -> str:
 def config_path() -> str:
     """Absolute path to the config.ini this instance reads/writes."""
     return os.path.join(app_dir(), "config.ini")
+
+
+def icon_path() -> Optional[str]:
+    """The bundled/adjacent app_icon.ico for the window + taskbar icon, or None.
+    Checks the PyInstaller extract dir (_MEIPASS), the exe/app dir, and the source
+    dir so the SAME icon shows whether frozen or run from source."""
+    for base in (getattr(sys, "_MEIPASS", None), app_dir(),
+                 os.path.dirname(os.path.abspath(__file__))):
+        if not base:
+            continue
+        p = os.path.join(base, "app_icon.ico")
+        if os.path.isfile(p):
+            return p
+    return None
 
 
 def startup_dir() -> str:
@@ -767,8 +795,16 @@ class AgentApp:
         self._tray_log_tap_installed = False
 
         root.title(APP_TITLE)
-        root.geometry("720x560")
-        root.minsize(640, 480)
+        root.geometry("780x620")
+        root.minsize(700, 540)
+        self._setup_theme(root)
+        # Window + taskbar icon = the SAME brand .ico the exe file icon uses.
+        try:
+            _ico = icon_path()
+            if _ico:
+                root.iconbitmap(_ico)
+        except Exception:
+            pass
         try:
             root.protocol("WM_DELETE_WINDOW", self.on_close)
         except Exception:
@@ -784,6 +820,99 @@ class AgentApp:
             self.show_dashboard(cfg)
         else:
             self.show_setup(cfg)
+
+    # -- theme ------------------------------------------------------------- #
+    @staticmethod
+    def _setup_theme(root: tk.Tk) -> None:
+        """Apply a flat, brand-coloured ttk theme so the windowed agent reads like
+        the cloud UI, not a bare tkinter form. Uses 'clam' (the built-in theme that
+        honours colour configs on Windows) + a set of named styles."""
+        try:
+            style = ttk.Style(root)
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
+            root.configure(bg=BG)
+            base = ("Segoe UI", 10)
+            style.configure(".", background=BG, foreground=TXT, font=base,
+                            borderwidth=0, focuscolor=BG)
+            style.configure("TFrame", background=BG)
+            style.configure("Card.TFrame", background=CARD)
+            style.configure("Header.TFrame", background=BRAND)
+            style.configure("TLabel", background=BG, foreground=TXT, font=base)
+            style.configure("Card.TLabel", background=CARD, foreground=TXT, font=base)
+            style.configure("Sub.TLabel", background=BG, foreground=SUB, font=("Segoe UI", 9))
+            style.configure("CardSub.TLabel", background=CARD, foreground=SUB, font=("Segoe UI", 9))
+            style.configure("CardBig.TLabel", background=CARD, foreground=TXT, font=("Segoe UI", 16, "bold"))
+            style.configure("Header.TLabel", background=BRAND, foreground="#FFFFFF", font=("Segoe UI", 15, "bold"))
+            style.configure("HeaderSub.TLabel", background=BRAND, foreground="#DBEAFE", font=("Segoe UI", 9))
+            # Secondary/default button — flat white with a subtle border (web-like).
+            # clam draws a 3D bevel from light/darkcolor; pin BOTH to the border so
+            # the button stays FLAT and hover reads as a clean tint, not a bevel.
+            style.configure("TButton", background=CARD, foreground=TXT, font=base,
+                            padding=(13, 7), relief="flat", borderwidth=1,
+                            bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER,
+                            focuscolor=CARD)
+            style.map("TButton",
+                      background=[("pressed", "#E2E8F0"), ("active", "#F1F5F9"),
+                                  ("disabled", "#F8FAFC")],
+                      foreground=[("active", BRAND_DEEP), ("pressed", BRAND_DEEP),
+                                  ("disabled", "#94A3B8")],
+                      bordercolor=[("active", "#C7D2FE"), ("pressed", BRAND)],
+                      lightcolor=[("active", "#F1F5F9"), ("pressed", "#E2E8F0")],
+                      darkcolor=[("active", "#F1F5F9"), ("pressed", "#E2E8F0")])
+            # Primary — solid brand blue, darker on hover.
+            style.configure("Primary.TButton", background=BRAND, foreground="#FFFFFF",
+                            font=("Segoe UI", 10, "bold"), padding=(16, 8), borderwidth=0,
+                            bordercolor=BRAND, lightcolor=BRAND, darkcolor=BRAND,
+                            focuscolor=BRAND, relief="flat")
+            style.map("Primary.TButton",
+                      background=[("pressed", BRAND_DEEP), ("active", BRAND_DEEP),
+                                  ("disabled", "#93B4F5")],
+                      foreground=[("active", "#FFFFFF"), ("pressed", "#FFFFFF"),
+                                  ("disabled", "#EAF1FF")],
+                      lightcolor=[("active", BRAND_DEEP), ("pressed", BRAND_DEEP)],
+                      darkcolor=[("active", BRAND_DEEP), ("pressed", BRAND_DEEP)])
+            # Danger — solid red (Quit / Uninstall), darker red on hover.
+            style.configure("Danger.TButton", background=BAD_RED, foreground="#FFFFFF",
+                            font=("Segoe UI", 10, "bold"), padding=(14, 7), borderwidth=0,
+                            bordercolor=BAD_RED, lightcolor=BAD_RED, darkcolor=BAD_RED,
+                            focuscolor=BAD_RED, relief="flat")
+            style.map("Danger.TButton",
+                      background=[("pressed", "#B91C1C"), ("active", "#B91C1C")],
+                      foreground=[("active", "#FFFFFF"), ("pressed", "#FFFFFF"),
+                                  ("disabled", "#FFFFFF")],
+                      lightcolor=[("active", "#B91C1C"), ("pressed", "#B91C1C")],
+                      darkcolor=[("active", "#B91C1C"), ("pressed", "#B91C1C")])
+            style.configure("TNotebook", background=BG, borderwidth=0)
+            style.configure("TNotebook.Tab", background="#E2E8F0", foreground=SUB,
+                            padding=(16, 8), font=("Segoe UI", 10, "bold"))
+            style.map("TNotebook.Tab", background=[("selected", CARD)], foreground=[("selected", BRAND)])
+            style.configure("Brand.Horizontal.TProgressbar", background=BRAND,
+                            troughcolor="#E2E8F0", borderwidth=0, thickness=10)
+            style.configure("OK.Horizontal.TProgressbar", background=OK_GREEN,
+                            troughcolor="#E2E8F0", borderwidth=0, thickness=10)
+            style.configure("TEntry", fieldbackground=CARD, foreground=TXT,
+                            bordercolor=BORDER, borderwidth=1, relief="solid", padding=4)
+            # Checkbox — bigger label + a web-like blue tick: white box normally,
+            # filled brand-blue with a white check when selected (Bootstrap look).
+            # White box + a BLUE check (static indicatorforeground so clam renders
+            # it reliably — mapped indicator colours are ignored by clam). Bigger
+            # label + margin so it reads clearly, web-like.
+            style.configure("TCheckbutton", background=BG, foreground=TXT,
+                            font=("Segoe UI", 11), padding=(2, 6),
+                            indicatorbackground="#FFFFFF", indicatorforeground=BRAND,
+                            bordercolor="#94A3B8", focuscolor=BG,
+                            indicatormargin=(0, 2, 9, 2))
+            style.map("TCheckbutton",
+                      background=[("active", BG)],
+                      foreground=[("active", TXT)],
+                      indicatorbackground=[("active", "#EFF6FF"),
+                                           ("selected", "#FFFFFF")],
+                      bordercolor=[("selected", BRAND), ("active", BRAND)])
+        except Exception:
+            pass
 
     # -- view switching ---------------------------------------------------- #
     def _clear(self) -> None:
@@ -869,15 +998,25 @@ class SetupView:
         self._installing = False
         self._installed_exe: Optional[str] = None
 
-        frame = ttk.Frame(parent, padding=16)
-        frame.pack(fill="both", expand=True)
+        outer = ttk.Frame(parent)
+        outer.pack(fill="both", expand=True)
 
-        ttk.Label(frame, text="Tally Cloud Sync - Setup",
-                  font=("Segoe UI", 15, "bold")).pack(anchor="w")
+        # Brand header bar (matches the cloud UI top-bar).
+        header = ttk.Frame(outer, style="Header.TFrame")
+        header.pack(fill="x")
+        hp = ttk.Frame(header, style="Header.TFrame")
+        hp.pack(fill="x", padx=18, pady=14)
+        ttk.Label(hp, text="Tally Cloud Sync", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(hp, text="Setup - activate this PC's sync agent",
+                  style="HeaderSub.TLabel").pack(anchor="w")
+
+        frame = ttk.Frame(outer)
+        frame.pack(fill="both", expand=True, padx=18, pady=14)
+
         ttk.Label(frame,
                   text="Enter your license key and choose where to install. "
                        "The agent installs itself and starts in the background.",
-                  wraplength=660, foreground="#444").pack(anchor="w", pady=(2, 12))
+                  wraplength=680, style="Sub.TLabel").pack(anchor="w", pady=(0, 12))
 
         form = ttk.Frame(frame)
         form.pack(fill="x")
@@ -914,20 +1053,22 @@ class SetupView:
                         variable=self.var_desktop).pack(anchor="w")
 
         btns = ttk.Frame(frame)
-        btns.pack(fill="x", pady=(6, 6))
-        self.install_btn = ttk.Button(btns, text="Install",
+        btns.pack(fill="x", pady=(12, 8))
+        self.install_btn = ttk.Button(btns, text="Install", style="Primary.TButton",
                                       command=self.on_install)
         self.install_btn.pack(side="left")
         self.open_btn = ttk.Button(btns, text="Open Dashboard",
                                    command=self.on_open_dashboard, state="disabled")
         self.open_btn.pack(side="left", padx=(8, 0))
-        ttk.Button(btns, text="Quit", command=app.quit_app).pack(side="right")
+        ttk.Button(btns, text="Quit", style="Danger.TButton",
+                   command=app.quit_app).pack(side="right")
 
-        ttk.Label(frame, text="Progress:").pack(anchor="w", pady=(6, 0))
-        self.log = tk.Text(frame, height=10, wrap="word", state="disabled",
-                           background="#101418", foreground="#d6e2ea",
-                           insertbackground="#d6e2ea", relief="flat")
-        self.log.pack(fill="both", expand=True, pady=(2, 0))
+        ttk.Label(frame, text="Progress", style="Sub.TLabel").pack(anchor="w", pady=(6, 2))
+        self.log = tk.Text(frame, height=9, wrap="word", state="disabled",
+                           background="#0F172A", foreground="#CBD5E1",
+                           insertbackground="#CBD5E1", relief="flat",
+                           font=("Consolas", 9), padx=10, pady=8)
+        self.log.pack(fill="both", expand=True, pady=(0, 0))
 
         if not running_frozen():
             self._append("Note: running from source (not frozen). The install "
@@ -1297,58 +1438,86 @@ class DashboardView:
         self._install_log_tap()
 
         root = parent
-        outer = ttk.Frame(root, padding=14)
+        outer = ttk.Frame(root)
         outer.pack(fill="both", expand=True)
 
-        # Header / status strip.
-        header = ttk.Frame(outer)
+        # ── Brand header bar (blue, like the cloud top-bar) ──────────
+        header = ttk.Frame(outer, style="Header.TFrame")
         header.pack(fill="x")
-        ttk.Label(header, text="Tally Cloud Sync",
-                  font=("Segoe UI", 14, "bold")).pack(side="left")
-        self.status_dot = ttk.Label(header, text="  Disconnected",
-                                    foreground="#b00020", font=("Segoe UI", 10, "bold"))
+        hpad = ttk.Frame(header, style="Header.TFrame")
+        hpad.pack(fill="x", padx=18, pady=14)
+        htext = ttk.Frame(hpad, style="Header.TFrame")
+        htext.pack(side="left")
+        ttk.Label(htext, text="Tally Cloud Sync", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(htext, text="Desktop sync agent", style="HeaderSub.TLabel").pack(anchor="w")
+        self.status_dot = ttk.Label(hpad, text="  Connecting...", style="HeaderSub.TLabel",
+                                    font=("Segoe UI", 10, "bold"))
         self.status_dot.pack(side="right")
 
-        info = ttk.Frame(outer)
-        info.pack(fill="x", pady=(6, 8))
-        self.lbl_last_sync = ttk.Label(info, text="Last sync: never")
-        self.lbl_last_sync.grid(row=0, column=0, sticky="w", padx=(0, 24))
-        self.lbl_version = ttk.Label(
-            info, text="Version: " + (cfg.agent_version or "?"))
-        self.lbl_version.grid(row=0, column=1, sticky="w", padx=(0, 24))
-        self.lbl_update = ttk.Label(info, text="", foreground="#0a7d28")
-        self.lbl_update.grid(row=0, column=2, sticky="w")
+        # ── Body ─────────────────────────────────────────────────────
+        body = ttk.Frame(outer)
+        body.pack(fill="both", expand=True, padx=16, pady=14)
 
-        # Controls.
-        ctrl = ttk.Frame(outer)
-        ctrl.pack(fill="x", pady=(0, 8))
+        # Status + live-sync card.
+        card = ttk.Frame(body, style="Card.TFrame")
+        card.pack(fill="x")
+        cin = ttk.Frame(card, style="Card.TFrame")
+        cin.pack(fill="x", padx=16, pady=14)
+
+        row1 = ttk.Frame(cin, style="Card.TFrame")
+        row1.pack(fill="x")
+        self.lbl_sync_state = ttk.Label(row1, text="Starting...", style="CardBig.TLabel")
+        self.lbl_sync_state.pack(side="left")
+        self.lbl_update = ttk.Label(row1, text="", style="CardSub.TLabel", foreground=OK_GREEN)
+        self.lbl_update.pack(side="right")
+
+        # The live "process" bar — animates while the agent is syncing so the
+        # window clearly reads "working", like the cloud's sync progress.
+        self.progress = ttk.Progressbar(cin, style="Brand.Horizontal.TProgressbar",
+                                        mode="indeterminate", length=200)
+        self.progress.pack(fill="x", pady=(10, 12))
+
+        meta = ttk.Frame(cin, style="Card.TFrame")
+        meta.pack(fill="x")
+        self.lbl_company = ttk.Label(
+            meta, text="Company: " + (getattr(cfg, "company_name", None) or "-"),
+            style="CardSub.TLabel")
+        self.lbl_company.grid(row=0, column=0, sticky="w", padx=(0, 20))
+        self.lbl_last_sync = ttk.Label(meta, text="Last sync: never", style="CardSub.TLabel")
+        self.lbl_last_sync.grid(row=0, column=1, sticky="w", padx=(0, 20))
+        self.lbl_version = ttk.Label(meta, text="Agent v" + (cfg.agent_version or "?"),
+                                     style="CardSub.TLabel")
+        self.lbl_version.grid(row=0, column=2, sticky="w")
+
+        # ── Controls ─────────────────────────────────────────────────
+        ctrl = ttk.Frame(body)
+        ctrl.pack(fill="x", pady=(12, 12))
+        ttk.Button(ctrl, text="Sync Now", style="Primary.TButton",
+                   command=self.on_sync_now).pack(side="left")
         self.btn_start = ttk.Button(ctrl, text="Start", command=self.on_start)
-        self.btn_start.pack(side="left")
+        self.btn_start.pack(side="left", padx=(8, 0))
         self.btn_stop = ttk.Button(ctrl, text="Stop", command=self.on_stop,
                                    state="disabled")
         self.btn_stop.pack(side="left", padx=(6, 0))
-        ttk.Button(ctrl, text="Sync Now", command=self.on_sync_now).pack(
-            side="left", padx=(6, 0))
         ttk.Button(ctrl, text="Open Logs", command=self.on_open_logs).pack(
             side="left", padx=(6, 0))
-        ttk.Button(ctrl, text="Uninstall", command=self.on_uninstall).pack(
-            side="right")
+        ttk.Button(ctrl, text="Uninstall", style="Danger.TButton",
+                   command=self.on_uninstall).pack(side="right")
 
-        # A notebook: Activity tail + Settings.
-        nb = ttk.Notebook(outer)
-        nb.pack(fill="both", expand=True, pady=(4, 0))
+        # ── Notebook: Activity tail + Settings ───────────────────────
+        nb = ttk.Notebook(body)
+        nb.pack(fill="both", expand=True)
 
-        # Activity tab.
-        act = ttk.Frame(nb, padding=6)
-        nb.add(act, text="Activity")
-        self.activity = tk.Text(act, height=12, wrap="word", state="disabled",
-                                background="#101418", foreground="#d6e2ea",
-                                insertbackground="#d6e2ea", relief="flat")
+        act = ttk.Frame(nb, padding=8)
+        nb.add(act, text="  Activity  ")
+        self.activity = tk.Text(act, height=10, wrap="word", state="disabled",
+                                background="#0F172A", foreground="#CBD5E1",
+                                insertbackground="#CBD5E1", relief="flat",
+                                font=("Consolas", 9), padx=10, pady=8)
         self.activity.pack(fill="both", expand=True)
 
-        # Settings tab.
-        st = ttk.Frame(nb, padding=10)
-        nb.add(st, text="Settings")
+        st = ttk.Frame(nb, padding=12)
+        nb.add(st, text="  Settings  ")
         self._build_settings(st)
 
         # Live update pump.
@@ -1692,6 +1861,18 @@ class DashboardView:
             ver = snap.get("version")
             if ver:
                 self.lbl_version.configure(text="Version: " + str(ver))
+            # REAL progress bar in SERVICE mode: the service writes the latest
+            # push/pull tick into .status.json; reflect it here. When there's no
+            # active push but we're connected, show a calm 100% "Up to date".
+            # (When the in-process fallback drives sync, its own progress events
+            # update the bar via _drain_status, so don't stomp it here.)
+            if not self._fallback_active:
+                prog = snap.get("progress")
+                if isinstance(prog, dict) and prog.get("total"):
+                    self._set_progress(prog.get("done"), prog.get("total"),
+                                       prog.get("phase"))
+                elif connected:
+                    self._show_idle_ok()
 
     def _read_status_file(self) -> dict:
         """Read + parse the service's .status.json (best-effort; {} on any error)."""
@@ -2192,6 +2373,13 @@ class DashboardView:
             if event == "started":
                 self._connected = True
                 self._set_status(True)
+                self._begin_working("Starting sync…")
+            elif event == "progress":
+                # Live per-record / per-company tick — drive the REAL % bar.
+                self._connected = True
+                self._set_status(True)
+                self._set_progress(payload.get("done"), payload.get("total"),
+                                   payload.get("phase"))
             elif event == "cycle":
                 # A cycle with ok=True means the heartbeat reached the cloud, so
                 # we are Connected; ok=False means it failed (server down / no
@@ -2200,9 +2388,7 @@ class DashboardView:
                 self._connected = ok
                 self._set_status(ok)
                 if ok:
-                    self._last_sync_ts = payload.get("ts", time.time())
-                    self.lbl_last_sync.configure(
-                        text="Last sync: " + self._fmt_ts(self._last_sync_ts))
+                    self._finish_cycle_ok(payload.get("ts", time.time()))
             elif event == "stopped":
                 self._connected = False
                 self._set_status(False)
@@ -2237,10 +2423,109 @@ class DashboardView:
 
     # -- helpers ----------------------------------------------------------- #
     def _set_status(self, connected: bool) -> None:
+        """Set only the connection DOT (+ reset the bar when disconnected). The
+        progress bar itself is driven by _begin_working / _set_progress /
+        _finish_cycle_ok so it shows a REAL percentage, not a fake 0->100 sweep."""
         if connected:
-            self.status_dot.configure(text="  Connected", foreground="#0a7d28")
+            self.status_dot.configure(text="  Connected", foreground="#86EFAC")
         else:
-            self.status_dot.configure(text="  Disconnected", foreground="#b00020")
+            self.status_dot.configure(text="  Disconnected", foreground="#FCA5A5")
+            try:
+                self.progress.stop()
+                self.progress.configure(mode="determinate",
+                                        style="Brand.Horizontal.TProgressbar", value=0)
+            except Exception:
+                pass
+            try:
+                self.lbl_sync_state.configure(text="Not connected", foreground=BAD_RED)
+            except Exception:
+                pass
+            try:
+                self.lbl_update.configure(text="")
+            except Exception:
+                pass
+
+    # -- live progress bar (real %) --------------------------------------- #
+    def _begin_working(self, text: str = "Syncing with Tally…") -> None:
+        """Show the indeterminate 'working' animation until real progress lands."""
+        try:
+            self.progress.configure(mode="indeterminate",
+                                    style="Brand.Horizontal.TProgressbar")
+            self.progress.start(18)
+        except Exception:
+            pass
+        try:
+            self.lbl_sync_state.configure(text=text, foreground=BRAND)
+        except Exception:
+            pass
+        try:
+            self.lbl_update.configure(text="")
+        except Exception:
+            pass
+
+    def _set_progress(self, done, total, phase) -> None:
+        """Drive the DETERMINATE bar to the real percentage (done / total)."""
+        try:
+            total = int(total or 0)
+            done = int(done or 0)
+        except Exception:
+            return
+        if total <= 0:
+            return
+        pct = max(0, min(100, round(done * 100.0 / total)))
+        try:
+            self.progress.stop()
+            self.progress.configure(mode="determinate", maximum=100, value=pct,
+                                    style="Brand.Horizontal.TProgressbar")
+        except Exception:
+            pass
+        try:
+            self.lbl_sync_state.configure(
+                text="%s — %d%%" % (phase or "Syncing", pct), foreground=BRAND)
+        except Exception:
+            pass
+        try:
+            self.lbl_update.configure(
+                text="%s / %s records" % (format(done, ","), format(total, ",")),
+                foreground=SUB)
+        except Exception:
+            pass
+
+    def _finish_cycle_ok(self, ts) -> None:
+        """Cycle complete: fill the bar to 100% green + 'Up to date'."""
+        self._last_sync_ts = ts
+        try:
+            self.progress.stop()
+            self.progress.configure(mode="determinate", maximum=100, value=100,
+                                    style="OK.Horizontal.TProgressbar")
+        except Exception:
+            pass
+        try:
+            self.lbl_sync_state.configure(text="Up to date", foreground=OK_GREEN)
+        except Exception:
+            pass
+        try:
+            self.lbl_update.configure(text="✓ Synced", foreground=OK_GREEN)
+        except Exception:
+            pass
+        try:
+            self.lbl_last_sync.configure(text="Last sync: " + self._fmt_ts(ts))
+        except Exception:
+            pass
+
+    def _show_idle_ok(self) -> None:
+        """Connected + no active push: calm 100% green 'Up to date' bar (service
+        mode polls this each tick; must NOT touch last-sync)."""
+        try:
+            self.progress.stop()
+            self.progress.configure(mode="determinate", maximum=100, value=100,
+                                    style="OK.Horizontal.TProgressbar")
+        except Exception:
+            pass
+        try:
+            self.lbl_sync_state.configure(text="Up to date", foreground=OK_GREEN)
+        except Exception:
+            pass
 
     @staticmethod
     def _fmt_ts(ts: Optional[float]) -> str:

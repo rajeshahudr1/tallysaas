@@ -227,6 +227,36 @@ app.use(async (req, res, next) => {
     res.locals.permissions = _perms;
     res.locals.canModule = (mod) => _allAccess
         || _perms.has(`${mod}.view`) || _perms.has(`${mod}.manage`);
+    // Action-level check (e.g. canDo('sales-invoices','edit')) — drives the SFA
+    // Approvals link + Approve/Reject buttons (admins/managers with edit).
+    res.locals.canDo = (mod, action) => _allAccess || _perms.has(`${mod}.${action}`);
+    // Field-sales salesman flag (from /me) — drives the Draft/Submit buttons and
+    // the salesman "My Field" dashboard link.
+    res.locals.isSalesman = !!(u && u.is_salesman);
+    // needsApproval — TRUE for EVERY non-admin (not only linked salesmen): their
+    // sales invoices go through the company-admin approval queue, so the create
+    // screen shows "Submit for Approval" instead of "Save & Send to Tally".
+    res.locals.needsApproval = !!(u && u.role_slug
+        && !['super-admin', 'company-admin', 'admin', 'owner'].includes(u.role_slug));
+    // ── License-expiry banner ────────────────────────────────────────
+    //   Every company user (admin included) sees a top banner counting down to
+    //   their licence's valid_until. days_left is recomputed on EACH render from
+    //   the stored valid_until, so it stays accurate day-to-day without a re-login.
+    //   Warn at ≤ 15 days; go red once expired. Super-admin (no licence) is skipped.
+    res.locals.licenseBanner = null;
+    if (u && u.license && u.license.valid_until && u.role_slug !== 'super-admin') {
+        const vu = new Date(u.license.valid_until);
+        if (!isNaN(vu.getTime())) {
+            const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+            const daysLeft = Math.floor((vu.getTime() - t0.getTime()) / 86400000);
+            const dateStr = vu.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+            if (daysLeft < 0) {
+                res.locals.licenseBanner = { level: 'expired', daysLeft, date: dateStr };
+            } else if (daysLeft <= 15) {
+                res.locals.licenseBanner = { level: 'warn', daysLeft, date: dateStr };
+            }
+        }
+    }
     // ── Top switcher — ROLE-AWARE, ALWAYS FRESH ──────────────────────
     //   • super-admin   → TWO levels: a LICENSE dropdown + a COMPANY dropdown
     //                     for the SELECTED license (defaults to the first).
@@ -287,7 +317,9 @@ app.use(async (req, res, next) => {
     // a sync-feed hiccup must never break page rendering.
     res.locals.notificationCount = 0;
     res.locals.syncNotifs        = [];
-    if (u && req.session && req.session.token && req.session.companyId != null) {
+    // Super Admin is a platform operator — a TENANT's sync/sale notifications are
+    // not theirs to see, so never fetch the company-scoped feed for them.
+    if (u && !res.locals.isSuperAdmin && req.session && req.session.token && req.session.companyId != null) {
         try {
             const nr = await api.callApi(req, 'GET', '/sync/notifications');
             if (nr.body && nr.body.status === 200 && nr.body.data) {

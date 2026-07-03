@@ -1,0 +1,192 @@
+<%
+/* views/accountant-access/index.ejs — SETTINGS · Accountant Access (CA sharing).
+ * Route: GET /accountant-access  ·  activeMenu: 'users'.
+ * Locals: accountants [{id,name,email,status,last_login}]. */
+var _accts = (typeof accountants !== 'undefined' && accountants) ? accountants : [];
+var _roles = (typeof roleOptions !== 'undefined' && roleOptions) ? roleOptions : [];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Accountant Access',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Accountant Access' },
+    ],
+    actions: [],
+}) %>
+
+<!-- Intro banner -->
+<div class="card ac-intro">
+    <div class="ac-intro-icon"><i class="fa-solid fa-user-shield"></i></div>
+    <div>
+        <h2 class="ac-intro-title">Share your books with your CA</h2>
+        <p class="ac-intro-text">They get a <strong>safe, read-only</strong> login — they can <strong>view &amp; export</strong> reports, ledgers, invoices and outstanding, but <strong>cannot create, edit or delete</strong> anything. The Accountant role is built automatically and scoped to your plan.</p>
+    </div>
+</div>
+
+<!-- Invite form -->
+<div class="card ac-section">
+    <h2 class="form-section-title">Invite an Accountant</h2>
+    <form method="post" action="/accountant-access" autocomplete="off">
+        <div class="form-grid">
+            <div class="form-group">
+                <label class="form-label" for="acc-name">Accountant Name</label>
+                <input type="text" class="form-control" id="acc-name" name="name" placeholder="e.g. CA Sharma" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="acc-email">Email</label>
+                <input type="email" class="form-control" id="acc-email" name="email" placeholder="ca@example.com" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="acc-pass">Set Password</label>
+                <div class="ac-pass-wrap">
+                    <input type="password" class="form-control" id="acc-pass" name="password" placeholder="Min 8 characters" minlength="8" required>
+                    <button type="button" class="ac-pass-toggle" onclick="acTogglePass(this)" aria-label="Show password"><i class="fa-solid fa-eye"></i></button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="acc-role">Role</label>
+                <select class="form-select" id="acc-role" name="role_id">
+                    <option value="">Accountant — safe read-only (default)</option>
+                    <% _roles.forEach(function (r) { %>
+                        <option value="<%= r.id %>"><%= r.name %></option>
+                    <% }); %>
+                </select>
+            </div>
+        </div>
+        <p class="ac-hint">Share this password with your CA so they can sign in. Creating a login uses one user seat on your licence.</p>
+        <button type="submit" class="btn btn-gradient"><i class="fa-solid fa-user-plus"></i> Send Invite</button>
+    </form>
+</div>
+
+<!-- Accountants list -->
+<div class="card ac-list">
+    <h2 class="form-section-title">Accountants <span class="ac-count"><%= _accts.length %></span></h2>
+    <% if (!_accts.length) { %>
+        <div class="ac-empty">
+            <i class="fa-solid fa-user-tie"></i>
+            <p>No accountant added yet. Invite your CA above to share your books.</p>
+        </div>
+    <% } else { %>
+        <div class="table-wrap">
+            <table class="ac-table">
+                <thead>
+                    <tr><th>Accountant</th><th>Email</th><th>Role</th><th>Last Login</th><th>Status</th><th class="ac-right">Action</th></tr>
+                </thead>
+                <tbody>
+                    <% _accts.forEach(function (a) {
+                        var _initial = (a.name || '?').charAt(0).toUpperCase();
+                        var _active = (a.status === 'Active');
+                    %>
+                        <tr>
+                            <td>
+                                <div class="ac-person">
+                                    <span class="ac-avatar"><%= _initial %></span>
+                                    <span class="ac-name"><%= a.name %></span>
+                                </div>
+                            </td>
+                            <td class="ac-muted"><%= a.email %></td>
+                            <td><span class="ac-role-pill"><%= a.role || 'Accountant' %></span></td>
+                            <td class="ac-muted"><%= a.last_login || 'Never' %></td>
+                            <td><span class="ac-pill <%= _active ? 'ac-pill-active' : 'ac-pill-inactive' %>"><%= a.status %></span></td>
+                            <td class="ac-right">
+                                <form id="ac-rev-<%= a.id %>" method="post" action="/accountant-access/<%= a.id %>/revoke" style="display:none"></form>
+                                <button type="button" class="ac-revoke" data-form="ac-rev-<%= a.id %>" data-name="<%= a.name %>" onclick="acAskRevoke(this)"><i class="fa-solid fa-ban"></i> Revoke</button>
+                            </td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
+
+<!-- Custom revoke confirm (replaces the browser's confirm dialog) -->
+<div id="ac-modal" class="ac-modal-overlay" aria-hidden="true">
+    <div class="ac-modal" role="dialog" aria-modal="true">
+        <div class="ac-modal-icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+        <h3>Revoke access?</h3>
+        <p id="ac-modal-msg">This accountant will no longer be able to sign in.</p>
+        <div class="ac-modal-actions">
+            <button type="button" class="btn btn-light" onclick="acCloseRevoke()">Cancel</button>
+            <button type="button" class="ac-modal-danger" onclick="acConfirmRevoke()">Revoke Access</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // The Revoke button is type="button" so it NEVER triggers a form submit (and
+    // never trips the global "Please wait…" loader) until the user confirms in
+    // the modal — which then submits the hidden per-row form.
+    var _acRevokeFormId = null;
+    function acAskRevoke(btn) {
+        _acRevokeFormId = btn.getAttribute('data-form');
+        var name = btn.getAttribute('data-name') || 'This accountant';
+        document.getElementById('ac-modal-msg').textContent =
+            name + ' will no longer be able to sign in. You can invite them again later.';
+        document.getElementById('ac-modal').classList.add('open');
+    }
+    function acCloseRevoke() {
+        document.getElementById('ac-modal').classList.remove('open');
+        _acRevokeFormId = null;
+    }
+    function acConfirmRevoke() {
+        if (_acRevokeFormId) document.getElementById(_acRevokeFormId).submit();
+    }
+    function acTogglePass(btn) {
+        var inp = document.getElementById('acc-pass');
+        var icon = btn.querySelector('i');
+        if (inp.type === 'password') { inp.type = 'text'; icon.className = 'fa-solid fa-eye-slash'; }
+        else { inp.type = 'password'; icon.className = 'fa-solid fa-eye'; }
+    }
+    document.getElementById('ac-modal').addEventListener('click', function (e) {
+        if (e.target === this) acCloseRevoke();
+    });
+</script>
+
+<style>
+    /* These cards hold content directly (no .card-body wrapper), so the app's
+     * padding-less .card would let content hug the edges — give them their own. */
+    .card.ac-intro, .card.ac-section, .card.ac-list { padding:20px; }
+    .card.ac-intro, .card.ac-section { margin-bottom:18px; }
+    .card.ac-intro { display:flex !important; flex-direction:row !important; gap:16px; align-items:flex-start; }
+    .form-section-title { margin:0 0 16px; }
+    .ac-intro-icon { width:46px; height:46px; flex:0 0 46px; border-radius:12px; background:linear-gradient(135deg,#2563EB,#6D28D9); color:#fff; display:grid; place-items:center; font-size:19px; }
+    .ac-intro-title { margin:0 0 4px; font-size:17px; font-weight:700; color:#111827; }
+    .ac-intro-text { color:#6B7280; margin:0; line-height:1.55; }
+    .ac-hint { color:#6B7280; font-size:13px; margin:12px 0 16px; }
+    /* Show-password toggle inside the Set Password field. */
+    .ac-pass-wrap { position:relative; }
+    .ac-pass-wrap .form-control { padding-right:42px; }
+    .ac-pass-toggle { position:absolute; right:6px; top:50%; transform:translateY(-50%); background:none; border:none; color:#9CA3AF; cursor:pointer; padding:6px 8px; font-size:14px; line-height:1; }
+    .ac-pass-toggle:hover { color:#4B5563; }
+    /* Role pill in the list. */
+    .ac-role-pill { display:inline-block; padding:3px 11px; border-radius:999px; font-size:12px; font-weight:700; background:rgba(109,40,217,.10); color:#6D28D9; }
+    .ac-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .ac-empty { text-align:center; padding:32px 12px; color:#9CA3AF; }
+    .ac-empty i { font-size:34px; opacity:.5; }
+    .ac-empty p { margin:12px 0 0; }
+    .ac-table { width:100%; border-collapse:collapse; }
+    .ac-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 14px 12px; border-bottom:1px solid #EEF1F5; }
+    .ac-table td { padding:14px; border-bottom:1px solid #F3F4F6; }
+    .ac-table tr:last-child td { border-bottom:none; }
+    .ac-right { text-align:right; }
+    .ac-muted { color:#6B7280; }
+    .ac-person { display:flex; align-items:center; gap:10px; }
+    .ac-avatar { width:34px; height:34px; border-radius:50%; background:#2563EB; color:#fff; display:grid; place-items:center; font-weight:800; font-size:14px; }
+    .ac-name { font-weight:700; color:#111827; }
+    .ac-pill { display:inline-block; padding:3px 11px; border-radius:999px; font-size:12px; font-weight:700; }
+    .ac-pill-active { background:rgba(22,163,74,.12); color:#16A34A; }
+    .ac-pill-inactive { background:rgba(107,114,128,.14); color:#6B7280; }
+    .ac-revoke { border:1px solid #FECACA; background:#FEF2F2; color:#DC2626; font-weight:600; font-size:13px; padding:7px 14px; border-radius:9px; cursor:pointer; transition:.15s; }
+    .ac-revoke:hover { background:#FEE2E2; }
+    .ac-modal-overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:2000; }
+    .ac-modal-overlay.open { display:flex; }
+    .ac-modal { background:#fff; border-radius:16px; padding:26px; max-width:400px; width:90%; box-shadow:0 24px 70px rgba(0,0,0,.25); text-align:center; }
+    .ac-modal-icon { width:52px; height:52px; margin:0 auto 14px; border-radius:50%; background:rgba(220,38,38,.12); color:#DC2626; display:grid; place-items:center; font-size:22px; }
+    .ac-modal h3 { margin:0 0 8px; font-size:19px; font-weight:700; color:#111827; }
+    .ac-modal p { color:#6B7280; margin:0 0 22px; line-height:1.5; }
+    .ac-modal-actions { display:flex; gap:10px; justify-content:center; }
+    .ac-modal-danger { background:#DC2626; color:#fff; border:none; font-weight:600; padding:10px 18px; border-radius:10px; cursor:pointer; }
+    .ac-modal-danger:hover { background:#B91C1C; }
+</style>

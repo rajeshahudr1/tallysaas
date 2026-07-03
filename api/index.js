@@ -122,6 +122,9 @@ if (IS_DEV) {
     });
 }
 
+// ── Static uploads (product-image gallery etc.) served at /uploads ──────────────
+app.use('/uploads', express.static(require('./Helpers/uploads').UPLOAD_ROOT, { maxAge: '7d' }));
+
 // ── API router (mounted at /api/v1; defines /ping, /health, /auth, /customers) ──
 app.use('/api/v1', require('./Routes'));
 
@@ -160,6 +163,15 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
         console.log(`              → Is PostgreSQL running and does database "${dbName}" exist?`);
         // Intentionally do NOT exit — /api/v1/ping stays alive for health probes.
     }
+    // Automatic payment-reminder scheduler (per-licence hour + offset days).
+    try { require('./jobs/reminderScheduler').startScheduler(); }
+    catch (e) { console.log(`      Reminder scheduler: NOT started — ${e.message}`); }
+    // Recurring-invoice generator (hourly; next_run_date gates it).
+    try { require('./jobs/recurringInvoiceScheduler').startScheduler(); }
+    catch (e) { console.log(`      Recurring scheduler: NOT started — ${e.message}`); }
+    // e-Invoice maintenance (e-Way expiry + IRN timeout reconcile; 5-min tick).
+    try { require('./jobs/einvoiceScheduler').startScheduler(); }
+    catch (e) { console.log(`      e-Invoice scheduler: NOT started — ${e.message}`); }
     console.log('');
 });
 

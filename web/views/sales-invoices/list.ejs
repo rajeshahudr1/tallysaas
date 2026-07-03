@@ -47,6 +47,7 @@ var tableColumns = [
     { key: 'gst',        label: 'GST',          sortable: true,  type: 'currency' },
     { key: 'total',      label: 'Total',        sortable: true,  type: 'currency' },
     { key: 'status',     label: 'Status',       sortable: true,  type: 'status' },
+    { key: 'approval',   label: 'Approval',     sortable: true,  type: 'status' },
 ];
 
 var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
@@ -73,6 +74,26 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
     <span style="font-size:15px;font-weight:700;color:#111"><%= typeof monthLabel !== 'undefined' ? monthLabel : '' %></span>
 </div>
 <% } %>
+
+<%# ── SFA approval tabs — only APPROVED invoices are the real, counted sales;
+     PENDING are awaiting a company-admin's approval (not counted). Works with or
+     without a month (a non-approved tab shows a flat cross-month list). ── %>
+<% var _tab = (typeof approvalTab !== 'undefined') ? approvalTab : 'approved';
+   var _mv  = (typeof monthValue !== 'undefined' && monthValue) ? monthValue : '';
+   function _tabUrl(a) {
+       var q = [];
+       if (_mv) q.push('month=' + encodeURIComponent(_mv));
+       if (a !== 'approved') q.push('approval=' + a);
+       return '/sales-invoices' + (q.length ? '?' + q.join('&') : '');
+   }
+   var _tabs = [ {k:'approved',label:'Approved',icon:'fa-circle-check'}, {k:'pending',label:'Pending',icon:'fa-clock'}, {k:'all',label:'All',icon:'fa-list'} ]; %>
+<div class="appr-tabs">
+    <% _tabs.forEach(function (t) { %>
+        <a href="<%= _tabUrl(t.k) %>" class="appr-tab <%= _tab === t.k ? 'is-active' : '' %>">
+            <i class="fa-solid <%= t.icon %> me-1"></i><%= t.label %>
+        </a>
+    <% }); %>
+</div>
 
 <form id="invoice-filters-form" autocomplete="off" method="get" action="/sales-invoices">
     <% if (typeof monthValue !== 'undefined' && monthValue) { %>
@@ -135,6 +156,14 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
 </div>
 
 <style>
+    .appr-tabs { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
+    .appr-tab {
+        display:inline-flex; align-items:center; padding:8px 18px; border-radius:9px;
+        font-size:13px; font-weight:600; text-decoration:none;
+        color:#475569; background:#fff; border:1px solid #e5e7eb;
+    }
+    .appr-tab:hover { background:#f8fafc; color:#2563EB; }
+    .appr-tab.is-active { background:#2563EB; border-color:#2563EB; color:#fff; }
     @media (min-width: 992px) {
         .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
     }

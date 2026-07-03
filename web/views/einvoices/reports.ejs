@@ -1,0 +1,102 @@
+<%
+/* views/einvoices/reports.ejs — e-Invoice / e-Way reports (IRN, EWB,
+ * Cancellation, Expiry, Transport). */
+var _type = (typeof type !== 'undefined' && type) ? type : 'irn';
+var _rows = Array.isArray(rows) ? rows : [];
+var _from = (typeof from !== 'undefined') ? from : '';
+var _to   = (typeof to !== 'undefined') ? to : '';
+function d(x){ if(!x) return '—'; try { return new Date(x).toLocaleDateString('en-IN'); } catch(e){ return x; } }
+function money(n){ return '₹' + Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+var TABS = [
+    { k:'irn', label:'IRN Report' }, { k:'ewb', label:'e-Way Report' },
+    { k:'cancellation', label:'Cancellation' }, { k:'expiry', label:'Expiry' },
+    { k:'transport', label:'Transport' },
+];
+%>
+<%- include('../partials/page-head', {
+    title: 'e-Invoice Reports',
+    breadcrumb: [ { label: 'Dashboard', href: '/' }, { label: 'e-Invoice Reports' } ],
+    actions: [ { label: 'Export CSV', icon: 'fa-file-csv', variant: 'light', id: 'ei-rep-csv' } ],
+}) %>
+
+<div class="card p-0">
+    <div class="ei-rep-tabs">
+        <% TABS.forEach(function(tb){ %>
+            <a href="/einvoices/reports?type=<%= tb.k %>" class="ei-rep-tab <%= _type===tb.k ? 'is-active' : '' %>"><%= tb.label %></a>
+        <% }); %>
+        <form method="get" action="/einvoices/reports" class="ei-rep-filter">
+            <input type="hidden" name="type" value="<%= _type %>">
+            <input type="date" name="from" value="<%= _from %>" class="form-control form-control-sm">
+            <span class="text-muted">→</span>
+            <input type="date" name="to" value="<%= _to %>" class="form-control form-control-sm">
+            <button class="btn btn-primary btn-sm">Apply</button>
+        </form>
+    </div>
+
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="ei-rep-table">
+            <thead>
+                <% if (_type === 'transport') { %>
+                    <tr><th>Invoice</th><th>e-Way</th><th>Vehicle</th><th>Mode</th><th>Reason</th><th>Remarks</th><th>When</th></tr>
+                <% } else { %>
+                    <tr><th>Invoice</th><th>Customer</th><th>GSTIN</th><th>IRN</th><th>e-Way</th><th>Valid Until</th><th>IRP</th><th>EWB</th><th class="text-end">Amount</th></tr>
+                <% } %>
+            </thead>
+            <tbody>
+            <% if (!_rows.length) { %>
+                <tr><td colspan="9" class="text-center text-muted py-4">No records for this report<%= (_from||_to) ? ' in the selected range' : '' %>.</td></tr>
+            <% } else if (_type === 'transport') { %>
+                <% _rows.forEach(function(r){ %>
+                    <tr>
+                        <td><strong><%= r.invoice_no || '—' %></strong></td>
+                        <td><%= r.ewb_no || '—' %></td>
+                        <td><%= r.vehicle_no || '—' %></td>
+                        <td><%= r.transport_mode || '—' %></td>
+                        <td><%= r.reason_code || '—' %></td>
+                        <td class="text-muted"><%= r.remarks || '—' %></td>
+                        <td class="text-muted"><%= d(r.created_at) %></td>
+                    </tr>
+                <% }); %>
+            <% } else { %>
+                <% _rows.forEach(function(r){ %>
+                    <tr>
+                        <td><strong><%= r.invoice_no || '—' %></strong></td>
+                        <td><%= r.customer || '—' %></td>
+                        <td class="text-muted"><%= r.gstin || '—' %></td>
+                        <td class="text-muted" title="<%= r.irn || '' %>"><%= r.irn ? (String(r.irn).slice(0,16)+'…') : '—' %></td>
+                        <td><%= r.ewb_no || '—' %></td>
+                        <td class="text-muted"><%= d(r.ewb_valid_until) %></td>
+                        <td><%= r.irp_status || '—' %></td>
+                        <td><%= r.ewb_status || '—' %></td>
+                        <td class="text-end"><%= money(r.total) %></td>
+                    </tr>
+                <% }); %>
+            <% } %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<style>
+    .ei-rep-tabs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid #e2e8f0;}
+    .ei-rep-tab{padding:6px 14px;border-radius:8px;font-size:13px;font-weight:600;color:#475569;text-decoration:none;}
+    .ei-rep-tab:hover{background:#f1f5f9;} .ei-rep-tab.is-active{background:#2563eb;color:#fff;}
+    .ei-rep-filter{display:flex;align-items:center;gap:6px;margin-left:auto;}
+</style>
+<script>
+(function(){
+  var btn=document.getElementById('ei-rep-csv');
+  if(!btn) return;
+  btn.addEventListener('click',function(){
+    var t=document.getElementById('ei-rep-table'); if(!t) return;
+    var csv=[];
+    t.querySelectorAll('tr').forEach(function(tr){
+      var cells=[].map.call(tr.querySelectorAll('th,td'),function(c){ return '"'+c.textContent.trim().replace(/"/g,'""')+'"'; });
+      if(cells.length) csv.push(cells.join(','));
+    });
+    var blob=new Blob([csv.join('\n')],{type:'text/csv'});
+    var a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='einvoice-<%= _type %>-report.csv'; a.click();
+  });
+})();
+</script>

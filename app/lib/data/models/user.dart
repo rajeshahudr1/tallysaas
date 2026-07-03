@@ -18,6 +18,8 @@ class AppUser {
     required this.roleSlug,
     this.companyId,
     this.permissions = const [],
+    this.isSalesman = false,
+    this.salesPersonId,
   });
 
   final int id;
@@ -26,6 +28,13 @@ class AppUser {
   final String role;      // human-readable role name, e.g. "Administrator"
   final String roleSlug;  // machine slug, e.g. "admin"
   final int? companyId;   // active tenant; null until a company is resolved
+
+  /// SFA — true when this user is a LINKED field salesman (a sales_persons row
+  /// points user_id at them). Drives the Draft/Submit invoice buttons + the
+  /// "My Field" dashboard, and mirrors the server-side "see only my invoices"
+  /// scoping. From `GET /me` (`is_salesman` / `sales_person_id`).
+  final bool isSalesman;
+  final int? salesPersonId;
 
   /// Flat permission slugs the role grants, e.g. `customers.view`,
   /// `customers.create`. Super Admin is reported as the single wildcard `['*']`.
@@ -76,6 +85,8 @@ class AppUser {
       roleSlug: slug,
       companyId: _toInt(j['company_id']),
       permissions: _strList(j['permissions']),
+      isSalesman: j['is_salesman'] == true,
+      salesPersonId: _toInt(j['sales_person_id']),
     );
   }
 
@@ -89,6 +100,8 @@ class AppUser {
         'role_slug': roleSlug,
         'company_id': companyId,
         'permissions': permissions,
+        'is_salesman': isSalesman,
+        'sales_person_id': salesPersonId,
       };
 
   /// Up-to-two-letter avatar initials derived from the display name.

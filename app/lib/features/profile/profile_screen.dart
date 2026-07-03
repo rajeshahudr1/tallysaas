@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/api/api_client.dart';
+import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_service.dart';
 import '../../core/auth/session.dart';
 import '../../shared/widgets/app_button.dart';
@@ -67,47 +69,18 @@ class ProfileScreen extends ConsumerWidget {
 
           const SizedBox(height: AppSpacing.xl24),
 
-          // ─── Account / admin shortcuts ──────────────────────
-          _MenuTile(
-            icon: Icons.business_outlined,
-            label: 'Switch Company',
-            onTap: () => context.push('/company-switcher'),
-          ),
+          // ─── Account / admin shortcuts — ROLE-GATED (mirrors the web sidebar).
+          //     Sync / Change History / Roles are admin-only; Settings / Users /
+          //     Accountant follow the role's module permissions. A salesman sees
+          //     only what their role grants — never Sync, Settings, Users, etc.
+          ..._buildMenu(context, user),
+
+          // Change Password — available to EVERY role.
           const SizedBox(height: AppSpacing.sm8),
           _MenuTile(
-            icon: Icons.sync,
-            label: 'Sync Dashboard',
-            onTap: () => context.push('/sync'),
-          ),
-          const SizedBox(height: AppSpacing.sm8),
-          _MenuTile(
-            icon: Icons.list_alt_outlined,
-            label: 'Sync Logs',
-            onTap: () => context.push('/sync-logs'),
-          ),
-          const SizedBox(height: AppSpacing.sm8),
-          _MenuTile(
-            icon: Icons.history,
-            label: 'Change History',
-            onTap: () => context.push('/change-history'),
-          ),
-          const SizedBox(height: AppSpacing.sm8),
-          _MenuTile(
-            icon: Icons.settings_outlined,
-            label: 'Settings',
-            onTap: () => context.push('/settings'),
-          ),
-          const SizedBox(height: AppSpacing.sm8),
-          _MenuTile(
-            icon: Icons.group_outlined,
-            label: 'Users',
-            onTap: () => context.push('/users'),
-          ),
-          const SizedBox(height: AppSpacing.sm8),
-          _MenuTile(
-            icon: Icons.shield_outlined,
-            label: 'Roles & Permissions',
-            onTap: () => context.push('/roles'),
+            icon: Icons.lock_outline,
+            label: 'Change Password',
+            onTap: () => _showChangePassword(context, ref),
           ),
 
           const SizedBox(height: AppSpacing.xl24),
@@ -132,6 +105,100 @@ class ProfileScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Change-password dialog — every role. Verifies the current password server-
+/// side (POST /account/change-password) then sets the new one.
+Future<void> _showChangePassword(BuildContext context, WidgetRef ref) async {
+  final current = TextEditingController();
+  final next = TextEditingController();
+  final confirm = TextEditingController();
+  void snack(BuildContext c, String m) => ScaffoldMessenger.of(c)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(m)));
+
+  await showDialog<void>(
+    context: context,
+    builder: (dctx) {
+      bool busy = false;
+      return StatefulBuilder(
+        builder: (dctx, setLocal) => AlertDialog(
+          title: const Text('Change Password'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(controller: current, obscureText: true, decoration: const InputDecoration(labelText: 'Current password')),
+              const SizedBox(height: 10),
+              TextField(controller: next, obscureText: true, decoration: const InputDecoration(labelText: 'New password (min 6)')),
+              const SizedBox(height: 10),
+              TextField(controller: confirm, obscureText: true, decoration: const InputDecoration(labelText: 'Confirm new password')),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: busy ? null : () => Navigator.pop(dctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      if (next.text.length < 6) { snack(dctx, 'New password must be at least 6 characters.'); return; }
+                      if (next.text != confirm.text) { snack(dctx, 'New password and confirmation do not match.'); return; }
+                      setLocal(() => busy = true);
+                      try {
+                        await ref.read(apiClientProvider).post('/account/change-password',
+                            body: {'current_password': current.text, 'new_password': next.text});
+                        if (dctx.mounted) Navigator.pop(dctx);
+                        if (context.mounted) snack(context, 'Your password has been changed.');
+                      } catch (e) {
+                        setLocal(() => busy = false);
+                        snack(dctx, e is ApiException ? e.message : 'Could not change your password.');
+                      }
+                    },
+              child: busy
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('Update'),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+  current.dispose();
+  next.dispose();
+  confirm.dispose();
+}
+
+/// Builds the role-gated shortcut list. Each entry appears ONLY when the user's
+/// role allows it — admin-only items (Sync, Change History, Roles) need a
+/// company/super admin; the rest follow the role's module permissions. Matches
+/// the web sidebar RBAC exactly (no static menu items).
+List<Widget> _buildMenu(BuildContext context, dynamic user) {
+  final bool isAdmin = user.isSuperAdmin || user.roleSlug == 'company-admin';
+  final entries = <_MenuEntry>[
+    // Everyone may switch between the companies they can access.
+    _MenuEntry(Icons.business_outlined, 'Switch Company', '/company-switcher', true),
+    _MenuEntry(Icons.sync, 'Sync Dashboard', '/sync', isAdmin),
+    _MenuEntry(Icons.list_alt_outlined, 'Sync Logs', '/sync-logs', isAdmin),
+    _MenuEntry(Icons.history, 'Change History', '/change-history', isAdmin),
+    _MenuEntry(Icons.settings_outlined, 'Settings', '/settings', user.canModule('settings') as bool),
+    _MenuEntry(Icons.group_outlined, 'Users', '/users', user.canModule('users') as bool),
+    _MenuEntry(Icons.shield_outlined, 'Roles & Permissions', '/roles', isAdmin),
+    _MenuEntry(Icons.verified_user_outlined, 'Accountant Access', '/accountant-access', user.canModule('users') as bool),
+  ];
+  final visible = entries.where((e) => e.show).toList();
+  final out = <Widget>[];
+  for (var i = 0; i < visible.length; i++) {
+    if (i > 0) out.add(const SizedBox(height: AppSpacing.sm8));
+    final e = visible[i];
+    out.add(_MenuTile(icon: e.icon, label: e.label, onTap: () => context.push(e.route)));
+  }
+  return out;
+}
+
+class _MenuEntry {
+  const _MenuEntry(this.icon, this.label, this.route, this.show);
+  final IconData icon;
+  final String label;
+  final String route;
+  final bool show;
 }
 
 /// A tappable account/admin shortcut row (Switch Company, Tally Sync, Settings).

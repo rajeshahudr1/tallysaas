@@ -25,6 +25,11 @@ class Endpoints {
   static const String locations    = '/locations';
   static const String salesPersons = '/sales-persons';
 
+  // Product image gallery (multi-image; local storage, absolute urls). NOT
+  // synced to Tally — Tally stock items have no image field.
+  static String productImages(int id) => '/products/$id/images';
+  static String productImage(int id, int imageId) => '/products/$id/images/$imageId';
+
   // ─── Transactions ───────────────────────────────────────────
   static const String salesInvoices    = '/sales-invoices';
   static const String purchaseInvoices = '/purchase-invoices';
