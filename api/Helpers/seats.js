@@ -90,12 +90,13 @@ async function reconcileLicenseSeats(trx, licenseId) {
 
     // Identify the license-admin: role slug 'company-admin', this license,
     // company_id NULL. It is ALWAYS Active and counts as the first seat.
+    // master.users carries a denormalised role_slug (roles live in tenant dbs),
+    // so match it directly instead of joining the (tenant-only) roles table.
     const admin = await trx('users as u')
-        .leftJoin('roles as r', 'r.id', 'u.role_id')
         .where('u.license_id', licenseId)
         .whereNull('u.company_id')
         .whereNull('u.deleted_at')
-        .where('r.slug', 'company-admin')
+        .where('u.role_slug', 'company-admin')
         .orderBy('u.created_at', 'asc').orderBy('u.id', 'asc')
         .first('u.id', 'u.status');
     const adminId = admin ? admin.id : null;

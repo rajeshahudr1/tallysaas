@@ -128,7 +128,11 @@ async function create(req, res) {
         // unique across the whole install — across BOTH users AND sales_persons
         // (one email = one person). Ignore soft-deleted rows so a previously
         // removed email can be reused.
-        if (await emailInUse(db, email, {})) {
+        // Email is the LOGIN identity → unique across the whole install. Check
+        // master.users (every licence's logins) AND the tenant (its sales_persons).
+        const emailMaster = await require('../../config/masterDb').db('users')
+            .whereRaw('lower(email) = ?', [String(email).toLowerCase()]).whereNull('deleted_at').first('id');
+        if (emailMaster || await emailInUse(db, email, {})) {
             return R.errorResponse(res, EMAIL_TAKEN_MSG, 422);
         }
 
@@ -137,77 +141,70 @@ async function create(req, res) {
         // platform/admin roles (super-admin, company-admin), or one of THEIR OWN
         // license's custom roles — nothing else. Super Admin (no license) bypasses.
         const isSuper = req.user && req.user.role_slug === 'super-admin';
+        const licenseIdForRole = (req.user && req.user.license_id) || null;
+        // Roles live in the TENANT db (via als). Fetch the assigned role so we can
+        // BOTH policy-check it AND denormalise its slug onto the master.users row.
+        const role = await db('roles').where('id', body.role_id)
+            .first('id', 'slug', 'is_system', 'license_id');
+        if (!role) return R.errorResponse(res, 'You cannot assign that role.', 422);
         if (!isSuper) {
-            const licenseId = (req.user && req.user.license_id) || null;
-            const role = await db('roles').where('id', body.role_id)
-                .first('id', 'slug', 'is_system', 'license_id');
-            const assignable = role
-                && !['super-admin', 'company-admin'].includes(role.slug)
-                && ((role.is_system && role.license_id == null) || role.license_id === licenseId);
+            const assignable = !['super-admin', 'company-admin'].includes(role.slug)
+                && ((role.is_system && role.license_id == null) || role.license_id === licenseIdForRole);
             if (!assignable) {
                 return R.errorResponse(res, 'You cannot assign that role.', 422);
             }
         }
 
         const password_hash = await hash(body.password);
-
-        // No more manual approval: every user is created APPROVED (the legacy
-        // approval columns stay consistent — always approved). Whether the user
-        // can actually log in is decided purely by the SEAT count: after we
-        // insert, reconcileLicenseSeats() flips the license-admin + the OLDEST
-        // users up to max_users to Active and the rest (the newest excess) to
-        // Inactive. So a new user over the cap ends up Inactive (no 422).
-        const licenseId = (req.user && req.user.license_id) || null;
-
-        // Coerce optional fields away from `undefined` — knex throws "Undefined
-        // binding(s)" on an undefined insert value (it does NOT substitute the
-        // column DEFAULT). status defaults to 'Active' (a NOT NULL column); the
-        // seat reconcile below may flip it to Inactive when over the cap.
         const now = new Date();
-        const row = {
-            company_id:    req.companyId,
-            license_id:    licenseId,
-            role_id:       body.role_id,
-            name:          body.name,
+        const licenseId = (req.user && req.user.license_id) || null;
+        const masterDb = require('../../config/masterDb').db;
+
+        // Shared fields for BOTH the master (auth) row and the tenant mirror.
+        const base = {
+            company_id:  req.companyId,
+            license_id:  licenseId,
+            role_id:     body.role_id,
+            name:        body.name,
             email,
-            mobile:        body.mobile ?? null,
+            mobile:      body.mobile ?? null,
             password_hash,
-            status:        body.status || 'Active',
+            status:      body.status || 'Active',
             // Location scoping: a location-restricted creator can only place new
-            // users in THEIR own location (force it); an unrestricted creator
-            // keeps the chosen/blank location_id (blank = all locations).
-            location_id:   req.locationId != null ? req.locationId : (body.location_id ?? null),
-            // Approval is RETIRED — always approved so the legacy columns stay
-            // consistent (login is gated by status + subscription, not approval).
+            // users in THEIR own location; else keep the chosen/blank location_id.
+            location_id: req.locationId != null ? req.locationId : (body.location_id ?? null),
             approval_status: 'approved',
             approved_at:     now,
             approved_by:     req.user ? req.user.sub : null,
         };
 
-        // Create the user, then reconcile the license seats in the SAME
-        // transaction (row-locks the license). The new (newest) user is Active
-        // only if within the seat count; over the cap it becomes Inactive. The
-        // reconcile also provisions/expires subscriptions so the login gate is
-        // consistent. A user without a license (super-admin path) is just
-        // created Active.
-        const inserted = await db.transaction(async (trx) => {
-            const [u] = await trx('users').insert(row).returning([
-                'id', 'company_id', 'license_id', 'role_id',
-                'name', 'email', 'mobile', 'status', 'approval_status', 'location_id', 'created_at',
-            ]);
-            if (licenseId) {
-                await reconcileLicenseSeats(trx, licenseId);
-                // Re-read the (possibly flipped) status so the response is honest.
-                const fresh = await trx('users').where('id', u.id).first('status');
-                if (fresh) u.status = fresh.status;
-            }
-            return u;
-        });
+        // Users straddle two DBs: MASTER holds the LOGIN identity (+ a denormalised
+        // role_slug so auth needn't touch a tenant); the TENANT holds a MIRROR at
+        // the SAME id so business FKs (created_by, sales_persons.user_id, …)
+        // resolve. Create master first (mints the id), then mirror into the tenant.
+        const [mu] = await masterDb('users').insert({ ...base, role_slug: role.slug })
+            .returning(['id', 'company_id', 'license_id', 'role_id', 'name', 'email',
+                'mobile', 'status', 'approval_status', 'location_id', 'created_at']);
 
-        const msg = inserted.status === 'Active'
+        await db('users').insert({ id: mu.id, ...base });
+        await db.raw("SELECT setval(pg_get_serial_sequence('users','id'), (SELECT COALESCE(MAX(id),1) FROM users))");
+
+        // Seats are a MASTER concern (subscriptions + master.users.status). After
+        // reconciling, mirror the (possibly flipped) status onto the tenant row so
+        // the two stay consistent. A new user over the cap ends up Inactive.
+        if (licenseId) {
+            await reconcileLicenseSeats(masterDb, licenseId);
+            const fresh = await masterDb('users').where('id', mu.id).first('status');
+            if (fresh) {
+                mu.status = fresh.status;
+                await db('users').where('id', mu.id).update({ status: fresh.status });
+            }
+        }
+
+        const msg = mu.status === 'Active'
             ? 'User created. They can sign in now.'
             : 'User created but inactive — the license seat limit is reached. Raise the plan (max_users) to activate them.';
-        return R.successResponse(res, inserted, msg);
+        return R.successResponse(res, mu, msg);
     } catch (err) {
         console.error('users.create error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);

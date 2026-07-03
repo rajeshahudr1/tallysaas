@@ -272,8 +272,10 @@ async function login(req, res) {
         let salesPersonId = null;
         const adminish = ['super-admin', 'company-admin', 'admin', 'owner']
             .includes(user.role_slug);
-        if (!adminish && user.company_id) {
-            const sp = await db('sales_persons')
+        if (!adminish && user.company_id && user.license_id) {
+            // sales_persons lives in the user's TENANT db (login runs on master).
+            const tdb = require('../../config/tenantDb').getKnexForLicense(user.license_id);
+            const sp = await tdb('sales_persons')
                 .where({ user_id: user.id, company_id: user.company_id })
                 .whereNull('deleted_at').first('id');
             if (sp) salesPersonId = Number(sp.id);
