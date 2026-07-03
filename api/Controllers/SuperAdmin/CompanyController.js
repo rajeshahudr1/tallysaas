@@ -26,21 +26,30 @@ async function list(req, res) {
         const [{ count }] = await base.clone().count({ count: '*' });
 
         const rows = await base.clone()
-            .leftJoin('licenses', 'licenses.id', 'companies.license_id')
             .select(
                 'companies.id',
                 'companies.name',
                 'companies.status',
                 'companies.license_id',
                 'companies.max_sessions_per_user',
-                'licenses.holder_name as license_holder',
-                'licenses.key_prefix  as license_prefix',
             )
             .orderBy('companies.id', 'desc')
             .limit(perPage).offset((page - 1) * perPage);
 
+        // Licences live in the MASTER control plane, not the tenant db — attach
+        // the holder/prefix of the bridged licence (one per tenant db).
+        const masterDb = require('../../config/masterDb').db;
+        const lic = req.bridgeLicenseId
+            ? await masterDb('licenses').where('id', req.bridgeLicenseId).first('holder_name', 'key_prefix')
+            : null;
+        const data = rows.map((r) => ({
+            ...r,
+            license_holder: lic ? lic.holder_name : null,
+            license_prefix: lic ? lic.key_prefix : null,
+        }));
+
         return R.successResponse(res, {
-            data: rows,
+            data,
             meta: { total: Number(count), page, per_page: perPage },
         });
     } catch (err) {
