@@ -27,9 +27,14 @@ function resolveTenant(req, res, next) {
     const u = req.user;
     if (!u || typeof u !== 'object') return R.errorResponse(res, AUTH_FAIL, 401);
 
-    // Super-admin (or any token without a tenant db) can't hit tenant routes.
+    // TRANSITION-TOLERANT: until the flip, JWTs carry no `db_name` — fall through
+    // so `db(...)` uses the global (old single-DB) fallback and the app keeps
+    // working. Super-admin also falls through (they use the global master pool /
+    // an explicit super-admin bridge, never a single tenant db). Post-flip, when
+    // every token carries db_name, the else-branch below always runs.
+    // (To make this STRICT after the flip, reject when !u.db_name.)
     if (u.role_slug === 'super-admin' || !u.db_name || typeof u.db_name !== 'string') {
-        return R.errorResponse(res, AUTH_FAIL, 401);
+        return next();
     }
 
     let tk;
