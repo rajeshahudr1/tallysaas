@@ -136,9 +136,14 @@ function build(config) {
     // number) AND this table carries a location_id column, we also pin
     // location_id = req.locationId — company_id stays the primary tenant guard,
     // location scope is layered on top and cannot widen what company scope allows.
+    // Tenant DB resolver — use the per-license req.db that tenantResolver set on
+    // the request; fall back to the global single-DB pool during the migration so
+    // this factory stays NON-BREAKING until Phase 3 flips config + wires
+    // resolveTenant on every route.
+    const D = (req) => (req && req.db) || db;
     // Build a FRESH base query (joins/aliases via baseQuery, else the table).
-    function freshQb() {
-        return baseQuery ? baseQuery(db) : db(table);
+    function freshQb(req) {
+        return baseQuery ? baseQuery(D(req)) : D(req)(table);
     }
     // Apply the company + soft-delete (+ optional location + extraScope) guards
     // to an existing builder IN PLACE. It MUTATES `qb` and returns NOTHING.
@@ -166,7 +171,7 @@ function build(config) {
     // to another location — even by guessing its id. Returns the existing row or
     // undefined (treated as not-found / not-owned by the caller).
     function ownedRowQuery(req, id) {
-        const qb = db(table)
+        const qb = D(req)(table)
             .where(tenantColQualified, req.companyId)
             .whereNull(deletedColQualified)
             .where(idColQualified, id);
@@ -191,7 +196,7 @@ function build(config) {
             const search = (req.query.search || '').trim();
             const status = (req.query.status || '').trim();
 
-            let qb = freshQb();
+            let qb = freshQb(req);
             await applyScope(req, qb);
 
             // Optional status filter (qualified to the base table).
@@ -252,7 +257,7 @@ function build(config) {
         const id = Number(req.params.id);
         if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, notFound, 404);
         try {
-            const qb = freshQb();
+            const qb = freshQb(req);
             await applyScope(req, qb);
             let row = await qb.where(idColQualified, id)
                 .select(...listColumns).first();
@@ -268,11 +273,11 @@ function build(config) {
     async function create(req, res) {
         try {
             if (fkCheck) {
-                const fk = await fkCheck(db, req.body, req.companyId);
+                const fk = await fkCheck(D(req), req.body, req.companyId);
                 if (fk) return R.errorResponse(res, fk.msg, fk.status || 422);
             }
             if (uniqueCheck) {
-                const dup = await uniqueCheck(db, req.body, req.companyId);
+                const dup = await uniqueCheck(D(req), req.body, req.companyId);
                 if (dup) return R.errorResponse(res, dup.msg, dup.status || 422);
             }
             // Always stamp the tenant id, even if buildInsert forgot it.
@@ -289,10 +294,10 @@ function build(config) {
                 row.location_id = req.locationId;
             }
 
-            const [created] = await db(table).insert(row).returning('*');
+            const [created] = await D(req)(table).insert(row).returning('*');
 
             // HISTORY (best-effort): a create has no before snapshot.
-            await recordHistory(db, {
+            await recordHistory(D(req), {
                 company_id:  req.companyId,
                 module:      moduleSlug(table),
                 record_type: singular(table),
@@ -322,11 +327,11 @@ function build(config) {
             if (!existing) return R.errorResponse(res, notFound, 404);
 
             if (fkCheck) {
-                const fk = await fkCheck(db, req.body, req.companyId);
+                const fk = await fkCheck(D(req), req.body, req.companyId);
                 if (fk) return R.errorResponse(res, fk.msg, fk.status || 422);
             }
             if (uniqueCheck) {
-                const dup = await uniqueCheck(db, req.body, req.companyId, id);
+                const dup = await uniqueCheck(D(req), req.body, req.companyId, id);
                 if (dup) return R.errorResponse(res, dup.msg, dup.status || 422);
             }
 
@@ -342,11 +347,11 @@ function build(config) {
                 patch.location_id = req.locationId;
             }
 
-            const [updated] = await db(table).where('id', id).update(patch).returning('*');
+            const [updated] = await D(req)(table).where('id', id).update(patch).returning('*');
 
             // HISTORY (best-effort): `existing` is the row BEFORE the update.
             // recordHistory skips writing when nothing actually changed.
-            await recordHistory(db, {
+            await recordHistory(D(req), {
                 company_id:  req.companyId,
                 module:      moduleSlug(table),
                 record_type: singular(table),
@@ -375,10 +380,10 @@ function build(config) {
 
             const now = new Date();
             // Soft delete — set deleted_at; row stays for audit/restore.
-            await db(table).where('id', id).update({ deleted_at: now, updated_at: now });
+            await D(req)(table).where('id', id).update({ deleted_at: now, updated_at: now });
 
             // HISTORY (best-effort): a delete records the row as it was, no after.
-            await recordHistory(db, {
+            await recordHistory(D(req), {
                 company_id:  req.companyId,
                 module:      moduleSlug(table),
                 record_type: singular(table),
