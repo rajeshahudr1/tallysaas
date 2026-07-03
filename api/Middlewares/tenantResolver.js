@@ -19,6 +19,7 @@
 
 const R      = require('../Helpers/response');
 const tenant = require('../config/tenantDb');
+const { runWithTenant } = require('../config/db');
 
 const AUTH_FAIL = 'Authentication failed. Please log in again.';
 
@@ -31,13 +32,17 @@ function resolveTenant(req, res, next) {
         return R.errorResponse(res, AUTH_FAIL, 401);
     }
 
+    let tk;
     try {
-        req.db = tenant.getTenantKnex(u.db_name);   // factory does its own regex guard
+        tk = tenant.getTenantKnex(u.db_name);   // factory does its own regex guard
+        req.db = tk;                            // explicit handle (crudController + bridges)
     } catch (err) {
         console.error('tenantResolver: getTenantKnex failed:', err.message);
         return R.errorResponse(res, AUTH_FAIL, 401);
     }
-    return next();
+    // Bind this tenant Knex as the active `db` for the WHOLE request so every
+    // controller's module-level `db(...)` transparently hits the right tenant DB.
+    return runWithTenant(tk, () => next());
 }
 
 module.exports = { resolveTenant };

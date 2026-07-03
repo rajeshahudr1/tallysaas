@@ -18,11 +18,43 @@
 
 const knex     = require('knex');
 const knexfile = require('../knexfile');
+const { AsyncLocalStorage } = require('node:async_hooks');
 
 const ENV = process.env.APP_ENV || 'development';
 
-// Single shared Knex instance for the whole process.
-const db = knex(knexfile[ENV] || knexfile.development);
+// ── Per-license multi-DB routing via AsyncLocalStorage ───────────────────────
+// Historically ONE shared pool. For the database-per-license model we keep that
+// pool as the FALLBACK (`_globalKnex`) and expose `db` as a PROXY that, for the
+// duration of a request wrapped in `runWithTenant(tenantKnex, fn)`, transparently
+// routes every `db(...)` / `db.raw` / `db.transaction` / `db.fn` call to that
+// request's tenant Knex — so the ~40 controllers that do `db('table')` need NO
+// change. With no tenant context (boot, jobs, un-wired routes) it falls back to
+// `_globalKnex`, keeping the app working through the migration until the flip.
+const _globalKnex = knex(knexfile[ENV] || knexfile.development);
+
+const als = new AsyncLocalStorage();
+
+function resolveKnex() {
+    const store = als.getStore();
+    return (store && store.db) || _globalKnex;
+}
+
+// Proxy over a callable target so BOTH `db('table')` (apply) and `db.raw`,
+// `db.transaction`, `db.schema`, `db.fn`, … (get) forward to the resolved Knex.
+const db = new Proxy(function noop() {}, {
+    apply(_t, _thisArg, args) { return resolveKnex()(...args); },
+    get(_t, prop) {
+        const k = resolveKnex();
+        const val = k[prop];
+        return (typeof val === 'function') ? val.bind(k) : val;
+    },
+    has(_t, prop) { return prop in resolveKnex(); },
+});
+
+/** Run `fn` with `tenantKnex` bound as the active db for this async context. */
+function runWithTenant(tenantKnex, fn) {
+    return als.run({ db: tenantKnex }, fn);
+}
 
 /**
  * Lightweight connectivity check. Resolves on success; rejects with the
@@ -70,4 +102,4 @@ async function pingWithRetry(opts = {}) {
     throw lastErr;
 }
 
-module.exports = { db, ping, pingWithRetry };
+module.exports = { db, ping, pingWithRetry, als, runWithTenant, _globalKnex };
