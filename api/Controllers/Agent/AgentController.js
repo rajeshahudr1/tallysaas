@@ -25,6 +25,9 @@ const R          = require('../../Helpers/response');
 const jwt        = require('../../Helpers/jwt');
 const licenseKey = require('../../Helpers/licenseKey');
 const db         = require('../../config/db').db;
+const masterDb   = require('../../config/masterDb').db;
+const { runWithTenant } = require('../../config/db');
+const { getKnexForLicense } = require('../../config/tenantDb');
 const { recordHistory } = require('../../Helpers/history');
 const agentRelease      = require('../../Helpers/agentRelease');
 
@@ -73,7 +76,7 @@ async function activate(req, res) {
         const parsed = licenseKey.parse(license_key);
         if (!parsed) return R.errorResponse(res, INVALID_KEY_MSG, 404);
 
-        const lic = await db('licenses')
+        const lic = await masterDb('licenses')
             .where({ key_prefix: parsed.prefix, license_key_hash: parsed.hash })
             .whereNull('deleted_at')
             .first();
@@ -90,7 +93,7 @@ async function activate(req, res) {
         // Machine binding — bind on first activation; reject a different machine.
         const now = new Date();
         if (!lic.machine_id) {
-            await db('licenses').where('id', lic.id).update({
+            await masterDb('licenses').where('id', lic.id).update({
                 machine_id, machine_bound_at: now, agent_version: agent_version || null,
                 last_seen_at: now, updated_at: now,
             });
@@ -98,15 +101,19 @@ async function activate(req, res) {
             return R.errorResponse(res,
                 'This license is already activated on another machine. Ask your administrator to reset it.', 403);
         } else {
-            await db('licenses').where('id', lic.id)
+            await masterDb('licenses').where('id', lic.id)
                 .update({ agent_version: agent_version || lic.agent_version, last_seen_at: now, updated_at: now });
         }
 
         // Companies this license may sync — only the FIRST max_companies
         // (created_at asc, id asc), on-the-fly. The rest are over the limit and
         // are excluded from sync everywhere (queue / commands / results).
-        const companies = await syncingCompanies(
-            lic.id, lic.max_companies, ['id', 'name', 'slug', 'status'],
+        // activate() is PUBLIC (no authenticateAgent), so no tenant db is bound
+        // yet — companies live in THIS licence's tenant db, so bind it explicitly
+        // for the read.
+        const companies = await runWithTenant(
+            getKnexForLicense(lic.id),
+            () => syncingCompanies(lic.id, lic.max_companies, ['id', 'name', 'slug', 'status']),
         );
 
         const agentToken = jwt.sign(
@@ -165,7 +172,7 @@ async function heartbeat(req, res) {
                 .filter((n) => n);
             patch.last_open_companies = JSON.stringify(names);
         }
-        await db('licenses').where('id', req.license.id).update(patch);
+        await masterDb('licenses').where('id', req.license.id).update(patch);
 
         // Per-license AUTO-sync toggles: the MASTER switch (sync_enabled) and the
         // two DIRECTION toggles (push/pull). authenticateAgent selects a fixed
@@ -176,7 +183,7 @@ async function heartbeat(req, res) {
         let pushEnabled = true;
         let pullEnabled = true;
         try {
-            const lic = await db('licenses').where('id', req.license.id)
+            const lic = await masterDb('licenses').where('id', req.license.id)
                 .first('sync_enabled', 'sync_push_enabled', 'sync_pull_enabled');
             if (lic) {
                 if (lic.sync_enabled      != null) syncEnabled = !!lic.sync_enabled;
@@ -232,7 +239,7 @@ async function heartbeat(req, res) {
 async function offline(req, res) {
     try {
         const now = new Date();
-        await db('licenses').where('id', req.license.id).update({
+        await masterDb('licenses').where('id', req.license.id).update({
             last_seen_at: null,
             last_open_companies: null,
             updated_at: now,
@@ -276,7 +283,7 @@ async function pending(req, res) {
         // SYNC GATE: only the first max_companies companies (created_at asc, id
         // asc) sync — the rest are excluded from the pull/push queue. max_companies
         // isn't on req.license (authenticateAgent selects a fixed set), so read it.
-        const licRow = await db('licenses').where('id', req.license.id).first('max_companies');
+        const licRow = await masterDb('licenses').where('id', req.license.id).first('max_companies');
         const maxCompanies = licRow ? licRow.max_companies : null;
         const companies = await syncingCompanies(
             req.license.id, maxCompanies,
@@ -528,7 +535,7 @@ async function result(req, res) {
         const results = Array.isArray(req.body && req.body.results) ? req.body.results : [];
         // Only accept results for the FIRST max_companies (syncing) companies —
         // a company over the sync limit must not be pushed/stamped.
-        const licRow = await db('licenses').where('id', req.license.id).first('max_companies');
+        const licRow = await masterDb('licenses').where('id', req.license.id).first('max_companies');
         const maxCompanies = licRow ? licRow.max_companies : null;
         const syncing = await syncingCompanies(req.license.id, maxCompanies, ['id']);
         const allowed = new Set(syncing.map((c) => Number(c.id)));
@@ -692,7 +699,7 @@ async function importFromTally(req, res) {
             if (!companyName) {
                 return R.errorResponse(res, 'No target company — send company_name (the Tally company) or a valid company_id.', 422);
             }
-            const lic = await db('licenses').where('id', licenseId).first('max_companies');
+            const lic = await masterDb('licenses').where('id', licenseId).first('max_companies');
             const [{ c }] = await db('companies').where('license_id', licenseId)
                 .whereNull('deleted_at').count({ c: '*' });
             if (lic && lic.max_companies != null && Number(c) >= Number(lic.max_companies)) {
@@ -721,7 +728,7 @@ async function importFromTally(req, res) {
         // SYNC GATE: refuse a pull into a company that is OVER the license sync
         // limit (only the first max_companies, created_at asc, may sync). A
         // just-created company passed the cap check above, so it is in the set.
-        const licGate = await db('licenses').where('id', licenseId).first('max_companies');
+        const licGate = await masterDb('licenses').where('id', licenseId).first('max_companies');
         const syncSet = await syncingCompanies(licenseId, licGate ? licGate.max_companies : null, ['id']);
         const syncIds = new Set(syncSet.map((c) => Number(c.id)));
         if (!syncIds.has(Number(cid))) {
@@ -1490,7 +1497,7 @@ async function getCommands(req, res) {
         // when that company is within the license's first max_companies (the
         // syncing set). Company-less commands (company_id NULL, e.g. self_update)
         // always pass. Computed on-the-fly from max_companies.
-        const licRow = await db('licenses').where('id', req.license.id).first('max_companies');
+        const licRow = await masterDb('licenses').where('id', req.license.id).first('max_companies');
         const maxCompanies = licRow ? licRow.max_companies : null;
         const syncing = await syncingCompanies(req.license.id, maxCompanies, ['id']);
         const allowedCompanyIds = syncing.map((c) => Number(c.id));
@@ -1609,7 +1616,7 @@ async function getVersion(req, res) {
 
         let rel = null;
         try {
-            rel = await agentRelease.currentRelease(db);
+            rel = await agentRelease.currentRelease(masterDb);
         } catch (e) {
             rel = null;   // table missing / DB hiccup → behave as "no release".
         }
@@ -1620,7 +1627,7 @@ async function getVersion(req, res) {
         // Per-license cloud toggle (default ON when the column/row is unreadable).
         let autoUpdate = true;
         try {
-            const lic = await db('licenses').where('id', req.license.id).first('auto_update');
+            const lic = await masterDb('licenses').where('id', req.license.id).first('auto_update');
             if (lic && lic.auto_update != null) autoUpdate = !!lic.auto_update;
         } catch (e) {
             autoUpdate = true;
@@ -1655,7 +1662,7 @@ async function getVersion(req, res) {
  */
 async function download(req, res) {
     try {
-        const rel = await agentRelease.currentRelease(db);
+        const rel = await agentRelease.currentRelease(masterDb);
         if (!rel || !rel.filename) {
             return R.errorResponse(res, 'No agent release is currently published.', 404);
         }

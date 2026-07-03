@@ -9,15 +9,21 @@
  */
 
 const { runDueRecurring } = require('../Helpers/recurringInvoices');
+const { forEachTenant } = require('../Helpers/eachTenant');
 
 let _timer = null;
 
 function startScheduler() {
     if (_timer) return;
+    // Per-license multi-DB: recurring_invoices (+ the invoices it generates) live
+    // in each tenant db, so run the due-pass once per tenant with that db bound as
+    // `db` (runDueRecurring uses the ALS-bound db). One tenant's failure is logged
+    // and skipped by forEachTenant — it never aborts the others.
     const tick = () => {
-        runDueRecurring()
-            .then((r) => { if (r.generated) console.log('[recurring-scheduler]', JSON.stringify(r)); })
-            .catch((e) => console.error('[recurring-scheduler] error:', e && e.message));
+        forEachTenant(async (licenseId) => {
+            const r = await runDueRecurring();
+            if (r && r.generated) console.log(`[recurring-scheduler] lic=${licenseId}`, JSON.stringify(r));
+        }).catch((e) => console.error('[recurring-scheduler] error:', e && e.message));
     };
     _timer = setInterval(tick, 60 * 60 * 1000);   // hourly
     if (_timer.unref) _timer.unref();

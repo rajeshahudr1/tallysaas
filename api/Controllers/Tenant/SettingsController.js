@@ -23,6 +23,7 @@
 
 const R  = require('../../Helpers/response');
 const db = require('../../config/db').db;
+const masterDb = require('../../config/masterDb').db;   // licenses live in the master control plane
 
 const OOPS_MSG     = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND    = 'Company not found.';
@@ -108,7 +109,7 @@ async function get(req, res) {
             const licenseId = (company && company.license_id)
                 || (req.user && req.user.license_id) || null;
             if (licenseId) {
-                const lic = await db('licenses')
+                const lic = await masterDb('licenses')
                     .where('id', licenseId)
                     .first('auto_update', 'sync_push_enabled', 'sync_pull_enabled', 'sync_enabled');
                 if (lic) {

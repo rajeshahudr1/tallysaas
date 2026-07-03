@@ -22,6 +22,7 @@
  */
 
 const db = require('../../config/db').db;
+const masterDb = require('../../config/masterDb').db;   // licenses / agent_releases live in the master control plane
 const R  = require('../../Helpers/response');
 const { friendlyReason } = require('../../Helpers/syncReason');
 const agentRelease = require('../../Helpers/agentRelease');
@@ -343,7 +344,7 @@ async function summary(req, res) {
 
         let license = null;
         if (company && company.license_id) {
-            license = await db('licenses')
+            license = await masterDb('licenses')
                 .where('id', company.license_id)
                 .first('id', 'status', 'last_seen_at', 'agent_version', 'machine_id',
                        'last_open_companies', 'auto_update',
@@ -392,7 +393,7 @@ async function summary(req, res) {
         let mandatory = false;
         let releaseNotes = null;
         try {
-            const rel = await agentRelease.currentRelease(db);
+            const rel = await agentRelease.currentRelease(masterDb);
             if (rel && rel.version) {
                 latestVersion = rel.version;
                 mandatory = !!rel.mandatory;
@@ -576,13 +577,13 @@ async function buildAgentUpdateNotif(companyId) {
         const company = await db('companies').where('id', companyId).first('id', 'license_id');
         if (!company || !company.license_id) return null;
 
-        const license = await db('licenses')
+        const license = await masterDb('licenses')
             .where('id', company.license_id)
             .first('id', 'agent_version', 'auto_update');
         const installedVersion = license ? (license.agent_version || null) : null;
 
         let rel = null;
-        try { rel = await agentRelease.currentRelease(db); } catch { rel = null; }
+        try { rel = await agentRelease.currentRelease(masterDb); } catch { rel = null; }
         let latestVersion = rel && rel.version ? rel.version : null;
         if (!latestVersion) {
             latestVersion = (String(process.env.AGENT_LATEST_VERSION || '').trim() || null);

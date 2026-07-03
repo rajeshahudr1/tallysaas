@@ -15,6 +15,7 @@
 
 const R  = require('../../Helpers/response');
 const db = require('../../config/db').db;
+const masterDb = require('../../config/masterDb').db;   // licenses live in the master control plane
 
 const OOPS_MSG  = 'Oops..Something went wrong. Please try again.';
 const DEFAULT_PER_PAGE = 20;
@@ -105,7 +106,7 @@ async function create(req, res) {
         }
 
         // Enforce the license's company cap.
-        const lic = await db('licenses').where('id', licenseId).whereNull('deleted_at')
+        const lic = await masterDb('licenses').where('id', licenseId).whereNull('deleted_at')
             .first('max_companies', 'status');
         if (!lic) return R.errorResponse(res, 'Your license could not be found.', 422);
         if (lic.status && lic.status !== 'active') {

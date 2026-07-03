@@ -21,23 +21,41 @@ const R = require('../Helpers/response');
 const { getTenantKnex, dbNameForLicense } = require('../config/tenantDb');
 const { runWithTenant } = require('../config/db');
 
-function superAdminBridge(req, res, next) {
-    const raw = (req.query && req.query.license_id)
-        || (req.body && req.body.license_id)
-        || (req.params && (req.params.license_id || req.params.licenseId));
-    const licenseId = Number(raw);
-    if (!Number.isInteger(licenseId) || licenseId <= 0) {
-        return next();   // no licence chosen yet → master/global
-    }
-    let tk;
-    try {
-        tk = getTenantKnex(dbNameForLicense(licenseId));
-        req.db = tk;
-        req.bridgeLicenseId = licenseId;
-    } catch (err) {
-        return R.errorResponse(res, 'Invalid licence.', 400);
-    }
-    return runWithTenant(tk, () => next());
+/**
+ * Build a bridge middleware that binds a licence's tenant db (via runWithTenant)
+ * when `pick(req)` yields a valid license id, else falls through to the
+ * master/global pool. `pick` is where the licence id is carried — it differs by
+ * route (an explicit ?license_id= vs a /licenses/:id/… path param).
+ */
+function makeBridge(pick) {
+    return function bridge(req, res, next) {
+        const licenseId = Number(pick(req));
+        if (!Number.isInteger(licenseId) || licenseId <= 0) {
+            return next();   // no licence chosen yet → master/global
+        }
+        let tk;
+        try {
+            tk = getTenantKnex(dbNameForLicense(licenseId));
+            req.db = tk;
+            req.bridgeLicenseId = licenseId;
+        } catch (err) {
+            return R.errorResponse(res, 'Invalid licence.', 400);
+        }
+        return runWithTenant(tk, () => next());
+    };
 }
+
+// Default: the target licence is carried EXPLICITLY as ?license_id / body
+// .license_id / :license_id — screens that first PICK a licence, then act on its
+// tenant data (GPS/GSP config, a licence's companies, its role permissions).
+const superAdminBridge = makeBridge((req) =>
+    (req.query && req.query.license_id)
+    || (req.body && req.body.license_id)
+    || (req.params && (req.params.license_id || req.params.licenseId)));
+
+// Variant for /super-admin/licenses/:id/… routes where the route's OWN :id IS
+// the licence (e.g. .../licenses/:id/reminders). Here :id is never a company /
+// role id, so reading it as the licence is safe.
+superAdminBridge.fromLicenseParam = makeBridge((req) => req.params && req.params.id);
 
 module.exports = { superAdminBridge };

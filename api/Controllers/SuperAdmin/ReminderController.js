@@ -15,6 +15,7 @@
 
 const R = require('../../Helpers/response');
 const db = require('../../config/db').db;
+const masterDb = require('../../config/masterDb').db;   // licenses live in the master control plane
 const { getSettings, saveSettings } = require('../../Helpers/reminders');
 const { isConfigured: waConfigured } = require('../../Helpers/whatsapp');
 const { getTransport } = require('../../Helpers/mail');
@@ -23,7 +24,7 @@ const OOPS = 'Oops..Something went wrong. Please try again.';
 
 async function licenseExists(id) {
     if (!Number.isInteger(id) || id <= 0) return false;
-    const row = await db('licenses').where('id', id).whereNull('deleted_at').first('id');
+    const row = await masterDb('licenses').where('id', id).whereNull('deleted_at').first('id');
     return !!row;
 }
 

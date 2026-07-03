@@ -31,6 +31,7 @@
  */
 
 const db = require('../../config/db').db;
+const masterDb = require('../../config/masterDb').db;   // licenses live in the master control plane
 const R  = require('../../Helpers/response');
 
 const OOPS = 'Oops..Something went wrong. Please try again.';
@@ -184,7 +185,7 @@ async function setAutoUpdate(req, res) {
             return R.errorResponse(res, 'Only a licensed account can change auto-update.', 422);
         }
 
-        const updated = await db('licenses')
+        const updated = await masterDb('licenses')
             .where('id', licenseId)
             .whereNull('deleted_at')
             .update({ auto_update: enabled, updated_at: new Date() });
@@ -254,7 +255,7 @@ async function setSyncDirection(req, res) {
         if (hasPush) patch.sync_push_enabled = toBool(body.push_enabled);
         if (hasPull) patch.sync_pull_enabled = toBool(body.pull_enabled);
 
-        const updated = await db('licenses')
+        const updated = await masterDb('licenses')
             .where('id', licenseId)
             .whereNull('deleted_at')
             .update(patch);
@@ -264,7 +265,7 @@ async function setSyncDirection(req, res) {
 
         // Echo the resulting effective state so the dashboard can update both
         // toggles. Re-read so a partial PATCH returns the unchanged flag too.
-        const lic = await db('licenses').where('id', licenseId)
+        const lic = await masterDb('licenses').where('id', licenseId)
             .first('sync_push_enabled', 'sync_pull_enabled');
         const pushEnabled = lic && lic.sync_push_enabled != null ? !!lic.sync_push_enabled : true;
         const pullEnabled = lic && lic.sync_pull_enabled != null ? !!lic.sync_pull_enabled : true;

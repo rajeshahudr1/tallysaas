@@ -23,6 +23,9 @@
 const R   = require('../Helpers/response');
 const jwt = require('../Helpers/jwt');
 const db  = require('../config/db').db;
+const { runWithTenant } = require('../config/db');
+const masterDb = require('../config/masterDb').db;
+const { getTenantKnex, dbNameForLicense } = require('../config/tenantDb');
 
 const AUTH_FAIL_MSG    = 'Authentication failed. Please log in again.';
 const SESSION_ENDED_MSG = 'Your session has ended. Please log in again.';
@@ -126,7 +129,8 @@ async function authenticateAgent(req, res, next) {
     }
 
     try {
-        const lic = await db('licenses')
+        // Licences live in the MASTER control plane (never in a tenant db).
+        const lic = await masterDb('licenses')
             .where('id', payload.license_id)
             .whereNull('deleted_at')
             .select('id', 'status', 'valid_until', 'machine_id', 'holder_name', 'plan')
@@ -142,7 +146,14 @@ async function authenticateAgent(req, res, next) {
         }
         req.license = lic;
         req.agent = payload;
-        return next();
+        // Bind THIS licence's tenant db for the rest of the request so the agent
+        // controller's bare db('customers'|'products'|'invoices'|'agent_commands'…)
+        // calls hit the licence's OWN database, not the master control plane.
+        // (Master-plane tables it still needs — licenses / agent_releases — use
+        // masterDb explicitly inside the controller.)
+        const tk = getTenantKnex(dbNameForLicense(payload.license_id));
+        req.db = tk;
+        return runWithTenant(tk, () => next());
     } catch (err) {
         console.error('authenticateAgent error:', err);
         return R.errorResponse(res, 'Agent authentication failed.', 401);
