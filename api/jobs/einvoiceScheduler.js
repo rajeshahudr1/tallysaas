@@ -87,8 +87,14 @@ async function reconcileStuck() {
 
 /** One maintenance tick. Returns a summary for logging. */
 async function runTick() {
-    const expired = await expireOverdueEways();
-    const reconciled = await reconcileStuck();
+    // Per-license multi-DB: einvoices/companies live in each tenant db, so run
+    // the sweep once per tenant with that tenant's db bound as the active `db`.
+    const { forEachTenant } = require('../Helpers/eachTenant');
+    let expired = 0, reconciled = 0;
+    await forEachTenant(async () => {
+        expired    += Number(await expireOverdueEways())  || 0;
+        reconciled += Number(await reconcileStuck())      || 0;
+    });
     return { expired, reconciled };
 }
 

@@ -35,20 +35,25 @@ async function alreadySentToday(companyId, customerId, asOf) {
  * send_hour matches the current hour, and de-dupes per customer per day. */
 async function sendAutoReminders(asOf = new Date()) {
     const hour = asOf.getHours();
-    const licences = await db('reminder_settings')
-        .where('auto_enabled', true)
-        .where('send_hour', hour)
-        .where(function () { this.where('email_enabled', true).orWhere('whatsapp_enabled', true); })
-        .select('license_id', 'email_enabled', 'whatsapp_enabled', 'offsets');
+    const { forEachTenant } = require('../Helpers/eachTenant');
+    const summary = { licences: 0, sent: 0, skipped: 0, failed: 0 };
 
-    const summary = { licences: licences.length, sent: 0, skipped: 0, failed: 0 };
+    // Per-license multi-DB: reminder_settings + companies + payment_reminders all
+    // live in each tenant db, so run once per tenant with that db bound as `db`.
+    await forEachTenant(async () => {
+        const lic = await db('reminder_settings')
+            .where('auto_enabled', true)
+            .where('send_hour', hour)
+            .where(function () { this.where('email_enabled', true).orWhere('whatsapp_enabled', true); })
+            .first('email_enabled', 'whatsapp_enabled', 'offsets');
+        if (!lic) return;
+        summary.licences++;
 
-    for (const lic of licences) {
         const offsets = normalizeOffsets(lic.offsets);
-        if (!offsets.length) continue;
+        if (!offsets.length) return;
 
         const companies = await db('companies')
-            .where('license_id', lic.license_id).whereNull('deleted_at')
+            .whereNull('deleted_at')
             .select('id', 'name');
 
         for (const co of companies) {
@@ -92,7 +97,7 @@ async function sendAutoReminders(asOf = new Date()) {
                 });
             }
         }
-    }
+    });
     return summary;
 }
 
