@@ -33,6 +33,9 @@ const jwt       = require('../../Helpers/jwt');
 const passwords = require('../../Helpers/passwords');
 const mail      = require('../../Helpers/mail');
 const db        = require('../../config/db').db;
+// Licences + entitlements + subscriptions live in the MASTER db. When a request
+// is tenant-routed (als = a tenant db), reach them via masterDb explicitly.
+const masterDb  = require('../../config/masterDb').db;
 
 // Session tuning.
 //   SESSION_TTL_MS — how long a web session row stays valid (≈ token life). On
@@ -70,8 +73,10 @@ async function login(req, res) {
         // 1. Look up the active (not soft-deleted) user by lower(email), pulling
         //    the role name + slug in one join. Email is stored lower-cased, but
         //    we lower() defensively so case never causes a false miss.
+        // Auth is against the MASTER db. Roles live in the tenant DBs, so master
+        // can't join them — master.users carries a denormalised `role_slug`
+        // (+ role_id pointing at the tenant role) which is all login needs.
         const user = await db('users as u')
-            .leftJoin('roles as r', 'r.id', 'u.role_id')
             .whereRaw('lower(u.email) = ?', [email])
             .whereNull('u.deleted_at')
             .select(
@@ -87,10 +92,10 @@ async function login(req, res) {
                 'u.active_session_jti',
                 'u.session_last_seen',
                 'u.session_expires_at',
-                'r.name as role_name',
-                'r.slug as role_slug',
+                'u.role_slug',
             )
             .first();
+        if (user) user.role_name = user.role_slug || null;
 
         // 2. Verify the password. On a MISS, verify against the dummy hash so the
         //    code path (and timing) matches the wrong-password path, then bail
@@ -165,19 +170,24 @@ async function login(req, res) {
 
         if (!isSuperAdmin) {
             let limit = 1;
-            if (user.company_id) {
-                const company = await db('companies').where('id', user.company_id)
-                    .select('max_sessions_per_user').first();
-                if (company && company.max_sessions_per_user != null) {
-                    limit = Math.max(1, Number(company.max_sessions_per_user));
-                }
-            } else if (user.license_id) {
-                // License-admin (no fixed company_id): without this they'd be stuck
-                // at the default cap of 1 and every other login would evict them.
-                // Use the highest session cap among the license's companies.
-                const row = await db('companies').where('license_id', user.license_id)
-                    .whereNull('deleted_at').max('max_sessions_per_user as m').first();
-                if (row && row.m != null) limit = Math.max(1, Number(row.m));
+            // The session cap lives in companies.max_sessions_per_user, which is in
+            // the user's TENANT db (per-license). Read it there; on any hiccup keep
+            // the safe default of 1. user_sessions itself is MASTER (auth sessions).
+            if (user.license_id) {
+                try {
+                    const tdb = require('../../config/tenantDb').getKnexForLicense(user.license_id);
+                    let row;
+                    if (user.company_id) {
+                        row = await tdb('companies').where('id', user.company_id)
+                            .max('max_sessions_per_user as m').first();
+                    } else {
+                        // License-admin (no fixed company_id) → highest cap among the
+                        // licence's companies (else every other login evicts them).
+                        row = await tdb('companies').whereNull('deleted_at')
+                            .max('max_sessions_per_user as m').first();
+                    }
+                    if (row && row.m != null) limit = Math.max(1, Number(row.m));
+                } catch (_) { /* tenant unreachable → default cap of 1 */ }
             }
             // Evict oldest logins so that, once the new session is added below,
             // the live count never exceeds `limit`. (Keep the most recent logins.)
@@ -230,6 +240,10 @@ async function login(req, res) {
             role_id:    user.role_id,
             role_slug:  user.role_slug,
             name:       user.name,
+            // Per-license multi-DB: the tenant DB this user's requests route to
+            // (via tenantResolver → runWithTenant). Super-admin has no licence →
+            // null → resolveTenant falls through to the master/global pool.
+            db_name:    user.license_id ? `tally_lic_${user.license_id}` : null,
             jti,
         });
 
@@ -240,7 +254,12 @@ async function login(req, res) {
         if (user.role_slug === 'super-admin') {
             permissions = ['*'];
         } else {
-            const permRows = await db('role_permissions as rp')
+            // Role permissions live in the user's TENANT db (login runs on master,
+            // so reach the tenant explicitly by licence).
+            const tdb = user.license_id
+                ? require('../../config/tenantDb').getKnexForLicense(user.license_id)
+                : db;
+            const permRows = await tdb('role_permissions as rp')
                 .join('permissions as p', 'p.id', 'rp.permission_id')
                 .where('rp.role_id', user.role_id)
                 .select('p.slug');
@@ -264,7 +283,7 @@ async function login(req, res) {
         // (and is the single source of truth for access after expiry).
         let licenseInfo = null;
         if (user.role_slug !== 'super-admin' && user.license_id) {
-            const lic = await db('licenses').where('id', user.license_id).whereNull('deleted_at')
+            const lic = await masterDb('licenses').where('id', user.license_id).whereNull('deleted_at')
                 .first('valid_until', 'status');
             if (lic) {
                 let daysLeft = null;
@@ -315,8 +334,11 @@ async function me(req, res) {
             return R.errorResponse(res, 'Authentication failed. Please log in again.', 401);
         }
 
+        // No roles join: super-admin runs against master (no roles table) and a
+        // company user against the tenant mirror (which has role_id but not
+        // role_slug). The role comes off the verified JWT instead; role_id (the
+        // tenant role) still drives the permission lookup below.
         const user = await db('users as u')
-            .leftJoin('roles as r', 'r.id', 'u.role_id')
             .where('u.id', userId)
             .whereNull('u.deleted_at')
             .select(
@@ -330,8 +352,6 @@ async function me(req, res) {
                 'u.mobile',
                 'u.status',
                 'u.last_login_at',
-                'r.name as role_name',
-                'r.slug as role_slug',
             )
             .first();
 
@@ -339,6 +359,8 @@ async function me(req, res) {
         if (!user) {
             return R.errorResponse(res, 'Authentication failed. Please log in again.', 401);
         }
+        user.role_slug = (req.user && req.user.role_slug) || null;
+        user.role_name = user.role_slug;
 
         // Permission slugs for the role. Super Admin short-circuits to ['*'].
         let permissions;
@@ -382,7 +404,7 @@ async function me(req, res) {
         // truth for access. Super Admin has no company licence.
         let licenseInfo = null;
         if (user.role_slug !== 'super-admin' && user.license_id) {
-            const lic = await db('licenses').where('id', user.license_id).whereNull('deleted_at')
+            const lic = await masterDb('licenses').where('id', user.license_id).whereNull('deleted_at')
                 .first('valid_until', 'status');
             if (lic) {
                 let daysLeft = null;

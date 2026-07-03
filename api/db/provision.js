@@ -230,7 +230,17 @@ async function provisionLicense(opts, ctx = {}) {
             });
             // keep the tenant users sequence past the explicit id.
             await t.raw("SELECT setval(pg_get_serial_sequence('users','id'), (SELECT COALESCE(MAX(id),1) FROM users))");
-            log(`✓ admin user id=${masterUserId} <${email}> (master auth + tenant mirror) password=${password}`);
+
+            // 6) SEAT — an active subscription (master) so the login seat-gate
+            // passes. valid_until tracks the licence (or +10y when it never expires).
+            const validUntil = opts.validUntil
+                ? new Date(opts.validUntil)
+                : new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
+            await m('subscriptions').insert({
+                user_id: masterUserId, plan: opts.plan || 'standard',
+                valid_from: new Date(), valid_until: validUntil, status: 'active',
+            });
+            log(`✓ admin user id=${masterUserId} <${email}> (master auth + tenant mirror + active seat) password=${password}`);
         } finally { await t.destroy(); }
 
         return { license: lic, dbName, adminEmail: email, adminPassword: password, licenseKey: key, adminUserId: masterUserId };

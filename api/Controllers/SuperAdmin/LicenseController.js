@@ -168,24 +168,30 @@ async function list(req, res) {
         const page    = Math.max(1, parseInt(req.query.page, 10) || 1);
         const perPage = Math.min(100, parseInt(req.query.per_page, 10) || 20);
 
-        // Qualify deleted_at — the join below also has a deleted_at column.
         const base = db('licenses').whereNull('licenses.deleted_at');
         const [{ count }] = await base.clone().count({ count: '*' });
 
-        const rows = await base.clone()
-            .leftJoin('companies', function () {
-                this.on('companies.license_id', 'licenses.id').andOnNull('companies.deleted_at');
-            })
-            .groupBy('licenses.id')
+        const licRows = await base.clone()
             .select(
                 'licenses.id', 'licenses.key_prefix', 'licenses.holder_name', 'licenses.tally_serial',
                 'licenses.plan', 'licenses.max_companies', 'licenses.max_users', 'licenses.valid_until',
                 'licenses.status', 'licenses.machine_id', 'licenses.machine_bound_at',
                 'licenses.last_seen_at', 'licenses.agent_version', 'licenses.created_at',
             )
-            .count({ companies_count: 'companies.id' })
             .orderBy('licenses.id', 'desc')
             .limit(perPage).offset((page - 1) * perPage);
+
+        // companies now live in each licence's OWN tenant db, so count them there.
+        const tenant = require('../../config/tenantDb');
+        const rows = await Promise.all(licRows.map(async (lic) => {
+            let companies_count = 0;
+            try {
+                const tdb = tenant.getKnexForLicense(lic.id);
+                const r = await tdb('companies').whereNull('deleted_at').count('* as c').first();
+                companies_count = Number(r.c) || 0;
+            } catch (_) { /* tenant db not provisioned yet → 0 */ }
+            return { ...lic, companies_count };
+        }));
 
         return R.successResponse(res, {
             data: rows,

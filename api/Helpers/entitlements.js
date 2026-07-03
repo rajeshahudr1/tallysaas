@@ -16,7 +16,9 @@
  * entitled set — enforced server-side when setting role permissions.
  */
 
-const db = require('../config/db').db;
+// license_permissions + the permissions catalogue both live in the MASTER db,
+// so default to it (callers inside a MASTER transaction may still pass `conn`).
+const db = require('../config/masterDb').db;
 
 /** Every permission id in the catalogue (the "ALL" fallback). */
 async function allPermissionIds(conn) {
