@@ -68,93 +68,43 @@ async function create(req, res) {
     try {
         const b = req.body;
 
-        // The default admin needs the system 'company-admin' role (full perms).
-        const adminRole = await db('roles')
-            .where('slug', 'company-admin').whereNull('company_id').first();
-        if (!adminRole) {
-            return R.errorResponse(res, 'Server misconfigured: the company-admin role is missing. Run the seeds.', 500);
-        }
-
-        // Clearer than surfacing a raw unique-violation on users.email.
+        // Clearer than surfacing a raw unique-violation on master.users.email.
         const taken = await db('users').whereRaw('lower(email) = ?', [b.admin_email]).first('id');
         if (taken) {
             return R.errorResponse(res, 'A user with that admin email already exists.', 422);
         }
 
-        const { key, prefix, hash } = licenseKey.generate();
-        const generatedPw  = !(b.admin_password && b.admin_password.trim());
-        const clearPassword = generatedPw ? tempPassword() : b.admin_password.trim();
-        const passwordHash  = await passwords.hash(clearPassword);
-
-        const today = isoDate(Date.now());
-        // Seat window tracks the license expiry; if the license never expires,
-        // default the seat to +10y so the admin can always sign in.
-        const subValidUntil = b.valid_until
-            ? isoDate(b.valid_until)
-            : isoDate(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
-
-        const out = await db.transaction(async (trx) => {
-            const [lic] = await trx('licenses').insert({
-                license_key_hash: hash,
-                // Reversibly-encrypted full key so a super-admin can REVEAL it
-                // later (null when LICENSE_KEY_SECRET is unset → not revealable).
-                license_key_enc:  keyCrypto.encryptKey(key),
-                key_prefix:       prefix,
-                holder_name:      b.holder_name,
-                tally_serial:     b.tally_serial || null,
-                plan:             b.plan || 'standard',
-                max_companies:    b.max_companies != null ? b.max_companies : 5,
-                max_users:        b.max_users != null ? b.max_users : 10,
-                valid_until:      b.valid_until || null,
-                status:           'active',
-                // AUTO push (Cloud → Tally) is OFF by default — most setups only
-                // PULL from Tally; pushing edits back is opt-in (turn it on from
-                // the Sync settings when wanted). Pull + master sync stay ON.
-                sync_push_enabled: false,
-                created_by:       req.user ? req.user.sub : null,
-            }).returning('*');
-
-            const [admin] = await trx('users').insert({
-                company_id:      null,           // NULL = all companies under this license
-                license_id:      lic.id,
-                role_id:         adminRole.id,
-                name:            (b.admin_name && b.admin_name.trim()) || b.holder_name,
-                email:           b.admin_email,
-                mobile:          b.admin_mobile || null,
-                password_hash:   passwordHash,
-                status:          'Active',
-                approval_status: 'approved',     // the default admin is auto-approved
-                approved_at:     new Date(),
-                approved_by:     req.user ? req.user.sub : null,
-            }).returning(['id', 'name', 'email', 'approval_status']);
-
-            await trx('subscriptions').insert({
-                user_id:     admin.id,
-                plan:        lic.plan,
-                valid_from:  today,
-                valid_until: subValidUntil,
-                status:      'active',           // the auto-approved seat
-            });
-
-            // Entitle the new license to ALL modules by default; the Super Admin
-            // can restrict it later from the license's permissions screen.
-            await entitlements.grantAllToLicense(trx, lic.id);
-
-            return { lic, admin };
+        // Per-license multi-DB: provision the licence's OWN database end-to-end —
+        // schema + RBAC + a default company + the admin user in master WITH a
+        // tenant mirror (same id) + an active seat. Replaces the old single-DB
+        // insert (roles/companies now live in the tenant db, not master).
+        const { provisionLicense } = require('../../db/provision');
+        const result = await provisionLicense({
+            holderName:    b.holder_name,
+            adminEmail:    b.admin_email,
+            adminName:     b.admin_name,
+            adminPassword: (b.admin_password && b.admin_password.trim()) || undefined,
+            plan:          b.plan,
+            maxCompanies:  b.max_companies,
+            maxUsers:      b.max_users,
+            validUntil:    b.valid_until,
         });
+        // Entitle the new licence to ALL modules by default (master); restrict later.
+        await entitlements.grantAllToLicense(db, result.license.id);
 
+        const generatedPw = !(b.admin_password && b.admin_password.trim());
         // The clear key (always) + the temp password (only if auto-generated) are
         // returned ONCE — store them safely now.
         return R.successResponse(res, {
-            license_key: key,
+            license_key: result.licenseKey,
             admin_login: {
-                email:    out.admin.email,
-                password: generatedPw ? clearPassword : undefined,
+                email:    result.adminEmail,
+                password: generatedPw ? result.adminPassword : undefined,
             },
             license: {
-                id: out.lic.id, key_prefix: out.lic.key_prefix, holder_name: out.lic.holder_name,
-                plan: out.lic.plan, max_companies: out.lic.max_companies, max_users: out.lic.max_users,
-                valid_until: out.lic.valid_until, status: out.lic.status,
+                id: result.license.id, key_prefix: result.license.key_prefix, holder_name: result.license.holder_name,
+                plan: result.license.plan, max_companies: result.license.max_companies, max_users: result.license.max_users,
+                valid_until: result.license.valid_until, status: result.license.status,
             },
         }, `License + admin created. Copy the key${generatedPw ? ' and admin password' : ''} now — shown only once.`);
     } catch (err) {
