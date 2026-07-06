@@ -48,8 +48,26 @@ class CompanyProfile {
   }
 }
 
+/// One entry of the syncable-module catalog ({ key, label }) — mirrors the
+/// server's api/Helpers/syncModules.js. Backs the auto push/pull module pickers.
+class SyncModule {
+  const SyncModule({required this.key, required this.label});
+  final String key;
+  final String label;
+
+  factory SyncModule.fromJson(Map<String, dynamic> j) => SyncModule(
+        key: (j['key'] ?? '').toString(),
+        label: (j['label'] ?? j['key'] ?? '').toString(),
+      );
+}
+
 class Settings {
-  const Settings({required this.company, this.settings = const {}, this.sync = const {}});
+  const Settings({
+    required this.company,
+    this.settings = const {},
+    this.sync = const {},
+    this.modules = const [],
+  });
 
   /// The editable company profile.
   final CompanyProfile company;
@@ -58,8 +76,29 @@ class Settings {
   final Map<String, dynamic> settings;
 
   /// Agent sync toggles ({sync_enabled, push_enabled, pull_enabled,
-  /// auto_update}) — read here for the Tally Sync tab's switches.
+  /// auto_update, push_modules, pull_modules}) — read here for the Tally Sync
+  /// tab's switches + the per-module auto-sync pickers.
   final Map<String, dynamic> sync;
+
+  /// The full syncable-module catalog for the auto push/pull pickers.
+  final List<SyncModule> modules;
+
+  /// All module keys (the "ALL" fallback when a selection isn't configured).
+  List<String> get allModuleKeys => modules.map((m) => m.key).toList();
+
+  /// Read a module-selection list from the sync object. A missing / non-list
+  /// value falls back to ALL modules (matches the server + web).
+  List<String> _modList(String key) {
+    final v = sync[key];
+    if (v is List) return v.map((e) => e.toString()).toList();
+    return allModuleKeys;
+  }
+
+  /// Selected module keys for AUTO push (Cloud→Tally). ALL when unconfigured.
+  List<String> get pushModules => _modList('push_modules');
+
+  /// Selected module keys for AUTO pull (Tally→Cloud). ALL when unconfigured.
+  List<String> get pullModules => _modList('pull_modules');
 
   /// Read a settings-bag value as a string with a default.
   String sv(String key, [String fallback = '']) {
@@ -84,6 +123,7 @@ class Settings {
     final companyJson = j['company'];
     final settingsJson = j['settings'];
     final syncJson = j['sync'];
+    final modulesJson = j['modules'];
     return Settings(
       company: companyJson is Map
           ? CompanyProfile.fromJson(companyJson.cast<String, dynamic>())
@@ -92,6 +132,12 @@ class Settings {
           ? settingsJson.cast<String, dynamic>()
           : const {},
       sync: syncJson is Map ? syncJson.cast<String, dynamic>() : const {},
+      modules: modulesJson is List
+          ? modulesJson
+              .whereType<Map>()
+              .map((m) => SyncModule.fromJson(m.cast<String, dynamic>()))
+              .toList()
+          : const [],
     );
   }
 }

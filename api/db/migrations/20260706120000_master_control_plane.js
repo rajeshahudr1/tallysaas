@@ -45,6 +45,10 @@ exports.up = async function up(knex) {
     // Per-platform sessions: user_sessions.platform ('web'|'app') so a web login
     // and an app login coexist (one live session per platform). See AuthController.
     await knex.raw("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS platform varchar(16)").catch(() => {});
+    // Selective auto-sync: which modules auto-push (Cloud→Tally) / auto-pull
+    // (Tally→Cloud). JSON array of module keys; NULL = ALL. See AgentController.
+    await knex.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_push_modules text").catch(() => {});
+    await knex.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_pull_modules text").catch(() => {});
 };
 
 exports.down = async function down(knex) {

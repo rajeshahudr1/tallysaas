@@ -158,6 +158,8 @@ async function setupMaster(ctx = {}) {
         await m.raw('ALTER TABLE users ALTER COLUMN role_id DROP NOT NULL').catch(() => {});
         await m.raw("ALTER TABLE users ADD COLUMN IF NOT EXISTS role_slug varchar(64)").catch(() => {});
         await m.raw("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS platform varchar(16)").catch(() => {});
+        await m.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_push_modules text").catch(() => {});
+        await m.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_pull_modules text").catch(() => {});
 
         const permIdBySlug = await seedPermissions(m);
         log(`✓ master permissions: ${Object.keys(permIdBySlug).length}`);

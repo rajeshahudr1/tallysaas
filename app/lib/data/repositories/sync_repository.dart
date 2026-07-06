@@ -43,12 +43,22 @@ class SyncRepository {
   /// Pull everything from Tally now ("Sync Now").
   Future<dynamic> pull() => _api.post('/sync/pull', body: const {});
 
-  /// Flip the per-license auto-sync toggles (master + per-direction).
-  Future<dynamic> setDirection({bool? syncEnabled, bool? pushEnabled, bool? pullEnabled}) =>
+  /// Flip the per-license auto-sync toggles (master + per-direction) and/or the
+  /// per-module selection for AUTO push/pull. Each argument is optional — only
+  /// the provided ones are sent, so a caller can change just the modules.
+  Future<dynamic> setDirection({
+    bool? syncEnabled,
+    bool? pushEnabled,
+    bool? pullEnabled,
+    List<String>? pushModules,
+    List<String>? pullModules,
+  }) =>
       _api.patch('/account/sync-direction', body: {
         if (syncEnabled != null) 'sync_enabled': syncEnabled,
         if (pushEnabled != null) 'push_enabled': pushEnabled,
         if (pullEnabled != null) 'pull_enabled': pullEnabled,
+        if (pushModules != null) 'push_modules': pushModules,
+        if (pullModules != null) 'pull_modules': pullModules,
       });
 
   /// Flip the per-license agent auto-update toggle.

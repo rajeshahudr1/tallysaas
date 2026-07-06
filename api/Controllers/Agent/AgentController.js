@@ -182,13 +182,19 @@ async function heartbeat(req, res) {
         let syncEnabled = true;
         let pushEnabled = true;
         let pullEnabled = true;
+        const SM = require('../../Helpers/syncModules');
+        let pushModules = SM.ALL_KEYS.slice();   // default ALL
+        let pullModules = SM.ALL_KEYS.slice();
         try {
             const lic = await masterDb('licenses').where('id', req.license.id)
-                .first('sync_enabled', 'sync_push_enabled', 'sync_pull_enabled');
+                .first('sync_enabled', 'sync_push_enabled', 'sync_pull_enabled',
+                       'sync_push_modules', 'sync_pull_modules');
             if (lic) {
                 if (lic.sync_enabled      != null) syncEnabled = !!lic.sync_enabled;
                 if (lic.sync_push_enabled != null) pushEnabled = !!lic.sync_push_enabled;
                 if (lic.sync_pull_enabled != null) pullEnabled = !!lic.sync_pull_enabled;
+                pushModules = SM.effectiveKeys(lic.sync_push_modules);
+                pullModules = SM.effectiveKeys(lic.sync_pull_modules);
             }
         } catch (e) {
             syncEnabled = true;
@@ -207,6 +213,10 @@ async function heartbeat(req, res) {
             status: req.license.status,
             license_id: req.license.id,
             server_time: now.toISOString(),
+            // Selected modules for AUTO push/pull (for the agent's logs; the server
+            // already filters /pending + /import by these). ALL when unconfigured.
+            push_modules: pushModules,
+            pull_modules: pullModules,
             // EFFECTIVE auto-sync direction gates the agent loop reads each cycle
             // (master Auto-sync AND the per-direction toggle). Auto-sync OFF → both
             // false so the agent skips every automatic sync pass.
@@ -283,8 +293,14 @@ async function pending(req, res) {
         // SYNC GATE: only the first max_companies companies (created_at asc, id
         // asc) sync — the rest are excluded from the pull/push queue. max_companies
         // isn't on req.license (authenticateAgent selects a fixed set), so read it.
-        const licRow = await masterDb('licenses').where('id', req.license.id).first('max_companies');
+        const licRow = await masterDb('licenses').where('id', req.license.id)
+            .first('max_companies', 'sync_push_modules');
         const maxCompanies = licRow ? licRow.max_companies : null;
+        // Selective AUTO-push: only the operator-selected modules are queued for
+        // Tally (null column = ALL). We filter the assembled push payload at the
+        // return below via this parsed selection.
+        const SM = require('../../Helpers/syncModules');
+        const pushSel = SM.parseModules(licRow && licRow.sync_push_modules);
         const companies = await syncingCompanies(
             req.license.id, maxCompanies,
             ['id', 'name', 'slug', 'tally_guid', 'tally_dirty', 'mailing_name', 'email', 'phone', 'mobile',
@@ -511,11 +527,25 @@ async function pending(req, res) {
             amount: Number(j.amount) || 0, narration: j.narration || '',
         }));
 
+        // Selective AUTO-push filter: drop records whose module the operator did
+        // NOT select (pushSel null = ALL → keep everything). record_type → module:
+        const REC2MOD = {
+            customer: 'customers', supplier: 'suppliers', product: 'products',
+            location: 'locations', category: 'categories',
+            sales_invoice: 'sales-invoices', purchase_invoice: 'purchase-invoices',
+            payment: 'payments', receipt: 'receipts', journal: 'journals',
+        };
+        const keep = (r) => SM.isEnabled(pushSel, REC2MOD[r && r.record_type] || '');
+        const allVouchers = [...invoiceVouchers, ...payVouchers, ...journalVouchers].filter(keep);
+
         return R.successResponse(res, {
             companies,
             companies_to_create: companiesToCreate,
-            ledgers, stock_items, locations, categories,
-            vouchers: [...invoiceVouchers, ...payVouchers, ...journalVouchers],
+            ledgers:     ledgers.filter(keep),
+            stock_items: stock_items.filter(keep),
+            locations:   locations.filter(keep),
+            categories:  categories.filter(keep),
+            vouchers:    allVouchers,
         });
     } catch (err) {
         console.error('AgentController.pending error:', err);
@@ -646,6 +676,16 @@ async function result(req, res) {
 async function importFromTally(req, res) {
     try {
         const licenseId = req.license.id;
+
+        // Selective AUTO-pull: only the operator-selected modules are imported
+        // from Tally (null column = ALL). Parsed once; each entity loop below is
+        // gated by it. Best-effort read (a hiccup → ALL, never blocks the import).
+        const SM = require('../../Helpers/syncModules');
+        let pullSel = null;
+        try {
+            const _lp = await masterDb('licenses').where('id', licenseId).first('sync_pull_modules');
+            pullSel = SM.parseModules(_lp && _lp.sync_pull_modules);
+        } catch (_) { pullSel = null; }
 
         // Resolve the target cloud company. Prefer an explicit, valid company_id;
         // otherwise FIND-OR-CREATE by the Tally company NAME under this license —
@@ -935,6 +975,8 @@ async function importFromTally(req, res) {
             const table = parent.includes('debtor') ? 'customers'
                         : parent.includes('creditor') ? 'suppliers' : null;
             if (!table) { counts.skipped += 1; continue; }   // skip Cash/Bank/P&L/etc.
+            // Selective AUTO-pull: skip this party if its module wasn't selected.
+            if (!SM.isEnabled(pullSel, table)) { counts.skipped += 1; continue; }
 
             const alterId = aid(l);
             // Incremental: an unchanged master (alterid present AND <= watermark)
@@ -1055,7 +1097,8 @@ async function importFromTally(req, res) {
             return cat.id;
         };
 
-        for (const s of stockItems) {
+        // Selective AUTO-pull: skip Products entirely when not selected.
+        for (const s of (SM.isEnabled(pullSel, 'products') ? stockItems : [])) {
           try {
             const name = String(s.name || '').trim();
             if (!name) { counts.skipped += 1; continue; }
@@ -1137,7 +1180,8 @@ async function importFromTally(req, res) {
         //    (is_tally_godown=true, tally_guid='tally'). Idempotent by
         //    lower(name) per company: an existing same-named location is left
         //    untouched (no duplicate); a new name is INSERTED. ──
-        for (const g of godowns) {
+        // Selective AUTO-pull: skip Locations (godowns) when not selected.
+        for (const g of (SM.isEnabled(pullSel, 'locations') ? godowns : [])) {
           try {
             const name = String(g.name || '').trim();
             if (!name) { counts.skipped += 1; continue; }
@@ -1266,6 +1310,15 @@ async function importFromTally(req, res) {
             // also contain neither 'sales' nor 'purchase' but are handled above.
             const isSales = vt.indexOf('sales') > -1 || isCreditNote;
             const isPurchase = vt.indexOf('purchase') > -1 || isDebitNote;
+
+            // Selective AUTO-pull: skip creating the BUSINESS record (journal /
+            // payment / receipt / invoice) when that voucher's module wasn't
+            // selected. The full double-entry mirror (tally_voucher_entries above)
+            // was already stored so Reports still match Tally exactly.
+            const _vMod = isJournal ? 'journals'
+                : isReceipt ? 'receipts' : isPayment ? 'payments'
+                : isSales ? 'sales-invoices' : isPurchase ? 'purchase-invoices' : null;
+            if (_vMod && !SM.isEnabled(pullSel, _vMod)) { counts.skipped += 1; continue; }
 
             if (isJournal) {
                 // Journal voucher → journals table. DEDUP BY GUID (Tally reuses

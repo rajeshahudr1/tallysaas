@@ -86,7 +86,9 @@ CREATE TABLE public.licenses (
     sync_push_enabled boolean DEFAULT true NOT NULL,
     sync_pull_enabled boolean DEFAULT true NOT NULL,
     license_key_enc text,
-    sync_enabled boolean DEFAULT true NOT NULL
+    sync_enabled boolean DEFAULT true NOT NULL,
+    sync_push_modules text,
+    sync_pull_modules text
 );
 
 CREATE SEQUENCE public.licenses_id_seq

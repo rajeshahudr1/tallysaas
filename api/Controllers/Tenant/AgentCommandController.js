@@ -234,8 +234,10 @@ async function setSyncDirection(req, res) {
         const body = req.body || {};
         const hasPush = Object.prototype.hasOwnProperty.call(body, 'push_enabled');
         const hasPull = Object.prototype.hasOwnProperty.call(body, 'pull_enabled');
-        if (!hasPush && !hasPull) {
-            return R.errorResponse(res, 'Provide push_enabled and/or pull_enabled.', 422);
+        const hasPushMods = Array.isArray(body.push_modules);
+        const hasPullMods = Array.isArray(body.pull_modules);
+        if (!hasPush && !hasPull && !hasPushMods && !hasPullMods) {
+            return R.errorResponse(res, 'Provide push_enabled / pull_enabled and/or push_modules / pull_modules.', 422);
         }
 
         // Resolve which license to flip. A licensed user → their own license. A
@@ -251,9 +253,14 @@ async function setSyncDirection(req, res) {
             return R.errorResponse(res, 'Only a licensed account can change auto-sync direction.', 422);
         }
 
+        const SM = require('../../Helpers/syncModules');
         const patch = { updated_at: new Date() };
         if (hasPush) patch.sync_push_enabled = toBool(body.push_enabled);
         if (hasPull) patch.sync_pull_enabled = toBool(body.pull_enabled);
+        // Per-module selection — which modules AUTO push/pull when the direction
+        // is ON. Stored as a JSON array of valid keys (an empty array = NOTHING).
+        if (hasPushMods) patch.sync_push_modules = JSON.stringify(SM.sanitize(body.push_modules));
+        if (hasPullMods) patch.sync_pull_modules = JSON.stringify(SM.sanitize(body.pull_modules));
 
         const updated = await masterDb('licenses')
             .where('id', licenseId)
@@ -264,16 +271,22 @@ async function setSyncDirection(req, res) {
         }
 
         // Echo the resulting effective state so the dashboard can update both
-        // toggles. Re-read so a partial PATCH returns the unchanged flag too.
+        // toggles + the module selections. Re-read so a partial PATCH returns the
+        // unchanged fields too.
         const lic = await masterDb('licenses').where('id', licenseId)
-            .first('sync_push_enabled', 'sync_pull_enabled');
+            .first('sync_push_enabled', 'sync_pull_enabled', 'sync_push_modules', 'sync_pull_modules');
         const pushEnabled = lic && lic.sync_push_enabled != null ? !!lic.sync_push_enabled : true;
         const pullEnabled = lic && lic.sync_pull_enabled != null ? !!lic.sync_pull_enabled : true;
 
         return R.successResponse(
             res,
-            { push_enabled: pushEnabled, pull_enabled: pullEnabled },
-            'Auto-sync direction updated. The agent will apply it on its next cycle.',
+            {
+                push_enabled: pushEnabled,
+                pull_enabled: pullEnabled,
+                push_modules: SM.effectiveKeys(lic && lic.sync_push_modules),
+                pull_modules: SM.effectiveKeys(lic && lic.sync_pull_modules),
+            },
+            'Auto-sync updated. The agent will apply it on its next cycle.',
             { show: true },
         );
     } catch (err) {

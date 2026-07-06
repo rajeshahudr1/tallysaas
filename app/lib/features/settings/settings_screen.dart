@@ -7,6 +7,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/utils/validators.dart';
 import '../../data/models/settings.dart';
 import '../../data/repositories/settings_repository.dart';
+import '../../data/repositories/sync_repository.dart';
 import '../../shared/widgets/app_button.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/error_state.dart';
@@ -44,6 +45,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   final _tallyCompany = TextEditingController();
   final _retry = TextEditingController();
   bool _syncEnabled = true, _syncPush = true, _syncPull = true, _autoUpdate = true;
+  // Selective auto-sync: the module catalog + the current push/pull selections.
+  List<SyncModule> _syncModules = const [];
+  List<String> _pushMods = const [];
+  List<String> _pullMods = const [];
 
   // Invoice & Tax
   final _invPrefix = TextEditingController();
@@ -101,6 +106,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _syncPush = s.syncFlag('push_enabled');
     _syncPull = s.syncFlag('pull_enabled');
     _autoUpdate = s.syncFlag('auto_update');
+    _syncModules = s.modules;
+    _pushMods = List<String>.from(s.pushModules);
+    _pullMods = List<String>.from(s.pullModules);
 
     _invPrefix.text = s.sv('inv_prefix', 'INV-');
     _invNext.text = s.sv('inv_next', '1');
@@ -283,9 +291,132 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         _section('Sync Settings'),
         _switch('Sync Enabled', _syncEnabled, (v) => setState(() => _syncEnabled = v)),
         _switch('Push to Tally', _syncPush, (v) => setState(() => _syncPush = v)),
+        _modulesRow('push'),
         _switch('Pull from Tally', _syncPull, (v) => setState(() => _syncPull = v)),
+        _modulesRow('pull'),
         _switch('Auto-update agent', _autoUpdate, (v) => setState(() => _autoUpdate = v)),
       ]);
+
+  // A "Choose modules" row under the Push/Pull switch — opens a checkbox dialog
+  // and persists the per-module selection to the license via /sync-direction.
+  Widget _modulesRow(String direction) {
+    final sel = direction == 'push' ? _pushMods : _pullMods;
+    return Padding(
+      padding: const EdgeInsets.only(left: AppSpacing.md12, bottom: AppSpacing.sm8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text('Modules: ${_modsSummary(sel)}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppColors.muted)),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.checklist, size: 18),
+            label: const Text('Choose'),
+            onPressed: _syncModules.isEmpty ? null : () => _pickModules(direction),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _modsSummary(List<String> sel) {
+    final total = _syncModules.length;
+    if (total == 0) return 'All';
+    if (sel.isEmpty) return 'None';
+    if (sel.length == total) return 'All';
+    return '${sel.length} of $total';
+  }
+
+  Future<void> _pickModules(String direction) async {
+    final current = List<String>.from(direction == 'push' ? _pushMods : _pullMods);
+    final chosen = Set<String>.from(current);
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(direction == 'push'
+              ? 'Auto push modules (Cloud → Tally)'
+              : 'Auto pull modules (Tally → Cloud)'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    TextButton(
+                      onPressed: () => setLocal(() => chosen
+                        ..clear()
+                        ..addAll(_syncModules.map((m) => m.key))),
+                      child: const Text('Select all'),
+                    ),
+                    TextButton(
+                      onPressed: () => setLocal(() => chosen.clear()),
+                      child: const Text('Clear all'),
+                    ),
+                  ],
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: [
+                      for (final m in _syncModules)
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(m.label),
+                          value: chosen.contains(m.key),
+                          onChanged: (v) => setLocal(() {
+                            if (v == true) {
+                              chosen.add(m.key);
+                            } else {
+                              chosen.remove(m.key);
+                            }
+                          }),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                  ctx, _syncModules.map((m) => m.key).where(chosen.contains).toList()),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    try {
+      await ref.read(syncRepositoryProvider).setDirection(
+            pushModules: direction == 'push' ? result : null,
+            pullModules: direction == 'pull' ? result : null,
+          );
+      if (!mounted) return;
+      setState(() {
+        if (direction == 'push') {
+          _pushMods = result;
+        } else {
+          _pullMods = result;
+        }
+      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Auto-sync modules updated.')));
+    } on ApiException catch (e) {
+      _showError(e.message);
+    } catch (e) {
+      _showError('Could not update modules: $e');
+    }
+  }
 
   Widget _invoiceTax() => _tab([
         _section('Numbering'),

@@ -99,8 +99,14 @@ async function get(req, res) {
         // null/unreadable (matches the agent + SyncController defaults), so an
         // older license / pre-migration DB shows all-ON with no regression. Best-
         // effort: a read hiccup must never sink the whole settings load.
+        // SM is the single source of truth for the syncable-module catalog +
+        // per-module selection parsing. `modules` (the {key,label} list) is
+        // surfaced so the Settings popup can render every checkbox; push_modules /
+        // pull_modules carry the current selection (ALL when unconfigured).
+        const SM = require('../../Helpers/syncModules');
         let sync = {
             auto_update: true, push_enabled: true, pull_enabled: true, sync_enabled: true,
+            push_modules: SM.ALL_KEYS.slice(), pull_modules: SM.ALL_KEYS.slice(),
         };
         try {
             // Prefer the company's license; fall back to the caller's OWN license
@@ -111,18 +117,24 @@ async function get(req, res) {
             if (licenseId) {
                 const lic = await masterDb('licenses')
                     .where('id', licenseId)
-                    .first('auto_update', 'sync_push_enabled', 'sync_pull_enabled', 'sync_enabled');
+                    .first('auto_update', 'sync_push_enabled', 'sync_pull_enabled', 'sync_enabled',
+                           'sync_push_modules', 'sync_pull_modules');
                 if (lic) {
                     sync = {
                         auto_update:  lic.auto_update       != null ? !!lic.auto_update       : true,
                         push_enabled: lic.sync_push_enabled != null ? !!lic.sync_push_enabled : true,
                         pull_enabled: lic.sync_pull_enabled != null ? !!lic.sync_pull_enabled : true,
                         sync_enabled: lic.sync_enabled      != null ? !!lic.sync_enabled      : true,
+                        push_modules: SM.effectiveKeys(lic.sync_push_modules),
+                        pull_modules: SM.effectiveKeys(lic.sync_pull_modules),
                     };
                 }
             }
         } catch (e) {
-            sync = { auto_update: true, push_enabled: true, pull_enabled: true, sync_enabled: true };
+            sync = {
+                auto_update: true, push_enabled: true, pull_enabled: true, sync_enabled: true,
+                push_modules: SM.ALL_KEYS.slice(), pull_modules: SM.ALL_KEYS.slice(),
+            };
         }
 
         // Strip the internal-only license_id from the surfaced company object.
@@ -132,7 +144,11 @@ async function get(req, res) {
             const { license_id, ...rest } = company;
             companyOut = rest;
         }
-        return R.successResponse(res, { company: companyOut, settings, sync });
+        return R.successResponse(res, {
+            company: companyOut, settings, sync,
+            // The full syncable-module catalog for rendering the auto-sync popup.
+            modules: SM.SYNC_MODULES,
+        });
     } catch (err) {
         console.error('settings.get error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);

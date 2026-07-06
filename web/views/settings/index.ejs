@@ -31,6 +31,19 @@ function _sChk(k, dflt) { var v = _s[k]; if (v === undefined) return dflt ? 'che
 var _sync = (typeof syncFlags !== 'undefined' && syncFlags) ? syncFlags : {};
 function _syncChk(k) { return _sync[k] !== false ? 'checked' : ''; }
 
+/* Selective AUTO-sync modules: the catalog [{key,label}] + the currently-
+ * selected push/pull key sets. When Auto push/pull is ON, ONLY these modules
+ * move. Rendered as a checkbox popup (one per direction). Default = ALL. */
+var _syncMods    = (typeof syncModules !== 'undefined' && Array.isArray(syncModules)) ? syncModules : [];
+var _pushModsSel = (typeof syncPushModules !== 'undefined' && Array.isArray(syncPushModules)) ? syncPushModules : _syncMods.map(function (m) { return m.key; });
+var _pullModsSel = (typeof syncPullModules !== 'undefined' && Array.isArray(syncPullModules)) ? syncPullModules : _syncMods.map(function (m) { return m.key; });
+function _modsSummary(sel) {
+    if (!_syncMods.length) return 'All modules';
+    if (!sel || !sel.length) return 'None selected';
+    if (sel.length === _syncMods.length) return 'All modules';
+    return sel.length + ' of ' + _syncMods.length + ' modules';
+}
+
 function _optsSel(list, selected) {
     var html = '';
     (list || []).forEach(function (v) {
@@ -222,6 +235,12 @@ var headActions = _isSuper ? '' :
                 <div>
                     <div style="font-weight:600;font-size:14px">Auto push (Cloud &rarr; Tally)</div>
                     <div class="form-hint mb-0">Automatically push cloud changes to Tally. Only applies while Auto-sync is ON.</div>
+                    <div class="mt-2 d-flex align-items-center gap-2">
+                        <button type="button" class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#pushModulesModal">
+                            <i class="fa-solid fa-list-check me-1"></i>Choose modules
+                        </button>
+                        <span class="form-hint mb-0" id="push-mods-summary"><%= _modsSummary(_pushModsSel) %></span>
+                    </div>
                 </div>
                 <div class="form-check form-switch mb-0">
                     <input type="hidden" name="settings[sync_push_enabled]" value="">
@@ -233,6 +252,12 @@ var headActions = _isSuper ? '' :
                 <div>
                     <div style="font-weight:600;font-size:14px">Auto pull (Tally &rarr; Cloud)</div>
                     <div class="form-hint mb-0">Automatically pull Tally changes into the cloud. Only applies while Auto-sync is ON.</div>
+                    <div class="mt-2 d-flex align-items-center gap-2">
+                        <button type="button" class="btn btn-light btn-sm" data-bs-toggle="modal" data-bs-target="#pullModulesModal">
+                            <i class="fa-solid fa-list-check me-1"></i>Choose modules
+                        </button>
+                        <span class="form-hint mb-0" id="pull-mods-summary"><%= _modsSummary(_pullModsSel) %></span>
+                    </div>
                 </div>
                 <div class="form-check form-switch mb-0">
                     <input type="hidden" name="settings[sync_pull_enabled]" value="">
@@ -364,4 +389,126 @@ var headActions = _isSuper ? '' :
     </div>
 
 </form>
+
+<%# ── Selective auto-sync MODULE pickers. Live in Bootstrap modals OUTSIDE the
+     settings <form> so their checkboxes never ride the profile save; they PATCH
+     /sync-direction directly via fetch. One modal per direction. ── %>
+<% function _modRows(idPrefix, sel) {
+     var html = '';
+     _syncMods.forEach(function (m) {
+         var checked = (sel || []).indexOf(m.key) !== -1 ? ' checked' : '';
+         html += '<label class="d-flex align-items-center gap-2 py-2" style="border-bottom:1px solid var(--border);cursor:pointer">'
+              +  '<input class="form-check-input mt-0 ' + idPrefix + '-mod" type="checkbox" value="' + m.key + '"' + checked + '>'
+              +  '<span style="font-size:14px">' + m.label + '</span></label>';
+     });
+     return html;
+ } %>
+
+<div class="modal fade" id="pushModulesModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-cloud-arrow-up me-2"></i>Auto push modules (Cloud &rarr; Tally)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="form-hint">When Auto push is ON, only the checked modules are pushed to Tally.</p>
+        <div class="d-flex justify-content-between mb-2">
+          <button type="button" class="btn btn-link btn-sm p-0" data-select-all="push">Select all</button>
+          <button type="button" class="btn btn-link btn-sm p-0" data-select-none="push">Clear all</button>
+        </div>
+        <div id="push-mods-list"><%- _modRows('push', _pushModsSel) %></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="push-mods-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="pullModulesModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fa-solid fa-cloud-arrow-down me-2"></i>Auto pull modules (Tally &rarr; Cloud)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p class="form-hint">When Auto pull is ON, only the checked modules are pulled from Tally.</p>
+        <div class="d-flex justify-content-between mb-2">
+          <button type="button" class="btn btn-link btn-sm p-0" data-select-all="pull">Select all</button>
+          <button type="button" class="btn btn-link btn-sm p-0" data-select-none="pull">Clear all</button>
+        </div>
+        <div id="pull-mods-list"><%- _modRows('pull', _pullModsSel) %></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="pull-mods-save">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+    var TOTAL = <%= _syncMods.length %>;
+    function summarise(n) {
+        if (!TOTAL) return 'All modules';
+        if (n === 0) return 'None selected';
+        if (n === TOTAL) return 'All modules';
+        return n + ' of ' + TOTAL + ' modules';
+    }
+    // Self-contained mini-toast (no global helper exists in this layout).
+    function notify(msg, ok) {
+        var t = document.createElement('div');
+        t.textContent = msg;
+        t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:1080;padding:12px 18px;'
+            + 'border-radius:8px;color:#fff;font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.25);'
+            + 'background:' + (ok ? '#16a34a' : '#dc2626');
+        document.body.appendChild(t);
+        setTimeout(function () { t.style.transition = 'opacity .4s'; t.style.opacity = '0'; }, 2600);
+        setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3100);
+    }
+    function boxes(dir) { return Array.prototype.slice.call(document.querySelectorAll('.' + dir + '-mod')); }
+    // Select all / clear all
+    document.querySelectorAll('[data-select-all]').forEach(function (b) {
+        b.addEventListener('click', function () { boxes(b.getAttribute('data-select-all')).forEach(function (c) { c.checked = true; }); });
+    });
+    document.querySelectorAll('[data-select-none]').forEach(function (b) {
+        b.addEventListener('click', function () { boxes(b.getAttribute('data-select-none')).forEach(function (c) { c.checked = false; }); });
+    });
+    function wireSave(dir, field, summaryId, saveBtnId, modalId) {
+        var btn = document.getElementById(saveBtnId);
+        if (!btn) return;
+        btn.addEventListener('click', function () {
+            var keys = boxes(dir).filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
+            btn.disabled = true;
+            // urlencoded (the web BFF parses forms, not JSON). The /sync-direction
+            // route splits a comma-joined value back into an array; an empty value
+            // means "none selected".
+            var body = new URLSearchParams();
+            body.set(field, keys.join(','));
+            fetch('/sync-direction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin',
+                body: body.toString(),
+            }).then(function (r) { return r.json(); }).then(function (res) {
+                btn.disabled = false;
+                var sm = document.getElementById(summaryId);
+                if (sm) sm.textContent = summarise(keys.length);
+                var m = window.bootstrap && bootstrap.Modal.getInstance(document.getElementById(modalId));
+                if (m) m.hide();
+                notify((res && res.msg) || 'Saved.', !!(res && res.ok));
+            }).catch(function () {
+                btn.disabled = false;
+                notify('Could not reach the server.', false);
+            });
+        });
+    }
+    wireSave('push', 'push_modules', 'push-mods-summary', 'push-mods-save', 'pushModulesModal');
+    wireSave('pull', 'pull_modules', 'pull-mods-summary', 'pull-mods-save', 'pullModulesModal');
+})();
+</script>
 <% } %>

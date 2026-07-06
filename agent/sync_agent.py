@@ -387,6 +387,41 @@ def _flag(data: dict, key: str, default: bool = True) -> bool:
     return default
 
 
+# The syncable-module catalog (key -> friendly label) — MUST mirror the server's
+# api/Helpers/syncModules.js. Used only to pretty-print the selection in the logs;
+# the cloud is authoritative and already filters /pending (push) + /import (pull)
+# to just the selected modules, so the agent never has to filter itself.
+SYNC_MODULE_LABELS = {
+    "customers": "Customers", "suppliers": "Suppliers", "products": "Products",
+    "categories": "Categories", "locations": "Locations",
+    "sales-invoices": "Sales Invoices", "purchase-invoices": "Purchase Invoices",
+    "payments": "Payments", "receipts": "Receipts", "journals": "Journals",
+}
+ALL_SYNC_MODULE_KEYS = list(SYNC_MODULE_LABELS.keys())
+
+
+def _modules(data: dict, key: str) -> list[str]:
+    """Read a module-selection list from the heartbeat (``push_modules`` /
+    ``pull_modules``). MISSING / non-list -> ALL modules (older server or an
+    unconfigured licence syncs everything, no regression). Filters to the known
+    keys so a stray value never confuses the log."""
+    if not isinstance(data, dict) or key not in data:
+        return list(ALL_SYNC_MODULE_KEYS)
+    val = data.get(key)
+    if not isinstance(val, list):
+        return list(ALL_SYNC_MODULE_KEYS)
+    return [str(x) for x in val if str(x) in SYNC_MODULE_LABELS]
+
+
+def _modules_label(keys: list[str]) -> str:
+    """Human-readable summary of a module selection for the logs/console."""
+    if not keys:
+        return "NONE"
+    if len(keys) == len(ALL_SYNC_MODULE_KEYS):
+        return "ALL"
+    return ", ".join(SYNC_MODULE_LABELS.get(k, k) for k in keys)
+
+
 def _open_company_names(cfg: Config, logger) -> Optional[list[str]]:
     """Return the names of the companies currently OPEN in Tally (or None).
 
@@ -570,6 +605,12 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
     push_enabled = _flag(hb, "push_enabled")
     pull_enabled = _flag(hb, "pull_enabled")
 
+    # Per-license SELECTED modules for AUTO push/pull. The cloud already filters
+    # /pending + /import to just these; the agent reads them ONLY to report which
+    # modules are in scope this cycle (the "with all logs" requirement).
+    push_modules = _modules(hb, "push_modules")
+    pull_modules = _modules(hb, "pull_modules")
+
     # 2) Tally reachability - if it is down, optionally AUTO-START it, then
     #    re-check. Tally serves its XML API only while open, so auto-start lets
     #    the agent run truly unattended (config [tally] auto_start, default on).
@@ -623,6 +664,11 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
     #    skipped entirely (a skip is NOT a failure, so the cycle still counts ok).
     #    If BOTH are off the cycle still heartbeated + drained commands above.
     if push_enabled:
+        logger.info("Cloud->Tally auto-sync ON; modules: %s", _modules_label(push_modules))
+        if VERBOSE:
+            echo("")
+            echo("STEP 3/4 - Cloud -> Tally (push)")
+            echo(f"  [i] Modules selected for auto-push: {_modules_label(push_modules)}")
         pushed = _sync_pass(cfg, logger, api, tally)
     else:
         pushed = True
@@ -641,6 +687,12 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
             if VERBOSE:
                 echo("")
                 echo("STEP 4/4 - Tally -> Cloud (manual pull; auto is OFF)")
+        else:
+            logger.info("Tally->Cloud auto-sync ON; modules: %s", _modules_label(pull_modules))
+            if VERBOSE:
+                echo("")
+                echo("STEP 4/4 - Tally -> Cloud (pull)")
+                echo(f"  [i] Modules selected for auto-pull: {_modules_label(pull_modules)}")
         _pull_pass(cfg, logger, api, tally)
     else:
         logger.info("Tally->Cloud auto-sync is OFF (skipped)")

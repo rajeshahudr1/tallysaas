@@ -2592,6 +2592,13 @@ router.post('/sync-direction', async (req, res) => {
     // not clobber the other). The api treats each flag as optional.
     if (b.push_enabled !== undefined) payload.push_enabled = asBool(b.push_enabled);
     if (b.pull_enabled !== undefined) payload.pull_enabled = asBool(b.pull_enabled);
+    // Per-module selection for AUTO push/pull. Accept either a real array (XHR
+    // JSON) or a comma-joined string (plain form fallback). Only forward when
+    // the client actually sent the field so a flag-only toggle never clears it.
+    const asArr = (v) => (Array.isArray(v) ? v
+        : (typeof v === 'string' && v !== '' ? v.split(',') : (v === '' ? [] : undefined)));
+    if (b.push_modules !== undefined) { const a = asArr(b.push_modules); if (a !== undefined) payload.push_modules = a; }
+    if (b.pull_modules !== undefined) { const a = asArr(b.pull_modules); if (a !== undefined) payload.pull_modules = a; }
     try {
         const result = await api.patch(req, '/account/sync-direction', payload);
         const ok  = apiOk(result) || (result && result.body && result.body.status === 200);
@@ -2602,6 +2609,7 @@ router.post('/sync-direction', async (req, res) => {
             return res.status(200).json({
                 ok: !!ok, msg,
                 push_enabled: data.push_enabled, pull_enabled: data.pull_enabled,
+                push_modules: data.push_modules, pull_modules: data.pull_modules,
             });
         }
         setFlash(req, ok ? 'success' : 'error', msg);
@@ -3994,6 +4002,12 @@ router.get('/settings', async (req, res, next) => {
             sync_pull_enabled: _syncIn.pull_enabled !== false,
             auto_update:       _syncIn.auto_update  !== false,
         };
+        // Syncable-module catalog + the current per-module selection for the
+        // auto-push / auto-pull popups. Default to ALL when the API omits them.
+        const syncModules = Array.isArray(payload.modules) ? payload.modules : [];
+        const allKeys = syncModules.map((m) => m.key);
+        const syncPushModules = Array.isArray(_syncIn.push_modules) ? _syncIn.push_modules : allKeys;
+        const syncPullModules = Array.isArray(_syncIn.pull_modules) ? _syncIn.pull_modules : allKeys;
         const config = await fetchConfig(req, ['financial_years', 'gst_rates', 'payment_terms']);
 
         res.render('settings/index', {
@@ -4009,6 +4023,9 @@ router.get('/settings', async (req, res, next) => {
             companyProfile,            // = body.data.company  {name,email,mobile,gst_number,pan_number,financial_year,address}
             companySettings,           // = body.data.settings {arbitrary key/values}
             syncFlags,                 // = body.data.sync, normalised for the Sync Settings switches
+            syncModules,               // = body.data.modules [{key,label}] — the auto-sync popup catalog
+            syncPushModules,           // selected module keys for AUTO push (Cloud→Tally)
+            syncPullModules,           // selected module keys for AUTO pull (Tally→Cloud)
 
             // Config-enumeration option sources (api single source /config/options).
             ...config,
