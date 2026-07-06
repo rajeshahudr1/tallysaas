@@ -84,6 +84,25 @@ async function ensureDatabase(dbName) {
     } finally { await admin.end(); }
 }
 
+// Drop a tenant db if it exists (terminating any live connections first). Used
+// when provisioning a FRESH licence: its `tally_lic_<id>` must start empty. A
+// same-named db here is always STALE — the master was reset (e.g. re-run knex
+// migrate) so a new licence reused an id whose old tenant db was left behind;
+// reusing it would collide (duplicate company/user ids). Safe: the licence id is
+// freshly minted, so no LIVE tenant can legitimately own this db yet.
+async function dropDatabaseIfExists(dbName) {
+    if (!DB_NAME_RE.test(dbName)) throw new Error(`refusing unsafe db_name "${dbName}"`);
+    const admin = adminClient();
+    await admin.connect();
+    try {
+        await admin.query(
+            'SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()',
+            [dbName],
+        );
+        await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+    } finally { await admin.end(); }
+}
+
 async function runSchemaFile(knex, file) {
     const sql = fs.readFileSync(path.join(__dirname, file), 'utf8');
     await knex.raw(sql);
@@ -138,6 +157,7 @@ async function setupMaster(ctx = {}) {
         // denormalise role_slug so login needn't touch a tenant db.
         await m.raw('ALTER TABLE users ALTER COLUMN role_id DROP NOT NULL').catch(() => {});
         await m.raw("ALTER TABLE users ADD COLUMN IF NOT EXISTS role_slug varchar(64)").catch(() => {});
+        await m.raw("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS platform varchar(16)").catch(() => {});
 
         const permIdBySlug = await seedPermissions(m);
         log(`✓ master permissions: ${Object.keys(permIdBySlug).length}`);
@@ -190,9 +210,11 @@ async function provisionLicense(opts, ctx = {}) {
         const dbName = `tally_lic_${lic.id}`;
         log(`✓ master license id=${lic.id} holder="${holder}" key=${key}`);
 
-        // 2) tenant db + schema
-        const created = await ensureDatabase(dbName);
-        log(created ? `✓ created tenant db "${dbName}"` : `✓ tenant db "${dbName}" exists`);
+        // 2) FRESH tenant db — drop any stale same-named db (a reused id after a
+        //    master reset) so provisioning always starts clean, then create.
+        await dropDatabaseIfExists(dbName);
+        await ensureDatabase(dbName);
+        log(`✓ created tenant db "${dbName}" (fresh)`);
         const t = makeKnex(dbName);
         let masterUserId;
         try {
@@ -200,18 +222,16 @@ async function provisionLicense(opts, ctx = {}) {
                 await runSchemaFile(t, 'tenant-schema.sql');
                 log('✓ applied tenant-schema.sql');
             }
-            // 3) tenant RBAC + default company
+            // 3) tenant RBAC — NO default company. Companies come from the Tally
+            //    sync (agent importFromTally find-or-create) or a manual "Add
+            //    Company", so a fresh licence starts with ZERO companies. Creating
+            //    a "<holder>" placeholder here made a DUPLICATE sit beside the real
+            //    Tally company (their names rarely match), which is what the
+            //    operator saw as "why are there 2 companies?".
             const permIdBySlug = await seedPermissions(t);
             const roleIdBySlug = await seedRoles(t, permIdBySlug);
             const companyAdminRoleId = roleIdBySlug['company-admin'];
-            let co = await t('companies').where('slug', slugify(holder)).first();
-            if (!co) {
-                [co] = await t('companies').insert({
-                    name: holder, slug: slugify(holder), license_id: lic.id,
-                    status: 'Active', mailing_name: holder,
-                }).returning('*');
-            }
-            log(`✓ tenant RBAC (${Object.keys(permIdBySlug).length} perms, ${Object.keys(roleIdBySlug).length} roles) + company id=${co.id}`);
+            log(`✓ tenant RBAC (${Object.keys(permIdBySlug).length} perms, ${Object.keys(roleIdBySlug).length} roles) — no default company`);
 
             // 4) admin user in MASTER (auth) — role_id = the TENANT company-admin role id.
             const pwHash = await passwords.hash(password);
@@ -223,9 +243,12 @@ async function provisionLicense(opts, ctx = {}) {
             masterUserId = mu.id;
 
             // 5) MIRROR the user into the tenant with the SAME id (business FKs).
+            //    company_id: null — a licence-admin operates across the licence's
+            //    companies via the switcher (X-Company-Id), not a pinned company;
+            //    there is no default company to pin to anyway.
             await t('users').insert({
                 id: masterUserId, name: adminName, email, password_hash: pwHash,
-                role_id: companyAdminRoleId, company_id: co.id, license_id: lic.id,
+                role_id: companyAdminRoleId, company_id: null, license_id: lic.id,
                 status: 'Active', approval_status: 'approved',
             });
             // keep the tenant users sequence past the explicit id.
@@ -241,13 +264,28 @@ async function provisionLicense(opts, ctx = {}) {
                 valid_from: new Date(), valid_until: validUntil, status: 'active',
             });
             log(`✓ admin user id=${masterUserId} <${email}> (master auth + tenant mirror + active seat) password=${password}`);
-        } finally { await t.destroy(); }
+        } catch (err) {
+            // Cross-DB partial failure → roll the master rows back (leave NO orphan
+            // licence / admin / seat) and drop the half-built tenant db, then
+            // rethrow the original error so the caller reports the real cause.
+            await m('subscriptions').where('user_id', masterUserId || -1).del().catch(() => {});
+            await m('users').where('license_id', lic.id).del().catch(() => {});
+            await m('licenses').where('id', lic.id).del().catch(() => {});
+            await t.destroy().catch(() => {});
+            await dropDatabaseIfExists(dbName).catch(() => {});
+            throw err;
+        } finally { await t.destroy().catch(() => {}); }
 
         return { license: lic, dbName, adminEmail: email, adminPassword: password, licenseKey: key, adminUserId: masterUserId };
     } finally { await m.destroy(); }
 }
 
-module.exports = { setupMaster, provisionLicense, MASTER_DB, ensureDatabase, makeKnex };
+module.exports = {
+    setupMaster, provisionLicense, MASTER_DB, ensureDatabase, makeKnex,
+    // Exposed so the knex master migration/seed reuse the SAME schema + catalogue
+    // (one source of truth — knex-migrate and provision.js produce identical masters).
+    seedPermissions, seedRoles, MODULES, ACTIONS, SYSTEM_ROLES,
+};
 
 // ── CLI ──────────────────────────────────────────────────────
 if (require.main === module) {

@@ -22,6 +22,17 @@ from __future__ import annotations
 
 
 # --------------------------------------------------------------------------- #
+# Brand (product name shown in the GUI: window title, header, dialogs, tray,
+# shortcut). SINGLE source of truth — change it HERE and the whole agent follows.
+# Mirrors web/config/brand.js + app/lib/core/brand.dart — keep the three in sync.
+# NOTE: APP_SECRET below is a STABLE baked key (not a display name) — do NOT
+# rebrand it; changing it would break existing installs' credential decryption.
+# --------------------------------------------------------------------------- #
+BRAND_NAME = "Tally Cloud Sync"
+BRAND_NAME_AGENT = f"{BRAND_NAME} Agent"
+
+
+# --------------------------------------------------------------------------- #
 # Server URL (baked + hidden)
 # --------------------------------------------------------------------------- #
 # PRODUCTION: set your domain here before building the distributable exe; this

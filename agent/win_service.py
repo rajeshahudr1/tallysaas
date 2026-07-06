@@ -28,12 +28,15 @@ import os
 import sys
 import threading
 
+from constants import BRAND_NAME   # single source of truth for the brand name
 
-# Service identity. _svc_name_ is the SCM key; the display name + description are
-# what the operator sees in services.msc (mirrors "Tally Scheduler").
+
+# Service identity. _svc_name_ is the SCM key (STRUCTURAL — never rebrand it, it
+# would orphan an installed service); the display name + description are what the
+# operator sees in services.msc and follow the brand.
 SERVICE_NAME = "TallyCloudSync"
-SERVICE_DISPLAY_NAME = "Tally Cloud Sync"
-SERVICE_DESCRIPTION = "Background sync between TallyPrime and Tally Cloud."
+SERVICE_DISPLAY_NAME = BRAND_NAME
+SERVICE_DESCRIPTION = f"Background sync between TallyPrime and {BRAND_NAME}."
 
 
 def get_version() -> str:
@@ -129,7 +132,7 @@ class TallyCloudSyncService(_ServiceBase):
     def SvcDoRun(self):
         """Service main: report RUNNING, then run the sync loop until stopped."""
         try:
-            servicemanager.LogInfoMsg("Tally Cloud Sync service starting.")
+            servicemanager.LogInfoMsg(f"{SERVICE_DISPLAY_NAME} service starting.")
         except Exception:
             pass
         try:
@@ -141,11 +144,11 @@ class TallyCloudSyncService(_ServiceBase):
         except Exception as exc:  # never let a crash leave SCM hanging.
             try:
                 servicemanager.LogErrorMsg(
-                    "Tally Cloud Sync service error: " + str(exc))
+                    f"{SERVICE_DISPLAY_NAME} service error: " + str(exc))
             except Exception:
                 pass
         try:
-            servicemanager.LogInfoMsg("Tally Cloud Sync service stopped.")
+            servicemanager.LogInfoMsg(f"{SERVICE_DISPLAY_NAME} service stopped.")
         except Exception:
             pass
 

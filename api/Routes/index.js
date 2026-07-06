@@ -40,6 +40,8 @@ const express = require('express');
 const { authenticate, requireSuperAdmin, authenticateAgent } = require('../Middlewares/auth');
 const { resolveCompany }  = require('../Middlewares/companyScope');
 const { resolveLocation } = require('../Middlewares/locationScope');
+const { resolveTenant }   = require('../Middlewares/tenantResolver');
+const { superAdminBridge } = require('../Middlewares/superAdminBridge');
 const { can, canField }   = require('../Middlewares/rbac');
 const { validate }        = require('../Middlewares/validate');
 
@@ -210,14 +212,14 @@ router.post('/auth/logout', authenticate, AuthController.logout);
 
 // Current authenticated user (no company scope / RBAC — every logged-in user
 // may read their own profile).
-router.get('/me', authenticate, AuthController.me);
+router.get('/me', authenticate, resolveTenant, AuthController.me);
 
 // Every logged-in user may change THEIR OWN password (all roles). No company
 // scope / RBAC — it acts only on req.user.sub.
 router.post('/account/change-password', authenticate, AuthController.changePassword);
 
 // Companies the caller may switch between (license-scoped; super-admin = all).
-router.get('/my-companies', authenticate, MyCompaniesController.list);
+router.get('/my-companies', authenticate, resolveTenant, MyCompaniesController.list);
 
 // Config enumeration lists (supplier groups, payment terms, GST rates, units,
 // statuses …) — the single source for non-master-table dropdowns shared by the
@@ -277,17 +279,17 @@ router.delete('/super-admin/licenses/:id',
 // e-Invoice GSP integration (per-license, super-admin). Credentials are AES-GCM
 // encrypted before storage; secrets are never returned.
 router.get('/super-admin/einvoice-gsp',
-    authenticate, requireSuperAdmin, EInvoiceGspController.get);
+    authenticate, requireSuperAdmin, superAdminBridge, EInvoiceGspController.get);
 router.post('/super-admin/einvoice-gsp/credential',
-    authenticate, requireSuperAdmin, EInvoiceGspController.saveCredential);
+    authenticate, requireSuperAdmin, superAdminBridge, EInvoiceGspController.saveCredential);
 router.post('/super-admin/einvoice-gsp/settings',
-    authenticate, requireSuperAdmin, EInvoiceGspController.saveSettings);
+    authenticate, requireSuperAdmin, superAdminBridge, EInvoiceGspController.saveSettings);
 
 // GPS tracking config (per-license, super-admin).
 router.get('/super-admin/gps-settings',
-    authenticate, requireSuperAdmin, GpsSettingsController.get);
+    authenticate, requireSuperAdmin, superAdminBridge, GpsSettingsController.get);
 router.post('/super-admin/gps-settings',
-    authenticate, requireSuperAdmin, GpsSettingsController.save);
+    authenticate, requireSuperAdmin, superAdminBridge, GpsSettingsController.save);
 router.post('/super-admin/licenses/:id/reset-machine',
     authenticate, requireSuperAdmin, LicenseController.resetMachine);
 router.post('/super-admin/licenses/:id/suspend',
@@ -305,9 +307,9 @@ router.put('/super-admin/licenses/:id/credentials',
 
 // Super-Admin · Roles & Permissions matrix (roles are global → platform op).
 router.get('/permissions/matrix',
-    authenticate, requireSuperAdmin, RbacController.matrix);
+    authenticate, requireSuperAdmin, superAdminBridge, RbacController.matrix);
 router.put('/roles/:id/permissions',
-    authenticate, requireSuperAdmin, RbacController.updateRolePermissions);
+    authenticate, requireSuperAdmin, superAdminBridge, RbacController.updateRolePermissions);
 
 // Super-Admin · per-license module ENTITLEMENTS (which modules a license's
 // roles may use). Phase C — backs the license module-access screen.
@@ -319,9 +321,9 @@ router.put('/super-admin/licenses/:id/permissions',
 // Super-Admin · per-license payment-reminder settings (Email/WhatsApp channel
 // switches + auto scheduler). A licence gets a channel only when flipped on here.
 router.get('/super-admin/licenses/:id/reminders',
-    authenticate, requireSuperAdmin, ReminderController.get);
+    authenticate, requireSuperAdmin, superAdminBridge.fromLicenseParam, ReminderController.get);
 router.put('/super-admin/licenses/:id/reminders',
-    authenticate, requireSuperAdmin, ReminderController.update);
+    authenticate, requireSuperAdmin, superAdminBridge.fromLicenseParam, ReminderController.update);
 
 // Super-Admin · publish the agent auto-update RELEASE (drop the exe into
 // AGENT_RELEASE_DIR, then POST its version → marks the single is_current row).
@@ -347,9 +349,9 @@ router.post('/super-admin/app-release/auto-update',
 
 // Super-Admin · per-company concurrent web-session cap (max_sessions_per_user).
 router.get('/super-admin/companies',
-    authenticate, requireSuperAdmin, CompanyController.list);
+    authenticate, requireSuperAdmin, superAdminBridge, CompanyController.list);
 router.patch('/super-admin/companies/:id/session-limit',
-    authenticate, requireSuperAdmin, CompanyController.setSessionLimit);
+    authenticate, requireSuperAdmin, superAdminBridge, CompanyController.setSessionLimit);
 
 // ───────────────────────────────────────────────────────────────────
 // Customers (protected tenant CRUD — sample of the crudController factory)
@@ -357,34 +359,34 @@ router.patch('/super-admin/companies/:id/session-limit',
 
 router.get(
     '/customers',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
     validate(listCustomerSchema, 'query'),
     CustomerController.list,
 );
 
 router.get(
     '/customers/:id',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
     CustomerController.get,
 );
 
 router.post(
     '/customers',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'create'),
     validate(createCustomerSchema),
     CustomerController.create,
 );
 
 router.put(
     '/customers/:id',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'edit'),
     validate(updateCustomerSchema),
     CustomerController.update,
 );
 
 router.delete(
     '/customers/:id',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'delete'),
     CustomerController.destroy,
 );
 
@@ -394,34 +396,34 @@ router.delete(
 
 router.get(
     '/locations',
-    authenticate, resolveCompany, resolveLocation, can('locations', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('locations', 'view'),
     validate(listLocationSchema, 'query'),
     LocationController.list,
 );
 
 router.get(
     '/locations/:id',
-    authenticate, resolveCompany, resolveLocation, can('locations', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('locations', 'view'),
     LocationController.get,
 );
 
 router.post(
     '/locations',
-    authenticate, resolveCompany, resolveLocation, can('locations', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('locations', 'create'),
     validate(createLocationSchema),
     LocationController.create,
 );
 
 router.put(
     '/locations/:id',
-    authenticate, resolveCompany, resolveLocation, can('locations', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('locations', 'edit'),
     validate(updateLocationSchema),
     LocationController.update,
 );
 
 router.delete(
     '/locations/:id',
-    authenticate, resolveCompany, resolveLocation, can('locations', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('locations', 'delete'),
     LocationController.destroy,
 );
 
@@ -431,34 +433,34 @@ router.delete(
 
 router.get(
     '/sales-persons',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'view'),
     validate(listSalesPersonSchema, 'query'),
     SalesPersonController.list,
 );
 
 router.get(
     '/sales-persons/:id',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'view'),
     SalesPersonController.get,
 );
 
 router.post(
     '/sales-persons',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'create'),
     validate(createSalesPersonSchema),
     SalesPersonController.create,
 );
 
 router.put(
     '/sales-persons/:id',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
     validate(updateSalesPersonSchema),
     SalesPersonController.update,
 );
 
 router.delete(
     '/sales-persons/:id',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'delete'),
     SalesPersonController.destroy,
 );
 
@@ -468,24 +470,24 @@ router.delete(
 // (create-or-update the linked user + seat reconcile).
 router.get(
     '/sales-persons/:id/assignments',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'view'),
     SalesPersonController.getAssignments,
 );
 router.post(
     '/sales-persons/:id/login',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
     validate(salesPersonLoginSchema),
     SalesPersonController.setLogin,
 );
 router.put(
     '/sales-persons/:id/locations',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
     validate(salesPersonLocationsSchema),
     SalesPersonController.setLocations,
 );
 router.put(
     '/sales-persons/:id/customers',
-    authenticate, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-persons', 'edit'),
     validate(salesPersonCustomersSchema),
     SalesPersonController.setCustomers,
 );
@@ -496,34 +498,34 @@ router.put(
 
 router.get(
     '/suppliers',
-    authenticate, resolveCompany, resolveLocation, can('suppliers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('suppliers', 'view'),
     validate(listSupplierSchema, 'query'),
     SupplierController.list,
 );
 
 router.get(
     '/suppliers/:id',
-    authenticate, resolveCompany, resolveLocation, can('suppliers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('suppliers', 'view'),
     SupplierController.get,
 );
 
 router.post(
     '/suppliers',
-    authenticate, resolveCompany, resolveLocation, can('suppliers', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('suppliers', 'create'),
     validate(createSupplierSchema),
     SupplierController.create,
 );
 
 router.put(
     '/suppliers/:id',
-    authenticate, resolveCompany, resolveLocation, can('suppliers', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('suppliers', 'edit'),
     validate(updateSupplierSchema),
     SupplierController.update,
 );
 
 router.delete(
     '/suppliers/:id',
-    authenticate, resolveCompany, resolveLocation, can('suppliers', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('suppliers', 'delete'),
     SupplierController.destroy,
 );
 
@@ -533,101 +535,101 @@ router.delete(
 
 router.get(
     '/categories',
-    authenticate, resolveCompany, resolveLocation, can('categories', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('categories', 'view'),
     validate(listCategorySchema, 'query'),
     CategoryController.list,
 );
 
 router.get(
     '/categories/:id',
-    authenticate, resolveCompany, resolveLocation, can('categories', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('categories', 'view'),
     CategoryController.get,
 );
 
 router.post(
     '/categories',
-    authenticate, resolveCompany, resolveLocation, can('categories', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('categories', 'create'),
     validate(createCategorySchema),
     CategoryController.create,
 );
 
 router.put(
     '/categories/:id',
-    authenticate, resolveCompany, resolveLocation, can('categories', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('categories', 'edit'),
     validate(updateCategorySchema),
     CategoryController.update,
 );
 
 router.delete(
     '/categories/:id',
-    authenticate, resolveCompany, resolveLocation, can('categories', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('categories', 'delete'),
     CategoryController.destroy,
 );
 
 // ───────────────────────────────────────────────────────────────────
 // Expense Categories + Expenses (protected tenant CRUD)
 // ───────────────────────────────────────────────────────────────────
-router.get('/expense-categories',        authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseCategoryController.list);
-router.get('/expense-categories/:id',     authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseCategoryController.get);
-router.post('/expense-categories',        authenticate, resolveCompany, resolveLocation, can('expenses', 'create'), validate(createExpenseCategorySchema), ExpenseCategoryController.create);
-router.put('/expense-categories/:id',     authenticate, resolveCompany, resolveLocation, can('expenses', 'edit'),   validate(updateExpenseCategorySchema), ExpenseCategoryController.update);
-router.delete('/expense-categories/:id',  authenticate, resolveCompany, resolveLocation, can('expenses', 'delete'), ExpenseCategoryController.destroy);
+router.get('/expense-categories',        authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseCategoryController.list);
+router.get('/expense-categories/:id',     authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseCategoryController.get);
+router.post('/expense-categories',        authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'create'), validate(createExpenseCategorySchema), ExpenseCategoryController.create);
+router.put('/expense-categories/:id',     authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'edit'),   validate(updateExpenseCategorySchema), ExpenseCategoryController.update);
+router.delete('/expense-categories/:id',  authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'delete'), ExpenseCategoryController.destroy);
 
-router.get('/expenses',        authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseController.list);
-router.get('/expenses/:id',    authenticate, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseController.get);
-router.post('/expenses',       authenticate, resolveCompany, resolveLocation, can('expenses', 'create'), validate(createExpenseSchema), ExpenseController.create);
-router.put('/expenses/:id',    authenticate, resolveCompany, resolveLocation, can('expenses', 'edit'),   validate(updateExpenseSchema), ExpenseController.update);
-router.delete('/expenses/:id', authenticate, resolveCompany, resolveLocation, can('expenses', 'delete'), ExpenseController.destroy);
+router.get('/expenses',        authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseController.list);
+router.get('/expenses/:id',    authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'view'),   ExpenseController.get);
+router.post('/expenses',       authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'create'), validate(createExpenseSchema), ExpenseController.create);
+router.put('/expenses/:id',    authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'edit'),   validate(updateExpenseSchema), ExpenseController.update);
+router.delete('/expenses/:id', authenticate, resolveTenant, resolveCompany, resolveLocation, can('expenses', 'delete'), ExpenseController.destroy);
 
 // ───────────────────────────────────────────────────────────────────
 // Recurring Invoices (protected tenant CRUD + generate-now)
 // ───────────────────────────────────────────────────────────────────
-router.get('/recurring-invoices',        authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'view'),   RecurringInvoiceController.list);
-router.get('/recurring-invoices/:id',     authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'view'),   RecurringInvoiceController.get);
-router.post('/recurring-invoices',        authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'create'), validate(createRecurringSchema), RecurringInvoiceController.create);
-router.put('/recurring-invoices/:id',     authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'edit'),   validate(updateRecurringSchema), RecurringInvoiceController.update);
-router.delete('/recurring-invoices/:id',  authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'delete'), RecurringInvoiceController.destroy);
-router.post('/recurring-invoices/:id/generate', authenticate, resolveCompany, resolveLocation, can('recurring-invoices', 'create'), RecurringInvoiceController.generate);
+router.get('/recurring-invoices',        authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'view'),   RecurringInvoiceController.list);
+router.get('/recurring-invoices/:id',     authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'view'),   RecurringInvoiceController.get);
+router.post('/recurring-invoices',        authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'create'), validate(createRecurringSchema), RecurringInvoiceController.create);
+router.put('/recurring-invoices/:id',     authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'edit'),   validate(updateRecurringSchema), RecurringInvoiceController.update);
+router.delete('/recurring-invoices/:id',  authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'delete'), RecurringInvoiceController.destroy);
+router.post('/recurring-invoices/:id/generate', authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'create'), RecurringInvoiceController.generate);
 
 // ───────────────────────────────────────────────────────────────────
 // Bank Reconciliation — import statement + auto/manual match
 // ───────────────────────────────────────────────────────────────────
-router.post('/bank/import',                         authenticate, resolveCompany, can('bank-reconciliation', 'create'), validate(importBankSchema), BankController.importTxns);
-router.get('/bank/transactions',                    authenticate, resolveCompany, can('bank-reconciliation', 'view'),   BankController.list);
-router.get('/bank/transactions/:id/candidates',     authenticate, resolveCompany, can('bank-reconciliation', 'view'),   BankController.candidates);
-router.post('/bank/transactions/:id/match',         authenticate, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.match);
-router.post('/bank/transactions/:id/unmatch',       authenticate, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.unmatch);
-router.post('/bank/transactions/:id/ignore',        authenticate, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.ignore);
-router.delete('/bank/transactions/:id',             authenticate, resolveCompany, can('bank-reconciliation', 'delete'), BankController.remove);
+router.post('/bank/import',                         authenticate, resolveTenant, resolveCompany, can('bank-reconciliation', 'create'), validate(importBankSchema), BankController.importTxns);
+router.get('/bank/transactions',                    authenticate, resolveTenant, resolveCompany, can('bank-reconciliation', 'view'),   BankController.list);
+router.get('/bank/transactions/:id/candidates',     authenticate, resolveTenant, resolveCompany, can('bank-reconciliation', 'view'),   BankController.candidates);
+router.post('/bank/transactions/:id/match',         authenticate, resolveTenant, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.match);
+router.post('/bank/transactions/:id/unmatch',       authenticate, resolveTenant, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.unmatch);
+router.post('/bank/transactions/:id/ignore',        authenticate, resolveTenant, resolveCompany, can('bank-reconciliation', 'edit'),   BankController.ignore);
+router.delete('/bank/transactions/:id',             authenticate, resolveTenant, resolveCompany, can('bank-reconciliation', 'delete'), BankController.remove);
 
 // ───────────────────────────────────────────────────────────────────
 // e-Invoice (GST IRN) + e-Way Bill — GSP-ready
 // ───────────────────────────────────────────────────────────────────
-router.get('/einvoices',              authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.list);
+router.get('/einvoices',              authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.list);
 // Dashboard + reports — MUST precede '/einvoices/:id' so they aren't read as ids.
-router.get('/einvoices/dashboard',    authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.dashboard);
-router.get('/einvoices/report',       authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.report);
-router.get('/einvoices/:id',          authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.get);
-router.get('/einvoices/:id/details',  authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.details);
-router.post('/einvoices/bulk-generate', authenticate, resolveCompany, can('einvoice', 'create'), EInvoiceController.bulkGenerate);
-router.post('/einvoices/:id/generate', authenticate, resolveCompany, can('einvoice', 'create'), EInvoiceController.generate);
-router.post('/einvoices/:id/manual',  authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.manual);
-router.post('/einvoices/:id/cancel',  authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.cancel);
+router.get('/einvoices/dashboard',    authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.dashboard);
+router.get('/einvoices/report',       authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.report);
+router.get('/einvoices/:id',          authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.get);
+router.get('/einvoices/:id/details',  authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.details);
+router.post('/einvoices/bulk-generate', authenticate, resolveTenant, resolveCompany, can('einvoice', 'create'), EInvoiceController.bulkGenerate);
+router.post('/einvoices/:id/generate', authenticate, resolveTenant, resolveCompany, can('einvoice', 'create'), EInvoiceController.generate);
+router.post('/einvoices/:id/manual',  authenticate, resolveTenant, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.manual);
+router.post('/einvoices/:id/cancel',  authenticate, resolveTenant, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.cancel);
 // e-Way Bill lifecycle (from an existing IRN).
-router.post('/einvoices/:id/eway',            authenticate, resolveCompany, can('einvoice', 'create'), EInvoiceController.generateEway);
-router.post('/einvoices/:id/update-vehicle',  authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.updateVehicle);
-router.post('/einvoices/:id/extend',          authenticate, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.extendValidity);
+router.post('/einvoices/:id/eway',            authenticate, resolveTenant, resolveCompany, can('einvoice', 'create'), EInvoiceController.generateEway);
+router.post('/einvoices/:id/update-vehicle',  authenticate, resolveTenant, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.updateVehicle);
+router.post('/einvoices/:id/extend',          authenticate, resolveTenant, resolveCompany, can('einvoice', 'edit'),   EInvoiceController.extendValidity);
 // Delivery — Download (JSON) / Email / WhatsApp (no browser print).
-router.get('/einvoices/:id/download',         authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.download);
-router.post('/einvoices/:id/email',           authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.email);
-router.post('/einvoices/:id/whatsapp',        authenticate, resolveCompany, can('einvoice', 'view'),   EInvoiceController.whatsapp);
+router.get('/einvoices/:id/download',         authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.download);
+router.post('/einvoices/:id/email',           authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.email);
+router.post('/einvoices/:id/whatsapp',        authenticate, resolveTenant, resolveCompany, can('einvoice', 'view'),   EInvoiceController.whatsapp);
 
 // ───────────────────────────────────────────────────────────────────
 // Product images (multi-image gallery, local upload — NOT synced to Tally)
 // ───────────────────────────────────────────────────────────────────
-router.get('/products/:id/images',             authenticate, resolveCompany, can('products', 'view'), ProductImageController.list);
-router.post('/products/:id/images',            authenticate, resolveCompany, can('products', 'edit'), productImagesMiddleware, ProductImageController.upload);
-router.delete('/products/:id/images/:imageId', authenticate, resolveCompany, can('products', 'edit'), ProductImageController.remove);
+router.get('/products/:id/images',             authenticate, resolveTenant, resolveCompany, can('products', 'view'), ProductImageController.list);
+router.post('/products/:id/images',            authenticate, resolveTenant, resolveCompany, can('products', 'edit'), productImagesMiddleware, ProductImageController.upload);
+router.delete('/products/:id/images/:imageId', authenticate, resolveTenant, resolveCompany, can('products', 'edit'), ProductImageController.remove);
 
 // ───────────────────────────────────────────────────────────────────
 // Products (protected tenant CRUD)
@@ -635,34 +637,34 @@ router.delete('/products/:id/images/:imageId', authenticate, resolveCompany, can
 
 router.get(
     '/products',
-    authenticate, resolveCompany, resolveLocation, can('products', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'view'),
     validate(listProductSchema, 'query'),
     ProductController.list,
 );
 
 router.get(
     '/products/:id',
-    authenticate, resolveCompany, resolveLocation, can('products', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'view'),
     ProductController.get,
 );
 
 router.post(
     '/products',
-    authenticate, resolveCompany, resolveLocation, can('products', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'create'),
     validate(createProductSchema),
     ProductController.create,
 );
 
 router.put(
     '/products/:id',
-    authenticate, resolveCompany, resolveLocation, can('products', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'edit'),
     validate(updateProductSchema),
     ProductController.update,
 );
 
 router.delete(
     '/products/:id',
-    authenticate, resolveCompany, resolveLocation, can('products', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'delete'),
     ProductController.destroy,
 );
 
@@ -673,34 +675,34 @@ router.delete(
 
 router.get(
     '/customer-groups',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
     validate(listCustomerGroupSchema, 'query'),
     CustomerGroupController.list,
 );
 
 router.get(
     '/customer-groups/:id',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
     CustomerGroupController.get,
 );
 
 router.post(
     '/customer-groups',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'create'),
     validate(createCustomerGroupSchema),
     CustomerGroupController.create,
 );
 
 router.put(
     '/customer-groups/:id',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'edit'),
     validate(updateCustomerGroupSchema),
     CustomerGroupController.update,
 );
 
 router.delete(
     '/customer-groups/:id',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'delete'),
     CustomerGroupController.destroy,
 );
 
@@ -711,32 +713,32 @@ router.delete(
 
 router.get(
     '/sales-invoices',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
     validate(listInvoiceSchema, 'query'),
     InvoiceController.listSales,
 );
 
 router.get(
     '/sales-invoices/monthly',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
     InvoiceController.monthlySales,
 );
 
 router.get(
     '/sales-invoices/:id',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
     InvoiceController.get,
 );
 
 router.get(
     '/sales-invoices/:id/pdf',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
     InvoiceController.pdf,
 );
 
 router.post(
     '/sales-invoices',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
     validate(createSalesInvoiceSchema),
     InvoiceController.createSales,
 );
@@ -745,7 +747,7 @@ router.post(
 // draft-only + ownership). save_as_draft=false in the body ALSO submits it.
 router.put(
     '/sales-invoices/:id',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
     validate(createSalesInvoiceSchema),
     InvoiceController.updateDraft,
 );
@@ -753,7 +755,7 @@ router.put(
 // SFA — a salesman submits their own draft for approval ('draft' → 'pending').
 router.post(
     '/sales-invoices/:id/submit',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
     InvoiceController.submitDraft,
 );
 
@@ -761,18 +763,18 @@ router.post(
 // The controller additionally blocks salesmen (403) so they can't self-approve.
 router.post(
     '/sales-invoices/:id/approve',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'edit'),
     InvoiceController.approve,
 );
 router.post(
     '/sales-invoices/:id/reject',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'edit'),
     InvoiceController.reject,
 );
 
 router.delete(
     '/sales-invoices/:id',
-    authenticate, resolveCompany, resolveLocation, can('sales-invoices', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'delete'),
     InvoiceController.destroy,
 );
 
@@ -782,39 +784,39 @@ router.delete(
 
 router.get(
     '/purchase-invoices',
-    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
     validate(listInvoiceSchema, 'query'),
     InvoiceController.listPurchase,
 );
 
 router.get(
     '/purchase-invoices/monthly',
-    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
     InvoiceController.monthlyPurchase,
 );
 
 router.get(
     '/purchase-invoices/:id',
-    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
     InvoiceController.get,
 );
 
 router.get(
     '/purchase-invoices/:id/pdf',
-    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
     InvoiceController.pdf,
 );
 
 router.post(
     '/purchase-invoices',
-    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'create'),
     validate(createPurchaseInvoiceSchema),
     InvoiceController.createPurchase,
 );
 
 router.delete(
     '/purchase-invoices/:id',
-    authenticate, resolveCompany, resolveLocation, can('purchase-invoices', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'delete'),
     InvoiceController.destroy,
 );
 
@@ -824,33 +826,33 @@ router.delete(
 
 router.get(
     '/payments',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'view'),
     validate(listPaymentSchema, 'query'),
     PaymentController.listPayments,
 );
 
 router.get(
     '/payments/monthly',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'view'),
     PaymentController.monthlyPayments,
 );
 
 router.get(
     '/payments/:id',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'view'),
     PaymentController.get,
 );
 
 router.post(
     '/payments',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'create'),
     validate(createPaymentSchema),
     PaymentController.createPayment,
 );
 
 router.delete(
     '/payments/:id',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'delete'),
     PaymentController.destroy,
 );
 
@@ -860,33 +862,33 @@ router.delete(
 
 router.get(
     '/receipts',
-    authenticate, resolveCompany, resolveLocation, can('receipts', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('receipts', 'view'),
     validate(listPaymentSchema, 'query'),
     PaymentController.listReceipts,
 );
 
 router.get(
     '/receipts/monthly',
-    authenticate, resolveCompany, resolveLocation, can('receipts', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('receipts', 'view'),
     PaymentController.monthlyReceipts,
 );
 
 router.get(
     '/receipts/:id',
-    authenticate, resolveCompany, resolveLocation, can('receipts', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('receipts', 'view'),
     PaymentController.get,
 );
 
 router.post(
     '/receipts',
-    authenticate, resolveCompany, resolveLocation, can('receipts', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('receipts', 'create'),
     validate(createReceiptSchema),
     PaymentController.createReceipt,
 );
 
 router.delete(
     '/receipts/:id',
-    authenticate, resolveCompany, resolveLocation, can('receipts', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('receipts', 'delete'),
     PaymentController.destroy,
 );
 
@@ -898,36 +900,36 @@ router.delete(
 // Companies (tenant) — list (license-scoped) + register a new one.
 router.get(
     '/companies',
-    authenticate, resolveCompany, resolveLocation, can('companies', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('companies', 'view'),
     validate(listCompanySchema, 'query'),
     TenantCompanyController.list,
 );
 router.post(
     '/companies',
-    authenticate, resolveCompany, resolveLocation, can('companies', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('companies', 'create'),
     validate(createCompanySchema),
     TenantCompanyController.create,
 );
 router.get(
     '/companies/:id',
-    authenticate, resolveCompany, resolveLocation, can('companies', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('companies', 'view'),
     TenantCompanyController.get,
 );
 router.put(
     '/companies/:id',
-    authenticate, resolveCompany, resolveLocation, can('companies', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('companies', 'edit'),
     TenantCompanyController.update,
 );
 router.delete(
     '/companies/:id',
-    authenticate, resolveCompany, resolveLocation, can('companies', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('companies', 'delete'),
     TenantCompanyController.destroy,
 );
 
 // Dashboard summary — counts + charts + recent activity.
 router.get(
     '/dashboard/summary',
-    authenticate, resolveCompany, resolveLocation, can('dashboard', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('dashboard', 'view'),
     DashboardController.summary,
 );
 
@@ -936,35 +938,35 @@ router.get(
 // req.isSalesman/req.salesPersonId that the controller scopes on.
 router.get(
     '/field/my-dashboard',
-    authenticate, resolveCompany, resolveLocation, canField,
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canField,
     FieldController.myDashboard,
 );
 
 // SFA Phase 2 — GPS field tracking. Attendance (Start/End Day) + outlet
 // check-in/out. resolveLocation sets req.isSalesman/req.salesPersonId; the
 // controller enforces salesman-only writes + own-row scoping.
-router.post('/field/day/start',            authenticate, resolveCompany, resolveLocation, canField, FieldController.startDay);
-router.post('/field/day/end',              authenticate, resolveCompany, resolveLocation, canField, FieldController.endDay);
-router.post('/field/visits/checkin',       authenticate, resolveCompany, resolveLocation, canField, FieldController.checkin);
-router.post('/field/visits/:id/checkout',  authenticate, resolveCompany, resolveLocation, canField, FieldController.checkout);
-router.get('/field/visits',                authenticate, resolveCompany, resolveLocation, canField, FieldController.visits);
+router.post('/field/day/start',            authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.startDay);
+router.post('/field/day/end',              authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.endDay);
+router.post('/field/visits/checkin',       authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.checkin);
+router.post('/field/visits/:id/checkout',  authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.checkout);
+router.get('/field/visits',                authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.visits);
 
 // SFA — configurable GPS tracking. The app reads its config, then pings location
 // (de-duped by min-move) + logs part-visits; admins read the trail.
-router.get('/field/gps-config',            authenticate, resolveCompany, resolveLocation, canField, FieldController.gpsConfig);
-router.post('/field/locations',            authenticate, resolveCompany, resolveLocation, canField, FieldController.ping);
-router.post('/field/part-visits',          authenticate, resolveCompany, resolveLocation, canField, FieldController.partVisit);
-router.get('/field/locations',             authenticate, resolveCompany, resolveLocation, canField, FieldController.locations);
+router.get('/field/gps-config',            authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.gpsConfig);
+router.post('/field/locations',            authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.ping);
+router.post('/field/part-visits',          authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.partVisit);
+router.get('/field/locations',             authenticate, resolveTenant, resolveCompany, resolveLocation, canField, FieldController.locations);
 
 // Inventory — stock view derived from products + manual stock adjustment.
 router.get(
     '/inventory',
-    authenticate, resolveCompany, resolveLocation, can('inventory', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('inventory', 'view'),
     InventoryController.list,
 );
 router.post(
     '/inventory/adjust',
-    authenticate, resolveCompany, resolveLocation, can('inventory', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('inventory', 'edit'),
     validate(createAdjustmentSchema),
     InventoryController.adjust,
 );
@@ -972,7 +974,7 @@ router.post(
 // Roles — assignable-roles list for the Add/Edit User dropdown (license-scoped).
 router.get(
     '/roles',
-    authenticate, resolveCompany, resolveLocation, can('users', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('users', 'view'),
     RoleController.list,
 );
 
@@ -980,75 +982,75 @@ router.get(
 // license-admin builds roles only from the modules their license is entitled to.
 // NOTE: 'available-permissions' is registered before '/:id' so it isn't captured.
 router.get('/account/roles',
-    authenticate, can('users', 'view'), RoleController.manageList);
+    authenticate, resolveTenant, can('users','view'), RoleController.manageList);
 router.get('/account/roles/available-permissions',
-    authenticate, can('users', 'view'), RoleController.availablePermissions);
+    authenticate, resolveTenant, can('users','view'), RoleController.availablePermissions);
 router.get('/account/roles/:id',
-    authenticate, can('users', 'view'), RoleController.get);
+    authenticate, resolveTenant, can('users','view'), RoleController.get);
 router.post('/account/roles',
-    authenticate, can('users', 'create'), validate(createRoleSchema), RoleController.create);
+    authenticate, resolveTenant, can('users','create'), validate(createRoleSchema), RoleController.create);
 router.put('/account/roles/:id',
-    authenticate, can('users', 'edit'), validate(updateRoleSchema), RoleController.update);
+    authenticate, resolveTenant, can('users','edit'), validate(updateRoleSchema), RoleController.update);
 router.put('/account/roles/:id/permissions',
-    authenticate, can('users', 'edit'), validate(setRolePermissionsSchema), RoleController.setPermissions);
+    authenticate, resolveTenant, can('users','edit'), validate(setRolePermissionsSchema), RoleController.setPermissions);
 router.delete('/account/roles/:id',
-    authenticate, can('users', 'delete'), RoleController.remove);
+    authenticate, resolveTenant, can('users','delete'), RoleController.remove);
 
 // Account · "Share with Accountant" (CA collaboration). Company-scoped (the CA
 // login is created under req.companyId); the curated read-only Accountant role
 // is licence-scoped via req.user.license_id. Validated + seat-reconciled.
 router.post('/account/accountants',
-    authenticate, resolveCompany, resolveLocation, can('users', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('users', 'create'),
     validate(inviteAccountantSchema), AccountantController.invite);
 router.get('/account/accountants',
-    authenticate, resolveCompany, can('users', 'view'), AccountantController.list);
+    authenticate, resolveTenant, resolveCompany, can('users', 'view'), AccountantController.list);
 router.delete('/account/accountants/:id',
-    authenticate, resolveCompany, can('users', 'edit'), AccountantController.revoke);
+    authenticate, resolveTenant, resolveCompany, can('users', 'edit'), AccountantController.revoke);
 
 // Account · payment reminders — overdue customers list + manual send. List is
 // view-gated; sending is edit-gated (a read-only accountant can see but not send).
 router.get('/account/reminders',
-    authenticate, resolveCompany, can('customers', 'view'), ReminderTenantController.overdue);
+    authenticate, resolveTenant, resolveCompany, can('customers', 'view'), ReminderTenantController.overdue);
 router.post('/account/reminders/:id/send',
-    authenticate, resolveCompany, resolveLocation, can('customers', 'edit'), ReminderTenantController.send);
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'edit'), ReminderTenantController.send);
 
 // Account · Business Analytics — one read-only insights bundle (sales trend,
 // cash-flow, top customers/products, receivables aging, KPIs).
 router.get('/account/analytics',
-    authenticate, resolveCompany, can('reports', 'view'), AnalyticsController.overview);
+    authenticate, resolveTenant, resolveCompany, can('reports', 'view'), AnalyticsController.overview);
 
 // Account · cloud→agent command channel (user-auth, license-scoped). A user
 // queues "open this company in Tally"; the local agent drains it via /agent/*.
 // `authenticate` only — license scope comes from req.user.license_id (same as
 // the /account/roles management routes above).
 router.post('/account/agent/open-company',
-    authenticate, AgentCommandController.openCompany);
+    authenticate, resolveTenant, AgentCommandController.openCompany);
 router.get('/account/agent/commands',
-    authenticate, AgentCommandController.list);
+    authenticate, resolveTenant, AgentCommandController.list);
 // Auto-update (Requirement 3): flip the per-license cloud toggle (the agent
 // reads it as authoritative on its next /agent/version check), and "Update now"
 // which enqueues a 'self_update' command the agent honours by forcing a check.
 router.patch('/account/agent/auto-update',
-    authenticate, AgentCommandController.setAutoUpdate);
+    authenticate, resolveTenant, AgentCommandController.setAutoUpdate);
 router.post('/account/agent/self-update',
-    authenticate, AgentCommandController.selfUpdate);
+    authenticate, resolveTenant, AgentCommandController.selfUpdate);
 // Auto-sync DIRECTION (Requirement 1): flip the per-license push/pull AUTO
 // toggles (licenses.sync_push_enabled / .sync_pull_enabled). The agent reads
 // them back via its heartbeat each cycle and skips the push/pull pass when off.
 // License-scoped via req.user.license_id (super-admin may pass license_id).
 router.patch('/account/sync-direction',
-    authenticate, AgentCommandController.setSyncDirection);
+    authenticate, resolveTenant, AgentCommandController.setSyncDirection);
 
 // Users — company user management.
 router.get(
     '/users',
-    authenticate, resolveCompany, resolveLocation, can('users', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('users', 'view'),
     validate(listUserSchema, 'query'),
     UserController.list,
 );
 router.post(
     '/users',
-    authenticate, resolveCompany, resolveLocation, can('users', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('users', 'create'),
     validate(createUserSchema),
     UserController.create,
 );
@@ -1056,24 +1058,24 @@ router.post(
 // Settings — company profile + key/value settings.
 router.get(
     '/settings',
-    authenticate, resolveCompany, resolveLocation, can('settings', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('settings', 'view'),
     SettingsController.get,
 );
 router.put(
     '/settings',
-    authenticate, resolveCompany, resolveLocation, can('settings', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('settings', 'edit'),
     SettingsController.update,
 );
 
 // Tally sync — connection summary + log stream.
 router.get(
     '/sync/summary',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.summary,
 );
 router.get(
     '/sync/logs',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.logs,
 );
 // Single log row (full detail incl request_xml/response_xml + friendlyReason)
@@ -1081,7 +1083,7 @@ router.get(
 // path wins; ':id' captures only the detail lookups.
 router.get(
     '/sync/logs/:id',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.logDetail,
 );
 // Re-queue this company's failed/pending push records so the agent re-pushes
@@ -1090,7 +1092,7 @@ router.get(
 // the agent re-imports). Idempotent. MANUAL — not gated by the auto toggles.
 router.post(
     '/sync/retry',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.retry,
 );
 // MANUAL "Sync from Tally" (PULL): reset this company's tally_sync_state
@@ -1098,7 +1100,7 @@ router.post(
 // Independent of the per-license sync_pull_enabled auto toggle. Idempotent.
 router.post(
     '/sync/pull',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     SyncController.pull,
 );
 // Notification-bell feed — now a GENERAL feed (every module's cloud actions +
@@ -1107,13 +1109,13 @@ router.post(
 // guarded by auth + company scope only (NOT the tally-sync permission).
 router.get(
     '/sync/notifications',
-    authenticate, resolveCompany, resolveLocation,
+    authenticate, resolveTenant, resolveCompany, resolveLocation,
     SyncController.notifications,
 );
 // Paginated FULL feed for the dedicated /notifications page (View all + details).
 router.get(
     '/sync/notifications/all',
-    authenticate, resolveCompany, resolveLocation,
+    authenticate, resolveTenant, resolveCompany, resolveLocation,
     SyncController.notificationsAll,
 );
 // Mark ONE (or a few) bell item(s) read for the caller. Body { key } or
@@ -1121,13 +1123,13 @@ router.get(
 // "agent-update-1.2.0" contain dots. Returns the fresh read-aware { unread }.
 router.post(
     '/sync/notifications/read',
-    authenticate, resolveCompany, resolveLocation,
+    authenticate, resolveTenant, resolveCompany, resolveLocation,
     SyncController.markRead,
 );
 // Mark ALL currently-unread bell items read for the caller. Returns { unread:0 }.
 router.post(
     '/sync/notifications/read-all',
-    authenticate, resolveCompany, resolveLocation,
+    authenticate, resolveTenant, resolveCompany, resolveLocation,
     SyncController.markAllRead,
 );
 
@@ -1139,86 +1141,86 @@ router.post(
 // ───────────────────────────────────────────────────────────────────
 router.get(
     '/history',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     HistoryController.list,
 );
 router.get(
     '/history/compare',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     HistoryController.compare,
 );
 router.get(
     '/history/:id',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'view'),
     HistoryController.get,
 );
 router.post(
     '/history/:id/revert',
-    authenticate, resolveCompany, resolveLocation, can('tally-sync', 'edit'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('tally-sync', 'edit'),
     HistoryController.revert,
 );
 
 // Journal vouchers (Dr/Cr accounting entry — syncs to Tally as a Journal).
 router.get(
     '/journals',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'view'),
     validate(listJournalSchema, 'query'),
     JournalController.list,
 );
 router.get(
     '/journals/monthly',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'view'),
     JournalController.monthly,
 );
 router.post(
     '/journals',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'create'),
     validate(createJournalSchema),
     JournalController.create,
 );
 router.delete(
     '/journals/:id',
-    authenticate, resolveCompany, resolveLocation, can('payments', 'delete'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'delete'),
     JournalController.destroy,
 );
 
 // Reports — Tally-style registers (GST breakup, day book, outstanding, GST).
 router.get(
     '/reports/sales-register',
-    authenticate, resolveCompany, resolveLocation, can('reports', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
     ReportController.salesRegister,
 );
 router.get(
     '/reports/day-book',
-    authenticate, resolveCompany, resolveLocation, can('reports', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
     ReportController.dayBook,
 );
 router.get(
     '/reports/outstanding',
-    authenticate, resolveCompany, resolveLocation, can('reports', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
     ReportController.outstanding,
 );
 router.get(
     '/reports/gst-summary',
-    authenticate, resolveCompany, resolveLocation, can('reports', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
     ReportController.gstSummary,
 );
 router.get(
     '/reports/stock-summary',
-    authenticate, resolveCompany, resolveLocation, can('reports', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
     ReportController.stockSummary,
 );
 router.get(
     '/reports/ledger',
-    authenticate, resolveCompany, resolveLocation, can('reports', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
     ReportController.partyLedger,
 );
-router.get('/reports/trial-balance', authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.trialBalance);
-router.get('/reports/profit-loss',   authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.profitLoss);
-router.get('/reports/balance-sheet', authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.balanceSheet);
+router.get('/reports/trial-balance', authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.trialBalance);
+router.get('/reports/profit-loss',   authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.profitLoss);
+router.get('/reports/balance-sheet', authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.balanceSheet);
 
 // Server-rendered, data-ONLY PDF of ANY report (no app chrome) — same data as
 // the JSON endpoints above. 3-segment path, so it never shadows them.
-router.get('/reports/:type/pdf', authenticate, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.reportPdf);
+router.get('/reports/:type/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'), ReportController.reportPdf);
 
 module.exports = router;

@@ -83,6 +83,26 @@ app.use(helmet({
 app.use(compression());
 if (IS_DEV) app.use(morgan('dev'));
 
+/* ── PWA manifest (brand-driven) ────────────────────────────────
+ * Generated from web/config/brand.js so a rebrand needs no static edit.
+ * Registered BEFORE express.static so it wins over the file on disk.
+ * ─────────────────────────────────────────────────────────── */
+app.get('/manifest.webmanifest', (req, res) => {
+    const brand = require('./config/brand');
+    res.type('application/manifest+json').send(JSON.stringify({
+        name: brand.name,
+        short_name: brand.shortName,
+        description: brand.tagline,
+        start_url: '/', scope: '/', display: 'standalone',
+        orientation: 'portrait-primary',
+        theme_color: brand.color, background_color: '#F8FAFC',
+        icons: [
+            { src: '/icons/icon-192.svg', sizes: '192x192', type: 'image/svg+xml', purpose: 'any maskable' },
+            { src: '/icons/icon-512.svg', sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' },
+        ],
+    }, null, 2));
+});
+
 /* ── Static assets ──────────────────────────────────────────────
  * service-worker.js needs root scope + must never be cached stale,
  * so we attach the right headers when it's served.
@@ -195,11 +215,43 @@ if (process.env.SESSION_DEBUG === '1') {
  * override title/activeMenu/breadcrumb as needed.
  * ─────────────────────────────────────────────────────────── */
 app.use(async (req, res, next) => {
+    // Brand (name + logo) — single source of truth for every view. Change
+    // web/config/brand.js to rebrand the whole UI. See also window.BRAND
+    // (injected in _layout.ejs) for client-side JS.
+    res.locals.brand = require('./config/brand');
+
     // One-shot flash message (set by POST handlers, shown on the next page).
     res.locals.flash = (req.session && req.session.flash) || null;
     if (req.session && req.session.flash) delete req.session.flash;
 
     const u = req.session && req.session.user;
+
+    // Live-refresh the signed-in user's PERMISSIONS from /me so a super-admin's
+    // module (entitlement) change on their licence reflects in the menu WITHOUT a
+    // re-login. /me returns role grants ∩ the licence's entitlement. Best-effort:
+    // any error keeps the session's existing perms. Skipped for the super-admin
+    // (['*'], no entitlement) so we don't add an /me call to the platform screens.
+    if (u && u.role_slug !== 'super-admin') {
+        try {
+            const meRes = await api.get(req, '/me');
+            const me = meRes && meRes.body && meRes.body.data;
+            if (me && Array.isArray(me.permissions)) {
+                u.permissions = me.permissions;
+                if (typeof me.is_salesman !== 'undefined') u.is_salesman = me.is_salesman;
+                // Keep the licence summary fresh too (valid-until, remaining
+                // companies, max users) — drives the expiry banner.
+                if (me.license) u.license = me.license;
+            }
+        } catch (err) {
+            // A SESSION_ENDED (backend 401 — token evicted/expired) must NOT be
+            // swallowed: bubble it to the error handler so the user is logged out
+            // + redirected to /login (else the page renders with a dead session).
+            // Any OTHER error (a transient network blip) is best-effort → keep the
+            // session's existing perms and render the page.
+            if (err && err.code === 'SESSION_ENDED') return next(err);
+        }
+    }
+
     if (u) {
         res.locals.user = {
             name: u.name || 'User',
@@ -222,8 +274,13 @@ app.use(async (req, res, next) => {
     //    user sees ONLY the modules their role grants a '<module>.view' on. The
     //    sidebar + dashboard cards both filter through res.locals.can(). ──
     const _perms = new Set((u && Array.isArray(u.permissions)) ? u.permissions : []);
-    const _allAccess = (u && u.role_slug === 'super-admin')
-        || (u && u.role_slug === 'company-admin') || _perms.has('*');
+    // Blanket access is the SUPER-ADMIN's alone (['*']). A company-admin is NOT
+    // given blanket module access here — their perms already = role grants ∩ the
+    // licence's ENTITLEMENT (computed in /auth/login + /me), so the menu must
+    // respect it: a module the super-admin removed from the licence disappears.
+    // (Admin-only items like Users/Roles/Settings are gated by isCompanyAdmin,
+    // not this module perm check.)
+    const _allAccess = (u && u.role_slug === 'super-admin') || _perms.has('*');
     res.locals.permissions = _perms;
     res.locals.canModule = (mod) => _allAccess
         || _perms.has(`${mod}.view`) || _perms.has(`${mod}.manage`);
@@ -252,10 +309,34 @@ app.use(async (req, res, next) => {
             const dateStr = vu.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
             if (daysLeft < 0) {
                 res.locals.licenseBanner = { level: 'expired', daysLeft, date: dateStr };
-            } else if (daysLeft <= 15) {
+            } else if (daysLeft < 30) {
                 res.locals.licenseBanner = { level: 'warn', daysLeft, date: dateStr };
             }
         }
+    }
+    // ── Top licence strip (company-admin) — a compact always-on summary of the
+    //   plan: valid-until, company slots used/remaining, max users. Kept fresh by
+    //   the /me refresh above. Only the licence-admin manages the plan, so only
+    //   they see it (not a salesman / plain user, not the super-admin).
+    res.locals.licenseInfo = null;
+    if (u && u.license && u.role_slug === 'company-admin') {
+        const L = u.license;
+        let validLabel = null;
+        if (L.valid_until) {
+            const vu = new Date(L.valid_until);
+            if (!isNaN(vu.getTime())) {
+                validLabel = vu.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+            }
+        }
+        res.locals.licenseInfo = {
+            validUntilLabel:    validLabel,
+            daysLeft:           (typeof L.days_left === 'number') ? L.days_left : null,
+            companiesUsed:      L.companies_used,
+            maxCompanies:       L.max_companies,
+            companiesRemaining: L.companies_remaining,
+            usersUsed:          L.users_used,
+            maxUsers:           L.max_users,
+        };
     }
     // ── Top switcher — ROLE-AWARE, ALWAYS FRESH ──────────────────────
     //   • super-admin   → TWO levels: a LICENSE dropdown + a COMPANY dropdown

@@ -180,6 +180,7 @@ CREATE TABLE public.user_sessions (
     id bigint NOT NULL,
     user_id bigint NOT NULL,
     jti character varying(64) NOT NULL,
+    platform character varying(16),
     ip character varying(64),
     user_agent character varying(255),
     last_seen_at timestamp with time zone,

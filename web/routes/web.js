@@ -111,6 +111,13 @@ const RBAC_MODULE_BY_PATH = {
     'purchase-invoices': 'purchase-invoices', payments: 'payments',
     receipts: 'receipts', journals: 'journals', inventory: 'inventory',
     reports: 'reports', users: 'users',
+    // Every remaining module URL (mirrors the sidebar href→perm) so a hand-typed
+    // URL to a module the licence does NOT entitle is blocked too — not just
+    // hidden from the menu. URL path can differ from the module key (einvoices →
+    // einvoice) or borrow another module's perm (reminders → payments).
+    'bank-reconciliation': 'bank-reconciliation', 'recurring-invoices': 'recurring-invoices',
+    einvoices: 'einvoice', expenses: 'expenses', analytics: 'reports',
+    'accountant-access': 'users', reminders: 'payments', settings: 'settings',
 };
 const RBAC_ADMIN_ONLY_PATH = new Set(['sync-dashboard', 'sync-logs', 'history']);
 router.use((req, res, next) => {
@@ -553,23 +560,9 @@ router.get('/', async (req, res, next) => {
         //    would 403) → their own "My Field" dashboard.
         if (res.locals.isSuperAdmin) return res.redirect('/licenses');
         if (res.locals.isSalesman)   return res.redirect('/my-field');
-        // Date-range picker (header pill). Default = current month (1st → today)
-        // so the pill always shows a concrete, working range; the user can
-        // change it. Both dates flow to the api, which scopes the money metrics.
-        const _isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ''));
-        const _today = new Date();
-        const _p2 = (n) => String(n).padStart(2, '0');
-        const todayStr = `${_today.getFullYear()}-${_p2(_today.getMonth() + 1)}-${_p2(_today.getDate())}`;
-        const monthStartStr = `${todayStr.slice(0, 8)}01`;
-        let rangeFrom = _isYmd(req.query.from) ? req.query.from : monthStartStr;
-        let rangeTo   = _isYmd(req.query.to)   ? req.query.to   : todayStr;
-        if (rangeFrom > rangeTo) { const t = rangeFrom; rangeFrom = rangeTo; rangeTo = t; }
-        const _MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-        const _fmtR = (s) => { const a = s.split('-'); return `${Number(a[2])} ${_MON[Number(a[1]) - 1]} ${a[0]}`; };
-        const rangeLabel = `${_fmtR(rangeFrom)} – ${_fmtR(rangeTo)}`;
-
-        const { body } = await api.get(req,
-            '/dashboard/summary?from=' + encodeURIComponent(rangeFrom) + '&to=' + encodeURIComponent(rangeTo));
+        // No date filter — the dashboard is ALL-TIME so the numbers are stable and
+        // identical on web + app (the app dropped its date picker too).
+        const { body } = await api.get(req, '/dashboard/summary');
         const data = (body && body.data) || {};
 
         const counts = data.counts || {};
@@ -664,11 +657,6 @@ router.get('/', async (req, res, next) => {
             syncChart,
             recentInvoices,
             recentSync,
-
-            // Date-range picker state (header pill).
-            rangeFrom,
-            rangeTo,
-            rangeLabel,
 
             // Chart.js init for THIS page only. Passed as a real render local
             // (NOT assigned inside the template) so it reaches the layout's

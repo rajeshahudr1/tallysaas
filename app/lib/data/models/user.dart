@@ -20,6 +20,7 @@ class AppUser {
     this.permissions = const [],
     this.isSalesman = false,
     this.salesPersonId,
+    this.license,
   });
 
   final int id;
@@ -35,6 +36,11 @@ class AppUser {
   /// scoping. From `GET /me` (`is_salesman` / `sales_person_id`).
   final bool isSalesman;
   final int? salesPersonId;
+
+  /// The user's licence plan summary (company-admin+): valid-until, plan limits
+  /// (max companies/users) and how many company slots are used/remaining. Null
+  /// for the super-admin / a user with no licence. From `.license` in login + /me.
+  final LicenseInfo? license;
 
   /// Flat permission slugs the role grants, e.g. `customers.view`,
   /// `customers.create`. Super Admin is reported as the single wildcard `['*']`.
@@ -87,6 +93,7 @@ class AppUser {
       permissions: _strList(j['permissions']),
       isSalesman: j['is_salesman'] == true,
       salesPersonId: _toInt(j['sales_person_id']),
+      license: LicenseInfo.fromJson(j['license'] is Map ? Map<String, dynamic>.from(j['license'] as Map) : null),
     );
   }
 
@@ -102,6 +109,7 @@ class AppUser {
         'permissions': permissions,
         'is_salesman': isSalesman,
         'sales_person_id': salesPersonId,
+        'license': license?.toJson(),
       };
 
   /// Up-to-two-letter avatar initials derived from the display name.
@@ -135,5 +143,70 @@ class AppUser {
       return v.map((e) => e == null ? '' : e.toString()).where((s) => s.isNotEmpty).toList();
     }
     return const [];
+  }
+}
+
+/// The signed-in user's licence plan summary (company-admin+), from `.license`
+/// in the login `user` object OR the `/me` payload. Powers the app's top licence
+/// strip (valid-until, company slots used/remaining, max users). Null for the
+/// super-admin or a user with no licence.
+class LicenseInfo {
+  const LicenseInfo({
+    this.validUntil,
+    this.daysLeft,
+    this.status,
+    this.maxCompanies,
+    this.maxUsers,
+    this.companiesUsed,
+    this.companiesRemaining,
+    this.usersUsed,
+    this.usersRemaining,
+  });
+
+  final String? validUntil;   // ISO date string
+  final int? daysLeft;
+  final String? status;
+  final int? maxCompanies;
+  final int? maxUsers;
+  final int? companiesUsed;
+  final int? companiesRemaining;
+  final int? usersUsed;
+  final int? usersRemaining;
+
+  static LicenseInfo? fromJson(Map<String, dynamic>? j) {
+    if (j == null) return null;
+    int? i(Object? v) => v == null ? null : (v is num ? v.toInt() : int.tryParse(v.toString()));
+    return LicenseInfo(
+      validUntil: j['valid_until']?.toString(),
+      daysLeft: i(j['days_left']),
+      status: j['status']?.toString(),
+      maxCompanies: i(j['max_companies']),
+      maxUsers: i(j['max_users']),
+      companiesUsed: i(j['companies_used']),
+      companiesRemaining: i(j['companies_remaining']),
+      usersUsed: i(j['users_used']),
+      usersRemaining: i(j['users_remaining']),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'valid_until': validUntil,
+        'days_left': daysLeft,
+        'status': status,
+        'max_companies': maxCompanies,
+        'max_users': maxUsers,
+        'companies_used': companiesUsed,
+        'companies_remaining': companiesRemaining,
+        'users_used': usersUsed,
+        'users_remaining': usersRemaining,
+      };
+
+  /// "8 Jul 2026" from the ISO valid_until (best-effort; null when unparseable).
+  String? get validUntilLabel {
+    if (validUntil == null || validUntil!.isEmpty) return null;
+    final d = DateTime.tryParse(validUntil!);
+    if (d == null) return null;
+    const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${d.day} ${m[d.month - 1]} ${d.year}';
   }
 }

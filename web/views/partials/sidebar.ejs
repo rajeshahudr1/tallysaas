@@ -63,11 +63,12 @@ var menu = [
     ]},
 ];
 
-// Unified "Roles & Permissions" — ONE menu item, ONE page (/roles). Shown ONLY
-// to role-managers (super-admin manages every role across licenses + global
-// templates; company-admin manages their OWN license's custom roles). Plain
-// users never see it. Inserted at the TOP of the Settings group (above Users).
-if (_isCompanyAdmin || _isSuperAdmin) {
+// "Roles & Permissions" (/roles) — a COMPANY-ADMIN feature. Roles live in the
+// company's own tenant db and are built from the MODULES the platform admin
+// granted the licence. The super-admin has no tenant of its own — it sets each
+// company's allowed modules under Licenses → Permissions, NOT company roles — so
+// it never sees this item. Plain users never see it either.
+if (_isCompanyAdmin) {
     var _settings = menu.find(function (g) { return g.label === 'Settings'; });
     if (_settings) {
         _settings.items.unshift({ key: 'roles', label: 'Roles & Permissions', icon: 'fa-user-shield', href: '/roles' });
@@ -118,17 +119,18 @@ menu = menu.map(function (g) {
 }).filter(function (g) { return g.items.length > 0; });
 
 // ── Super Admin is a PLATFORM operator — they NEVER open a tenant's data. Strip
-// every tenant menu (Dashboard, Masters, Transactions, Tally Sync, Reports,
-// Users, Settings page) and leave ONLY the Platform Admin group + the global
-// Roles & Permissions item. Their landing + overview is the Licenses screen. ──
+// every tenant menu (Dashboard, Masters, Transactions, Tally Sync, Reports) and
+// leave ONLY the Platform Admin group + the platform Settings page. Company Roles
+// are NOT theirs (roles are per-company) — the super-admin sets a company's
+// allowed MODULES under Licenses → Permissions. Landing = the Licenses screen. ──
 if (_isSuperAdmin) {
     menu = menu.map(function (g) {
         if (g.label === 'Platform Admin') return g;
-        // Keep the Settings group — Roles & Permissions, Users, and the Settings
-        // page (full access) — the super-admin manages these across the platform.
+        // Keep the Settings group's platform-relevant items (Users, Settings) —
+        // NOT "Roles & Permissions" (that is a per-company / tenant feature).
         if (g.label === 'Settings') {
             g.items = (g.items || []).filter(function (it) {
-                return it.key === 'roles' || it.key === 'users' || it.key === 'settings';
+                return it.key === 'users' || it.key === 'settings';
             });
             return g;
         }
@@ -141,8 +143,8 @@ if (_isSuperAdmin) {
 
     <!-- Brand / logo -->
     <a class="sidebar-brand" href="/">
-        <span class="sidebar-logo"><i class="fa-solid fa-cloud"></i></span>
-        <span class="sidebar-brand-text">Tally Cloud Sync</span>
+        <span class="sidebar-logo"><i class="<%= (typeof brand !== 'undefined' && brand) ? brand.iconClass : 'fa-solid fa-cloud' %>"></i></span>
+        <span class="sidebar-brand-text"><%= (typeof brand !== 'undefined' && brand) ? brand.name : 'Tally Cloud Sync' %></span>
     </a>
 
     <!-- Navigation — labelled groups collapse/expand on click (the chevron

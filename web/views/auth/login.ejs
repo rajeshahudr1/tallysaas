@@ -9,14 +9,17 @@
 var _err   = (typeof error !== 'undefined') ? error : null;
 var _email = (typeof email !== 'undefined' && email) ? email : '';
 var _next  = (typeof next !== 'undefined' && next) ? next : '/';
+// Brand — single source of truth (web/config/brand.js via res.locals.brand).
+var _brand = (typeof brand !== 'undefined' && brand) ? brand
+    : { name: 'Tally Cloud Sync', logo: '/img/logo.svg', iconClass: 'fa-solid fa-cloud', color: '#2563EB' };
 %><!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Sign in · Tally Cloud Sync</title>
-    <meta name="theme-color" content="#2563EB">
-    <link rel="icon" type="image/svg+xml" href="/img/logo.svg">
+    <title>Sign in · <%= _brand.name %></title>
+    <meta name="theme-color" content="<%= _brand.color %>">
+    <link rel="icon" type="image/svg+xml" href="<%= _brand.logo %>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -49,8 +52,8 @@ var _next  = (typeof next !== 'undefined' && next) ? next : '/';
 <body>
     <div class="login-card">
         <div class="login-brand">
-            <span class="login-logo"><i class="fa-solid fa-cloud"></i></span>
-            <span class="login-brand-text">Tally Cloud Sync</span>
+            <span class="login-logo"><i class="<%= _brand.iconClass %>"></i></span>
+            <span class="login-brand-text"><%= _brand.name %></span>
         </div>
 
         <h1 class="login-title">Welcome back</h1>

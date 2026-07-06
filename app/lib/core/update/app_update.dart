@@ -6,6 +6,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../api/api_client.dart';
+import '../brand.dart';
 import '../constants.dart';
 
 /// Parsed `/app/version` response — the cloud's view of the latest published APK
@@ -127,7 +128,7 @@ class _UpdateDialogState extends ConsumerState<_UpdateDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('A new version${info.version != null ? ' (v${info.version})' : ''} of Tally Cloud Sync is available.'),
+            Text('A new version${info.version != null ? ' (v${info.version})' : ''} of ${Brand.name} is available.'),
             if (info.notes != null && info.notes!.trim().isNotEmpty) ...[
               const SizedBox(height: 8),
               Text(info.notes!, style: theme.textTheme.bodySmall),

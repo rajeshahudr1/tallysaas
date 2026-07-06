@@ -14,20 +14,28 @@
  *   companies, notificationCount
  *   pageScript        string?  — extra <script> markup for this page only
  * ─────────────────────────────────────────────────────────── */
-var _title      = (typeof title !== 'undefined' && title) ? title : 'Tally Cloud Sync';
+// Brand (name + logo) — single source of truth, from res.locals.brand
+// (web/config/brand.js). Defensive fallback keeps error pages rendering.
+var _brand = (typeof brand !== 'undefined' && brand) ? brand
+    : { name: 'Tally Cloud Sync', shortName: 'Tally Cloud',
+        tagline: 'Cloud accounting that syncs with Tally.',
+        logo: '/img/logo.svg', iconClass: 'fa-solid fa-cloud', color: '#2563EB' };
+var _title      = (typeof title !== 'undefined' && title) ? title : _brand.name;
 var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
 %><!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <title><%= _title %> · Tally Cloud Sync</title>
-    <meta name="theme-color" content="#2563EB">
-    <meta name="description" content="Tally Cloud Sync — cloud accounting that syncs with Tally.">
+    <title><%= _title %> · <%= _brand.name %></title>
+    <meta name="theme-color" content="<%= _brand.color %>">
+    <meta name="description" content="<%= _brand.name %> — <%= _brand.tagline %>">
+    <!-- Brand for client-side JS (toasts etc.) — see web/config/brand.js -->
+    <script>window.BRAND = <%- JSON.stringify({ name: _brand.name, shortName: _brand.shortName, logo: _brand.logo }) %>;</script>
 
     <!-- PWA -->
     <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="icon" type="image/svg+xml" href="/img/logo.svg">
+    <link rel="icon" type="image/svg+xml" href="<%= _brand.logo %>">
     <link rel="apple-touch-icon" href="/icons/icon-192.svg">
 
     <!-- Inter (Google Fonts) -->
@@ -46,7 +54,7 @@ var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
 
     <!-- App theme (single source of custom styling). ?v bust = force fresh
          CSS past any stale service-worker cache after an update. -->
-    <link rel="stylesheet" href="/css/theme.css?v=7">
+    <link rel="stylesheet" href="/css/theme.css?v=8">
 </head>
 <body class="app">
 

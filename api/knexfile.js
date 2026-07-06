@@ -3,17 +3,21 @@
 /**
  * api/knexfile.js
  *
- * Knex configuration for the SINGLE shared PostgreSQL database that backs
- * TallySaaS. Unlike the IOT reference project (master + per-tenant DBs),
- * TallySaaS uses ONE database and isolates tenants with a `company_id`
- * column on every tenant table — so there is exactly one connection config.
+ * Knex config for the MASTER control-plane database (tallysaas_master). Since
+ * the per-license DB split, TallySaaS is master + per-license `tally_lic_<id>`
+ * dbs. This connection = the master (DB_DATABASE=tallysaas_master), so:
+ *   `knex migrate:latest` + `knex seed:run`  → build the MASTER (11 tables +
+ *   super-admin). db/migrations holds ONE master migration; the 68 old single-DB
+ *   migrations are archived under db/migrations_legacy_presplit/.
+ * TENANT dbs are NOT migrated with knex — db/provision.js creates each licence's
+ * db from db/tenant-schema.sql when a licence is provisioned (web "Create
+ * Licence" or `node db/provision.js license --holder .. --email ..`).
  *
- * Connection values come from `.env` (see `.env.example`). The pool's
- * `afterCreate` pins every new connection to UTC so all TIMESTAMPTZ reads
- * and writes are unambiguous regardless of the server's local timezone.
+ * Connection values come from `.env`. The pool's `afterCreate` pins every new
+ * connection to IST so TIMESTAMPTZ reads/writes report in local Indian time.
  *
- * - migrations live in  ./db/migrations  (table: knex_migrations)
- * - seeds      live in  ./db/seeds
+ * - master migration lives in ./db/migrations   (table: knex_migrations)
+ * - master seed      lives in ./db/seeds
  *
  * Two named environments are exported:
  *   development — local defaults, modest pool.

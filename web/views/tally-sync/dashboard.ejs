@@ -122,7 +122,7 @@ function _statId(label) {
         <div class="sync-alert-title">Tally agent not connected</div>
         <div class="sync-alert-text">
             No heartbeat from the local Sync Agent in the last few minutes. Start the
-            <b>Tally Cloud Sync Agent</b> on the PC running Tally and make sure Tally is open.
+            <b><%= (typeof brand !== 'undefined' && brand) ? brand.name : 'Tally Cloud Sync' %> Agent</b> on the PC running Tally and make sure Tally is open.
             Sync actions are paused until it reconnects — clicking a sync button will alert you instead.
         </div>
     </div>

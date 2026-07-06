@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
+import '../../core/brand.dart';
 import '../../core/auth/auth_service.dart';
 import '../../shared/layouts/auth_shell.dart';
 import '../../shared/widgets/loading_state.dart';
@@ -47,7 +48,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
           // app name as text rather than the logo asset so the splash works
           // even before the image is dropped into assets/images/.
           Text(
-            'Tally Cloud Sync',
+            Brand.name,
             textAlign: TextAlign.center,
             style: theme.textTheme.titleLarge?.copyWith(
               color: AppColors.primary,

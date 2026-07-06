@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/brand.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_service.dart';
 import '../../core/utils/validators.dart';
@@ -89,10 +90,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             // Brand lockup — matches the web sign-in (cloud tile + wordmark).
             Row(
               children: [
-                SvgPicture.asset('assets/images/logo.svg', width: 44, height: 44),
+                SvgPicture.asset(Brand.logoAsset, width: 44, height: 44),
                 const SizedBox(width: AppSpacing.md12),
                 const Text(
-                  'Tally Cloud Sync',
+                  Brand.name,
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.text1),
                 ),
               ],

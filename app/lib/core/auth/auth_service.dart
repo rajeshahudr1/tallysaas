@@ -94,6 +94,22 @@ class AuthService {
     await _tokens.writeUserBlob(jsonEncode(user.toJson()));
     _session.setSignedIn(user);
   }
+
+  /// Re-fetch `/me` and update the cached user + session. `/me` returns the
+  /// user's role grants ∩ their licence's ENTITLEMENT, so this makes a
+  /// super-admin's module change on the licence reflect in the app's menu +
+  /// per-screen `can()` gates WITHOUT a re-login. Best-effort — on any network
+  /// error the current session is kept (offline-friendly). Called on app
+  /// resume + dashboard load.
+  Future<void> refreshMe() async {
+    try {
+      final user = await _repo.me();
+      await _tokens.writeUserBlob(jsonEncode(user.toJson()));
+      _session.setSignedIn(user);
+    } catch (_) {
+      // Keep the current session — never sign the user out on a transient error.
+    }
+  }
 }
 
 final authServiceProvider = Provider<AuthService>((ref) {

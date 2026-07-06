@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
+import '../../core/brand.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/sync_summary.dart';
@@ -220,7 +221,7 @@ class _SyncDashboardScreenState extends ConsumerState<SyncDashboardScreen> {
               Text('Tally agent not connected',
                   style: TextStyle(fontWeight: FontWeight.w700, color: AppColors.danger)),
               SizedBox(height: 4),
-              Text('No heartbeat from the local Sync Agent recently. Start the Tally Cloud Sync Agent on the PC running Tally (with Tally open). Sync actions queue and run once it reconnects.',
+              Text('No heartbeat from the local Sync Agent recently. Start the ${Brand.name} Agent on the PC running Tally (with Tally open). Sync actions queue and run once it reconnects.',
                   style: TextStyle(fontSize: 12.5, color: AppColors.text2)),
             ]),
           ),

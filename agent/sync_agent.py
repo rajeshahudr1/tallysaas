@@ -30,6 +30,7 @@ import time
 from typing import Any, Optional
 
 from config import Config, machine_fingerprint
+from constants import BRAND_NAME_AGENT
 from logger import get_logger
 from api_client import ApiClient, ActivationError, AgentError
 from tally_connector import TallyConnector, TallyUnavailable
@@ -47,8 +48,8 @@ _FAILED_RETRY_WARN_THRESHOLD = 3
 # How many times the interactive activation prompt re-asks on a bad key.
 _MAX_ACTIVATION_ATTEMPTS = 5
 
-# App banner shown at startup (stdout only).
-_APP_NAME = "Tally Cloud Sync Agent"
+# App banner shown at startup (stdout only). Brand from constants.py.
+_APP_NAME = BRAND_NAME_AGENT
 
 # Module-level "show the operator everything" switch. True for --once and for
 # the FIRST loop cycle (so the operator can watch the whole process happen);
@@ -121,7 +122,7 @@ def _parse_args(argv: list[str]) -> _Args:
 def _print_usage() -> None:
     """Print CLI usage to stdout."""
     print(
-        "Tally Cloud Sync Agent\n"
+        f"{_APP_NAME}\n"
         "\n"
         "Usage:\n"
         "  python sync_agent.py                 Run the continuous sync loop.\n"
@@ -2212,7 +2213,7 @@ def _print_status(cfg: Config, logger) -> int:
     token = cfg.get_token()
     fingerprint = machine_fingerprint()
 
-    print("Tally Cloud Sync Agent - status")
+    print(f"{_APP_NAME} - status")
     print(f"  api_url        : {cfg.api_url}")
     print(f"  agent_version  : {cfg.agent_version}")
     print(f"  sync_interval  : {cfg.sync_interval}s")

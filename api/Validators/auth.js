@@ -53,6 +53,9 @@ const loginSchema = Joi.object({
             'string.max':   'Password is too long.',
             'any.required': 'Password is required.',
         }),
+    // Which platform is signing in — drives the per-platform session model
+    // (one live session per platform). Optional; defaults to 'web' server-side.
+    client:   Joi.string().valid('web', 'app').optional(),
 });
 
 /**

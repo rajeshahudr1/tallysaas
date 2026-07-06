@@ -45,6 +45,10 @@ import time
 import traceback
 from typing import Optional
 
+# Brand name — single source of truth (constants.py). Imported first (constants
+# has no deps) so even the tkinter-missing fallback dialog below can use it.
+from constants import BRAND_NAME
+
 # tkinter is stdlib; import-guard only so a broken Tcl/Tk install fails with a
 # clear message instead of a bare traceback in a windowed (no-console) process.
 try:
@@ -56,7 +60,7 @@ except Exception as _exc:  # pragma: no cover - only on a broken Python build.
         import ctypes
         ctypes.windll.user32.MessageBoxW(
             0, "tkinter (Tcl/Tk) is not available: " + str(_exc),
-            "Tally Cloud Sync", 0x10)
+            BRAND_NAME, 0x10)
     except Exception:
         pass
     raise
@@ -67,7 +71,7 @@ from logger import get_logger
 import sync_agent
 
 
-APP_TITLE = "Tally Cloud Sync"
+APP_TITLE = BRAND_NAME
 
 # Brand palette (web-matched) — drives the ttk theme + the header/status cards
 # so the windowed agent looks like the cloud UI, not a bare tkinter form.
@@ -84,7 +88,7 @@ WARN_AMBER = "#D97706"
 
 INSTALLED_EXE_NAME = "TallyCloudSync.exe"
 STARTUP_VBS_NAME = "TallyCloudSync.vbs"
-SHORTCUT_NAME = "Tally Cloud Sync.lnk"
+SHORTCUT_NAME = f"{BRAND_NAME}.lnk"
 DEFAULT_INSTALL_DIR = r"C:\TallyCloudSync"
 LOCK_FILENAME = "tally_cloud_sync.lock"
 
@@ -297,7 +301,7 @@ def create_shortcut(installed_exe: str, lnk_path: str) -> bool:
             'Set lnk = sh.CreateShortcut("' + lnk_path + '")\r\n'
             'lnk.TargetPath = "' + installed_exe + '"\r\n'
             'lnk.WorkingDirectory = "' + work_dir + '"\r\n'
-            'lnk.Description = "Tally Cloud Sync"\r\n'
+            f'lnk.Description = "{APP_TITLE}"\r\n'
             'lnk.IconLocation = "' + installed_exe + ', 0"\r\n'
             'lnk.Save\r\n'
         )
@@ -1006,7 +1010,7 @@ class SetupView:
         header.pack(fill="x")
         hp = ttk.Frame(header, style="Header.TFrame")
         hp.pack(fill="x", padx=18, pady=14)
-        ttk.Label(hp, text="Tally Cloud Sync", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(hp, text=APP_TITLE, style="Header.TLabel").pack(anchor="w")
         ttk.Label(hp, text="Setup - activate this PC's sync agent",
                   style="HeaderSub.TLabel").pack(anchor="w")
 
@@ -1302,7 +1306,7 @@ class SetupView:
             self._installing = False
             messagebox.showinfo(
                 APP_TITLE,
-                "Tally Cloud Sync is installed.\n\nClick 'Open Dashboard' to "
+                f"{APP_TITLE} is installed.\n\nClick 'Open Dashboard' to "
                 "launch it. It will also start automatically at logon"
                 + (" in the background." if auto_start else "."))
         except Exception as exc:
@@ -1448,7 +1452,7 @@ class DashboardView:
         hpad.pack(fill="x", padx=18, pady=14)
         htext = ttk.Frame(hpad, style="Header.TFrame")
         htext.pack(side="left")
-        ttk.Label(htext, text="Tally Cloud Sync", style="Header.TLabel").pack(anchor="w")
+        ttk.Label(htext, text=APP_TITLE, style="Header.TLabel").pack(anchor="w")
         ttk.Label(htext, text="Desktop sync agent", style="HeaderSub.TLabel").pack(anchor="w")
         self.status_dot = ttk.Label(hpad, text="  Connecting...", style="HeaderSub.TLabel",
                                     font=("Segoe UI", 10, "bold"))
@@ -1527,7 +1531,7 @@ class DashboardView:
             # Service mode: do NOT spin up an in-process syncer (the service is
             # the one syncer). Just reflect the service's state + last status.
             self._activity("[i] Background service mode: the Windows service "
-                           "'Tally Cloud Sync' performs the sync. This window "
+                           f"'{APP_TITLE}' performs the sync. This window "
                            "monitors and controls it. Live activity from "
                            + self._logtail_path + " follows:")
             self.app.root.after(300, self._refresh_service_status)
@@ -2172,13 +2176,13 @@ class DashboardView:
         install_dir = app_dir()
         can_purge = _is_real_install_dir(install_dir)
         if can_purge:
-            prompt = ("Uninstall Tally Cloud Sync?\n\nThis stops syncing, removes "
+            prompt = (f"Uninstall {APP_TITLE}?\n\nThis stops syncing, removes "
                       "the background service / auto-start launcher and shortcuts, "
                       "and deletes the agent's files from:\n\n  " + install_dir +
                       "\n\nThe logs\\ folder is KEPT for your reference. This "
                       "window will close to finish. This cannot be undone.")
         else:
-            prompt = ("Uninstall Tally Cloud Sync?\n\nThis stops syncing and "
+            prompt = (f"Uninstall {APP_TITLE}?\n\nThis stops syncing and "
                       "removes the background service / auto-start launcher and "
                       "shortcuts. The install folder will be LEFT in place (it "
                       "does not look like a real install folder, so it is not "
@@ -2285,7 +2289,7 @@ class DashboardView:
                            "be removed (logs\\ is kept).")
             messagebox.showinfo(
                 APP_TITLE,
-                "Tally Cloud Sync has been uninstalled. This window will now close; "
+                f"{APP_TITLE} has been uninstalled. This window will now close; "
                 "the agent files are removed in the background and the logs\\ "
                 "folder is kept for your reference.")
             try:
@@ -2637,7 +2641,7 @@ def main() -> int:
         except Exception:
             pass
         try:
-            messagebox.showinfo(APP_TITLE, "Tally Cloud Sync is already running.")
+            messagebox.showinfo(APP_TITLE, f"{APP_TITLE} is already running.")
         except Exception:
             pass
         return 0

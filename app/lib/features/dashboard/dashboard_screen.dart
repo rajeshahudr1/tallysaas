@@ -8,6 +8,7 @@ import '../notifications/notifications_screen.dart';
 import '../field/field_dashboard_screen.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/endpoints.dart';
+import '../../core/auth/auth_service.dart';
 import '../../core/auth/session.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/user.dart';
@@ -24,13 +25,15 @@ class DashboardScreen extends ConsumerStatefulWidget {
 }
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
-  DateTime? _from;
-  DateTime? _to;
   Future<Map<String, dynamic>>? _future;
 
   @override
   void initState() {
     super.initState();
+    // Refresh /me so a super-admin's module (entitlement) change on the licence
+    // reflects in the app menu + per-screen can() gates WITHOUT a re-login.
+    // Fire-and-forget + best-effort (never blocks the dashboard or signs out).
+    ref.read(authServiceProvider).refreshMe();
     // A salesman sees their FIELD dashboard here (below), so skip the company
     // dashboard fetch — they lack 'dashboard' permission and it would 403.
     final session = ref.read(sessionProvider);
@@ -38,48 +41,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     if (!isSalesman) _future = _load();
   }
 
-  String _ymd(DateTime d) =>
-      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
+  // All-time dashboard (no date filter) — the numbers match the web, which is
+  // also all-time now.
   Future<Map<String, dynamic>> _load() async {
-    final q = <String, dynamic>{};
-    if (_from != null && _to != null) {
-      q['from'] = _ymd(_from!);
-      q['to'] = _ymd(_to!);
-    }
-    final data = await ref.read(apiClientProvider).get(Endpoints.dashboardSummary, query: q.isEmpty ? null : q);
+    final data = await ref.read(apiClientProvider).get(Endpoints.dashboardSummary);
     return data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
   }
 
   void _refresh() => setState(() => _future = _load());
-
-  Future<void> _pickDate({required bool isFrom}) async {
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: (isFrom ? _from : _to) ?? DateTime(2023, 1, 1),
-      firstDate: DateTime(2015),
-      lastDate: DateTime(2100),
-    );
-    if (picked == null) return;
-    setState(() {
-      if (isFrom) {
-        _from = picked;
-        if (_to != null && _to!.isBefore(_from!)) _to = _from;
-      } else {
-        _to = picked;
-        if (_from != null && _from!.isAfter(_to!)) _from = _to;
-      }
-    });
-    if (_from != null && _to != null) _refresh();
-  }
-
-  void _clearRange() {
-    setState(() {
-      _from = null;
-      _to = null;
-    });
-    _refresh();
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -112,7 +81,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       ),
       body: Column(
         children: [
-          _dateBar(),
+          _expiryBanner(user),
           Expanded(
             child: FutureBuilder<Map<String, dynamic>>(
               future: _future,
@@ -149,45 +118,38 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
-  // ── Date range bar ─────────────────────────────────────────────
-  Widget _dateBar() {
-    final hasRange = _from != null && _to != null;
+  // ── Licence expiry banner (company-admin only) ────────────────
+  // Mirrors the web: a warning strip at the very top when the subscription is
+  // within 15 days of expiry (amber) or already expired (red); nothing else.
+  // Kept fresh by refreshMe() on dashboard load.
+  Widget _expiryBanner(AppUser? user) {
+    final lic = user?.license;
+    if (user == null || user.roleSlug != 'company-admin' || lic == null || lic.daysLeft == null) {
+      return const SizedBox.shrink();
+    }
+    final d = lic.daysLeft!;
+    if (d >= 30) return const SizedBox.shrink();
+    final expired = d < 0;
+    final dateLbl = lic.validUntilLabel ?? '';
+    final onLbl = dateLbl.isNotEmpty ? ' (on $dateLbl)' : '';
+    final msg = expired
+        ? 'Your subscription has expired$onLbl. Please renew to restore full access.'
+        : 'Your subscription expires in $d day${d == 1 ? '' : 's'}$onLbl. Please renew to avoid interruption.';
+    final fg = expired ? const Color(0xFF991B1B) : const Color(0xFF92400E);
+    final bg = expired ? const Color(0xFFFEE2E2) : const Color(0xFFFEF3C7);
+    final bd = expired ? const Color(0xFFFECACA) : const Color(0xFFFDE68A);
     return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(color: bg, border: Border(bottom: BorderSide(color: bd))),
       padding: const EdgeInsets.fromLTRB(AppSpacing.md12, AppSpacing.sm8, AppSpacing.md12, AppSpacing.sm8),
-      decoration: const BoxDecoration(
-        color: AppColors.card,
-        border: Border(bottom: BorderSide(color: AppColors.border)),
-      ),
       child: Row(
         children: [
-          Expanded(child: _dateChip('From', _from, () => _pickDate(isFrom: true))),
-          const SizedBox(width: AppSpacing.sm8),
-          Expanded(child: _dateChip('To', _to, () => _pickDate(isFrom: false))),
-          if (hasRange)
-            IconButton(icon: const Icon(Icons.close, size: 18), tooltip: 'All time', onPressed: _clearRange),
+          Icon(expired ? Icons.error_outline : Icons.warning_amber_rounded, size: 18, color: fg),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(msg, style: TextStyle(fontSize: 12.5, color: fg, fontWeight: FontWeight.w600)),
+          ),
         ],
-      ),
-    );
-  }
-
-  Widget _dateChip(String label, DateTime? value, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppRadius.sm8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        decoration: BoxDecoration(
-          border: Border.all(color: AppColors.border),
-          borderRadius: BorderRadius.circular(AppRadius.sm8),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.calendar_today_outlined, size: 14, color: AppColors.text3),
-            const SizedBox(width: 6),
-            Text('$label: ${value == null ? 'All' : Fmt.date(value)}',
-                style: const TextStyle(fontSize: 12.5, color: AppColors.text1)),
-          ],
-        ),
       ),
     );
   }

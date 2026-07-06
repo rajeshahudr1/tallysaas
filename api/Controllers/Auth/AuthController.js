@@ -56,6 +56,59 @@ const DISABLED_MSG  = 'Your account is disabled.';
 const DUMMY_HASH =
     '$argon2id$v=19$m=65536,t=3,p=1$yvBNACGhmG2DJG0iSRNd5g$tr3ucRvo+pfvpnVw6c3Oi2NzaHpy0vBrXRbzAT8Uqfo';
 
+/**
+ * Build the licence summary the frontends show (login + /me): expiry
+ * (valid_until + days_left), the plan limits (max_companies, max_users) and how
+ * many company slots are used / remaining. Returns null for the super-admin (no
+ * licence) or a user with no licence. Best-effort on the tenant company count —
+ * a tenant-db hiccup leaves companies_used null rather than failing login/me.
+ */
+async function buildLicenseInfo(roleSlug, licenseId) {
+    if (roleSlug === 'super-admin' || !licenseId) return null;
+    const lic = await masterDb('licenses').where('id', licenseId).whereNull('deleted_at')
+        .first('valid_until', 'status', 'max_companies', 'max_users');
+    if (!lic) return null;
+
+    let daysLeft = null;
+    if (lic.valid_until) {
+        const vu = new Date(lic.valid_until);
+        const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+        daysLeft = Math.floor((vu.getTime() - t0.getTime()) / 86400000);
+    }
+
+    // Company slots used = the licence's non-deleted companies (its tenant db).
+    let companiesUsed = null;
+    try {
+        const tdb = require('../../config/tenantDb').getKnexForLicense(licenseId);
+        const [{ c }] = await tdb('companies').whereNull('deleted_at').count({ c: '*' });
+        companiesUsed = Number(c) || 0;
+    } catch (_) { /* best-effort — leave null */ }
+
+    // User seats used = the licence's non-deleted logins (master.users is the
+    // auth source of truth, one row per login across the licence).
+    let usersUsed = null;
+    try {
+        const [{ u }] = await masterDb('users').where('license_id', licenseId).whereNull('deleted_at').count({ u: '*' });
+        usersUsed = Number(u) || 0;
+    } catch (_) { /* best-effort — leave null */ }
+
+    const maxCompanies = lic.max_companies != null ? Number(lic.max_companies) : null;
+    const maxUsers     = lic.max_users != null ? Number(lic.max_users) : null;
+    return {
+        valid_until:  lic.valid_until,
+        status:       lic.status,
+        days_left:    daysLeft,
+        max_companies: maxCompanies,
+        max_users:    maxUsers,
+        companies_used: companiesUsed,
+        companies_remaining: (maxCompanies != null && companiesUsed != null)
+            ? Math.max(0, maxCompanies - companiesUsed) : null,
+        users_used: usersUsed,
+        users_remaining: (maxUsers != null && usersUsed != null)
+            ? Math.max(0, maxUsers - usersUsed) : null,
+    };
+}
+
 // How long the issued token is valid for. Mirrors the value baked into the JWT
 // by jwt.sign so the client can pre-empt expiry. (jwt.sign reads the same env.)
 const EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
@@ -164,40 +217,31 @@ async function login(req, res) {
         const jti = crypto.randomUUID();
         const sessionExpires = new Date(Date.now() + SESSION_TTL_MS);
 
+        // Which PLATFORM is signing in — the web BFF sends `client:'web'`, the app
+        // sends `client:'app'` (default 'web'). Drives the per-platform session
+        // model below. The Tally agent uses a SEPARATE agent token (not here).
+        const platform = (req.body && String(req.body.client).toLowerCase() === 'app') ? 'app' : 'web';
+
         // Drop truly-expired sessions for this user first (housekeeping).
         await db('user_sessions').where('user_id', user.id)
             .andWhere('expires_at', '<', nowDate).del();
 
+        // Session model: ONE live session PER PLATFORM. Web and app are tracked
+        // separately, so signing in on the app NEVER logs the web session out (and
+        // vice-versa) — the user can be signed in on web AND app at once. But a
+        // SECOND login on the SAME platform evicts the first (last-login-wins per
+        // platform). Super Admin is exempt (any number of sessions). Legacy rows
+        // (platform NULL, pre-change) count as 'web'.
         if (!isSuperAdmin) {
-            let limit = 1;
-            // The session cap lives in companies.max_sessions_per_user, which is in
-            // the user's TENANT db (per-license). Read it there; on any hiccup keep
-            // the safe default of 1. user_sessions itself is MASTER (auth sessions).
-            if (user.license_id) {
-                try {
-                    const tdb = require('../../config/tenantDb').getKnexForLicense(user.license_id);
-                    let row;
-                    if (user.company_id) {
-                        row = await tdb('companies').where('id', user.company_id)
-                            .max('max_sessions_per_user as m').first();
-                    } else {
-                        // License-admin (no fixed company_id) → highest cap among the
-                        // licence's companies (else every other login evicts them).
-                        row = await tdb('companies').whereNull('deleted_at')
-                            .max('max_sessions_per_user as m').first();
-                    }
-                    if (row && row.m != null) limit = Math.max(1, Number(row.m));
-                } catch (_) { /* tenant unreachable → default cap of 1 */ }
-            }
-            // Evict oldest logins so that, once the new session is added below,
-            // the live count never exceeds `limit`. (Keep the most recent logins.)
-            const live = await db('user_sessions').where('user_id', user.id)
-                .orderBy('created_at', 'asc').select('id');
-            const evictCount = live.length + 1 - limit;
-            if (evictCount > 0) {
-                const victimIds = live.slice(0, evictCount).map((s) => s.id);
-                await db('user_sessions').whereIn('id', victimIds).del();
-                console.error(`[LOGIN-EVICT] user=${user.id} (${user.email}) evicted ${evictCount} oldest session(s) ids=[${victimIds}] limit=${limit} liveWas=${live.length}`);
+            const victims = await db('user_sessions').where('user_id', user.id)
+                .where(function () {
+                    this.where('platform', platform);
+                    if (platform === 'web') this.orWhereNull('platform');
+                })
+                .select('id');
+            if (victims.length) {
+                await db('user_sessions').whereIn('id', victims.map((s) => s.id)).del();
+                console.error(`[LOGIN-EVICT] user=${user.id} (${user.email}) platform=${platform} evicted ${victims.length} prior session(s) on this platform`);
             }
         }
 
@@ -218,6 +262,7 @@ async function login(req, res) {
         await db('user_sessions').insert({
             user_id:      user.id,
             jti,
+            platform,
             ip:           String(req.headers['x-forwarded-for'] || req.ip || '').slice(0, 64) || null,
             user_agent:   String(req.headers['user-agent'] || '').slice(0, 255) || null,
             last_seen_at: nowDate,
@@ -263,7 +308,18 @@ async function login(req, res) {
                 .join('permissions as p', 'p.id', 'rp.permission_id')
                 .where('rp.role_id', user.role_id)
                 .select('p.slug');
-            permissions = permRows.map((r) => r.slug);
+            let slugs = permRows.map((r) => r.slug);
+            // PLAN GATE — effective permissions = role grants ∩ the licence's
+            // entitlement (license_permissions, master). MUST mirror /me so login
+            // and /me agree, else the web menu (built from the login perms) shows
+            // modules the super-admin removed from the licence. A licence with no
+            // explicit entitlements resolves to ALL (no filtering).
+            if (user.license_id) {
+                const { entitledSlugSet } = require('../../Helpers/entitlements');
+                const entitled = await entitledSlugSet(user.license_id);
+                if (entitled) slugs = slugs.filter((s) => entitled.has(s));
+            }
+            permissions = slugs;
         }
 
         // SFA — is this user a LINKED salesman? Drives the web/app draft +
@@ -281,22 +337,10 @@ async function login(req, res) {
             if (sp) salesPersonId = Number(sp.id);
         }
 
-        // License validity — powers the "your licence expires in N days" banner
-        // (and is the single source of truth for access after expiry).
-        let licenseInfo = null;
-        if (user.role_slug !== 'super-admin' && user.license_id) {
-            const lic = await masterDb('licenses').where('id', user.license_id).whereNull('deleted_at')
-                .first('valid_until', 'status');
-            if (lic) {
-                let daysLeft = null;
-                if (lic.valid_until) {
-                    const vu = new Date(lic.valid_until);
-                    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
-                    daysLeft = Math.floor((vu.getTime() - t0.getTime()) / 86400000);
-                }
-                licenseInfo = { valid_until: lic.valid_until, status: lic.status, days_left: daysLeft };
-            }
-        }
+        // License validity + limits — powers the "your licence expires in N days"
+        // banner AND the company-admin's top licence strip (valid-until, remaining
+        // companies, max users). Single source of truth for access after expiry.
+        const licenseInfo = await buildLicenseInfo(user.role_slug, user.license_id);
 
         // 7. Success envelope — never echo the password_hash.
         return R.successResponse(res, {
@@ -401,23 +445,10 @@ async function me(req, res) {
             if (sp) salesPersonId = Number(sp.id);
         }
 
-        // License validity — so the app/web can warn the company before it
-        // expires (a top banner) and knows the licence is the single source of
-        // truth for access. Super Admin has no company licence.
-        let licenseInfo = null;
-        if (user.role_slug !== 'super-admin' && user.license_id) {
-            const lic = await masterDb('licenses').where('id', user.license_id).whereNull('deleted_at')
-                .first('valid_until', 'status');
-            if (lic) {
-                let daysLeft = null;
-                if (lic.valid_until) {
-                    const vu = new Date(lic.valid_until);
-                    const t0 = new Date(); t0.setHours(0, 0, 0, 0);
-                    daysLeft = Math.floor((vu.getTime() - t0.getTime()) / 86400000);
-                }
-                licenseInfo = { valid_until: lic.valid_until, status: lic.status, days_left: daysLeft };
-            }
-        }
+        // License validity + limits — so the app/web can warn the company before
+        // it expires (a top banner) AND show the top licence strip (valid-until,
+        // remaining companies, max users). Super Admin has no company licence.
+        const licenseInfo = await buildLicenseInfo(user.role_slug, user.license_id);
 
         return R.successResponse(res, {
             id:            user.id,

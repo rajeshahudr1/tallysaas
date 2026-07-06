@@ -35,7 +35,7 @@ async function login(req, res) {
 
     if (!email || !password) return rerender('Enter your email and password.');
 
-    const { status, body, networkError } = await api.callApi(req, 'POST', '/auth/login', { email, password });
+    const { status, body, networkError } = await api.callApi(req, 'POST', '/auth/login', { email, password, client: 'web' });
 
     if (networkError || status === 0) {
         return rerender('Cannot reach the server. Is the API running?');

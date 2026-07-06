@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
+import '../../core/brand.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/utils/validators.dart';
 import '../../data/models/settings.dart';
@@ -116,7 +117,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _nLowStock = s.sb('notify_low_stock', false);
     _nUpdates = s.sb('notify_updates', true);
 
-    _appName.text = s.sv('app_name', 'Tally Cloud Sync');
+    _appName.text = s.sv('app_name', Brand.name);
     _primaryColor.text = s.sv('primary_color', '#2563EB');
     _accentColor.text = s.sv('accent_color', '#6D28D9');
     _theme = s.sv('theme', 'Light');

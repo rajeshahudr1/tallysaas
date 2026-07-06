@@ -328,7 +328,7 @@ var headActions = _isSuper ? '' :
             <div class="form-grid">
                 <div class="form-group">
                     <label class="form-label" for="set-app-name">App Display Name</label>
-                    <input type="text" class="form-control" id="set-app-name" name="settings[app_name]" value="<%= _sv('app_name', 'Tally Cloud Sync') %>">
+                    <input type="text" class="form-control" id="set-app-name" name="settings[app_name]" value="<%= _sv('app_name', (typeof brand !== 'undefined' && brand) ? brand.name : 'Tally Cloud Sync') %>">
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="set-logo">Logo</label>

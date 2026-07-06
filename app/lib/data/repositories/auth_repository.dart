@@ -28,6 +28,7 @@ class AuthRepository {
     final data = await _api.post(Endpoints.login, body: {
       'email': email.trim(),
       'password': password,
+      'client': 'app', // per-platform session — never evicts the user's web session
     });
     if (data is! Map) {
       throw StateError('Login response was not a JSON object.');

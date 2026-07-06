@@ -50,6 +50,17 @@ function isSuper(req) {
     return !!(req.user && req.user.role_slug === 'super-admin');
 }
 
+// Since the per-license DB split, a company's roles live in that company's OWN
+// tenant db and are managed by the COMPANY admin. The platform Super Admin has no
+// tenant of its own — it controls each company's ALLOWED MODULES (entitlements)
+// under Licenses → Permissions, NOT the company's roles. So /account/roles is
+// company-admin only; a super-admin caller is short-circuited here (gracefully —
+// querying the tenant-less master pool for `roles` would otherwise 500).
+const SUPER_ROLES_MSG =
+    'As the platform admin you set each company\'s allowed MODULES under '
+    + 'Licenses → Permissions. A company\'s roles are created by that company\'s own admin.';
+const EMPTY_LIST = { data: [], meta: { total: 0, page: 1, per_page: 0 } };
+
 function labelOf(key) {
     return String(key || '').split(/[-_]/)
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
@@ -99,6 +110,7 @@ async function editableRole(req, id) {
 /** GET /roles — assignable roles for the Add/Edit User dropdown. */
 async function list(req, res) {
     try {
+        if (isSuper(req)) return R.successResponse(res, EMPTY_LIST);   // platform admin has no tenant roles
         const licenseId = req.user && req.user.license_id;
         const rows = await visibleRolesQuery(licenseId, isSuper(req))
             .orderBy('id', 'asc').select('id', 'name', 'slug', 'is_system', 'license_id');
@@ -114,6 +126,7 @@ async function list(req, res) {
 /** GET /account/roles — role-management list (with per-role user counts). */
 async function manageList(req, res) {
     try {
+        if (isSuper(req)) return R.successResponse(res, EMPTY_LIST);   // roles are per-company; super-admin manages MODULES, not roles
         const licenseId = req.user && req.user.license_id;
         const super_    = isSuper(req);
         let rows = await visibleRolesQuery(licenseId, super_)
@@ -158,6 +171,7 @@ async function manageList(req, res) {
  */
 async function availablePermissions(req, res) {
     try {
+        if (isSuper(req)) return R.successResponse(res, { modules: [], slugs: [] });   // platform admin doesn't build company roles
         const super_ = isSuper(req);
         const all = await db('permissions').select('module', 'action', 'slug').orderBy(['module', 'action']);
 
@@ -197,6 +211,7 @@ async function availablePermissions(req, res) {
 /** GET /account/roles/:id — a visible role + its permission slugs. */
 async function get(req, res) {
     try {
+        if (isSuper(req)) return R.errorResponse(res, NOT_FOUND, 404);   // no tenant roles for the platform admin
         const licenseId = req.user && req.user.license_id;
         const super_    = isSuper(req);
         const id = Number(req.params.id);
@@ -236,6 +251,7 @@ async function get(req, res) {
  */
 async function create(req, res) {
     try {
+        if (isSuper(req)) return R.errorResponse(res, SUPER_ROLES_MSG, 422);
         const super_ = isSuper(req);
 
         // Resolve which license (if any) this new role belongs to.
@@ -298,6 +314,7 @@ async function create(req, res) {
 /** PUT /account/roles/:id — rename a custom role. */
 async function update(req, res) {
     try {
+        if (isSuper(req)) return R.errorResponse(res, SUPER_ROLES_MSG, 422);
         const id = Number(req.params.id);
         const role = await editableRole(req, id);
         if (!role) return R.errorResponse(res, 'Role not found or not editable.', 404);
@@ -317,6 +334,7 @@ async function update(req, res) {
 /** PUT /account/roles/:id/permissions — set permissions (filtered to entitled). */
 async function setPermissions(req, res) {
     try {
+        if (isSuper(req)) return R.errorResponse(res, SUPER_ROLES_MSG, 422);
         const id = Number(req.params.id);
         const role = await editableRole(req, id);
         if (!role) return R.errorResponse(res, 'Role not found or not editable.', 404);
@@ -352,6 +370,7 @@ async function setPermissions(req, res) {
 /** DELETE /account/roles/:id — delete a custom role (only if unused). */
 async function remove(req, res) {
     try {
+        if (isSuper(req)) return R.errorResponse(res, SUPER_ROLES_MSG, 422);
         const id = Number(req.params.id);
         const role = await editableRole(req, id);
         if (!role) return R.errorResponse(res, 'Role not found or not editable.', 404);

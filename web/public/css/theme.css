@@ -1146,3 +1146,14 @@ a.action-btn { text-decoration: none; }
     border-radius: 50%; background: var(--primary); vertical-align: middle;
 }
 .notif-menu .notif-item.is-read { opacity: .62; }
+
+/* ── Licence plan strip (top bar — company-admin) ─────────────────── */
+.topbar-license { display: flex; align-items: center; gap: 8px; margin-right: 4px; }
+.lic-pill {
+    display: inline-flex; align-items: center; font-size: 12px; color: #475569;
+    background: #F1F5F9; border: 1px solid #E2E8F0; border-radius: 999px;
+    padding: 5px 11px; white-space: nowrap; line-height: 1;
+}
+.lic-pill strong { color: #0F172A; margin-left: 3px; font-weight: 700; }
+.lic-pill-warn { background: #FEF3C7; border-color: #FDE68A; color: #92400E; }
+.lic-pill-warn strong { color: #78350F; }
