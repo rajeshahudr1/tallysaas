@@ -354,8 +354,14 @@ async function monthlyByType(req, res, type) {
         // snapshot) so the register ties to Tally to the paisa — keeping the
         // cloud's voucher counts + month drill-down. Falls back to the
         // reconstruction when the register has not been synced yet.
+        //
+        // BUT the Tally snapshot is the WHOLE COMPANY's register, so it must NOT
+        // be applied to a SCOPED view — a salesman (own invoices) or a
+        // location-restricted user must see the sum of THEIR OWN invoices, not
+        // the company total. For those, keep the reconstructed per-row total.
+        const scoped = req.isSalesman || req.locationId != null;
         const snapType = type === 'purchase' ? 'purchase_register' : 'sales_register';
-        const snap = await tallyReportSnapshot(req.companyId, snapType);
+        const snap = scoped ? null : await tallyReportSnapshot(req.companyId, snapType);
         const byName = {};
         if (snap && Array.isArray(snap.rows)) {
             for (const r of snap.rows) byName[String(r.month || '').trim().toLowerCase()] = Number(r.amount) || 0;

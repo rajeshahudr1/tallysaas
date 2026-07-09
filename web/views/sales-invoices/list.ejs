@@ -86,7 +86,7 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
        if (a !== 'approved') q.push('approval=' + a);
        return '/sales-invoices' + (q.length ? '?' + q.join('&') : '');
    }
-   var _tabs = [ {k:'approved',label:'Approved',icon:'fa-circle-check'}, {k:'pending',label:'Pending',icon:'fa-clock'}, {k:'all',label:'All',icon:'fa-list'} ]; %>
+   var _tabs = [ {k:'approved',label:'Approved',icon:'fa-circle-check'}, {k:'pending',label:'Pending',icon:'fa-clock'}, {k:'rejected',label:'Rejected',icon:'fa-circle-xmark'}, {k:'all',label:'All',icon:'fa-list'} ]; %>
 <div class="appr-tabs">
     <% _tabs.forEach(function (t) { %>
         <a href="<%= _tabUrl(t.k) %>" class="appr-tab <%= _tab === t.k ? 'is-active' : '' %>">
@@ -140,11 +140,14 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
     <%- include('../partials/table', {
         tableId: 'sales-invoices-table',
         basePath: '/sales-invoices',
+        editable: true,
         columns: tableColumns,
         rows: _rows,
         selectable: true,
         showIndex: true,
-        actions: ['view', 'print', 'delete'],
+        // Edit → /sales-invoices/:id/edit (rejected/pending re-submit on save);
+        // APPROVED rows are row-locked (_lockActions) so Edit + Delete disable.
+        actions: ['view', 'print', 'edit', 'delete'],
     }) %>
 
     <%- include('../partials/pagination', {
