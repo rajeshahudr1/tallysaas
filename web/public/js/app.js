@@ -58,7 +58,7 @@
             '.ss-native{position:absolute!important;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}' +
             '.ss-trigger{text-align:left;display:flex;align-items:center;width:100%;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
             '.ss-trigger.ss-placeholder{color:#9aa2b1}' +
-            '.ss-panel{display:none;position:absolute;z-index:1055;left:0;right:0;top:calc(100% + 4px);background:#fff;border:1px solid #e2e6ee;border-radius:10px;box-shadow:0 8px 24px rgba(20,25,40,.12);overflow:hidden}' +
+            '.ss-panel{display:none;position:fixed;z-index:1080;background:#fff;border:1px solid #e2e6ee;border-radius:10px;box-shadow:0 8px 24px rgba(20,25,40,.12);overflow:hidden}' +
             '.ss-wrap.is-open .ss-panel{display:block}' +
             '.ss-search-wrap{padding:8px;border-bottom:1px solid #eef0f4}' +
             '.ss-search{width:100%;border:1px solid #dfe3ea;border-radius:8px;padding:7px 10px;font-size:.9rem;outline:none}' +
@@ -138,15 +138,27 @@
             }
         }
 
+        // The panel is position:fixed (so it escapes any ancestor overflow clip,
+        // e.g. .filter-card{overflow:hidden}); pin it under the trigger.
+        function placePanel() {
+            var r = trigger.getBoundingClientRect();
+            panel.style.left  = r.left + 'px';
+            panel.style.top   = (r.bottom + 4) + 'px';
+            panel.style.width = r.width + 'px';
+        }
         function openPanel() {
             wrap.classList.add('is-open');
             search.value = '';
             buildList('');
+            placePanel();
             setTimeout(function () { search.focus(); }, 0);
             var selEl = list.querySelector('.is-selected');
             if (selEl) selEl.scrollIntoView({ block: 'nearest' });
         }
         function closePanel() { wrap.classList.remove('is-open'); }
+        // Keep the fixed panel pinned while open (page/card scroll, resize).
+        window.addEventListener('scroll', function () { if (wrap.classList.contains('is-open')) placePanel(); }, true);
+        window.addEventListener('resize', function () { if (wrap.classList.contains('is-open')) placePanel(); });
         function choose(i) {
             if (!sel.options[i] || sel.options[i].disabled) return;
             sel.selectedIndex = i;

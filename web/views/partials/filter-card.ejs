@@ -44,7 +44,10 @@ function _fval(f) {
                     <div class="<%= f.colClass || 'col-md-3 col-sm-6' %>">
                         <label class="form-label filter-label" for="<%= _id %>-<%= f.name %>"><%= f.label %></label>
                         <% if (f.type === 'select') { %>
-                            <select class="form-select filter-control" id="<%= _id %>-<%= f.name %>" name="<%= f.name %>">
+                            <%# searchable-select → every filter dropdown gets a "type to search"
+                                popup (app.js enhances it; the panel is position:fixed so the
+                                filter-card's overflow:hidden never clips it). %>
+                            <select class="form-select filter-control searchable-select" id="<%= _id %>-<%= f.name %>" name="<%= f.name %>">
                                 <% (f.options || []).forEach(function (opt) { %>
                                     <option value="<%= opt.value %>" <%= (String(_v) === String(opt.value)) ? 'selected' : '' %>><%= opt.label %></option>
                                 <% }); %>
