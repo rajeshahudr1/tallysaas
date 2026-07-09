@@ -2029,8 +2029,10 @@ router.get('/field-tracking', async (req, res, next) => {
         customer:     v.customer || '—',
         location:     v.location || '—',
         sales_person: v.sales_person || '—',
-        checkin:      fmtDate(v.checkin_at),
-        checkout:     v.checkout_at ? fmtDate(v.checkout_at) : '',
+        // Field tracking shows the full timestamp (date AND time) — a check-in at
+        // 2:19 PM must read as such, not just the day.
+        checkin:      fmtDateTime(v.checkin_at),
+        checkout:     v.checkout_at ? fmtDateTime(v.checkout_at) : '',
         distance:     v.checkin_distance_m,
         within:       !!v.checkin_within,
         note:         v.note || '',
@@ -2042,7 +2044,7 @@ router.get('/field-tracking', async (req, res, next) => {
         source:       p.source || '—',
         lat:          p.lat, lng: p.lng,
         moved:        p.moved_m,
-        at:           fmtDate(p.captured_at),
+        at:           fmtDateTime(p.captured_at),
     }));
     res.render('field/tracking', {
         title: 'Field Tracking',

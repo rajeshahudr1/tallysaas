@@ -38,6 +38,10 @@ var filterFields = [
 
 /* ── Table config ───────────────────────────────────────────── */
 /* Columns ordered like Tally's Sales/Voucher Register for easy data verification. */
+/* A salesman only cares about the APPROVAL state — the Tally-sync lifecycle
+ * ('Pending Tally' / 'Sent to Tally' …) is a back-office concern, so hide that
+ * 'Status' column for them. Admins keep both. */
+var _isSalesmanCol = (typeof isSalesman !== 'undefined' && isSalesman) ? true : false;
 var tableColumns = [
     { key: 'date',       label: 'Date',         sortable: true,  type: 'date' },
     { key: 'customer',   label: 'Particulars',  sortable: true,  type: 'text' },
@@ -46,7 +50,7 @@ var tableColumns = [
     { key: 'amount',     label: 'Taxable',      sortable: true,  type: 'currency' },
     { key: 'gst',        label: 'GST',          sortable: true,  type: 'currency' },
     { key: 'total',      label: 'Total',        sortable: true,  type: 'currency' },
-    { key: 'status',     label: 'Status',       sortable: true,  type: 'status' },
+    ...(_isSalesmanCol ? [] : [{ key: 'status', label: 'Status', sortable: true, type: 'status' }]),
     { key: 'approval',   label: 'Approval',     sortable: true,  type: 'status' },
 ];
 
