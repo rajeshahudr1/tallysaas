@@ -26,32 +26,32 @@ function n0(n)  { return Number(n || 0).toLocaleString('en-IN'); }
     </div></div>
 <% } else { %>
 
-<!-- Approval summary -->
+<!-- Approval summary — each card links to its detail page -->
 <section class="mf-stats">
-    <article class="mf-stat mf-stat--blue">
+    <a href="/my-locations" class="mf-stat mf-stat--blue">
         <span class="mf-stat-ico"><i class="fa-solid fa-location-dot"></i></span>
         <div><div class="mf-stat-val"><%= n0(st.locations) %></div><div class="mf-stat-lbl">My Locations</div></div>
-    </article>
-    <article class="mf-stat mf-stat--indigo">
+    </a>
+    <a href="/my-customers" class="mf-stat mf-stat--indigo">
         <span class="mf-stat-ico"><i class="fa-solid fa-user-group"></i></span>
         <div><div class="mf-stat-val"><%= n0(st.customers) %></div><div class="mf-stat-lbl">My Customers</div></div>
-    </article>
-    <article class="mf-stat mf-stat--slate">
+    </a>
+    <a href="/my-approvals?status=draft" class="mf-stat mf-stat--slate">
         <span class="mf-stat-ico"><i class="fa-solid fa-pen-ruler"></i></span>
         <div><div class="mf-stat-val"><%= n0(st.draft) %></div><div class="mf-stat-lbl">Drafts</div></div>
-    </article>
-    <article class="mf-stat mf-stat--amber">
+    </a>
+    <a href="/my-approvals?status=pending" class="mf-stat mf-stat--amber">
         <span class="mf-stat-ico"><i class="fa-solid fa-hourglass-half"></i></span>
         <div><div class="mf-stat-val"><%= n0(st.pending) %></div><div class="mf-stat-lbl">Pending Approval</div></div>
-    </article>
-    <article class="mf-stat mf-stat--green">
+    </a>
+    <a href="/my-approvals?status=approved" class="mf-stat mf-stat--green">
         <span class="mf-stat-ico"><i class="fa-solid fa-circle-check"></i></span>
         <div><div class="mf-stat-val"><%= n0(st.approved) %></div><div class="mf-stat-lbl">Approved</div></div>
-    </article>
-    <article class="mf-stat mf-stat--red">
+    </a>
+    <a href="/my-approvals?status=rejected" class="mf-stat mf-stat--red">
         <span class="mf-stat-ico"><i class="fa-solid fa-circle-xmark"></i></span>
         <div><div class="mf-stat-val"><%= n0(st.rejected) %></div><div class="mf-stat-lbl">Rejected</div></div>
-    </article>
+    </a>
 </section>
 
 <% var att = f.attendance || {}; var covPct = Math.min(100, Number(st.coverage_pct) || 0); %>
@@ -123,7 +123,9 @@ function n0(n)  { return Number(n || 0).toLocaleString('en-IN'); }
     .mf-empty i { font-size:30px; display:block; margin-bottom:10px; color:#94a3b8; }
     .mf-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:14px; }
     .mf-stat { display:flex; align-items:center; gap:12px; padding:14px 16px; background:#fff;
-        border:1px solid #e2e8f0; border-radius:14px; }
+        border:1px solid #e2e8f0; border-radius:14px; text-decoration:none; color:inherit;
+        transition:border-color .15s, box-shadow .15s, transform .1s; }
+    a.mf-stat:hover { border-color:#c7d2fe; box-shadow:0 4px 14px rgba(20,25,40,.08); transform:translateY(-1px); }
     .mf-stat-ico { width:40px; height:40px; border-radius:11px; display:inline-flex; align-items:center;
         justify-content:center; font-size:17px; flex:0 0 auto; }
     .mf-stat-val { font-size:20px; font-weight:800; color:#0f172a; line-height:1.1; }

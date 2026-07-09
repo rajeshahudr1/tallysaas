@@ -243,7 +243,28 @@
             });
         }
 
-        // Seed the table with one empty row.
-        addRow();
+        // Seed the table. EDIT mode → one pre-filled row per existing line item
+        // (window.INVOICE_EDIT_ITEMS); otherwise a single empty row.
+        var seed = Array.isArray(window.INVOICE_EDIT_ITEMS) ? window.INVOICE_EDIT_ITEMS : [];
+        if (seed.length) {
+            seed.forEach(function (it) {
+                var row = addRow();
+                var pid = it.product_id != null ? String(it.product_id) : '';
+                var p = pid && PROD_BY_ID[pid] ? PROD_BY_ID[pid] : null;
+                if (p) applyProduct(row, p);        // sets the search label + product id
+                // The stored line values win over the product defaults (they may
+                // have been edited when the invoice was first created).
+                if (it.hsn)  row.querySelector('.li-hsn').value  = it.hsn;
+                if (it.unit) row.querySelector('.li-unit').value = it.unit;
+                row.querySelector('.li-qty').value  = it.quantity != null ? it.quantity : 1;
+                row.querySelector('.li-rate').value = it.rate != null ? it.rate : 0;
+                row.querySelector('.li-disc').value = it.discount_pct != null ? it.discount_pct : 0;
+                row.querySelector('.li-gst').value  = it.gst_rate != null ? it.gst_rate : 0;
+                recalcRow(row);
+            });
+            recalcTotals();
+        } else {
+            addRow();
+        }
     }
 })();

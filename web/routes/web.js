@@ -1784,6 +1784,83 @@ router.post('/sales-invoices', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · EDIT a Sales Invoice (GET /sales-invoices/:id/edit) — reuses
+ *    the create form pre-filled. Editable ONLY while un-approved (draft/pending/
+ *    rejected); the api locks approved. A salesman may edit ONLY their own (api
+ *    scopes by created_by). Saving re-submits it for approval. */
+router.get('/sales-invoices/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [invR, customerOptions, locationOptions, salesPersonOptions, invoiceProducts] = await Promise.all([
+        api.get(req, `/sales-invoices/${id}`),
+        fetchCustomerInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchOptions(req, '/sales-persons'),
+        fetchInvoiceProducts(req, 'sales_price'),
+    ]);
+    // GET /sales-invoices/:id returns the invoice fields at the ROOT of data,
+    // with the line items nested under data.items.
+    const inv = (invR.body && invR.body.data) || null;
+    if (!inv || !inv.id) {
+        setFlash(req, 'error', 'Invoice not found or you cannot edit it.');
+        return req.session.save(() => res.redirect(res.locals.isSalesman ? '/my-approvals' : '/sales-invoices'));
+    }
+    if (String(inv.approval_status) === 'approved') {
+        setFlash(req, 'error', 'This invoice is approved and locked — it can no longer be edited.');
+        return req.session.save(() => res.redirect(res.locals.isSalesman ? '/my-approvals?status=approved' : '/sales-invoices'));
+    }
+    const u = res.locals.user || {};
+    const mySalesPerson = (res.locals.isSalesman && u.sales_person_id)
+        ? { id: u.sales_person_id, name: u.name || 'Me' } : null;
+    res.render('sales-invoices/create', {
+        title: 'Edit Invoice',
+        activeMenu: 'sales-inv',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Sales Invoices', href: res.locals.isSalesman ? '/my-approvals' : '/sales-invoices' },
+            { label: 'Edit Invoice' },
+        ],
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts, mySalesPerson,
+        nextInvoiceNo: inv.invoice_no || '',
+        editInvoice: inv,
+        editItems: Array.isArray(inv.items) ? inv.items : [],
+        pageScript: '<script src="/js/invoice.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* POST /sales-invoices/:id/update — save an edited invoice (api PUT
+ * /sales-invoices/:id → updateDraft). Saving without save_as_draft re-submits it
+ * for approval (draft/rejected → pending). Salesman → back to My Approvals. */
+router.post('/sales-invoices/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const num = (v) => (v === '' || v == null ? undefined : Number(v));
+    const wantsDraft = b.save_as_draft === '1' || b.save_as_draft === 'true' || b.save_as_draft === 'on';
+    const payload = {
+        customer_id:     num(b.customer_id),
+        location_id:     num(b.location_id),
+        sales_person_id: num(b.sales_person_id),
+        invoice_date:    b.invoice_date || undefined,
+        due_date:        b.due_date || undefined,
+        notes:           b.notes || undefined,
+        save_as_draft:   wantsDraft ? true : false,   // explicit false → re-submit (pending)
+        items:           parseInvoiceItems(b.items_json),
+    };
+    const result = await api.put(req, `/sales-invoices/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.msg) || 'Invoice updated.');
+        const dest = res.locals.isSalesman
+            ? (wantsDraft ? '/my-approvals?status=draft' : '/my-approvals?status=pending')
+            : '/sales-invoices';
+        return req.session.save(() => res.redirect(dest));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update the invoice.'));
+    return req.session.save(() => res.redirect(`/sales-invoices/${id}/edit`));
+  } catch (err) { next(err); }
+});
+
 /* ── SFA · Invoice Approvals — pending field invoices for an admin to act on.
  *    (GET /sales-invoices/approvals) — must be a LITERAL path (no :id conflict). */
 router.get('/sales-invoices/approvals', async (req, res, next) => {
@@ -1851,6 +1928,88 @@ router.get('/my-field', async (req, res, next) => {
         ],
         field,
     });
+  } catch (err) { next(err); }
+});
+
+/* ── SFA · My Customers (GET /my-customers) — a salesman's OWN assigned
+ *    customers, read-only. /customers is assignment-scoped server-side
+ *    (canCustomerRead), so this lists ONLY the customers assigned to them. */
+router.get('/my-customers', async (req, res, next) => {
+  try {
+    const { body } = await api.get(req, '/customers?per_page=100');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    res.render('field/my-customers', {
+        title: 'My Customers',
+        activeMenu: 'my-field',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'My Field', href: '/my-field' },
+            { label: 'My Customers' },
+        ],
+        customers: rows,
+    });
+  } catch (err) { next(err); }
+});
+
+/* ── SFA · My Locations (GET /my-locations) — a salesman's OWN assigned
+ *    locations (beats), read-only, with their per-location tallies. Reuses the
+ *    same /field/my-dashboard payload as the field home. */
+router.get('/my-locations', async (req, res, next) => {
+  try {
+    const { body } = await api.get(req, '/field/my-dashboard');
+    const field = (body && body.data) || { is_salesman: false, locations: [] };
+    res.render('field/my-locations', {
+        title: 'My Locations',
+        activeMenu: 'my-field',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'My Field', href: '/my-field' },
+            { label: 'My Locations' },
+        ],
+        field,
+    });
+  } catch (err) { next(err); }
+});
+
+/* ── SFA · My Approvals (GET /my-approvals) — the salesman's OWN invoices in ONE
+ *    page, grouped by status (Pending / Approved / Rejected / Draft). The api's
+ *    /sales-invoices is scoped to their own rows (created_by) + filters by
+ *    ?approval=<status>. Pending & rejected & draft rows can be re-submitted
+ *    (POST /sales-invoices/:id/submit); approved is view-only. */
+router.get('/my-approvals', async (req, res, next) => {
+  try {
+    const want = ['pending', 'rejected', 'approved', 'draft'];
+    const active = want.includes(String(req.query.status)) ? String(req.query.status) : 'pending';
+    const lists = {};
+    await Promise.all(want.map(async (s) => {
+        try {
+            const { body } = await api.get(req, `/sales-invoices?approval=${s}&per_page=100`);
+            lists[s] = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+        } catch (_) { lists[s] = []; }
+    }));
+    res.render('field/my-approvals', {
+        title: 'My Approvals',
+        activeMenu: 'my-field',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'My Field', href: '/my-field' },
+            { label: 'My Approvals' },
+        ],
+        lists, active,
+    });
+  } catch (err) { next(err); }
+});
+
+/* POST /sales-invoices/:id/resubmit — a salesman re-submits an edited/rejected
+ * invoice for approval (api POST /sales-invoices/:id/submit). Scoped + gated
+ * server-side (own, non-approved). Redirects back to My Approvals. */
+router.post('/sales-invoices/:id/resubmit', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/sales-invoices/${Number(req.params.id)}/submit`, {});
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.msg) || 'Invoice re-submitted for approval.')
+                      : apiError(result, 'Could not re-submit the invoice.'));
+    return req.session.save(() => res.redirect('/my-approvals?status=pending'));
   } catch (err) { next(err); }
 });
 

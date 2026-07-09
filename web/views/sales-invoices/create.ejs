@@ -31,6 +31,19 @@ var _invNo    = (typeof nextInvoiceNo !== 'undefined' && nextInvoiceNo) ? nextIn
 var _mySP     = (typeof mySalesPerson !== 'undefined' && mySalesPerson) ? mySalesPerson : null;
 var _isSalesman = (typeof isSalesman !== 'undefined' && isSalesman) ? true : false;
 
+/* EDIT mode — an existing invoice is being edited (draft/pending/rejected). The
+ * header + line items pre-fill and the form PUTs to /:id/update (re-submits). */
+var _edit      = (typeof editInvoice !== 'undefined' && editInvoice) ? editInvoice : null;
+var _editItems = (typeof editItems !== 'undefined' && Array.isArray(editItems)) ? editItems : [];
+var _formAction = _edit ? ('/sales-invoices/' + _edit.id + '/update') : '/sales-invoices';
+function _isSel(a, b) { return (a != null && String(a) === String(b)) ? ' selected' : ''; }
+/* Date value (YYYY-MM-DD) for a native date input; blank → today (create). */
+function _dv(v, fallbackToday) {
+    if (v) { var s = String(v); return s.length >= 10 ? s.slice(0, 10) : s; }
+    return fallbackToday ? new Date().toISOString().slice(0, 10) : '';
+}
+var _pageTitle = _edit ? 'Edit Invoice' : 'Create Invoice';
+
 /* Tiny HTML-attr escaper so a customer/product name with a quote can't break
  * the data-* attributes we emit. */
 function _esc(s) {
@@ -39,19 +52,22 @@ function _esc(s) {
         .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/* FK <select> options — value = id. */
-function _selOpts(placeholder, list) {
-    var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
-    (list || []).forEach(function (o) { html += '<option value="' + o.id + '">' + _esc(o.name) + '</option>'; });
+/* FK <select> options — value = id; `sel` (optional) pre-selects a value (edit). */
+function _selOpts(placeholder, list, sel) {
+    var chosen = sel != null && sel !== '';
+    var html = '<option value=""' + (chosen ? '' : ' selected') + ' disabled hidden>' + placeholder + '</option>';
+    (list || []).forEach(function (o) { html += '<option value="' + o.id + '"' + _isSel(sel, o.id) + '>' + _esc(o.name) + '</option>'; });
     return html;
 }
 
 /* Customer <option>s carry the customer's location (id + label) so selecting a
- * customer AUTO-fills the Location field (see the inline script below). */
-function _customerOpts(list) {
-    var html = '<option value="" selected disabled hidden>Select customer</option>';
+ * customer AUTO-fills the Location field (see the inline script below). `sel`
+ * pre-selects (edit mode). */
+function _customerOpts(list, sel) {
+    var chosen = sel != null && sel !== '';
+    var html = '<option value=""' + (chosen ? '' : ' selected') + ' disabled hidden>Select customer</option>';
     (list || []).forEach(function (o) {
-        html += '<option value="' + o.id + '"'
+        html += '<option value="' + o.id + '"' + _isSel(sel, o.id)
              + ' data-location-id="' + _esc(o.location_id) + '"'
              + ' data-location="' + _esc(o.location) + '">' + _esc(o.name) + '</option>';
     });
@@ -67,12 +83,15 @@ var _productsJson = JSON.stringify(_products.map(function (p) {
 // "Save as Draft" buttons carry save_as_draft=1 so the api keeps it editable.
 // Only a company-admin (needsApproval=false) saves straight through to Tally.
 var _needsApproval = (typeof needsApproval !== 'undefined') ? !!needsApproval : false;
-var _primaryLabel = _needsApproval
-    ? '<i class="fa-solid fa-paper-plane me-1"></i>Submit for Approval'
-    : '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally';
+var _primaryLabel = _edit
+    ? '<i class="fa-solid fa-paper-plane me-1"></i>Update &amp; Re-submit'
+    : (_needsApproval
+        ? '<i class="fa-solid fa-paper-plane me-1"></i>Submit for Approval'
+        : '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally');
+var _backHref = _isSalesman ? '/my-approvals' : '/sales-invoices';
 var headActions =
-    '<a class="btn btn-light" href="/sales-invoices">' +
-        '<i class="fa-solid fa-arrow-left me-1"></i>Back to Invoices' +
+    '<a class="btn btn-light" href="' + _backHref + '">' +
+        '<i class="fa-solid fa-arrow-left me-1"></i>Back' +
     '</a>' +
     '<div class="btn-group">' +
         '<button type="submit" form="invoice-form" class="btn btn-primary">' +
@@ -92,16 +111,16 @@ var headActions =
 %>
 
 <%- include('../partials/page-head', {
-    title: 'Create Invoice',
+    title: _pageTitle,
     breadcrumb: [
         { label: 'Dashboard', href: '/' },
-        { label: 'Sales Invoices', href: '/sales-invoices' },
-        { label: 'Create Invoice' },
+        { label: 'Sales Invoices', href: _isSalesman ? '/my-approvals' : '/sales-invoices' },
+        { label: _pageTitle },
     ],
     actions: headActions,
 }) %>
 
-<form id="invoice-form" method="post" action="/sales-invoices" autocomplete="off" novalidate>
+<form id="invoice-form" method="post" action="<%= _formAction %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/invoice.js on submit. -->
     <input type="hidden" name="items_json" id="items-json">
@@ -118,7 +137,7 @@ var headActions =
                 <div class="form-group">
                     <label class="form-label" for="inv-customer">Customer<span class="req">*</span></label>
                     <select class="form-select" id="inv-customer" name="customer_id" required>
-                        <%- _customerOpts(_custs) %>
+                        <%- _customerOpts(_custs, _edit && _edit.customer_id) %>
                     </select>
                 </div>
 
@@ -130,7 +149,7 @@ var headActions =
 
                 <div class="form-group">
                     <label class="form-label" for="inv-date">Invoice Date<span class="req">*</span></label>
-                    <input type="date" class="form-control" id="inv-date" name="invoice_date" value="2024-05-21" required>
+                    <input type="date" class="form-control" id="inv-date" name="invoice_date" value="<%= _dv(_edit && _edit.invoice_date, true) %>" required>
                 </div>
 
                 <div class="form-group">
@@ -139,11 +158,11 @@ var headActions =
                         <%# A salesman can't list locations (403) — the field is read-only and
                             AUTO-fills from the picked customer's location. %>
                         <input type="text" class="form-control" id="inv-location-label"
-                               placeholder="Auto from customer" readonly>
-                        <input type="hidden" id="inv-location" name="location_id" value="">
+                               placeholder="Auto from customer" value="<%= _esc((_edit && _edit.location) || '') %>" readonly>
+                        <input type="hidden" id="inv-location" name="location_id" value="<%= (_edit && _edit.location_id) || '' %>">
                     <% } else { %>
                         <select class="form-select" id="inv-location" name="location_id">
-                            <%- _selOpts('Select location', _locs) %>
+                            <%- _selOpts('Select location', _locs, _edit && _edit.location_id) %>
                         </select>
                     <% } %>
                 </div>
@@ -156,14 +175,14 @@ var headActions =
                         <input type="hidden" id="inv-sp" name="sales_person_id" value="<%= _mySP.id %>">
                     <% } else { %>
                         <select class="form-select" id="inv-sp" name="sales_person_id">
-                            <%- _selOpts('Select sales person', _sps) %>
+                            <%- _selOpts('Select sales person', _sps, _edit && _edit.sales_person_id) %>
                         </select>
                     <% } %>
                 </div>
 
                 <div class="form-group">
                     <label class="form-label" for="inv-due">Due Date</label>
-                    <input type="date" class="form-control" id="inv-due" name="due_date" value="2024-06-20">
+                    <input type="date" class="form-control" id="inv-due" name="due_date" value="<%= _dv(_edit && _edit.due_date, false) %>">
                 </div>
 
             </div>
@@ -211,7 +230,7 @@ var headActions =
             <div>
                 <label class="form-label" for="inv-notes">Notes / Terms</label>
                 <textarea class="form-control" id="inv-notes" name="notes" rows="5"
-                          maxlength="500" placeholder="Payment terms, delivery notes, bank details…"></textarea>
+                          maxlength="500" placeholder="Payment terms, delivery notes, bank details…"><%= (_edit && _edit.notes) || '' %></textarea>
             </div>
 
             <div class="inv-totals">
@@ -288,6 +307,18 @@ var headActions =
 <%# Products for the searchable line-item picker + customer→location auto-fill. %>
 <script>
     window.INVOICE_PRODUCTS = <%- _productsJson %>;
+    // EDIT mode: existing line items so invoice.js seeds the rows (else one empty row).
+    window.INVOICE_EDIT_ITEMS = <%- JSON.stringify(_editItems.map(function (it) {
+        return {
+            product_id: it.product_id != null ? it.product_id : null,
+            hsn: it.hsn || it.hsn_code || '',
+            quantity: Number(it.quantity != null ? it.quantity : (it.qty || 0)) || 0,
+            unit: it.unit || '',
+            rate: Number(it.rate || 0) || 0,
+            discount_pct: Number(it.discount_pct != null ? it.discount_pct : (it.disc_pct || 0)) || 0,
+            gst_rate: Number(it.gst_rate != null ? it.gst_rate : (it.gst || 0)) || 0,
+        };
+    })) %>;
 </script>
 <script>
 (function () {

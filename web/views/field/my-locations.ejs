@@ -1,0 +1,64 @@
+<%
+/* views/field/my-locations.ejs — SFA · the salesman's OWN assigned locations
+ * (beats), read-only, with per-location tallies. Data from /field/my-dashboard. */
+var f = (typeof field !== 'undefined' && field) ? field : { locations: [] };
+var locs = Array.isArray(f.locations) ? f.locations : [];
+function inr(n){ return '₹' + Number(n||0).toLocaleString('en-IN', { maximumFractionDigits:0 }); }
+function n0(n){ return Number(n||0).toLocaleString('en-IN'); }
+function esc(s){ return String(s==null?'':s); }
+%>
+<%- include('../partials/page-head', {
+    title: 'My Locations',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'My Field', href: '/my-field' },
+        { label: 'My Locations' },
+    ],
+}) %>
+
+<div class="card">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-map-location-dot me-2 text-primary"></i>My Locations</h2>
+        <span class="form-hint mb-0"><%= locs.length %> assigned</span>
+    </div>
+
+    <% if (!locs.length) { %>
+        <div class="mf-empty"><i class="fa-solid fa-map-pin"></i>
+            <div>No locations are assigned to you yet. Ask your admin to assign your beats.</div>
+        </div>
+    <% } else { %>
+    <div class="mf-loc-grid">
+        <% locs.forEach(function (l) { %>
+            <div class="mf-loc">
+                <div class="mf-loc-head">
+                    <span class="mf-loc-name"><%= esc(l.name) %></span>
+                    <span class="mf-loc-badge <%= String(l.status).toLowerCase()==='active' ? 'is-on' : 'is-off' %>"><%= esc(l.status) || '—' %></span>
+                </div>
+                <div class="mf-loc-sub"><%= [l.city, l.state].filter(Boolean).join(', ') || '—' %></div>
+                <div class="mf-loc-metrics">
+                    <div><b><%= n0(l.customers) %></b><span>Customers</span></div>
+                    <div><b><%= n0(l.invoices) %></b><span>My Invoices</span></div>
+                    <div><b><%= inr(l.sales_value) %></b><span>Sales</span></div>
+                </div>
+            </div>
+        <% }); %>
+    </div>
+    <% } %>
+</div>
+
+<style>
+    .mf-empty { padding:36px 16px; text-align:center; color:#64748b; }
+    .mf-empty i { font-size:30px; display:block; margin-bottom:10px; color:#94a3b8; }
+    .mf-loc-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; padding:8px; }
+    .mf-loc { border:1px solid #e2e8f0; border-radius:12px; padding:14px; background:#fff; }
+    .mf-loc-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .mf-loc-name { font-weight:700; color:#0f172a; }
+    .mf-loc-badge { font-size:10.5px; font-weight:700; padding:1px 8px; border-radius:999px; }
+    .mf-loc-badge.is-on { color:#166534; background:#dcfce7; }
+    .mf-loc-badge.is-off { color:#6b7280; background:#f3f4f6; }
+    .mf-loc-sub { font-size:12px; color:#64748b; margin-top:2px; }
+    .mf-loc-metrics { display:flex; justify-content:space-between; gap:8px; margin-top:12px; padding-top:10px; border-top:1px solid #f1f5f9; }
+    .mf-loc-metrics div { display:flex; flex-direction:column; }
+    .mf-loc-metrics b { font-size:15px; color:#0f172a; }
+    .mf-loc-metrics span { font-size:10.5px; color:#94a3b8; font-weight:600; }
+</style>

@@ -1,0 +1,114 @@
+<%
+/* views/field/my-approvals.ejs — SFA · the salesman's OWN invoices in ONE page,
+ * grouped by approval status. Pending / Rejected / Draft can be re-submitted for
+ * approval (and viewed); Approved is view-only. Data from GET /sales-invoices
+ * (own-scoped, ?approval=<status>). */
+var lists  = (typeof lists !== 'undefined' && lists) ? lists : {};
+var active = (typeof active !== 'undefined' && active) ? active : 'pending';
+function inr(n){ return '₹' + Number(n||0).toLocaleString('en-IN', { minimumFractionDigits:2, maximumFractionDigits:2 }); }
+function esc(s){ return String(s==null?'':s); }
+function ymd(d){ if(!d) return '—'; var s=String(d); return s.length>=10 ? s.slice(0,10).split('-').reverse().join('/') : s; }
+
+var TABS = [
+    { key:'pending',  label:'Pending Approval', icon:'fa-hourglass-half', cls:'amber' },
+    { key:'rejected', label:'Rejected',         icon:'fa-circle-xmark',   cls:'red'   },
+    { key:'draft',    label:'Drafts',           icon:'fa-pen-ruler',      cls:'slate' },
+    { key:'approved', label:'Approved',         icon:'fa-circle-check',   cls:'green' },
+];
+// Editable while un-approved (edit → "Update & Re-submit" moves it to pending).
+function canEdit(status){ return status !== 'approved'; }
+// The standalone one-click Re-submit uses POST /submit, which the api allows for
+// a DRAFT only. A REJECTED/PENDING invoice re-submits by Edit → save.
+function canQuickSubmit(status){ return status === 'draft'; }
+%>
+<%- include('../partials/page-head', {
+    title: 'My Approvals',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'My Field', href: '/my-field' },
+        { label: 'My Approvals' },
+    ],
+    actions: [ { label: 'New Invoice', icon: 'fa-plus', gradient: true, href: '/sales-invoices/create' } ],
+}) %>
+
+<!-- Status tabs -->
+<div class="mf-appr-tabs">
+    <% TABS.forEach(function (t) { var rows = lists[t.key] || []; %>
+        <a class="mf-appr-tab <%= active === t.key ? 'is-active' : '' %> mf-appr-tab--<%= t.cls %>" href="/my-approvals?status=<%= t.key %>">
+            <i class="fa-solid <%= t.icon %>"></i>
+            <span class="mf-appr-tab-lbl"><%= t.label %></span>
+            <span class="mf-appr-tab-count"><%= rows.length %></span>
+        </a>
+    <% }); %>
+</div>
+
+<% var rows = lists[active] || []; %>
+<div class="card">
+    <% if (!rows.length) { %>
+        <div class="mf-empty"><i class="fa-solid fa-inbox"></i><div>No <%= esc(active) %> invoices.</div></div>
+    <% } else { %>
+    <div class="li-table-wrap">
+        <table class="li-table">
+            <thead>
+                <tr>
+                    <th>Invoice No</th><th>Date</th><th>Customer</th>
+                    <th class="num">Total</th><th>Status</th><th class="center">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% rows.forEach(function (r) { var status = String(r.approval_status||''); %>
+                    <tr>
+                        <td><b><%= esc(r.invoice_no || ('#'+r.id)) %></b></td>
+                        <td><%= ymd(r.invoice_date) %></td>
+                        <td><%= esc(r.customer || '—') %></td>
+                        <td class="num"><%= inr(r.total) %></td>
+                        <td>
+                            <span class="pill-status pill-status--<%= status==='approved'?'success':(status==='rejected'?'danger':'warning') %>">
+                                <%= status || '—' %>
+                            </span>
+                            <% if (status==='rejected' && r.rejection_reason) { %>
+                                <div class="mf-appr-reason"><i class="fa-solid fa-circle-info me-1"></i><%= esc(r.rejection_reason) %></div>
+                            <% } %>
+                        </td>
+                        <td class="center">
+                            <div class="d-inline-flex gap-1">
+                                <a class="btn btn-light btn-sm" href="/sales-invoices/<%= r.id %>/print" target="_blank" title="View">
+                                    <i class="fa-regular fa-eye"></i>
+                                </a>
+                                <% if (canEdit(status)) { %>
+                                    <a class="btn btn-primary btn-sm" href="/sales-invoices/<%= r.id %>/edit" title="Edit &amp; re-submit">
+                                        <i class="fa-solid fa-pen me-1"></i><%= status === 'rejected' ? 'Edit & Re-submit' : 'Edit' %>
+                                    </a>
+                                <% } %>
+                                <% if (canQuickSubmit(status)) { %>
+                                    <form method="post" action="/sales-invoices/<%= r.id %>/resubmit" class="m-0">
+                                        <button type="submit" class="btn btn-primary btn-sm" title="Submit for approval">
+                                            <i class="fa-solid fa-paper-plane me-1"></i>Submit
+                                        </button>
+                                    </form>
+                                <% } %>
+                            </div>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+    <% } %>
+</div>
+
+<style>
+    .mf-empty { padding:36px 16px; text-align:center; color:#64748b; }
+    .mf-empty i { font-size:30px; display:block; margin-bottom:10px; color:#94a3b8; }
+    .mf-appr-tabs { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:14px; }
+    .mf-appr-tab { display:flex; align-items:center; gap:10px; padding:12px 14px; background:#fff;
+        border:1px solid #e2e8f0; border-radius:12px; text-decoration:none; color:#334155; transition:border-color .15s, box-shadow .15s; }
+    .mf-appr-tab:hover { border-color:#c7d2fe; }
+    .mf-appr-tab.is-active { border-color:#6366f1; box-shadow:0 0 0 2px rgba(99,102,241,.15); }
+    .mf-appr-tab i { width:20px; text-align:center; }
+    .mf-appr-tab-lbl { font-size:13px; font-weight:600; flex:1; }
+    .mf-appr-tab-count { font-size:13px; font-weight:800; background:#f1f5f9; border-radius:999px; padding:1px 9px; color:#0f172a; }
+    .mf-appr-tab--amber i { color:#b45309; } .mf-appr-tab--red i { color:#dc2626; }
+    .mf-appr-tab--slate i { color:#475569; } .mf-appr-tab--green i { color:#16a34a; }
+    .mf-appr-reason { font-size:11px; color:#dc2626; margin-top:4px; max-width:260px; }
+</style>

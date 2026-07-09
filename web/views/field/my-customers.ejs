@@ -1,0 +1,69 @@
+<%
+/* views/field/my-customers.ejs — SFA · the salesman's OWN assigned customers,
+ * read-only. Data from GET /customers (assignment-scoped server-side). */
+var rows = (typeof customers !== 'undefined' && Array.isArray(customers)) ? customers : [];
+function esc(s){ return String(s==null?'':s); }
+%>
+<%- include('../partials/page-head', {
+    title: 'My Customers',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'My Field', href: '/my-field' },
+        { label: 'My Customers' },
+    ],
+}) %>
+
+<div class="card">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-user-group me-2 text-primary"></i>My Customers</h2>
+        <span class="form-hint mb-0"><%= rows.length %> assigned</span>
+    </div>
+
+    <% if (!rows.length) { %>
+        <div class="mf-empty"><i class="fa-solid fa-user-slash"></i>
+            <div>No customers are assigned to you yet. Ask your admin to assign customers to you.</div>
+        </div>
+    <% } else { %>
+    <div class="mf-cust-grid">
+        <% rows.forEach(function (c) { %>
+            <div class="mf-cust">
+                <div class="mf-cust-top">
+                    <span class="mf-cust-name"><%= esc(c.name) %></span>
+                    <% if (c.status) { %><span class="mf-loc-badge <%= String(c.status).toLowerCase()==='active'?'is-on':'is-off' %>"><%= esc(c.status) %></span><% } %>
+                </div>
+                <div class="mf-cust-rows">
+                    <% if (c.mobile) { %><div><i class="fa-solid fa-phone"></i><a href="tel:<%= esc(c.mobile) %>"><%= esc(c.mobile) %></a></div><% } %>
+                    <% if (c.email) { %><div><i class="fa-solid fa-envelope"></i><%= esc(c.email) %></div><% } %>
+                    <% if (c.location) { %><div><i class="fa-solid fa-location-dot"></i><%= esc(c.location) %></div><% } %>
+                    <% if (c.gst_number) { %><div><i class="fa-solid fa-receipt"></i><%= esc(c.gst_number) %></div><% } %>
+                    <% var addr = [c.billing_address, c.city, c.state].filter(Boolean).join(', '); if (addr) { %>
+                        <div><i class="fa-solid fa-map-pin"></i><%= esc(addr) %></div>
+                    <% } %>
+                </div>
+                <div class="mf-cust-foot">
+                    <a class="btn btn-light btn-sm" href="/sales-invoices/create">
+                        <i class="fa-solid fa-plus me-1"></i>New Invoice
+                    </a>
+                </div>
+            </div>
+        <% }); %>
+    </div>
+    <% } %>
+</div>
+
+<style>
+    .mf-empty { padding:36px 16px; text-align:center; color:#64748b; }
+    .mf-empty i { font-size:30px; display:block; margin-bottom:10px; color:#94a3b8; }
+    .mf-cust-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; padding:8px; }
+    .mf-cust { border:1px solid #e2e8f0; border-radius:12px; padding:14px; background:#fff; display:flex; flex-direction:column; }
+    .mf-cust-top { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+    .mf-cust-name { font-weight:700; color:#0f172a; font-size:15px; }
+    .mf-cust-rows { display:flex; flex-direction:column; gap:6px; font-size:12.5px; color:#475569; }
+    .mf-cust-rows > div { display:flex; align-items:center; gap:8px; }
+    .mf-cust-rows i { width:16px; color:#94a3b8; }
+    .mf-cust-rows a { color:#2563eb; text-decoration:none; }
+    .mf-cust-foot { margin-top:12px; padding-top:10px; border-top:1px solid #f1f5f9; }
+    .mf-loc-badge { font-size:10.5px; font-weight:700; padding:1px 8px; border-radius:999px; }
+    .mf-loc-badge.is-on { color:#166534; background:#dcfce7; }
+    .mf-loc-badge.is-off { color:#6b7280; background:#f3f4f6; }
+</style>
