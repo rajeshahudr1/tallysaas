@@ -28,6 +28,13 @@ final _recCustomersProvider = FutureProvider.autoDispose<List<Map<String, dynami
 const _kGreen = Color(0xFF16A34A);
 const _kFreq = ['monthly', 'quarterly', 'yearly'];
 
+/// A template + the invoices it has generated (GET /recurring-invoices/:id/invoices).
+final _recDetailProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>, int>((ref, id) async {
+  final data = await ref.read(apiClientProvider).get('/recurring-invoices/$id/invoices');
+  return data is Map ? data.cast<String, dynamic>() : <String, dynamic>{};
+});
+
 String _fmtDate(dynamic d) {
   final s = d == null ? '' : '$d';
   if (s.length < 10) return s.isEmpty ? '—' : s;
@@ -74,7 +81,8 @@ class RecurringInvoicesScreen extends ConsumerWidget {
                         child: _RecurringCard(r,
                             onEdit: () => _addOrEdit(context, ref, r),
                             onDelete: () => _delete(context, ref, r),
-                            onGenerate: () => _generate(context, ref, r)),
+                            onGenerate: () => _generate(context, ref, r),
+                            onView: () => _view(context, r)),
                       ),
                   ],
                 ),
@@ -114,6 +122,17 @@ class RecurringInvoicesScreen extends ConsumerWidget {
     }
   }
 
+  /// View a template's schedule + the invoices it has generated (bottom sheet).
+  void _view(BuildContext context, Map<String, dynamic> r) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.card,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (_) => _RecurringDetailSheet(template: r),
+    );
+  }
+
   Future<void> _delete(BuildContext context, WidgetRef ref, Map<String, dynamic> r) async {
     final yes = await ConfirmDialog.show(context,
         title: 'Delete this template?', message: 'Already-generated invoices are kept.', confirmLabel: 'Delete', danger: true);
@@ -131,11 +150,12 @@ class RecurringInvoicesScreen extends ConsumerWidget {
 }
 
 class _RecurringCard extends StatelessWidget {
-  const _RecurringCard(this.r, {required this.onEdit, required this.onDelete, required this.onGenerate});
+  const _RecurringCard(this.r, {required this.onEdit, required this.onDelete, required this.onGenerate, required this.onView});
   final Map<String, dynamic> r;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onGenerate;
+  final VoidCallback onView;
 
   @override
   Widget build(BuildContext context) {
@@ -178,6 +198,7 @@ class _RecurringCard extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
+              TextButton.icon(onPressed: onView, icon: const Icon(Icons.visibility_outlined, size: 18), label: const Text('View'), style: TextButton.styleFrom(foregroundColor: AppColors.text2)),
               TextButton.icon(onPressed: onGenerate, icon: const Icon(Icons.bolt, size: 18), label: const Text('Generate'), style: TextButton.styleFrom(foregroundColor: AppColors.primary)),
               IconButton(icon: const Icon(Icons.edit_outlined, size: 20), color: AppColors.text2, onPressed: onEdit),
               IconButton(icon: const Icon(Icons.delete_outline, size: 20), color: AppColors.danger, onPressed: onDelete),
@@ -409,6 +430,91 @@ class _RecurringSheetState extends ConsumerState<_RecurringSheet> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Bottom sheet: a template's schedule + the invoices it has generated. Mirrors
+/// the web /recurring-invoices/:id/view page.
+class _RecurringDetailSheet extends ConsumerWidget {
+  const _RecurringDetailSheet({required this.template});
+  final Map<String, dynamic> template;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final id = (template['id'] as num?)?.toInt() ?? 0;
+    final async = ref.watch(_recDetailProvider(id));
+    return DraggableScrollableSheet(
+      expand: false,
+      initialChildSize: 0.7,
+      maxChildSize: 0.92,
+      minChildSize: 0.5,
+      builder: (_, scroll) => Padding(
+        padding: const EdgeInsets.fromLTRB(AppSpacing.lg16, AppSpacing.lg16, AppSpacing.lg16, AppSpacing.md12),
+        child: async.when(
+          loading: () => const Center(child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator())),
+          error: (e, _) => Center(child: Text(e is ApiException ? e.message : 'Could not load.', style: const TextStyle(color: AppColors.danger))),
+          data: (d) {
+            final t = (d['template'] is Map) ? (d['template'] as Map).cast<String, dynamic>() : template;
+            final invoices = (d['invoices'] is List) ? (d['invoices'] as List).whereType<Map>().toList() : const [];
+            final gen = t['generated_count'] ?? invoices.length;
+            Widget kv(String k, String v) => Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                    Text(k, style: theme.textTheme.bodySmall?.copyWith(color: AppColors.text3)),
+                    Flexible(child: Text(v, textAlign: TextAlign.end, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600))),
+                  ]),
+                );
+            return ListView(
+              controller: scroll,
+              children: [
+                Row(children: [
+                  Expanded(child: Text('${t['title'] ?? 'Template'}', style: theme.textTheme.titleMedium)),
+                  IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+                ]),
+                const SizedBox(height: AppSpacing.sm8),
+                AppCard(
+                  child: Column(children: [
+                    kv('Customer', '${t['customer'] ?? '—'}'),
+                    kv('Amount', Fmt.inr(t['amount']) + (Fmt.n(t['gst_rate']).toDouble() > 0 ? '  (+${Fmt.n(t['gst_rate'])}% GST)' : '')),
+                    kv('Frequency', _cap('${t['frequency'] ?? 'monthly'}')),
+                    kv('Next run', _fmtDate(t['next_run_date'])),
+                    kv('Generated so far', '$gen'),
+                    kv('Start', _fmtDate(t['start_date'])),
+                    kv('End', t['end_date'] != null ? _fmtDate(t['end_date']) : 'No end'),
+                  ]),
+                ),
+                const SizedBox(height: AppSpacing.md12),
+                Text('Generated Invoices (${invoices.length})', style: theme.textTheme.titleSmall),
+                const SizedBox(height: AppSpacing.sm8),
+                if (invoices.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 24),
+                    child: Center(child: Text('None yet — generated invoices will appear here.', style: TextStyle(color: AppColors.text3))),
+                  )
+                else
+                  for (final inv in invoices)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.sm8),
+                      child: AppCard(
+                        child: Row(children: [
+                          Expanded(
+                            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                              Text('${inv['invoice_no'] ?? '#${inv['id']}'}', style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+                              Text(_fmtDate(inv['invoice_date']), style: theme.textTheme.bodySmall?.copyWith(color: AppColors.text3)),
+                            ]),
+                          ),
+                          Text(Fmt.inr(inv['total']), style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
+                        ]),
+                      ),
+                    ),
+                const SizedBox(height: AppSpacing.md12),
+              ],
+            );
+          },
+        ),
+      ),
     );
   }
 }
