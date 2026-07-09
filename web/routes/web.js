@@ -3762,6 +3762,28 @@ router.post('/recurring-invoices/:id/delete', async (req, res, next) => {
         return req.session.save(() => res.redirect('/recurring-invoices'));
     } catch (err) { next(err); }
 });
+/* View a template + the invoices it has generated (how many came out / are due). */
+router.get('/recurring-invoices/:id/view', async (req, res, next) => {
+    try {
+        const { body } = await api.get(req, `/recurring-invoices/${Number(req.params.id)}/invoices`);
+        const payload  = (body && body.data) || {};
+        if (!payload.template) {
+            setFlash(req, 'error', 'Recurring template not found.');
+            return req.session.save(() => res.redirect('/recurring-invoices'));
+        }
+        res.render('recurring-invoices/view', {
+            title: 'Recurring · ' + (payload.template.title || 'Template'),
+            activeMenu: 'recurring',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Recurring Invoices', href: '/recurring-invoices' },
+                { label: payload.template.title || 'Template' },
+            ],
+            template: payload.template,
+            invoices: Array.isArray(payload.invoices) ? payload.invoices : [],
+        });
+    } catch (err) { next(err); }
+});
 router.post('/recurring-invoices/:id', async (req, res, next) => {
     try {
         const result = await api.put(req, `/recurring-invoices/${Number(req.params.id)}`, _recurringBody(req.body || {}));

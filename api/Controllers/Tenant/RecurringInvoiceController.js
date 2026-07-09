@@ -88,4 +88,39 @@ async function generate(req, res) {
     }
 }
 
-module.exports = { ...controller, generate };
+/**
+ * GET /recurring-invoices/:id/invoices — the template + the sales invoices it has
+ * already generated. Generated invoices carry a fixed note
+ * ("Auto-generated — recurring: <title>"); we match on that + the template's
+ * customer so the operator can see how many came out (and open each).
+ */
+async function generatedInvoices(req, res) {
+    try {
+        const id = Number(req.params.id);
+        const rec = await baseQuery(db)
+            .where('recurring_invoices.id', id)
+            .where('recurring_invoices.company_id', req.companyId)
+            .whereNull('recurring_invoices.deleted_at')
+            .first(...LIST_COLUMNS);
+        if (!rec) return R.errorResponse(res, 'Recurring invoice not found.', 404);
+
+        const note = `Auto-generated — recurring: ${rec.title}`;
+        let q = db('invoices')
+            .where('company_id', req.companyId)
+            .where('type', 'sales')
+            .where('notes', note)
+            .whereNull('deleted_at');
+        if (rec.customer_id != null) q = q.where('customer_id', rec.customer_id);
+        const invoices = await q
+            .orderBy('id', 'desc')
+            .select('id', 'invoice_no', 'invoice_date', 'due_date', 'total',
+                    'status', 'approval_status');
+
+        return R.successResponse(res, { template: rec, invoices });
+    } catch (err) {
+        console.error('recurring.generatedInvoices error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+module.exports = { ...controller, generate, generatedInvoices };

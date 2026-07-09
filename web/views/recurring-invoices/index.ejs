@@ -65,6 +65,7 @@ var FREQ = ['monthly', 'quarterly', 'yearly'];
                             <td class="rc-muted"><%= _d(r.next_run_date) %></td>
                             <td><span class="rc-pill <%= _active ? 'rc-on' : 'rc-off' %>"><%= r.status %></span></td>
                             <td class="rc-right">
+                                <a class="rc-icon-btn" title="View generated invoices" href="/recurring-invoices/<%= r.id %>/view"><i class="fa-regular fa-eye"></i></a>
                                 <form method="post" action="/recurring-invoices/<%= r.id %>/generate" style="display:inline" id="rcgen-<%= r.id %>"></form>
                                 <button type="button" class="rc-icon-btn rc-gen" title="Generate now" onclick="rcAskGen('rcgen-<%= r.id %>', '<%= r.title %>')"><i class="fa-solid fa-bolt"></i></button>
                                 <button type="button" class="rc-icon-btn" title="Edit"

@@ -1,0 +1,90 @@
+<%
+/* views/recurring-invoices/view.ejs — a recurring template + the invoices it has
+ * generated (so the operator can see how many came out / when the next is due).
+ * Locals: template {…}, invoices [{id,invoice_no,invoice_date,due_date,total,status,approval_status}]. */
+var t = (typeof template !== 'undefined' && template) ? template : {};
+var rows = (typeof invoices !== 'undefined' && Array.isArray(invoices)) ? invoices : [];
+function money(n){ return '₹' + Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function ymd(d){ if(!d) return '—'; var s=String(d); return s.length>=10 ? s.slice(0,10).split('-').reverse().join('/') : s; }
+function esc(s){ return String(s==null?'':s); }
+var _generated = (t.generated_count != null) ? t.generated_count : rows.length;
+%>
+<%- include('../partials/page-head', {
+    title: 'Recurring: ' + esc(t.title || 'Template'),
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Recurring Invoices', href: '/recurring-invoices' },
+        { label: esc(t.title || 'Template') },
+    ],
+    actions: [
+        { label: 'Back', icon: 'fa-arrow-left', variant: 'light', href: '/recurring-invoices' },
+    ],
+}) %>
+
+<!-- Schedule summary -->
+<div class="card mb-3">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-repeat me-2 text-primary"></i><%= esc(t.title || 'Template') %></h2>
+        <span class="pill-status pill-status--<%= String(t.status).toLowerCase()==='active'?'success':'warning' %>"><%= esc(t.status || '—') %></span>
+    </div>
+    <div class="inv-body">
+        <div class="rv-grid">
+            <div><span class="rv-lbl">Customer</span><span class="rv-val"><%= esc(t.customer || '—') %></span></div>
+            <div><span class="rv-lbl">Amount</span><span class="rv-val"><%= money(t.amount) %><% if (Number(t.gst_rate)) { %> <span class="rv-sub">+<%= Number(t.gst_rate) %>% GST</span><% } %></span></div>
+            <div><span class="rv-lbl">Frequency</span><span class="rv-val"><%= esc(t.frequency || 'monthly') %></span></div>
+            <div><span class="rv-lbl">Next run</span><span class="rv-val"><%= ymd(t.next_run_date) %></span></div>
+            <div><span class="rv-lbl">Generated so far</span><span class="rv-val"><%= _generated %></span></div>
+            <div><span class="rv-lbl">Last run</span><span class="rv-val"><%= t.last_run_at ? ymd(t.last_run_at) : '—' %></span></div>
+            <div><span class="rv-lbl">Start</span><span class="rv-val"><%= ymd(t.start_date) %></span></div>
+            <div><span class="rv-lbl">End</span><span class="rv-val"><%= t.end_date ? ymd(t.end_date) : 'No end' %></span></div>
+        </div>
+        <% if (String(t.status).toLowerCase()==='active') { %>
+        <form method="post" action="/recurring-invoices/<%= t.id %>/generate" class="mt-3">
+            <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-bolt me-1"></i>Generate one now</button>
+        </form>
+        <% } %>
+    </div>
+</div>
+
+<!-- Generated invoices -->
+<div class="card">
+    <div class="inv-section-head">
+        <h2 class="inv-section-title"><i class="fa-solid fa-file-invoice me-2 text-primary"></i>Generated Invoices</h2>
+        <span class="form-hint mb-0"><%= rows.length %> invoice<%= rows.length===1?'':'s' %></span>
+    </div>
+    <% if (!rows.length) { %>
+        <div class="rv-empty"><i class="fa-solid fa-inbox"></i>
+            <div>No invoices generated yet. They appear here on each scheduled run (or when you click "Generate one now").</div>
+        </div>
+    <% } else { %>
+    <div class="li-table-wrap">
+        <table class="li-table">
+            <thead>
+                <tr><th>Invoice No</th><th>Date</th><th>Due</th><th class="num">Total</th><th>Status</th><th class="center"></th></tr>
+            </thead>
+            <tbody>
+                <% rows.forEach(function (r) { %>
+                    <tr>
+                        <td><b><%= esc(r.invoice_no || ('#'+r.id)) %></b></td>
+                        <td><%= ymd(r.invoice_date) %></td>
+                        <td><%= ymd(r.due_date) %></td>
+                        <td class="num"><%= money(r.total) %></td>
+                        <td><span class="pill-status pill-status--<%= String(r.status).indexOf('sent')>-1?'success':'warning' %>"><%= esc(r.status || '—') %></span></td>
+                        <td class="center"><a class="btn btn-light btn-sm" href="/sales-invoices/<%= r.id %>/print" target="_blank" title="View"><i class="fa-regular fa-eye"></i></a></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+    <% } %>
+</div>
+
+<style>
+    .rv-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; }
+    .rv-grid > div { display:flex; flex-direction:column; gap:2px; }
+    .rv-lbl { font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#6b7280; }
+    .rv-val { font-size:15px; font-weight:700; color:#111827; }
+    .rv-sub { font-size:11px; font-weight:600; color:#16a34a; }
+    .rv-empty { padding:32px 16px; text-align:center; color:#64748b; }
+    .rv-empty i { font-size:28px; display:block; margin-bottom:10px; color:#94a3b8; }
+</style>

@@ -590,6 +590,7 @@ router.post('/recurring-invoices',        authenticate, resolveTenant, resolveCo
 router.put('/recurring-invoices/:id',     authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'edit'),   validate(updateRecurringSchema), RecurringInvoiceController.update);
 router.delete('/recurring-invoices/:id',  authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'delete'), RecurringInvoiceController.destroy);
 router.post('/recurring-invoices/:id/generate', authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'create'), RecurringInvoiceController.generate);
+router.get('/recurring-invoices/:id/invoices', authenticate, resolveTenant, resolveCompany, resolveLocation, can('recurring-invoices', 'view'), RecurringInvoiceController.generatedInvoices);
 
 // ───────────────────────────────────────────────────────────────────
 // Bank Reconciliation — import statement + auto/manual match
