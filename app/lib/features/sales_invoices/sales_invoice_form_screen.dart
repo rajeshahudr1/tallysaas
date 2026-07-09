@@ -31,6 +31,7 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
   int? _customerId;
   int? _locationId;
   int? _salesPersonId;
+  String? _locationName;   // display for the salesman's read-only Location
   DateTime _invoiceDate = _today();
   DateTime? _dueDate;
   final _notes = TextEditingController();
@@ -46,6 +47,12 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
   @override
   void initState() {
     super.initState();
+    // A salesman login IS the sales person — their role can't list sales_persons
+    // (403), so pre-set their own id (the field renders read-only in build()).
+    final session = ref.read(sessionProvider);
+    if (session is SessionSignedIn && session.user.isSalesman) {
+      _salesPersonId = session.user.salesPersonId;
+    }
     // SFA — capture location on opening the invoice create page (gated by the
     // super-admin GPS config's track_on_create + window). Fire-and-forget.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -144,14 +151,27 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final t = computeInvoiceTotals(_rows);
+    final session = ref.watch(sessionProvider);
+    final user = session is SessionSignedIn ? session.user : null;
+    final isSalesman = user?.isSalesman ?? false;
     return Scaffold(
       appBar: AppBar(title: const Text('New Sales Invoice')),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg16),
         children: [
-          FkDropdown(
+          // Searchable customer picker; on select we AUTO-fill the Location from
+          // that customer's own location (mirrors the web). Assignment-scoped by
+          // the API, so a salesman sees only their assigned customers.
+          SearchableFkDropdown(
             label: 'Customer *', endpoint: '/customers',
-            value: _customerId, onChanged: (v) => setState(() => _customerId = v),
+            value: _customerId,
+            onChanged: (v) => setState(() => _customerId = v),
+            onItem: (o) => setState(() {
+              if (o?.locationId != null) {
+                _locationId = o!.locationId;
+                _locationName = o.locationName;
+              }
+            }),
           ),
           const SizedBox(height: AppSpacing.md12),
           Row(
@@ -168,15 +188,28 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
             ],
           ),
           const SizedBox(height: AppSpacing.md12),
-          FkDropdown(
-            label: 'Location', endpoint: '/locations',
-            value: _locationId, onChanged: (v) => setState(() => _locationId = v),
-          ),
+          // Location — a salesman can't list locations (403); it auto-fills from
+          // the picked customer and shows read-only. An admin picks it normally.
+          if (isSalesman)
+            _ReadOnlyField(
+              label: 'Location',
+              value: _locationName ?? (_locationId != null ? 'Selected' : null),
+              hint: 'Auto from customer',
+            )
+          else
+            FkDropdown(
+              label: 'Location', endpoint: '/locations',
+              value: _locationId, onChanged: (v) => setState(() => _locationId = v),
+            ),
           const SizedBox(height: AppSpacing.md12),
-          FkDropdown(
-            label: 'Sales Person', endpoint: '/sales-persons',
-            value: _salesPersonId, onChanged: (v) => setState(() => _salesPersonId = v),
-          ),
+          // Sales Person — login IS the sales person for a salesman: read-only self.
+          if (isSalesman)
+            _ReadOnlyField(label: 'Sales Person', value: user?.name)
+          else
+            FkDropdown(
+              label: 'Sales Person', endpoint: '/sales-persons',
+              value: _salesPersonId, onChanged: (v) => setState(() => _salesPersonId = v),
+            ),
           const SizedBox(height: AppSpacing.lg16),
 
           Row(
@@ -256,6 +289,42 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
           Text(Fmt.inr(value), style: style),
         ],
       ),
+    );
+  }
+}
+
+/// A labelled READ-ONLY field — a non-editable value that matches the FkDropdown
+/// look. Used for a salesman's auto-filled Location + their own Sales Person.
+class _ReadOnlyField extends StatelessWidget {
+  const _ReadOnlyField({required this.label, required this.value, this.hint});
+  final String label;
+  final String? value;
+  final String? hint;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final shown = (value != null && value!.trim().isNotEmpty);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: AppSpacing.sm8),
+          child: Text(label, style: theme.textTheme.titleSmall),
+        ),
+        InputDecorator(
+          decoration: const InputDecoration(
+            filled: true,
+            fillColor: AppColors.scaffoldBg,
+            suffixIcon: Icon(Icons.lock_outline, size: 18),
+          ),
+          child: Text(
+            shown ? value! : (hint ?? '—'),
+            style: shown ? null : TextStyle(color: theme.hintColor),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }

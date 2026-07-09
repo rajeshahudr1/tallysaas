@@ -113,7 +113,7 @@ class LineItemCard extends StatelessWidget {
       child: AppCard(
         child: Column(
           children: [
-            FkDropdown(
+            SearchableFkDropdown(
               label: 'Product', endpoint: '/products',
               value: row.productId,
               onChanged: (v) { row.productId = v; onChanged(); },

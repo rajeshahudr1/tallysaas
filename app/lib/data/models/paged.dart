@@ -53,13 +53,20 @@ class PagedResult<T> {
 /// …). Always fetched from the API — never hardcoded — so web + app stay in
 /// sync. Maps the same {id,name} rows the web's `fetchOptions` consumes.
 class OptionItem {
-  const OptionItem({required this.id, required this.name});
+  const OptionItem({required this.id, required this.name, this.locationId, this.locationName});
   final int id;
   final String name;
+
+  /// Present on customer options — the customer's own location (id + label), so
+  /// picking a customer AUTO-fills the invoice's Location field (mirrors the web).
+  final int? locationId;
+  final String? locationName;
 
   factory OptionItem.fromJson(Map<String, dynamic> j) => OptionItem(
         id: _toInt(j['id']) ?? 0,
         name: (j['name'] ?? '').toString(),
+        locationId: _toInt(j['location_id']),
+        locationName: (j['location'] == null) ? null : j['location'].toString(),
       );
 
   @override
