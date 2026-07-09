@@ -81,8 +81,11 @@ async function generate(req, res) {
         rec.created_by = req.user ? req.user.sub : null;
         const inv = await generateNow(rec);
         return R.successResponse(res, { invoice_id: inv.id, invoice_no: inv.invoice_no },
-            `Invoice ${inv.invoice_no} generated.`);
+            `Invoice ${inv.invoice_no} generated for ${String(inv.invoice_date).slice(0, 10)}.`);
     } catch (err) {
+        if (err && err.code === 'RECURRING_ENDED') {
+            return R.errorResponse(res, err.message, 422);
+        }
         console.error('recurring.generate error:', err);
         return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
     }

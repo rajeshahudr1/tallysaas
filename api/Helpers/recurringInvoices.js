@@ -138,11 +138,21 @@ async function runDueRecurring(asOf = new Date()) {
     return { due: due.length, generated };
 }
 
-/** Manual "Generate now" — cut one invoice TODAY and advance one period. */
+/** Manual "Generate now" — cut the NEXT scheduled period's invoice (dated on the
+ * template's next_run_date) and advance the schedule one period. So repeated
+ * clicks produce consecutive months (July, then August, then September, …),
+ * matching the operator's expectation, instead of stacking many on today. Falls
+ * back to today only when next_run_date is unset. Refuses to generate past the
+ * template's end_date. */
 async function generateNow(rec, asOf = new Date()) {
-    const today = ymd(asOf);
-    const inv = await generateOne(rec, today);
-    const base = toYmd(rec.next_run_date) || today;
+    const base = toYmd(rec.next_run_date) || ymd(asOf);
+    const end = toYmd(rec.end_date);
+    if (end && base > end) {
+        const e = new Error('This recurring schedule has ended — no more invoices to generate.');
+        e.code = 'RECURRING_ENDED';
+        throw e;
+    }
+    const inv = await generateOne(rec, base);
     await advance(rec.id, addByFrequency(base, rec.frequency), inv.id, (rec.generated_count || 0) + 1);
     return inv;
 }
