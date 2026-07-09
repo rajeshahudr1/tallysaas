@@ -48,10 +48,16 @@ async function callApi(req, method, path, body) {
     let parsed = null;
     try { parsed = await resp.json(); } catch { /* non-JSON response */ }
     // The backend rejected our (previously valid) token → the session has ended
-    // (expired / evicted). Surface it so the error handler clears the web session
-    // and redirects to /login instead of rendering an error page. The login call
-    // itself carries no token, so it is naturally exempt.
-    if (resp.status === 401 && req && req.session && req.session.token) {
+    // (expired / evicted / single-session eviction). Surface it so the error
+    // handler clears the web session and redirects to /login instead of rendering
+    // a dead page. The login call itself carries no token, so it is exempt.
+    //
+    // CRITICAL: the api uses the "HTTP 200 + body.status" envelope, so an auth
+    // failure comes back as HTTP 200 with body.status === 401 — NOT a real HTTP
+    // 401. We must check BOTH, or the timeout→/login redirect never fires (this
+    // was the long-standing "session timeout doesn't log me out" bug).
+    const envelope401 = parsed && Number(parsed.status) === 401;
+    if ((resp.status === 401 || envelope401) && req && req.session && req.session.token) {
         const e = new Error('Session ended');
         e.code = 'SESSION_ENDED';
         throw e;
