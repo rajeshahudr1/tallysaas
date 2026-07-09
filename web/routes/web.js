@@ -136,7 +136,9 @@ router.use((req, res, next) => {
             const tail = parts.slice(1).map((s) => s.toLowerCase());
             if ((tail.includes('add') || tail.includes('create') || tail.includes('new'))
                 && !res.locals.canDo(mod, 'create')) return forbid();
-            if (tail.includes('edit') && !res.locals.canDo(mod, 'edit')) return forbid();
+            // 'edit' + write-ish sub-paths (e.g. /inventory/adjust) need edit.
+            if ((tail.includes('edit') || tail.includes('adjust'))
+                && !res.locals.canDo(mod, 'edit')) return forbid();
             if (tail.includes('delete') && !res.locals.canDo(mod, 'delete')) return forbid();
         }
     }

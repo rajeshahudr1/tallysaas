@@ -334,11 +334,14 @@ var headActions =
         border-radius: 6px; font-size: 13px; background: #fff;
     }
     .li-product-search:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,.15); }
+    /* position: FIXED (not absolute) so the menu escapes the invoice table's
+       overflow-x:auto clip (which also clips overflow-y). JS sets top/left/width
+       from the search input's viewport rect. */
     .li-prod-menu {
-        position: absolute; top: 100%; left: 0; right: 0; z-index: 30;
+        position: fixed; z-index: 1080;
         max-height: 240px; overflow-y: auto; background: #fff;
         border: 1px solid var(--border, #d1d5db); border-radius: 6px;
-        box-shadow: 0 8px 24px rgba(0,0,0,.12); margin-top: 2px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.12);
     }
     .li-prod-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .li-prod-item:hover, .li-prod-item.is-active { background: #eef2ff; }

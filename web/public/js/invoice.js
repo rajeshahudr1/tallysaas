@@ -126,6 +126,14 @@
             if (!search || !menu) return;
             var active = -1, items = [];
 
+            // The menu is position:fixed (to escape the table's overflow clip), so
+            // pin it under the search input using the input's viewport rect.
+            function place() {
+                var r = search.getBoundingClientRect();
+                menu.style.left  = r.left + 'px';
+                menu.style.top   = (r.bottom + 2) + 'px';
+                menu.style.width = r.width + 'px';
+            }
             function render(list) {
                 menu.innerHTML = '';
                 items = list;
@@ -143,7 +151,11 @@
                     });
                 }
                 menu.hidden = false;
+                place();
             }
+            // Keep the fixed menu pinned to the input while it's open (page/table scroll).
+            window.addEventListener('scroll', function () { if (!menu.hidden) place(); }, true);
+            window.addEventListener('resize', function () { if (!menu.hidden) place(); });
             function filter() {
                 var q = search.value.trim().toLowerCase();
                 var list = !q ? PRODUCTS.slice(0, 50)

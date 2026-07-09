@@ -64,7 +64,9 @@ var sortOptions = ['Product', 'Current Stock', 'Stock Value', 'Status'];
     ],
     actions: [
         { label: 'Export',           icon: 'fa-upload',  variant: 'light', href: '/inventory/export' },
-        { label: 'Stock Adjustment', icon: 'fa-sliders', gradient: true, href: '/inventory/adjust' },
+        // Stock Adjustment writes stock → needs inventory.edit (a view-only role
+        // like a salesman must not see it). Matches the api can('inventory','edit').
+        { label: 'Stock Adjustment', icon: 'fa-sliders', gradient: true, href: '/inventory/adjust', requires: 'inventory.edit' },
     ],
 }) %>
 
