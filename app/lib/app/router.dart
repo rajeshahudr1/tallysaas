@@ -20,6 +20,9 @@ import '../features/dashboard/dashboard_screen.dart';
 import '../features/field/approvals_screen.dart';
 import '../features/field/checkin_screen.dart';
 import '../features/field/field_dashboard_screen.dart';
+import '../features/field/my_approvals_screen.dart';
+import '../features/field/my_customers_screen.dart';
+import '../features/field/my_locations_screen.dart';
 import '../features/field/part_visit_screen.dart';
 import '../features/field/visits_screen.dart';
 import '../features/journals/journal_detail_screen.dart';
@@ -364,6 +367,24 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'my-field',
         builder: (_, __) => const FieldDashboardScreen(),
       ),
+      // SFA — salesman's own assigned customers / locations (read-only) + their
+      // invoices grouped by approval status (with edit & re-submit).
+      GoRoute(
+        path: '/my-customers',
+        name: 'my-customers',
+        builder: (_, __) => const MyCustomersScreen(),
+      ),
+      GoRoute(
+        path: '/my-locations',
+        name: 'my-locations',
+        builder: (_, __) => const MyLocationsScreen(),
+      ),
+      GoRoute(
+        path: '/my-approvals',
+        name: 'my-approvals',
+        builder: (_, state) =>
+            MyApprovalsScreen(initialStatus: state.uri.queryParameters['status'] ?? 'pending'),
+      ),
       GoRoute(
         path: '/field/checkin',
         name: 'field-checkin',
@@ -385,6 +406,14 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/sales-invoices/approvals',
         name: 'sales-invoice-approvals',
         builder: (_, __) => const ApprovalsScreen(),
+      ),
+      // SFA — edit an un-approved invoice (draft/pending/rejected); saving
+      // re-submits it. MUST precede '/sales-invoices/:id'.
+      GoRoute(
+        path: '/sales-invoices/:id/edit',
+        name: 'sales-invoice-edit',
+        builder: (_, state) =>
+            SalesInvoiceFormScreen(editId: int.parse(state.pathParameters['id']!)),
       ),
       GoRoute(
         path: '/sales-invoices/:id',

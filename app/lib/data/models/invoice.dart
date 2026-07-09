@@ -10,6 +10,10 @@ class Invoice {
     this.customer,
     this.supplier,
     this.location,
+    this.customerId,
+    this.locationId,
+    this.salesPersonId,
+    this.rejectionReason,
     this.invoiceDate,
     this.dueDate,
     this.subtotal,
@@ -31,6 +35,11 @@ class Invoice {
   final String? customer;
   final String? supplier;
   final String? location;
+  // FK ids (from GET :id, invoices.*) — needed to pre-fill the edit form.
+  final int? customerId;
+  final int? locationId;
+  final int? salesPersonId;
+  final String? rejectionReason; // why an admin rejected it (shown to salesman)
   final String? invoiceDate;
   final String? dueDate;
   final num? subtotal;
@@ -63,6 +72,10 @@ class Invoice {
       customer: _sn(j['customer']),
       supplier: _sn(j['supplier']),
       location: _sn(j['location']),
+      customerId: _toInt(j['customer_id']),
+      locationId: _toInt(j['location_id']),
+      salesPersonId: _toInt(j['sales_person_id']),
+      rejectionReason: _sn(j['rejection_reason']),
       invoiceDate: _sn(j['invoice_date']),
       dueDate: _sn(j['due_date']),
       subtotal: _toNum(j['subtotal']),

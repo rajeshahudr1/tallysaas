@@ -21,7 +21,11 @@ import '../transactions/invoice_form_parts.dart';
 /// `POST /sales-invoices`. Pops `true` to refresh. Every FK is fetched live —
 /// nothing is hardcoded.
 class SalesInvoiceFormScreen extends ConsumerStatefulWidget {
-  const SalesInvoiceFormScreen({super.key});
+  const SalesInvoiceFormScreen({super.key, this.editId});
+
+  /// When set, the form loads that invoice and EDITS it (draft/pending/rejected);
+  /// saving re-submits it for approval. Null → a new invoice.
+  final int? editId;
 
   @override
   ConsumerState<SalesInvoiceFormScreen> createState() => _SalesInvoiceFormScreenState();
@@ -38,10 +42,18 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
 
   final List<LineRow> _rows = [LineRow()];
   bool _busy = false;
+  bool get _isEdit => widget.editId != null;
+  bool _loadingEdit = false;
+  String? _loadError;
 
   static DateTime _today() {
     final n = DateTime.now();
     return DateTime(n.year, n.month, n.day);
+  }
+
+  static DateTime? _parseYmd(String? s) {
+    if (s == null || s.isEmpty) return null;
+    return DateTime.tryParse(s.length > 10 ? s.substring(0, 10) : s);
   }
 
   @override
@@ -53,11 +65,51 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
     if (session is SessionSignedIn && session.user.isSalesman) {
       _salesPersonId = session.user.salesPersonId;
     }
-    // SFA — capture location on opening the invoice create page (gated by the
-    // super-admin GPS config's track_on_create + window). Fire-and-forget.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(gpsTrackerProvider).captureOnCreate();
-    });
+    if (_isEdit) {
+      _loadForEdit();
+    } else {
+      // SFA — capture location on opening the CREATE page (gated by the
+      // super-admin GPS config's track_on_create + window). Fire-and-forget.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(gpsTrackerProvider).captureOnCreate();
+      });
+    }
+  }
+
+  /// Fetch the invoice being edited and seed the header + line items.
+  Future<void> _loadForEdit() async {
+    setState(() => _loadingEdit = true);
+    try {
+      final inv = await ref.read(invoiceRepositoryProvider).getSales(widget.editId!);
+      _customerId = inv.customerId;
+      _locationId = inv.locationId;
+      _locationName = inv.location;
+      if (inv.salesPersonId != null) _salesPersonId = inv.salesPersonId;
+      _invoiceDate = _parseYmd(inv.invoiceDate) ?? _today();
+      _dueDate = _parseYmd(inv.dueDate);
+      _notes.text = inv.notes ?? '';
+      for (final r in _rows) {
+        r.dispose();
+      }
+      _rows.clear();
+      for (final it in inv.items) {
+        final row = LineRow()
+          ..productId = it.productId
+          ..desc.text = it.description ?? ''
+          ..qty.text = (it.quantity ?? 1).toString()
+          ..rate.text = (it.rate ?? 0).toString()
+          ..disc.text = (it.discountPct ?? 0).toString()
+          ..gst.text = (it.gstRate ?? 0).toString();
+        _rows.add(row);
+      }
+      if (_rows.isEmpty) _rows.add(LineRow());
+    } on ApiException catch (e) {
+      _loadError = e.message;
+    } catch (e) {
+      _loadError = 'Could not load the invoice: $e';
+    } finally {
+      if (mounted) setState(() => _loadingEdit = false);
+    }
   }
 
   @override
@@ -111,22 +163,32 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
 
     setState(() => _busy = true);
     try {
-      await ref.read(invoiceRepositoryProvider).createSales({
+      final body = <String, dynamic>{
         'customer_id': _customerId,
         if (_locationId != null) 'location_id': _locationId,
         if (_salesPersonId != null) 'sales_person_id': _salesPersonId,
         'invoice_date': DateFormat('yyyy-MM-dd').format(_invoiceDate),
         if (_dueDate != null) 'due_date': DateFormat('yyyy-MM-dd').format(_dueDate!),
         if (_notes.text.trim().isNotEmpty) 'notes': _notes.text.trim(),
-        if (asDraft) 'save_as_draft': true,
+        // EDIT: send explicit false so the api RE-submits (draft/rejected →
+        // pending); CREATE: only send when saving a draft.
+        if (_isEdit) 'save_as_draft': asDraft else if (asDraft) 'save_as_draft': true,
         'items': lines,
-      });
+      };
+      final repo = ref.read(invoiceRepositoryProvider);
+      if (_isEdit) {
+        await repo.updateSales(widget.editId!, body);
+      } else {
+        await repo.createSales(body);
+      }
       if (!mounted) return;
       final msg = asDraft
           ? 'Draft saved.'
-          : isSalesman
-              ? 'Invoice submitted for approval.'
-              : 'Sales invoice created.';
+          : _isEdit
+              ? 'Invoice updated & re-submitted for approval.'
+              : isSalesman
+                  ? 'Invoice submitted for approval.'
+                  : 'Sales invoice created.';
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(msg)));
@@ -134,7 +196,7 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
     } on ApiException catch (e) {
       _showError(e.message);
     } catch (e) {
-      _showError('Could not create invoice: $e');
+      _showError('Could not save invoice: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -154,8 +216,27 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
     final isSalesman = user?.isSalesman ?? false;
+    final title = _isEdit ? 'Edit Invoice' : 'New Sales Invoice';
+    if (_isEdit && _loadingEdit) {
+      return Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_isEdit && _loadError != null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(title)),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(AppSpacing.xl24),
+            child: Text(_loadError!, textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.danger)),
+          ),
+        ),
+      );
+    }
     return Scaffold(
-      appBar: AppBar(title: const Text('New Sales Invoice')),
+      appBar: AppBar(title: Text(title)),
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg16),
         children: [
@@ -256,6 +337,19 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
           Builder(builder: (_) {
             final session = ref.watch(sessionProvider);
             final isSalesman = session is SessionSignedIn && session.user.isSalesman;
+            if (_isEdit) {
+              // Editing an un-approved invoice → save re-submits it for approval.
+              return Column(children: [
+                AppButton(label: 'Update & Re-submit', loading: _busy, onPressed: () => _save()),
+                const SizedBox(height: AppSpacing.sm8),
+                OutlinedButton.icon(
+                  onPressed: _busy ? null : () => _save(asDraft: true),
+                  icon: const Icon(Icons.save_outlined, size: 18),
+                  label: const Text('Save as Draft'),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                ),
+              ]);
+            }
             if (!isSalesman) {
               return AppButton(label: 'Save Invoice', loading: _busy, onPressed: () => _save());
             }

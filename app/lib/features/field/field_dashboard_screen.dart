@@ -134,31 +134,41 @@ class _FieldDashboardScreenState extends ConsumerState<FieldDashboardScreen> {
         crossAxisSpacing: AppSpacing.sm8,
         childAspectRatio: 2.5,
         children: [
-          _stat('My Locations', Fmt.num0(s.locations), Icons.location_on, AppColors.primary),
-          _stat('My Customers', Fmt.num0(s.customers), Icons.groups, const Color(0xFF4F46E5)),
-          _stat('Drafts', Fmt.num0(s.draft), Icons.edit_note, AppColors.text3),
-          _stat('Pending', Fmt.num0(s.pending), Icons.hourglass_bottom, AppColors.warn),
-          _stat('Approved', Fmt.num0(s.approved), Icons.check_circle, AppColors.success),
-          _stat('Rejected', Fmt.num0(s.rejected), Icons.cancel, AppColors.danger),
+          _stat('My Locations', Fmt.num0(s.locations), Icons.location_on, AppColors.primary, '/my-locations'),
+          _stat('My Customers', Fmt.num0(s.customers), Icons.groups, const Color(0xFF4F46E5), '/my-customers'),
+          _stat('Drafts', Fmt.num0(s.draft), Icons.edit_note, AppColors.text3, '/my-approvals?status=draft'),
+          _stat('Pending', Fmt.num0(s.pending), Icons.hourglass_bottom, AppColors.warn, '/my-approvals?status=pending'),
+          _stat('Approved', Fmt.num0(s.approved), Icons.check_circle, AppColors.success, '/my-approvals?status=approved'),
+          _stat('Rejected', Fmt.num0(s.rejected), Icons.cancel, AppColors.danger, '/my-approvals?status=rejected'),
         ],
       );
 
-  Widget _stat(String label, String value, IconData icon, Color c) => AppCard(
-        child: Row(children: [
-          Container(
-            width: 34, height: 34,
-            decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(AppRadius.sm8)),
-            child: Icon(icon, color: c, size: 18),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(value, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.text1)),
-              Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11, color: AppColors.text3, fontWeight: FontWeight.w600)),
-            ]),
-          ),
-        ]),
+  // Each stat card links to its detail page (My Locations / My Customers / the
+  // status-filtered My Approvals). Refreshes the dashboard when returning.
+  Widget _stat(String label, String value, IconData icon, Color c, String route) => InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.sm8),
+        onTap: () async {
+          await context.push(route);
+          if (mounted) _reload();
+        },
+        child: AppCard(
+          child: Row(children: [
+            Container(
+              width: 34, height: 34,
+              decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(AppRadius.sm8)),
+              child: Icon(icon, color: c, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                Text(value, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.text1)),
+                Text(label, maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11, color: AppColors.text3, fontWeight: FontWeight.w600)),
+              ]),
+            ),
+            const Icon(Icons.chevron_right, size: 18, color: AppColors.text3),
+          ]),
+        ),
       );
 
   Widget _attendanceCard(FieldDashboard f) {

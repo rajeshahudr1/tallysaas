@@ -58,6 +58,17 @@ class InvoiceRepository {
   Future<void> submitDraft(int id) =>
       _api.post('${Endpoints.salesInvoices}/$id/submit', body: const {});
 
+  /// Edit an un-approved invoice (draft/pending/rejected). Passing
+  /// save_as_draft:false re-submits it for approval in the same call
+  /// (rejected/draft → pending). Returns the updated invoice.
+  Future<Invoice> updateSales(int id, Map<String, dynamic> body) async {
+    final data = await _api.put('${Endpoints.salesInvoices}/$id', body: body);
+    return Invoice.fromJson((data as Map).cast<String, dynamic>());
+  }
+
+  /// Fetch a single sales invoice (header + line items) — for the edit form.
+  Future<Invoice> getSales(int id) => get(Endpoints.salesInvoices, id);
+
   // Convenience aliases for the two endpoints.
   Future<PagedResult<Invoice>> listSales({int page = 1, int perPage = 10, String? search, Map<String, String>? filters}) =>
       list(Endpoints.salesInvoices, page: page, perPage: perPage, search: search, filters: filters);
