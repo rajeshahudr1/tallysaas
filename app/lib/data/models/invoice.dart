@@ -75,7 +75,7 @@ class Invoice {
       customerId: _toInt(j['customer_id']),
       locationId: _toInt(j['location_id']),
       salesPersonId: _toInt(j['sales_person_id']),
-      rejectionReason: _sn(j['rejection_reason']),
+      rejectionReason: _sn(j['rejected_reason']),
       invoiceDate: _sn(j['invoice_date']),
       dueDate: _sn(j['due_date']),
       subtotal: _toNum(j['subtotal']),

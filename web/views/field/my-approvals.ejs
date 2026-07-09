@@ -66,8 +66,8 @@ function canQuickSubmit(status){ return status === 'draft'; }
                             <span class="pill-status pill-status--<%= status==='approved'?'success':(status==='rejected'?'danger':'warning') %>">
                                 <%= status || '—' %>
                             </span>
-                            <% if (status==='rejected' && r.rejection_reason) { %>
-                                <div class="mf-appr-reason"><i class="fa-solid fa-circle-info me-1"></i><%= esc(r.rejection_reason) %></div>
+                            <% if (status==='rejected' && r.rejected_reason) { %>
+                                <div class="mf-appr-reason"><i class="fa-solid fa-circle-info me-1"></i><%= esc(r.rejected_reason) %></div>
                             <% } %>
                         </td>
                         <td class="center">

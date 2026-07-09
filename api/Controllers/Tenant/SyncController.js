@@ -165,6 +165,70 @@ async function unreadActionKeys(companyId, readSet) {
         return [];
     }
 }
+// ── Role-aware SFA (field-sales approval) notifications ─────────────────────
+// A SALESMAN sees ONLY what concerns THEM: their invoices getting approved /
+// rejected. A COMPANY-ADMIN sees "Invoice received from <salesman>" for each of
+// their salesmen's invoices awaiting approval (NOT their own approve/reject
+// actions — those belong to the salesman). Each item deep-links to the right
+// page. Keys are stable ('sfa-<status>-<id>') so the read flag persists.
+async function buildSfaFeed(req, readSet, limit) {
+    const companyId = req.companyId;
+    try {
+        if (req.isSalesman) {
+            const rows = await db('invoices')
+                .where('company_id', companyId).where('type', 'sales')
+                .where('created_by', req.user.sub)
+                .whereIn('approval_status', ['approved', 'rejected'])
+                .whereNull('deleted_at')
+                .orderBy('updated_at', 'desc').limit(limit)
+                .select('id', 'invoice_no', 'approval_status', 'rejected_reason', 'updated_at');
+            return rows.map((r) => {
+                const rejected = r.approval_status === 'rejected';
+                const key = `sfa-${r.approval_status}-${r.id}`;
+                const no = r.invoice_no || ('#' + r.id);
+                return {
+                    id: key, kind: 'action',
+                    tone: rejected ? 'danger' : 'success',
+                    icon: rejected ? 'fa-circle-xmark' : 'fa-circle-check',
+                    title: rejected ? `Invoice ${no} rejected` : `Invoice ${no} approved`,
+                    sub:   rejected ? (r.rejected_reason || 'Edit & re-submit') : 'Counted in your sales',
+                    link:  rejected ? '/my-approvals?status=rejected' : '/my-approvals?status=approved',
+                    when:  r.updated_at, read: readSet.has(key),
+                };
+            });
+        }
+        // Company-admin → invoices submitted by their salesmen, awaiting approval.
+        const isAdmin = req.user && req.user.role_slug === 'company-admin';
+        if (isAdmin) {
+            const rows = await db('invoices as i')
+                .leftJoin('sales_persons as sp', 'sp.id', 'i.sales_person_id')
+                .leftJoin('users as u', 'u.id', 'i.created_by')
+                .where('i.company_id', companyId).where('i.type', 'sales')
+                .where('i.approval_status', 'pending')
+                .whereNotNull('i.created_by')
+                .whereNull('i.deleted_at')
+                .orderBy('i.updated_at', 'desc').limit(limit)
+                .select('i.id', 'i.invoice_no', 'i.updated_at', 'sp.name as sp_name', 'u.name as u_name');
+            return rows.map((r) => {
+                const who = r.sp_name || r.u_name || 'a salesman';
+                const key = `sfa-pending-${r.id}`;
+                const no = r.invoice_no || ('#' + r.id);
+                return {
+                    id: key, kind: 'action', tone: 'warning', icon: 'fa-file-invoice',
+                    title: `Invoice ${no} received from ${who}`,
+                    sub:   'Pending your approval',
+                    link:  '/sales-invoices/approvals',
+                    when:  r.updated_at, read: readSet.has(key),
+                };
+            });
+        }
+        return [];
+    } catch (err) {
+        console.error('sync.buildSfaFeed (ignored):', err && err.message);
+        return [];
+    }
+}
+
 // A failed sync-log row → uniform notification item (links to the Sync Logs page).
 function failedLogToNotif(r, readSet) {
     const reason = friendlyReason(r.message, r.status);
@@ -772,7 +836,27 @@ async function notifications(req, res) {
         const failedItems = recent
             .filter((r) => String(r.status || '').toLowerCase() === 'failed')
             .map((r) => failedLogToNotif(r, readSet));
-        const recentOut = actionItems.concat(failedItems)
+        // Role-aware SFA feed (salesman = own approve/reject; company-admin =
+        // invoices received from their salesmen). See buildSfaFeed.
+        const sfaItems = await buildSfaFeed(req, readSet, NOTIF_RECENT_MAX);
+
+        // Compose the feed per ROLE:
+        //  • salesman     → ONLY their SFA items (their work), nothing company-wide.
+        //  • company-admin→ SFA "received from" + the generic company action feed
+        //    MINUS sales-invoice rows (approve/reject are the admin's own actions,
+        //    surfaced to the salesman instead) + sync failures.
+        //  • everyone else→ the generic feed (unchanged).
+        let recentOut;
+        if (req.isSalesman) {
+            recentOut = sfaItems.slice();
+        } else if (req.user && req.user.role_slug === 'company-admin') {
+            const nonInvoiceActions = actionItems.filter(
+                (it) => it.link !== '/sales-invoices' && it.link !== '/purchase-invoices');
+            recentOut = sfaItems.concat(nonInvoiceActions).concat(failedItems);
+        } else {
+            recentOut = actionItems.concat(failedItems);
+        }
+        recentOut = recentOut
             .sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0))
             .slice(0, NOTIF_RECENT_MAX);
 
@@ -784,7 +868,8 @@ async function notifications(req, res) {
         // ── New-agent-version notification — pinned to the TOP when present.
         // Auto-update=OFF agents need the operator to update; the bell is how
         // they find out. Best-effort: a lookup hiccup never sinks the feed.
-        const updateNotif = await buildAgentUpdateNotif(companyId);
+        // The agent-update entry is a sync/admin concern — NOT for a salesman.
+        const updateNotif = req.isSalesman ? null : await buildAgentUpdateNotif(companyId);
         if (updateNotif) {
             recentOut.unshift({
                 id:    String(updateNotif.id),
@@ -799,11 +884,19 @@ async function notifications(req, res) {
             });
         }
 
-        // ── Read-aware badge ── the unread count EXCLUDES this user's already-
-        // read items: failed-in-window rows not yet read + (1 if an unread
-        // agent-update entry exists). This is what persists across reload — the
-        // server subtracts read items so the re-rendered badge is correct.
-        const unread = (await computeUnreadKeys(companyId, readSet, updateNotif)).length;
+        // ── Read-aware badge (role-aware) ──
+        //  • salesman     → their unread SFA items only.
+        //  • company-admin→ unread SFA + the sync failed/update keys.
+        //  • everyone else→ the sync failed/update keys (unchanged).
+        const sfaUnread = sfaItems.filter((it) => !it.read).length;
+        let unread;
+        if (req.isSalesman) {
+            unread = sfaUnread;
+        } else if (req.user && req.user.role_slug === 'company-admin') {
+            unread = sfaUnread + (await computeUnreadKeys(companyId, readSet, updateNotif)).length;
+        } else {
+            unread = (await computeUnreadKeys(companyId, readSet, updateNotif)).length;
+        }
 
         return R.successResponse(res, {
             // Read-aware unread badge (failed-in-window not yet read by this user
