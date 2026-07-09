@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/module_info.dart';
 import '../../core/utils/formatters.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/error_state.dart';
@@ -33,7 +34,7 @@ class BankReconciliationScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(_bankProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Bank Reconciliation')),
+      appBar: AppBar(title: const Text('Bank Reconciliation'), actions: const [ModuleInfoButton('bank-reconciliation')]),
       body: async.when(
         loading: () => const LoadingState(message: 'Loading…'),
         error: (e, _) => ErrorState(

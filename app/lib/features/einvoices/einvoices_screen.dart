@@ -7,6 +7,7 @@ import 'package:printing/printing.dart';
 import '../../app/theme.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/module_info.dart';
 import '../../core/utils/formatters.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
@@ -37,7 +38,7 @@ class EInvoicesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(_einvoiceProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('e-Invoice & e-Way')),
+      appBar: AppBar(title: const Text('e-Invoice & e-Way'), actions: const [ModuleInfoButton('einvoice')]),
       body: async.when(
         loading: () => const LoadingState(message: 'Loading…'),
         error: (e, _) => ErrorState(

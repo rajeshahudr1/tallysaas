@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/module_info.dart';
 import '../../core/utils/formatters.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/error_state.dart';
@@ -29,7 +30,7 @@ class RemindersScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(_remindersProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Payment Reminders')),
+      appBar: AppBar(title: const Text('Payment Reminders'), actions: const [ModuleInfoButton('reminders')]),
       body: async.when(
         loading: () => const LoadingState(message: 'Loading…'),
         error: (e, _) => ErrorState(

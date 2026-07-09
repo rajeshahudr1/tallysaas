@@ -42,10 +42,24 @@ function _btnClass(a) {
     if (a.gradient) return 'btn btn-gradient';
     return 'btn btn-' + (a.variant || 'light');
 }
+/* Optional ⓘ "how this module works" popup. Pass infoKey:'recurring' (etc.) to
+ * the include; the blurb comes from res.locals.moduleInfo (config/moduleInfo.js). */
+var _infoKey = (typeof infoKey !== 'undefined' && infoKey) ? String(infoKey) : '';
+var _infoAll = (typeof moduleInfo !== 'undefined' && moduleInfo) ? moduleInfo : {};
+var _info    = (_infoKey && _infoAll[_infoKey]) ? _infoAll[_infoKey] : null;
+var _infoId  = 'modinfo-' + _infoKey.replace(/[^a-z0-9]/gi, '');
 %>
 <div class="page-head">
     <div class="page-head-text">
-        <h1 class="page-title"><%= _title %></h1>
+        <h1 class="page-title">
+            <%= _title %>
+            <% if (_info) { %>
+                <button type="button" class="modinfo-btn" data-bs-toggle="modal" data-bs-target="#<%= _infoId %>"
+                        title="How this works" aria-label="How this works">
+                    <i class="fa-solid fa-circle-info"></i>
+                </button>
+            <% } %>
+        </h1>
         <% if (_breadcrumb.length) { %>
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb page-breadcrumb mb-0">
@@ -86,3 +100,36 @@ function _btnClass(a) {
         </div>
     <% } %>
 </div>
+
+<% if (_info) { %>
+<!-- ⓘ "How this module works" modal -->
+<div class="modal fade" id="<%= _infoId %>" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fa-solid fa-circle-info me-2 text-primary"></i><%= _info.title %></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p class="modinfo-intro"><%= _info.intro %></p>
+                <ul class="modinfo-list">
+                    <% (_info.points || []).forEach(function (p) { %>
+                        <li><i class="fa-solid fa-check"></i><span><%= p %></span></li>
+                    <% }); %>
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" data-bs-dismiss="modal">Got it</button>
+            </div>
+        </div>
+    </div>
+</div>
+<style>
+    .modinfo-btn { border:0; background:transparent; color:#9ca3af; cursor:pointer; padding:0 0 0 8px; font-size:.7em; vertical-align:middle; line-height:1; }
+    .modinfo-btn:hover { color:#2563eb; }
+    .modinfo-intro { font-size:14px; color:#374151; margin-bottom:14px; }
+    .modinfo-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+    .modinfo-list li { display:flex; gap:10px; font-size:13.5px; color:#334155; line-height:1.5; }
+    .modinfo-list li i { color:#16a34a; margin-top:3px; flex:0 0 auto; }
+</style>
+<% } %>

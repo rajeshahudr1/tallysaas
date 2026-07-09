@@ -9,7 +9,7 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
 %>
 
 <%- include('../partials/page-head', {
-    title: 'Bank Reconciliation',
+    title: 'Bank Reconciliation', infoKey: 'bank-reconciliation',
     breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Bank Reconciliation' }],
     actions: '<button type="button" class="btn btn-gradient" onclick="bkOpen(\'bk-upload\')"><i class="fa-solid fa-file-arrow-up me-1"></i>Import Statement</button>',
 }) %>

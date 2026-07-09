@@ -220,6 +220,7 @@ app.use(async (req, res, next) => {
     // web/config/brand.js to rebrand the whole UI. See also window.BRAND
     // (injected in _layout.ejs) for client-side JS.
     res.locals.brand = require('./config/brand');
+    res.locals.moduleInfo = require('./config/moduleInfo').MODULE_INFO;
 
     // One-shot flash message (set by POST handlers, shown on the next page).
     res.locals.flash = (req.session && req.session.flash) || null;

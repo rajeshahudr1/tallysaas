@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/theme.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/module_info.dart';
 import '../../core/utils/formatters.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
@@ -50,7 +51,7 @@ class RecurringInvoicesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(_recurringProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Recurring Invoices')),
+      appBar: AppBar(title: const Text('Recurring Invoices'), actions: const [ModuleInfoButton('recurring')]),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _addOrEdit(context, ref, null),
         icon: const Icon(Icons.add),
