@@ -42,7 +42,7 @@ const { resolveCompany }  = require('../Middlewares/companyScope');
 const { resolveLocation } = require('../Middlewares/locationScope');
 const { resolveTenant }   = require('../Middlewares/tenantResolver');
 const { superAdminBridge } = require('../Middlewares/superAdminBridge');
-const { can, canField, canCustomerRead } = require('../Middlewares/rbac');
+const { can, canField, canCustomerRead, canRefRead } = require('../Middlewares/rbac');
 const { validate }        = require('../Middlewares/validate');
 
 // ── Validators ────────────────────────────────────────────────────
@@ -396,14 +396,14 @@ router.delete(
 
 router.get(
     '/locations',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('locations', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canRefRead('locations'),
     validate(listLocationSchema, 'query'),
     LocationController.list,
 );
 
 router.get(
     '/locations/:id',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('locations', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canRefRead('locations'),
     LocationController.get,
 );
 
@@ -535,14 +535,14 @@ router.delete(
 
 router.get(
     '/categories',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('categories', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canRefRead('categories'),
     validate(listCategorySchema, 'query'),
     CategoryController.list,
 );
 
 router.get(
     '/categories/:id',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('categories', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canRefRead('categories'),
     CategoryController.get,
 );
 

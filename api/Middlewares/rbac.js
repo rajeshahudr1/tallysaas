@@ -120,6 +120,24 @@ function canCustomerRead(req, res, next) {
 }
 
 /**
+ * Reference-list READ gate. Small REFERENCE masters (categories, locations, …)
+ * are just LABELS used to populate filter dropdowns and forms. A field salesman
+ * who can view inventory/invoices needs to read them to FILTER, even though
+ * their role doesn't carry categories.view / locations.view. Being a linked
+ * salesman IS the entitlement (mirrors canField / canCustomerRead); everyone
+ * else needs the module's own `.view`. Gates ONLY the list/get read — write
+ * stays on the strict can(module, …). `module` is the ref master's slug.
+ */
+function canRefRead(module) {
+    return function refReadMiddleware(req, res, next) {
+        const user = req.user || {};
+        if (user.role_slug === 'super-admin') return next();
+        if (req.isSalesman) return next();           // salesman reads reference labels
+        return can(module, 'view')(req, res, next);
+    };
+}
+
+/**
  * Invalidate the in-process permission cache. Call after a role's permissions
  * change (whole cache, or a single role_id).
  */
@@ -132,6 +150,7 @@ module.exports = {
     can,
     canField,
     canCustomerRead,
+    canRefRead,
     clearCache,
     loadRolePermissions,
     FORBIDDEN_MSG,
