@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -88,6 +89,7 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
       appBar: AppBar(
         title: const Text('Products'),
         actions: [
+          const ModuleInfoButton('products'),
           IconButton(
             icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
             color: hasFilter ? AppColors.primary : null,

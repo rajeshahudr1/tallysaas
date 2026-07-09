@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
@@ -36,7 +37,7 @@ class AccountantAccessScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(_accountantsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Accountant Access')),
+      appBar: AppBar(title: const Text('Accountant Access'), actions: const [ModuleInfoButton('accountant-access')]),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _invite(context, ref),
         icon: const Icon(Icons.person_add_alt),

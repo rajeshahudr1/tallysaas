@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
@@ -46,6 +47,7 @@ class ExpensesScreen extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Expenses'),
         actions: [
+          const ModuleInfoButton('expenses'),
           IconButton(
             tooltip: 'Categories',
             icon: const Icon(Icons.sell_outlined),

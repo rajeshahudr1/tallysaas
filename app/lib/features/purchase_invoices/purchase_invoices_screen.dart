@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -84,6 +85,7 @@ class _PurchaseInvoicesScreenState extends ConsumerState<PurchaseInvoicesScreen>
       appBar: AppBar(
         title: const Text('Purchase Invoices'),
         actions: [
+          const ModuleInfoButton('purchase-invoices'),
           IconButton(
             icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
             color: hasFilter ? AppColors.primary : null,

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -65,7 +66,7 @@ class _CompaniesScreenState extends ConsumerState<CompaniesScreen> {
     final user = session is SessionSignedIn ? session.user : null;
     final canCreate = user?.can('companies', 'create') ?? false;
     return Scaffold(
-      appBar: AppBar(title: const Text('Companies')),
+      appBar: AppBar(title: const Text('Companies'), actions: const [ModuleInfoButton('companies')]),
       floatingActionButton: !canCreate
           ? null
           : FloatingActionButton.extended(

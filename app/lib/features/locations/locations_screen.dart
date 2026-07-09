@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -82,6 +83,7 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
       appBar: AppBar(
         title: const Text('Locations'),
         actions: [
+          const ModuleInfoButton('locations'),
           IconButton(
             icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
             color: hasFilter ? AppColors.primary : null,

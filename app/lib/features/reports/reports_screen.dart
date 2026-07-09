@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -97,7 +98,7 @@ class ReportsScreen extends ConsumerWidget {
     // direct deep-link too.
     if (user != null && !user.canModule('reports')) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Reports')),
+        appBar: AppBar(title: const Text('Reports'), actions: const [ModuleInfoButton('reports')]),
         body: const Center(child: Text('Reports are not available for your role.')),
       );
     }
@@ -120,7 +121,7 @@ class ReportsScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Reports')),
+      appBar: AppBar(title: const Text('Reports'), actions: const [ModuleInfoButton('reports')]),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
           AppSpacing.md12, AppSpacing.xs4, AppSpacing.md12, AppSpacing.xxl32,

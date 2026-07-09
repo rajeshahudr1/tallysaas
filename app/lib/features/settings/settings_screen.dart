@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
@@ -207,6 +208,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Settings'),
+          actions: const [ModuleInfoButton('settings')],
           bottom: const TabBar(
             isScrollable: true,
             tabAlignment: TabAlignment.start,

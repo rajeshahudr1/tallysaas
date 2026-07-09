@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -81,6 +82,7 @@ class _CustomersScreenState extends ConsumerState<CustomersScreen> {
       appBar: AppBar(
         title: const Text('Customers'),
         actions: [
+          const ModuleInfoButton('customers'),
           IconButton(
             icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
             color: hasFilter ? AppColors.primary : null,

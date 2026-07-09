@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
@@ -78,6 +79,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
       appBar: AppBar(
         title: const Text('Inventory / Stock'),
         actions: [
+          const ModuleInfoButton('inventory'),
           IconButton(
             icon: Icon(_adv.isNotEmpty ? Icons.filter_alt : Icons.tune),
             color: _adv.isNotEmpty ? AppColors.primary : null,

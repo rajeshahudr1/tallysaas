@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -86,6 +87,7 @@ class _JournalsScreenState extends ConsumerState<JournalsScreen> {
       appBar: AppBar(
         title: const Text('Journals'),
         actions: [
+          const ModuleInfoButton('journals'),
           IconButton(
             icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
             color: hasFilter ? AppColors.primary : null,

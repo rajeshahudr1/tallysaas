@@ -1,5 +1,6 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import '../../core/module_info.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
@@ -37,7 +38,7 @@ class AnalyticsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(_analyticsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Business Analytics')),
+      appBar: AppBar(title: const Text('Business Analytics'), actions: const [ModuleInfoButton('reports')]),
       body: async.when(
         loading: () => const LoadingState(message: 'Loading…'),
         error: (e, _) => ErrorState(
