@@ -347,6 +347,11 @@ async function monthlyByType(req, res, type) {
             .select(db.raw("to_char(invoices.invoice_date, 'YYYY-MM') as month"))
             .sum('invoices.total as total')
             .count('invoices.id as count')
+            // App-CREATED invoices in the month (created_by set). A month with
+            // any of these is a live cloud month (e.g. 2026-07) — NOT part of the
+            // historical Tally register, so it must NOT inherit a same-named FY
+            // month's Tally figure (2022-07). See the snapshot gate below.
+            .select(db.raw('count(invoices.id) filter (where invoices.created_by is not null) as cloud_count'))
             .groupByRaw("to_char(invoices.invoice_date, 'YYYY-MM')")
             .orderByRaw("to_char(invoices.invoice_date, 'YYYY-MM')");
 
@@ -369,7 +374,13 @@ async function monthlyByType(req, res, type) {
         let running = 0;
         const months = rows.map((r) => {
             const nm = TALLY_MONTH_NAME[String(r.month).slice(5)];
-            const total = (nm && byName[nm] !== undefined) ? money(byName[nm]) : money(r.total);
+            // Use the Tally snapshot ONLY for a purely-historical Tally month (no
+            // app-created invoices). A live cloud month (cloud_count > 0, e.g.
+            // 2026-07) uses its REAL invoice sum instead of the same-named FY
+            // month's Tally figure — fixes "July 2026 shows July 2022's amount".
+            const isCloudMonth = (Number(r.cloud_count) || 0) > 0;
+            const useTally = nm && byName[nm] !== undefined && !isCloudMonth;
+            const total = useTally ? money(byName[nm]) : money(r.total);
             running = money(running + total);
             return { month: r.month, total, count: Number(r.count) || 0, closing: running };
         });
