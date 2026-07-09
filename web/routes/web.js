@@ -2828,9 +2828,13 @@ router.get('/notifications', async (req, res, next) => {
     try {
         const page = Math.max(1, parseInt(req.query.page, 10) || 1);
         const result = await api.get(req, `/sync/notifications/all?page=${page}&per_page=20`);
-        const body  = (result && result.body) || {};
-        const items = Array.isArray(body.data) ? body.data : [];
-        const meta  = body.meta || { total: items.length, page, per_page: 20, unread: 0 };
+        // The api envelope is { status, data: { data:[…items], meta:{…} } } — the
+        // items live at body.data.DATA (not body.data, which is the wrapper). This
+        // was why the page rendered empty while the bell (reads .data.recent) had
+        // items.
+        const payload = (result && result.body && result.body.data) || {};
+        const items = Array.isArray(payload.data) ? payload.data : [];
+        const meta  = payload.meta || { total: items.length, page, per_page: 20, unread: 0 };
         res.render('notifications/index', {
             title: 'Notifications',
             activeMenu: 'notifications',
