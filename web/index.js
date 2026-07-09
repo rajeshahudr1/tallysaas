@@ -33,6 +33,7 @@ const helmet       = require('helmet');
 
 const mock = require('./data/mock');
 const api  = require('./Helpers/apiClient');
+const { moduleForPath: rbacModuleForPath } = require('./config/rbacPaths');
 
 // Header initials fallback (e.g. "Rajesh Admin" → "RA").
 function initialsOf(name) {
@@ -287,6 +288,14 @@ app.use(async (req, res, next) => {
     // Action-level check (e.g. canDo('sales-invoices','edit')) — drives the SFA
     // Approvals link + Approve/Reject buttons (admins/managers with edit).
     res.locals.canDo = (mod, action) => _allAccess || _perms.has(`${mod}.${action}`);
+    // Path-based action check — the partials (table row ⋮, page-head "Add")
+    // don't know the module slug, only the URL path (basePath / href). This
+    // resolves the path → module (shared rbacPaths map) then delegates to canDo.
+    // Unknown path (not a gated module) → true, so non-module buttons still show.
+    res.locals.canPath = (p, action) => {
+        const mod = rbacModuleForPath(p);
+        return mod ? res.locals.canDo(mod, action) : true;
+    };
     // Field-sales salesman flag (from /me) — drives the Draft/Submit buttons and
     // the salesman "My Field" dashboard link.
     res.locals.isSalesman = !!(u && u.is_salesman);
@@ -296,12 +305,13 @@ app.use(async (req, res, next) => {
     res.locals.needsApproval = !!(u && u.role_slug
         && !['super-admin', 'company-admin', 'admin', 'owner'].includes(u.role_slug));
     // ── License-expiry banner ────────────────────────────────────────
-    //   Every company user (admin included) sees a top banner counting down to
-    //   their licence's valid_until. days_left is recomputed on EACH render from
-    //   the stored valid_until, so it stays accurate day-to-day without a re-login.
-    //   Warn at ≤ 15 days; go red once expired. Super-admin (no licence) is skipped.
+    //   ONLY the company-admin (the licence manager) sees the renewal countdown —
+    //   it's their subscription to renew. A salesman / plain user must NOT see it
+    //   (nothing they can act on), and the super-admin has no licence. days_left is
+    //   recomputed on EACH render from valid_until so it stays accurate day-to-day.
+    //   Warn at < 30 days; go red once expired.
     res.locals.licenseBanner = null;
-    if (u && u.license && u.license.valid_until && u.role_slug !== 'super-admin') {
+    if (u && u.license && u.license.valid_until && u.role_slug === 'company-admin') {
         const vu = new Date(u.license.valid_until);
         if (!isNaN(vu.getTime())) {
             const t0 = new Date(); t0.setHours(0, 0, 0, 0);
@@ -382,13 +392,26 @@ app.use(async (req, res, next) => {
 
     // Selected company: the session's choice if still in the list, else the first.
     const selCompany = companies.find((c) => Number(c.id) === Number(req.session.companyId)) || companies[0] || null;
-    req.session.companyId = selCompany ? selCompany.id : null;   // pin → X-Company-Id
+    if (selCompany) {
+        req.session.companyId   = selCompany.id;     // pin → X-Company-Id
+        req.session.companyName = selCompany.name;   // remember for the fallback below
+    } else if (!companies.length && req.session.companyId == null) {
+        req.session.companyId = null;
+    }
 
     res.locals.licenses          = licenses;
     res.locals.selectedLicenseId = selectedLicenseId;
     res.locals.selectedLicense   = licenses.find((l) => Number(l.id) === Number(selectedLicenseId)) || null;
     res.locals.companies         = companies;
-    res.locals.company           = selCompany ? { id: selCompany.id, name: selCompany.name } : null;
+    // Header company label. Prefer the freshly-resolved company; else fall back to
+    // the last-known one on the session (set at login / a prior render) so a
+    // transient /my-companies hiccup — or a Forbidden/error page render — never
+    // regresses the header to "No company" for a user who HAS a company.
+    res.locals.company = selCompany
+        ? { id: selCompany.id, name: selCompany.name }
+        : (req.session.companyId != null && req.session.companyName
+            ? { id: req.session.companyId, name: req.session.companyName }
+            : null);
 
     // ── Notification BELL — REAL sync activity (no mock) ─────────────────
     // Drive the header bell from GET /sync/notifications (company-scoped). The

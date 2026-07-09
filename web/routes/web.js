@@ -104,24 +104,13 @@ router.use(requireAuth);
  * Tally-Sync screens are company-admin-only per spec. The api ALSO enforces
  * can() on its data routes — this just renders a friendly Forbidden instead
  * of surfacing a raw 403 from the proxied call. */
-const RBAC_MODULE_BY_PATH = {
-    companies: 'companies', locations: 'locations', 'sales-persons': 'sales-persons',
-    customers: 'customers', suppliers: 'suppliers', products: 'products',
-    categories: 'categories', 'sales-invoices': 'sales-invoices',
-    'purchase-invoices': 'purchase-invoices', payments: 'payments',
-    receipts: 'receipts', journals: 'journals', inventory: 'inventory',
-    reports: 'reports', users: 'users',
-    // Every remaining module URL (mirrors the sidebar href→perm) so a hand-typed
-    // URL to a module the licence does NOT entitle is blocked too — not just
-    // hidden from the menu. URL path can differ from the module key (einvoices →
-    // einvoice) or borrow another module's perm (reminders → payments).
-    'bank-reconciliation': 'bank-reconciliation', 'recurring-invoices': 'recurring-invoices',
-    einvoices: 'einvoice', expenses: 'expenses', analytics: 'reports',
-    'accountant-access': 'users', reminders: 'payments', settings: 'settings',
-};
+// Path → module map lives in a shared module so index.js's canPath() view helper
+// (which HIDES buttons) and this guard (which BLOCKS URLs) never drift apart.
+const RBAC_MODULE_BY_PATH = require('../config/rbacPaths').PATH_TO_MODULE;
 const RBAC_ADMIN_ONLY_PATH = new Set(['sync-dashboard', 'sync-logs', 'history']);
 router.use((req, res, next) => {
-    const seg = (req.path.split('/')[1] || '').toLowerCase();
+    const parts = req.path.split('/').filter(Boolean);
+    const seg = (parts[0] || '').toLowerCase();
     if (!seg) return next();                                   // '/' dashboard
     const isAdmin = res.locals.isSuperAdmin || res.locals.isCompanyAdmin;
     const forbid = () => {
@@ -136,8 +125,20 @@ router.use((req, res, next) => {
     };
     if (RBAC_ADMIN_ONLY_PATH.has(seg)) return isAdmin ? next() : forbid();
     const mod = RBAC_MODULE_BY_PATH[seg];
-    if (mod && typeof res.locals.canModule === 'function' && !res.locals.canModule(mod)) {
-        return forbid();
+    if (mod && typeof res.locals.canModule === 'function') {
+        // Module-level (view) gate — a role with no access to the module at all.
+        if (!res.locals.canModule(mod)) return forbid();
+        // Per-ACTION gate: a hand-typed /products/add or /products/5/edit (or a
+        // delete POST) must be blocked when the role lacks create/edit/delete —
+        // not just hidden. The api ALSO enforces can() on the data mutation, so
+        // this is defence-in-depth + a friendly Forbidden instead of a raw 403.
+        if (typeof res.locals.canDo === 'function') {
+            const tail = parts.slice(1).map((s) => s.toLowerCase());
+            if ((tail.includes('add') || tail.includes('create') || tail.includes('new'))
+                && !res.locals.canDo(mod, 'create')) return forbid();
+            if (tail.includes('edit') && !res.locals.canDo(mod, 'edit')) return forbid();
+            if (tail.includes('delete') && !res.locals.canDo(mod, 'delete')) return forbid();
+        }
     }
     return next();
 });
@@ -556,10 +557,18 @@ router.get('/', async (req, res, next) => {
         // Role-based landing:
         //  • Super Admin is a platform operator (no tenant data) → their overview
         //    is the Licenses screen (total licences, companies, expiry, sync…).
-        //  • A field salesman has no company-dashboard permission (the KPI page
-        //    would 403) → their own "My Field" dashboard.
+        //  • ANY non-admin role that wasn't granted the Dashboard module has no
+        //    KPI page to land on (it would 403) → their own "My Dashboard"
+        //    (/my-field). Covers a field salesman AND any custom role (e.g. one
+        //    given only Products/Invoices) whose role has no dashboard.view.
+        //    Company-admin always keeps the KPI dashboard.
         if (res.locals.isSuperAdmin) return res.redirect('/licenses');
-        if (res.locals.isSalesman)   return res.redirect('/my-field');
+        if (res.locals.isSalesman
+            || (!res.locals.isCompanyAdmin
+                && typeof res.locals.canModule === 'function'
+                && !res.locals.canModule('dashboard'))) {
+            return res.redirect('/my-field');
+        }
         // No date filter — the dashboard is ALL-TIME so the numbers are stable and
         // identical on web + app (the app dropped its date picker too).
         const { body } = await api.get(req, '/dashboard/summary');

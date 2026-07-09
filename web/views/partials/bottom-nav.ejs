@@ -11,11 +11,18 @@
 var _active = (typeof activeMenu !== 'undefined') ? activeMenu : '';
 var items = [
     { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high',  href: '/' },
-    { key: 'customers', label: 'Customers', icon: 'fa-user-group',  href: '/customers' },
-    { key: 'sales-inv', label: 'Invoice',   icon: 'fa-file-invoice', href: '/sales-invoices' },
-    { key: 'inventory', label: 'Stock',     icon: 'fa-warehouse',   href: '/inventory' },
-    { key: 'profile',   label: 'Profile',   icon: 'fa-user',        href: '/settings' },
+    { key: 'customers', label: 'Customers', icon: 'fa-user-group',  href: '/customers',      mod: 'customers' },
+    { key: 'sales-inv', label: 'Invoice',   icon: 'fa-file-invoice', href: '/sales-invoices', mod: 'sales-invoices' },
+    { key: 'inventory', label: 'Stock',     icon: 'fa-warehouse',   href: '/inventory',      mod: 'inventory' },
+    // Account entry → the user's OWN profile (every user has one). Settings is a
+    // separate, permission-gated page reached from the header profile menu — the
+    // bottom bar must not link a salesman (no settings grant) into it.
+    { key: 'profile',   label: 'Profile',   icon: 'fa-user',        href: '/profile' },
 ];
+// RBAC: drop any module item the role can't access (a salesman has no Customers
+// grant, so Customers disappears; items with no `mod` — Dashboard/Profile — stay).
+var _cm = (typeof canModule === 'function') ? canModule : function () { return true; };
+items = items.filter(function (it) { return !it.mod || _cm(it.mod); });
 %>
 <nav class="bottom-nav d-lg-none" aria-label="Mobile navigation">
     <% items.forEach(function (item) { %>

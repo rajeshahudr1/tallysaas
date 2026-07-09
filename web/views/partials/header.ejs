@@ -233,7 +233,12 @@ function _relTime(v) {
             </button>
             <ul class="dropdown-menu dropdown-menu-end">
                 <li><a class="dropdown-item" href="/profile"><i class="fa-solid fa-user me-2 text-muted"></i>My Profile</a></li>
+                <%# Settings is a company-settings page — only a role granted the
+                    'settings' module sees the link (matches the route guard that
+                    now 403s /settings for others, e.g. a salesman). %>
+                <% if (typeof canModule !== 'function' || canModule('settings')) { %>
                 <li><a class="dropdown-item" href="/settings"><i class="fa-solid fa-gear me-2 text-muted"></i>Settings</a></li>
+                <% } %>
                 <li><hr class="dropdown-divider"></li>
                 <li><a class="dropdown-item text-danger" href="/logout"><i class="fa-solid fa-arrow-right-from-bracket me-2"></i>Sign out</a></li>
             </ul>

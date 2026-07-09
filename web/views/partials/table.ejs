@@ -33,6 +33,17 @@ var _actions    = (typeof actions !== 'undefined' && Array.isArray(actions)) ? a
  * confirm popup that POSTs to {basePath}/{id}/delete. Without it the actions
  * render disabled (the page isn't wired to the API yet). */
 var _base       = (typeof basePath !== 'undefined' && basePath) ? String(basePath).replace(/\/$/, '') : '';
+/* RBAC: hide Edit / Delete row actions the role can't perform (View + Print
+ * stay — they're read-only). canPath() resolves basePath → module → canDo; it
+ * is set in index.js. Guarded so a missing helper never blanks the actions. */
+var _canPath2   = (typeof canPath === 'function') ? canPath : function () { return true; };
+if (_base && _actions.length) {
+    _actions = _actions.filter(function (a) {
+        if (a === 'edit')   return _canPath2(_base, 'edit');
+        if (a === 'delete') return _canPath2(_base, 'delete');
+        return true;                                    // view / print / others
+    });
+}
 /* editable = the {basePath}/{id}/edit screen exists. Until an Edit page is
  * wired the Edit action stays disabled (a dead link → 404 is worse). */
 var _editable   = (typeof editable !== 'undefined') ? !!editable : false;

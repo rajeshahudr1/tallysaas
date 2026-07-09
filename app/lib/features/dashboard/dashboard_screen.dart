@@ -119,9 +119,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 
   // ── Licence expiry banner (company-admin only) ────────────────
-  // Mirrors the web: a warning strip at the very top when the subscription is
-  // within 15 days of expiry (amber) or already expired (red); nothing else.
-  // Kept fresh by refreshMe() on dashboard load.
+  // Mirrors the web exactly: a warning strip at the very top when the
+  // subscription is within 30 days of expiry (amber) or already expired (red);
+  // nothing else, and ONLY for the company-admin (the licence manager) — a
+  // salesman/plain user never sees it. Kept fresh by refreshMe() on load.
   Widget _expiryBanner(AppUser? user) {
     final lic = user?.license;
     if (user == null || user.roleSlug != 'company-admin' || lic == null || lic.daysLeft == null) {

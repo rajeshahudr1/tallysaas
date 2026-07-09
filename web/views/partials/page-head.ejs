@@ -15,6 +15,29 @@ var _title      = (typeof title !== 'undefined' && title) ? title : '';
 var _breadcrumb = (typeof breadcrumb !== 'undefined' && breadcrumb) ? breadcrumb : [];
 var _actions    = (typeof actions !== 'undefined') ? actions : null;
 
+/* RBAC: hide an "Add"/create button the role can't perform. A button is a
+ * create action when its href ends in /add|/create|/new, its label starts with
+ * "Add", or it carries requires:'<module>.create'. canPath() (index.js) resolves
+ * the href → module → canDo. Non-create buttons (Export, custom) are untouched.
+ * An action may set requires:false to opt out entirely. */
+var _canPath3 = (typeof canPath === 'function') ? canPath : function () { return true; };
+function _actionAllowed(a) {
+    if (!a || typeof a !== 'object') return true;
+    if (a.requires === false) return true;
+    if (typeof a.requires === 'string' && a.requires.indexOf('.') > -1) {
+        if (typeof canDo === 'function') {
+            var rp = a.requires.split('.'); return canDo(rp[0], rp[1]);
+        }
+        return true;
+    }
+    var href  = a.href || '';
+    var label = String(a.label || '');
+    var isCreate = /\/(add|create|new)\/?$/.test(href) || /^add\b/i.test(label);
+    if (isCreate && href) return _canPath3(href, 'create');
+    return true;
+}
+if (Array.isArray(_actions)) _actions = _actions.filter(_actionAllowed);
+
 function _btnClass(a) {
     if (a.gradient) return 'btn btn-gradient';
     return 'btn btn-' + (a.variant || 'light');
