@@ -26,25 +26,42 @@ var _locs     = (typeof locationOptions !== 'undefined' && locationOptions) ? lo
 var _sps      = (typeof salesPersonOptions !== 'undefined' && salesPersonOptions) ? salesPersonOptions : [];
 var _products = (typeof invoiceProducts !== 'undefined' && invoiceProducts) ? invoiceProducts : [];
 var _invNo    = (typeof nextInvoiceNo !== 'undefined' && nextInvoiceNo) ? nextInvoiceNo : '';
+/* A salesman login IS the sales person; their role can't list sales_persons, so
+ * the route passes their own {id,name} to pre-fill (read-only) the field. */
+var _mySP     = (typeof mySalesPerson !== 'undefined' && mySalesPerson) ? mySalesPerson : null;
+var _isSalesman = (typeof isSalesman !== 'undefined' && isSalesman) ? true : false;
+
+/* Tiny HTML-attr escaper so a customer/product name with a quote can't break
+ * the data-* attributes we emit. */
+function _esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 /* FK <select> options — value = id. */
 function _selOpts(placeholder, list) {
     var html = '<option value="" selected disabled hidden>' + placeholder + '</option>';
-    (list || []).forEach(function (o) { html += '<option value="' + o.id + '">' + o.name + '</option>'; });
+    (list || []).forEach(function (o) { html += '<option value="' + o.id + '">' + _esc(o.name) + '</option>'; });
     return html;
 }
 
-/* Product <option>s: value = product id; data-* feed the line-item
- * engine (auto-fills HSN/unit/rate/GST when a product is chosen). */
-var _productOptions = '<option value="" selected>Select product</option>';
-_products.forEach(function (p) {
-    _productOptions +=
-        '<option value="' + p.id + '"' +
-        ' data-hsn="'  + (p.hsn || '')  + '"' +
-        ' data-unit="' + (p.unit || '') + '"' +
-        ' data-rate="' + (p.rate || 0)  + '"' +
-        ' data-gst="'  + (p.gst || 0)   + '">' + p.name + '</option>';
-});
+/* Customer <option>s carry the customer's location (id + label) so selecting a
+ * customer AUTO-fills the Location field (see the inline script below). */
+function _customerOpts(list) {
+    var html = '<option value="" selected disabled hidden>Select customer</option>';
+    (list || []).forEach(function (o) {
+        html += '<option value="' + o.id + '"'
+             + ' data-location-id="' + _esc(o.location_id) + '"'
+             + ' data-location="' + _esc(o.location) + '">' + _esc(o.name) + '</option>';
+    });
+    return html;
+}
+
+/* Products as a JS array for the searchable line-item picker (autocomplete). */
+var _productsJson = JSON.stringify(_products.map(function (p) {
+    return { id: p.id, name: p.name, hsn: p.hsn || '', unit: p.unit || '', rate: p.rate || 0, gst: p.gst || 0 };
+}));
 
 // SFA — EVERY non-admin submits for approval (can't send straight to Tally); the
 // "Save as Draft" buttons carry save_as_draft=1 so the api keeps it editable.
@@ -101,7 +118,7 @@ var headActions =
                 <div class="form-group">
                     <label class="form-label" for="inv-customer">Customer<span class="req">*</span></label>
                     <select class="form-select" id="inv-customer" name="customer_id" required>
-                        <%- _selOpts('Select customer', _custs) %>
+                        <%- _customerOpts(_custs) %>
                     </select>
                 </div>
 
@@ -118,16 +135,30 @@ var headActions =
 
                 <div class="form-group">
                     <label class="form-label" for="inv-location">Location</label>
-                    <select class="form-select" id="inv-location" name="location_id">
-                        <%- _selOpts('Select location', _locs) %>
-                    </select>
+                    <% if (_isSalesman) { %>
+                        <%# A salesman can't list locations (403) — the field is read-only and
+                            AUTO-fills from the picked customer's location. %>
+                        <input type="text" class="form-control" id="inv-location-label"
+                               placeholder="Auto from customer" readonly>
+                        <input type="hidden" id="inv-location" name="location_id" value="">
+                    <% } else { %>
+                        <select class="form-select" id="inv-location" name="location_id">
+                            <%- _selOpts('Select location', _locs) %>
+                        </select>
+                    <% } %>
                 </div>
 
                 <div class="form-group">
                     <label class="form-label" for="inv-sp">Sales Person</label>
-                    <select class="form-select" id="inv-sp" name="sales_person_id">
-                        <%- _selOpts('Select sales person', _sps) %>
-                    </select>
+                    <% if (_isSalesman && _mySP) { %>
+                        <%# Login IS the sales person — read-only self, submitted via the hidden id. %>
+                        <input type="text" class="form-control" value="<%= _mySP.name %>" readonly>
+                        <input type="hidden" id="inv-sp" name="sales_person_id" value="<%= _mySP.id %>">
+                    <% } else { %>
+                        <select class="form-select" id="inv-sp" name="sales_person_id">
+                            <%- _selOpts('Select sales person', _sps) %>
+                        </select>
+                    <% } %>
                 </div>
 
                 <div class="form-group">
@@ -232,7 +263,11 @@ var headActions =
 <template id="li-row-tpl">
     <tr class="li-row">
         <td class="li-idx"></td>
-        <td><select class="li-product"><%- _productOptions %></select></td>
+        <td class="li-prod-cell">
+            <input type="text" class="li-product-search" placeholder="Search product…" autocomplete="off">
+            <input type="hidden" class="li-product">
+            <div class="li-prod-menu" hidden></div>
+        </td>
         <td><input type="text" class="li-hsn" readonly placeholder="—"></td>
         <td><input type="number" class="li-qty li-num" min="0" step="1" value="1"></td>
         <td><input type="text" class="li-unit" readonly placeholder="—"></td>
@@ -249,3 +284,63 @@ var headActions =
         </td>
     </tr>
 </template>
+
+<%# Products for the searchable line-item picker + customer→location auto-fill. %>
+<script>
+    window.INVOICE_PRODUCTS = <%- _productsJson %>;
+</script>
+<script>
+(function () {
+    // Customer → Location auto-fill. Picking a customer sets the Location field to
+    // that customer's location. For a salesman the Location is a read-only pair
+    // (#inv-location-label + hidden #inv-location); for an admin it's a <select>
+    // — we add the option if it isn't already there, then select it.
+    document.addEventListener('DOMContentLoaded', function () {
+        var cust = document.getElementById('inv-customer');
+        if (!cust) return;
+        cust.addEventListener('change', function () {
+            var opt = cust.options[cust.selectedIndex];
+            if (!opt) return;
+            var locId   = opt.getAttribute('data-location-id') || '';
+            var locName = opt.getAttribute('data-location') || '';
+            var label   = document.getElementById('inv-location-label'); // salesman (readonly)
+            var hidden  = document.getElementById('inv-location');
+            if (label && hidden && hidden.tagName === 'INPUT' && hidden.type === 'hidden') {
+                label.value = locName || '';
+                hidden.value = locId || '';
+                return;
+            }
+            var sel = document.getElementById('inv-location'); // admin (<select>)
+            if (sel && sel.tagName === 'SELECT') {
+                if (!locId) { sel.value = ''; return; }
+                var has = Array.prototype.some.call(sel.options, function (o) { return String(o.value) === String(locId); });
+                if (!has) {
+                    var o = document.createElement('option');
+                    o.value = locId; o.textContent = locName || ('Location ' + locId);
+                    sel.appendChild(o);
+                }
+                sel.value = String(locId);
+            }
+        });
+    });
+})();
+</script>
+
+<style>
+    /* Searchable product picker for line items (replaces the native <select>). */
+    .li-prod-cell { position: relative; min-width: 200px; }
+    .li-product-search {
+        width: 100%; padding: 6px 8px; border: 1px solid var(--border, #d1d5db);
+        border-radius: 6px; font-size: 13px; background: #fff;
+    }
+    .li-product-search:focus { outline: none; border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,.15); }
+    .li-prod-menu {
+        position: absolute; top: 100%; left: 0; right: 0; z-index: 30;
+        max-height: 240px; overflow-y: auto; background: #fff;
+        border: 1px solid var(--border, #d1d5db); border-radius: 6px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.12); margin-top: 2px;
+    }
+    .li-prod-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .li-prod-item:hover, .li-prod-item.is-active { background: #eef2ff; }
+    .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
+</style>

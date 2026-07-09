@@ -299,6 +299,21 @@ async function fetchOptions(req, basePath) {
     return rows.map((r) => ({ id: r.id, name: r.name }));
 }
 
+/* Customer options for the invoice form — id + name PLUS the customer's own
+ * location (id + label) so the Customer <select> can AUTO-fill the Location
+ * field on selection. /customers is assignment-scoped, so a salesman gets only
+ * their assigned customers here (canCustomerRead). */
+async function fetchCustomerInvoiceOptions(req) {
+    const { body } = await api.get(req, '/customers?per_page=100');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        location_id: r.location_id != null ? r.location_id : '',
+        location: r.location || '',
+    }));
+}
+
 /* Assignable roles as {id,name,slug} for the Sales-Person login-role select —
  * keeps `slug` (unlike fetchOptions) so the view can default-highlight the
  * system "sales-person" role. */
@@ -1696,11 +1711,22 @@ router.get('/sales-invoices', async (req, res, next) => {
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {
     const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts] = await Promise.all([
-        fetchOptions(req, '/customers'),
+        // Rich customer options carry the customer's location so picking a
+        // customer AUTO-fills the Location field (see create.ejs). A salesman's
+        // /locations + /sales-persons both 403 (no view perm), so those two
+        // fetches come back empty — handled below by auto-filling from the
+        // customer + the salesman's own identity.
+        fetchCustomerInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchOptions(req, '/sales-persons'),
         fetchInvoiceProducts(req, 'sales_price'),
     ]);
+    // The logged-in salesman IS the sales person (login = salesman) — their role
+    // can't list sales_persons, so pre-fill the field with their own identity.
+    const u = res.locals.user || {};
+    const mySalesPerson = (res.locals.isSalesman && u.sales_person_id)
+        ? { id: u.sales_person_id, name: u.name || 'Me' }
+        : null;
     res.render('sales-invoices/create', {
         title: 'Create Invoice',
         activeMenu: 'sales-inv',
@@ -1711,6 +1737,7 @@ router.get('/sales-invoices/create', async (req, res, next) => {
         ],
 
         customerOptions, locationOptions, salesPersonOptions, invoiceProducts,
+        mySalesPerson,
         nextInvoiceNo: 'Auto-generated on save',
 
         // Inject the line-item calculator only on this page.

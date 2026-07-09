@@ -26,6 +26,11 @@
         var addBtn = document.getElementById('li-add-row');
         if (!tbody || !tpl) return;
 
+        // Product catalogue for the searchable line-item picker (from the page).
+        var PRODUCTS = Array.isArray(window.INVOICE_PRODUCTS) ? window.INVOICE_PRODUCTS : [];
+        var PROD_BY_ID = {};
+        PRODUCTS.forEach(function (p) { PROD_BY_ID[String(p.id)] = p; });
+
         function inr(n) {
             return '₹' + (Number(n) || 0).toLocaleString('en-IN', {
                 minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -82,7 +87,12 @@
         }
 
         function resetRow(row) {
-            row.querySelector('.li-product').selectedIndex = 0;
+            var search = row.querySelector('.li-product-search');
+            var hidden = row.querySelector('.li-product');
+            if (search) search.value = '';
+            if (hidden) hidden.value = '';
+            var menu = row.querySelector('.li-prod-menu');
+            if (menu) { menu.hidden = true; menu.innerHTML = ''; }
             row.querySelector('.li-hsn').value  = '';
             row.querySelector('.li-unit').value = '';
             row.querySelector('.li-qty').value  = '1';
@@ -92,16 +102,82 @@
             recalcRow(row);
         }
 
-        function wireRow(row) {
-            var prod = row.querySelector('.li-product');
-            prod.addEventListener('change', function () {
-                var opt = prod.options[prod.selectedIndex];
-                row.querySelector('.li-hsn').value  = opt.getAttribute('data-hsn')  || '';
-                row.querySelector('.li-unit').value = opt.getAttribute('data-unit') || '';
-                if (opt.getAttribute('data-rate')) row.querySelector('.li-rate').value = opt.getAttribute('data-rate');
-                if (opt.getAttribute('data-gst'))  row.querySelector('.li-gst').value  = opt.getAttribute('data-gst');
-                recalcRow(row); recalcTotals();
+        // Apply a chosen product to the row: pin its id (hidden .li-product) +
+        // fill HSN / Unit / Rate / GST from the catalogue, then recompute.
+        function applyProduct(row, p) {
+            var search = row.querySelector('.li-product-search');
+            var hidden = row.querySelector('.li-product');
+            hidden.value = p ? String(p.id) : '';
+            if (search) search.value = p ? p.name : '';
+            row.querySelector('.li-hsn').value  = p ? (p.hsn || '')  : '';
+            row.querySelector('.li-unit').value = p ? (p.unit || '') : '';
+            if (p && p.rate != null) row.querySelector('.li-rate').value = p.rate;
+            if (p && p.gst != null)  row.querySelector('.li-gst').value  = p.gst;
+            recalcRow(row); recalcTotals();
+        }
+
+        // Searchable product picker: filter the catalogue as the user types and
+        // show a click/keyboard-selectable menu. Replaces the old native <select>
+        // so a 200+ product list is usable.
+        function wireProductPicker(row) {
+            var search = row.querySelector('.li-product-search');
+            var hidden = row.querySelector('.li-product');
+            var menu   = row.querySelector('.li-prod-menu');
+            if (!search || !menu) return;
+            var active = -1, items = [];
+
+            function render(list) {
+                menu.innerHTML = '';
+                items = list;
+                active = -1;
+                if (!list.length) {
+                    menu.innerHTML = '<div class="li-prod-empty">No products found</div>';
+                } else {
+                    list.forEach(function (p, i) {
+                        var d = document.createElement('div');
+                        d.className = 'li-prod-item';
+                        d.setAttribute('data-i', i);
+                        d.textContent = p.name;
+                        d.addEventListener('mousedown', function (e) { e.preventDefault(); choose(i); });
+                        menu.appendChild(d);
+                    });
+                }
+                menu.hidden = false;
+            }
+            function filter() {
+                var q = search.value.trim().toLowerCase();
+                var list = !q ? PRODUCTS.slice(0, 50)
+                    : PRODUCTS.filter(function (p) { return p.name.toLowerCase().indexOf(q) > -1; }).slice(0, 50);
+                render(list);
+            }
+            function choose(i) {
+                var p = items[i];
+                if (!p) return;
+                applyProduct(row, p);
+                menu.hidden = true;
+            }
+            function highlight() {
+                menu.querySelectorAll('.li-prod-item').forEach(function (el, i) {
+                    el.classList.toggle('is-active', i === active);
+                });
+                var el = menu.querySelector('.is-active');
+                if (el) el.scrollIntoView({ block: 'nearest' });
+            }
+
+            search.addEventListener('input', function () { hidden.value = ''; filter(); });
+            search.addEventListener('focus', function () { if (search.value.trim() === '') filter(); });
+            search.addEventListener('keydown', function (e) {
+                if (menu.hidden) return;
+                if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); highlight(); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); highlight(); }
+                else if (e.key === 'Enter') { if (active > -1) { e.preventDefault(); choose(active); } }
+                else if (e.key === 'Escape') { menu.hidden = true; }
             });
+            search.addEventListener('blur', function () { setTimeout(function () { menu.hidden = true; }, 150); });
+        }
+
+        function wireRow(row) {
+            wireProductPicker(row);
             row.querySelectorAll('.li-qty, .li-rate, .li-disc, .li-gst').forEach(function (inp) {
                 inp.addEventListener('input', function () { recalcRow(row); recalcTotals(); });
             });

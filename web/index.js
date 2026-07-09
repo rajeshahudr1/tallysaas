@@ -239,6 +239,9 @@ app.use(async (req, res, next) => {
             if (me && Array.isArray(me.permissions)) {
                 u.permissions = me.permissions;
                 if (typeof me.is_salesman !== 'undefined') u.is_salesman = me.is_salesman;
+                // The salesman's linked sales_persons.id — drives the invoice
+                // form's read-only "Sales Person = me" (login IS the sales person).
+                if (typeof me.sales_person_id !== 'undefined') u.sales_person_id = me.sales_person_id;
                 // Keep the licence summary fresh too (valid-until, remaining
                 // companies, max users) — drives the expiry banner.
                 if (me.license) u.license = me.license;
@@ -258,6 +261,7 @@ app.use(async (req, res, next) => {
             name: u.name || 'User',
             role: u.role || u.role_slug || '',
             role_slug: u.role_slug || '',
+            sales_person_id: u.sales_person_id != null ? u.sales_person_id : null,
             avatar: '/img/avatar.svg',
             initials: initialsOf(u.name),
         };
