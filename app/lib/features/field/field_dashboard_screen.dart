@@ -11,6 +11,7 @@ import '../../data/repositories/field_repository.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/error_state.dart';
 import '../../shared/widgets/loading_state.dart';
+import '../notifications/notifications_screen.dart';
 
 /// SFA — the logged-in salesman's field home: assigned locations (beats) with
 /// per-location customer/invoice tallies + an approval-status summary. Mirrors
@@ -70,7 +71,23 @@ class _FieldDashboardScreenState extends ConsumerState<FieldDashboardScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('My Field')),
+      appBar: AppBar(
+        title: const Text('My Field'),
+        actions: [
+          // Notification bell (with unread badge) → the salesman's role-filtered
+          // feed (their invoice approvals/rejections). Missing before this.
+          Consumer(builder: (_, r, __) {
+            final unread = r.watch(notificationsUnreadProvider).maybeWhen(data: (n) => n, orElse: () => 0);
+            return IconButton(
+              icon: unread > 0
+                  ? Badge(label: Text('$unread'), child: const Icon(Icons.notifications_outlined))
+                  : const Icon(Icons.notifications_outlined),
+              tooltip: 'Notifications',
+              onPressed: () => context.push('/notifications'),
+            );
+          }),
+        ],
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => context.push('/sales-invoices/add'),
         icon: const Icon(Icons.add),

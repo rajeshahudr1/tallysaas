@@ -69,6 +69,8 @@ class _NotifCard extends ConsumerWidget {
     'sales-invoices', 'purchase-invoices', 'payments', 'receipts', 'journals',
     'expenses', 'reminders', 'bank-reconciliation', 'recurring-invoices', 'einvoices',
     'analytics', 'inventory', 'companies',
+    // SFA approval deep-links (salesman → own approvals; admin → approvals queue).
+    'my-approvals', 'my-customers', 'my-locations',
   };
 
   bool _canOpen(String link) {

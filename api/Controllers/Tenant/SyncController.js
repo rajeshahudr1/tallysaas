@@ -1276,6 +1276,10 @@ async function notificationsAll(req, res) {
         const readSet = await readKeySet(userId);
 
         const actionItems = await buildActionFeed(companyId, readSet, NOTIF_PAGE_MAX);
+        // Role-aware SFA feed — MUST match the bell so "View all" shows the SAME
+        // role-relevant items (a salesman's own approve/reject; an admin's
+        // received-from-salesman), not an empty page.
+        const sfaItems = await buildSfaFeed(req, readSet, NOTIF_PAGE_MAX);
 
         const cutoff = new Date(Date.now() - NOTIF_ACTION_WINDOW_MS);
         const failedRows = await db('tally_sync_logs')
@@ -1285,10 +1289,20 @@ async function notificationsAll(req, res) {
             .select('id', 'module', 'record_type', 'status', 'message', 'synced_at', 'created_at');
         const failedItems = failedRows.map((r) => failedLogToNotif(r, readSet));
 
-        const merged = actionItems.concat(failedItems)
-            .sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
+        // Same per-role composition as the bell (see notifications()).
+        let merged;
+        if (req.isSalesman) {
+            merged = sfaItems.slice();
+        } else if (req.user && req.user.role_slug === 'company-admin') {
+            const nonInvoiceActions = actionItems.filter(
+                (it) => it.link !== '/sales-invoices' && it.link !== '/purchase-invoices');
+            merged = sfaItems.concat(nonInvoiceActions).concat(failedItems);
+        } else {
+            merged = actionItems.concat(failedItems);
+        }
+        merged = merged.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
 
-        const updateNotif = await buildAgentUpdateNotif(companyId);
+        const updateNotif = req.isSalesman ? null : await buildAgentUpdateNotif(companyId);
         if (updateNotif) {
             merged.unshift({
                 id:   String(updateNotif.id), kind: 'update',

@@ -98,15 +98,7 @@ class TransactionsHubScreen extends ConsumerWidget {
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
     final items = <_TxnEntry>[
-      // SFA — a linked salesman's field home (My Field) is pinned first.
-      if (user != null && user.isSalesman)
-        const _TxnEntry(
-          title: 'My Field',
-          subtitle: 'My locations, customers & invoices',
-          icon: Icons.location_on,
-          module: 'sales-invoices',
-          route: '/my-field',
-        ),
+      // (My Field is reached from the Dashboard tab, so it's NOT duplicated here.)
       // SFA — Invoice Approvals for approvers (edit perm, not a field salesman).
       if (user != null && user.can('sales-invoices', 'edit') && !user.isSalesman)
         const _TxnEntry(
