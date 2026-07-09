@@ -167,6 +167,8 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
   }
 
   Widget _body(SalesInvoicesState state) {
+    final session = ref.read(sessionProvider);
+    final isSalesman = session is SessionSignedIn && session.user.isSalesman;
     switch (state) {
       case SalesInvoicesLoading():
         return const LoadingState(message: 'Loading invoices…');
@@ -205,6 +207,9 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
               final inv = items[i];
               return _InvoiceCard(
                 inv,
+                // A salesman only cares about approval, not the Tally-sync
+                // lifecycle — hide the sync-status pill for them (matches web).
+                showSyncStatus: !isSalesman,
                 onTap: () async {
                   await context.push('/sales-invoices/${inv.id}');
                   if (context.mounted) {
@@ -220,9 +225,11 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
 }
 
 class _InvoiceCard extends StatelessWidget {
-  const _InvoiceCard(this.inv, {this.onTap});
+  const _InvoiceCard(this.inv, {this.onTap, this.showSyncStatus = true});
   final Invoice inv;
   final VoidCallback? onTap;
+  /// Whether to show the Tally sync-status pill (hidden for a salesman).
+  final bool showSyncStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -251,7 +258,7 @@ class _InvoiceCard extends StatelessWidget {
             children: [
               Text(Fmt.inr(inv.total), style: theme.textTheme.titleSmall),
               const SizedBox(height: 6),
-              if (inv.status != null) StatusPill(invoiceStatusLabel(inv.status)),
+              if (showSyncStatus && inv.status != null) StatusPill(invoiceStatusLabel(inv.status)),
             ],
           ),
         ],
