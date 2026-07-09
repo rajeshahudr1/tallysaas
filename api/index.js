@@ -25,6 +25,12 @@ process.env.TZ = process.env.TZ || 'Asia/Kolkata';
 
 require('dotenv').config();
 
+// ── Daily file logging ──────────────────────────────────────────
+// Init FIRST so console.error/warn are tee'd into logs/app-YYYY-MM-DD.log +
+// logs/error-YYYY-MM-DD.log before any other module can log, and so uncaught
+// crashes still leave a dated line. See Helpers/logger.js.
+require('./Helpers/logger').init();
+
 // ── PG bigint (INT8) → JS Number ────────────────────────────────
 // node-postgres returns INT8 as a STRING by default to avoid precision loss.
 // Our ids and counts sit far below 2^53, so we coerce to Number ONCE at boot

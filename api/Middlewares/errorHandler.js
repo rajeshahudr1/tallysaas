@@ -21,6 +21,7 @@
  */
 
 const IS_DEV = (process.env.APP_ENV || 'development') !== 'production';
+const { logger } = require('../Helpers/logger');
 
 /**
  * 404 — no route matched. Real HTTP 404, envelope body.
@@ -39,9 +40,9 @@ function notFound(req, res) {
  */
 // eslint-disable-next-line no-unused-vars
 function errorHandler(err, req, res, next) {
-    // Log with the request id (set by the requestId middleware) for tracing.
-    const rid = req && req.requestId ? req.requestId.slice(0, 8) : '--------';
-    console.error(`[${rid}] Unhandled error:`, err && (err.stack || err.message || err));
+    // Persist to logs/error-YYYY-MM-DD.log with full request context (id, method,
+    // url, who, company) so any unhandled failure is traceable to its request.
+    logger.requestError(req, err, 'Unhandled error:');
 
     const payload = {
         status: 500,

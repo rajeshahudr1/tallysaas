@@ -101,6 +101,25 @@ function canField(req, res, next) {
 }
 
 /**
+ * Customer-READ gate. A field salesman needs to SEE their customers to pick one
+ * when creating an invoice / receipt, even though their role usually does NOT
+ * carry `customers.view` (they don't manage the master). Being a LINKED salesman
+ * IS the entitlement — and CustomerController.list already narrows the result to
+ * ONLY the customers assigned to them (sales_person_customers), so a salesman
+ * reads their assigned customers and nothing more. Everyone else must hold
+ * `customers.view`. Must run AFTER resolveLocation (sets req.isSalesman).
+ *
+ * This gates ONLY reads (GET list + GET one). Create/edit/delete stay on the
+ * strict can('customers', …) so a salesman still can't manage the master.
+ */
+function canCustomerRead(req, res, next) {
+    const user = req.user || {};
+    if (user.role_slug === 'super-admin') return next();
+    if (req.isSalesman) return next();               // linked salesman → assigned customers only
+    return can('customers', 'view')(req, res, next);
+}
+
+/**
  * Invalidate the in-process permission cache. Call after a role's permissions
  * change (whole cache, or a single role_id).
  */
@@ -112,6 +131,7 @@ function clearCache(roleId) {
 module.exports = {
     can,
     canField,
+    canCustomerRead,
     clearCache,
     loadRolePermissions,
     FORBIDDEN_MSG,

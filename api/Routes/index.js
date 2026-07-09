@@ -42,7 +42,7 @@ const { resolveCompany }  = require('../Middlewares/companyScope');
 const { resolveLocation } = require('../Middlewares/locationScope');
 const { resolveTenant }   = require('../Middlewares/tenantResolver');
 const { superAdminBridge } = require('../Middlewares/superAdminBridge');
-const { can, canField }   = require('../Middlewares/rbac');
+const { can, canField, canCustomerRead } = require('../Middlewares/rbac');
 const { validate }        = require('../Middlewares/validate');
 
 // ── Validators ────────────────────────────────────────────────────
@@ -359,14 +359,14 @@ router.patch('/super-admin/companies/:id/session-limit',
 
 router.get(
     '/customers',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canCustomerRead,
     validate(listCustomerSchema, 'query'),
     CustomerController.list,
 );
 
 router.get(
     '/customers/:id',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canCustomerRead,
     CustomerController.get,
 );
 
