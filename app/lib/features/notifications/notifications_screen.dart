@@ -75,7 +75,11 @@ class _NotifCard extends ConsumerWidget {
 
   bool _canOpen(String link) {
     if (link.isEmpty) return false;
-    final segs = link.split('/').where((s) => s.isNotEmpty).toList();
+    // Strip the query string / hash BEFORE matching the first path segment —
+    // else '/my-approvals?status=approved' fails the allowlist and the tap does
+    // nothing (go_router still gets the full link with its query on push).
+    final path = link.split('?').first.split('#').first;
+    final segs = path.split('/').where((s) => s.isNotEmpty).toList();
     return segs.isNotEmpty && _appRoutes.contains(segs.first);
   }
 
