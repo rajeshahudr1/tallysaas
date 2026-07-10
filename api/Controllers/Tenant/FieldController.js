@@ -376,7 +376,9 @@ async function visits(req, res) {
         const rows = await q.orderBy('v.checkin_at', 'desc').limit(200).select(
             'v.id', 'v.checkin_at', 'v.checkout_at', 'v.checkin_distance_m',
             'v.checkin_within', 'v.note', 'v.status',
-            'c.name as customer', 'l.name as location', 'sp.name as sales_person',
+            'v.customer_id', 'v.checkin_lat', 'v.checkin_lng',
+            'c.name as customer', 'c.mobile as customer_mobile',
+            'l.name as location', 'sp.name as sales_person',
         );
         return R.successResponse(res, { data: rows });
     } catch (err) {

@@ -50,8 +50,52 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
     _debounce = Timer(const Duration(milliseconds: 350), _reload);
   }
 
+  /// Ask the salesman what they did at this outlet. Returns the comment (may be
+  /// empty), or null if they cancelled the whole check-in.
+  Future<String?> _askComment(Customer c) {
+    final ctl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Check in — ${c.name}', maxLines: 2, overflow: TextOverflow.ellipsis),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('What did you do at this shop?',
+                style: TextStyle(color: AppColors.text2, fontSize: 13)),
+            const SizedBox(height: AppSpacing.sm8),
+            TextField(
+              controller: ctl,
+              autofocus: true,
+              minLines: 2,
+              maxLines: 4,
+              maxLength: 500,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                hintText: 'e.g. Took order, collected payment, shared new catalogue…',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(ctx, ctl.text.trim()),
+            icon: const Icon(Icons.my_location, size: 16),
+            label: const Text('Check In'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _checkin(Customer c) async {
     if (_busyId != null) return;
+    final note = await _askComment(c);
+    if (note == null) return; // cancelled
+    if (!mounted) return;
     setState(() => _busyId = c.id);
     try {
       final pos = await LocationHelper.current();
@@ -59,6 +103,7 @@ class _CheckinScreenState extends ConsumerState<CheckinScreen> {
             customerId: c.id,
             lat: pos.latitude,
             lng: pos.longitude,
+            note: note,
           );
       if (!mounted) return;
       final within = row['checkin_within'] == true;

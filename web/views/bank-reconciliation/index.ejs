@@ -11,23 +11,46 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
 <%- include('../partials/page-head', {
     title: 'Bank Reconciliation', infoKey: 'bank-reconciliation',
     breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Bank Reconciliation' }],
-    actions: '<button type="button" class="btn btn-gradient" onclick="bkOpen(\'bk-upload\')"><i class="fa-solid fa-file-arrow-up me-1"></i>Import Statement</button>',
+    actions: '<button type="button" class="btn btn-light" onclick="bkSampleCsv()"><i class="fa-solid fa-file-csv me-1"></i>Sample CSV</button>'
+           + '<button type="button" class="btn btn-gradient" onclick="bkOpen(\'bk-upload\')"><i class="fa-solid fa-file-arrow-up me-1"></i>Import Statement</button>',
 }) %>
 
 <!-- Summary -->
-<div class="card bk-card bk-summary">
-    <div class="bk-metric"><span class="bk-lbl">Transactions</span><span class="bk-val"><%= _s.total || 0 %></span></div>
-    <div class="bk-metric"><span class="bk-lbl">Matched</span><span class="bk-val bk-green"><%= _s.matched || 0 %></span></div>
-    <div class="bk-metric"><span class="bk-lbl">Unmatched</span><span class="bk-val bk-amber"><%= _s.unmatched || 0 %></span></div>
-    <div class="bk-metric"><span class="bk-lbl">Credits (in)</span><span class="bk-val bk-green"><%= _money(_s.credit) %></span></div>
-    <div class="bk-metric"><span class="bk-lbl">Debits (out)</span><span class="bk-val bk-red"><%= _money(_s.debit) %></span></div>
+<div class="bk-stats">
+    <div class="bk-stat">
+        <span class="bk-stat-ic bk-ic-blue"><i class="fa-solid fa-layer-group"></i></span>
+        <div class="bk-stat-txt"><span class="bk-lbl">Transactions</span><span class="bk-val"><%= _s.total || 0 %></span></div>
+    </div>
+    <div class="bk-stat">
+        <span class="bk-stat-ic bk-ic-green"><i class="fa-solid fa-link"></i></span>
+        <div class="bk-stat-txt"><span class="bk-lbl">Matched</span><span class="bk-val bk-green"><%= _s.matched || 0 %></span></div>
+    </div>
+    <div class="bk-stat">
+        <span class="bk-stat-ic bk-ic-amber"><i class="fa-solid fa-circle-question"></i></span>
+        <div class="bk-stat-txt"><span class="bk-lbl">Unmatched</span><span class="bk-val bk-amber"><%= _s.unmatched || 0 %></span></div>
+    </div>
+    <div class="bk-stat">
+        <span class="bk-stat-ic bk-ic-green"><i class="fa-solid fa-arrow-down"></i></span>
+        <div class="bk-stat-txt"><span class="bk-lbl">Credits (in)</span><span class="bk-val bk-green"><%= _money(_s.credit) %></span></div>
+    </div>
+    <div class="bk-stat">
+        <span class="bk-stat-ic bk-ic-red"><i class="fa-solid fa-arrow-up"></i></span>
+        <div class="bk-stat-txt"><span class="bk-lbl">Debits (out)</span><span class="bk-val bk-red"><%= _money(_s.debit) %></span></div>
+    </div>
 </div>
 
 <!-- Transactions -->
 <div class="card bk-card">
     <h2 class="form-section-title">Statement Lines <span class="bk-count"><%= _list.length %></span></h2>
     <% if (!_list.length) { %>
-        <div class="bk-empty"><i class="fa-solid fa-building-columns"></i><p>No bank transactions yet. Use <strong>Import Statement</strong> to upload a CSV.</p></div>
+        <div class="bk-empty">
+            <i class="fa-solid fa-building-columns"></i>
+            <p>No bank transactions yet.<br>Upload your bank statement as a CSV to get started.</p>
+            <div class="bk-empty-actions">
+                <button type="button" class="btn btn-light btn-sm" onclick="bkSampleCsv()"><i class="fa-solid fa-file-csv me-1"></i>Download sample CSV</button>
+                <button type="button" class="btn btn-gradient btn-sm" onclick="bkOpen('bk-upload')"><i class="fa-solid fa-file-arrow-up me-1"></i>Import Statement</button>
+            </div>
+        </div>
     <% } else { %>
         <div class="table-wrap">
             <table class="bk-table">
@@ -71,6 +94,7 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
     <div class="bk-modal">
         <h3>Import Bank Statement (CSV)</h3>
         <p class="bk-muted" style="font-size:13px">CSV with a header row. Recognised columns (any order): <code>Date</code>, <code>Description</code>, <code>Reference</code>, and either <code>Amount</code> (signed) or <code>Debit</code> + <code>Credit</code>. Dates: DD/MM/YYYY or YYYY-MM-DD.</p>
+        <p style="font-size:13px;margin:-4px 0 10px"><a href="#" onclick="bkSampleCsv();return false;"><i class="fa-solid fa-download me-1"></i>Download a sample CSV</a> to see the exact format.</p>
         <input type="file" id="bk-file" accept=".csv,text/csv" class="form-control" onchange="bkParse(this)">
         <div id="bk-preview" class="bk-preview"></div>
         <form method="post" action="/bank-reconciliation/import" id="bk-import-form">
@@ -95,6 +119,27 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
 <script>
     function bkOpen(id) { document.getElementById(id).classList.add('open'); }
     function bkClose(id) { document.getElementById(id).classList.remove('open'); }
+
+    // ── Download a sample bank-statement CSV (matches the import parser) ──
+    function bkSampleCsv() {
+        var rows = [
+            ['Date', 'Description', 'Reference', 'Amount'],
+            ['05/07/2026', 'Payment received from Acme Traders', 'NEFT-889021', '15000.00'],
+            ['06/07/2026', 'Cheque paid to Global Supplies', 'CHQ-100234', '-8500.00'],
+            ['07/07/2026', 'UPI collection - retail', 'UPI-556677', '4200.00'],
+            ['08/07/2026', 'Bank charges', '', '-118.00'],
+            ['09/07/2026', 'Refund to customer', 'IMPS-771200', '-2500.00'],
+        ];
+        var csv = rows.map(function (r) {
+            return r.map(function (v) { v = String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }).join(',');
+        }).join('\r\n');
+        var blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'sample-bank-statement.csv';
+        document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+    }
     document.querySelectorAll('.bk-overlay').forEach(function (o) { o.addEventListener('click', function (e) { if (e.target === o) o.classList.remove('open'); }); });
 
     // ── CSV parse (client-side) ──
@@ -169,13 +214,21 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
 <style>
     .card.bk-card { padding:20px; margin-bottom:18px; }
     .form-section-title { margin:0 0 16px; }
-    .bk-summary { display:flex; flex-wrap:wrap; gap:28px; }
-    .bk-metric { display:flex; flex-direction:column; gap:3px; }
-    .bk-lbl { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; }
-    .bk-val { font-size:22px; font-weight:800; color:#111827; }
+    /* Summary stat grid — auto-fits into a row, wraps on small screens. */
+    .bk-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin-bottom:18px; }
+    .bk-stat { display:flex; align-items:center; gap:14px; background:#fff; border:1px solid var(--border,#EEF1F5); border-radius:14px; padding:16px 18px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
+    .bk-stat-ic { flex:0 0 auto; width:42px; height:42px; border-radius:11px; display:grid; place-items:center; font-size:17px; }
+    .bk-ic-blue { background:rgba(37,99,235,.12); color:#2563EB; }
+    .bk-ic-green { background:rgba(22,163,74,.12); color:#16A34A; }
+    .bk-ic-amber { background:rgba(180,83,9,.12); color:#B45309; }
+    .bk-ic-red { background:rgba(220,38,38,.12); color:#DC2626; }
+    .bk-stat-txt { display:flex; flex-direction:column; gap:2px; min-width:0; }
+    .bk-lbl { font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; white-space:nowrap; }
+    .bk-val { font-size:21px; font-weight:800; color:#111827; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .bk-green { color:#16A34A; } .bk-red { color:#DC2626; } .bk-amber { color:#B45309; }
     .bk-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
-    .bk-empty { text-align:center; padding:32px 12px; color:#9CA3AF; } .bk-empty i { font-size:34px; opacity:.5; } .bk-empty p { margin:12px 0 0; }
+    .bk-empty { text-align:center; padding:40px 12px; color:#9CA3AF; } .bk-empty i { font-size:40px; opacity:.45; } .bk-empty p { margin:14px 0 0; line-height:1.6; }
+    .bk-empty-actions { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:18px; }
     .bk-table { width:100%; border-collapse:collapse; }
     .bk-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 12px 12px; border-bottom:1px solid #EEF1F5; }
     .bk-table td { padding:11px 12px; border-bottom:1px solid #F3F4F6; }

@@ -41,6 +41,12 @@ class FieldDashboard {
     return double.tryParse(v.toString().trim()) ?? 0;
   }
 
+  static double? toDoubleOrNull(Object? v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString().trim());
+  }
+
   static String? str(Object? v) {
     if (v == null) return null;
     final s = v.toString().trim();
@@ -147,6 +153,8 @@ class FieldVisit {
   const FieldVisit({
     required this.id,
     this.customer,
+    this.customerId,
+    this.customerMobile,
     this.location,
     this.salesPerson,
     this.checkinAt,
@@ -155,10 +163,14 @@ class FieldVisit {
     this.within = false,
     this.note,
     this.status,
+    this.lat,
+    this.lng,
   });
 
   final int id;
   final String? customer;
+  final int? customerId;
+  final String? customerMobile;
   final String? location;
   final String? salesPerson;
   final String? checkinAt;
@@ -167,12 +179,16 @@ class FieldVisit {
   final bool within;
   final String? note;
   final String? status;
+  final double? lat;
+  final double? lng;
 
   bool get isOpen => (status ?? '') == 'open';
 
   factory FieldVisit.fromJson(Map<String, dynamic> j) => FieldVisit(
         id: FieldDashboard.toInt(j['id']),
         customer: FieldDashboard.str(j['customer']),
+        customerId: j['customer_id'] == null ? null : FieldDashboard.toInt(j['customer_id']),
+        customerMobile: FieldDashboard.str(j['customer_mobile']),
         location: FieldDashboard.str(j['location']),
         salesPerson: FieldDashboard.str(j['sales_person']),
         checkinAt: FieldDashboard.str(j['checkin_at']),
@@ -183,5 +199,7 @@ class FieldVisit {
         within: j['checkin_within'] == true,
         note: FieldDashboard.str(j['note']),
         status: FieldDashboard.str(j['status']),
+        lat: FieldDashboard.toDoubleOrNull(j['checkin_lat']),
+        lng: FieldDashboard.toDoubleOrNull(j['checkin_lng']),
       );
 }

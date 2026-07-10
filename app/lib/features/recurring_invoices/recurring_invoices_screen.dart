@@ -10,18 +10,13 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/confirm_dialog.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/form_dropdowns.dart';
 import '../../shared/widgets/loading_state.dart';
 
 /// Recurring Invoices — templates that auto-generate a sales invoice on a
 /// schedule. List + add/edit sheet + Generate-now + delete. Mirrors the web.
 final _recurringProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
   final data = await ref.read(apiClientProvider).get('/recurring-invoices', query: {'per_page': 100});
-  final rows = data is Map ? (data['data'] as List<dynamic>? ?? const []) : (data is List ? data : const []);
-  return rows.whereType<Map>().map((m) => m.cast<String, dynamic>()).toList();
-});
-
-final _recCustomersProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  final data = await ref.read(apiClientProvider).get('/customers', query: {'per_page': 200});
   final rows = data is Map ? (data['data'] as List<dynamic>? ?? const []) : (data is List ? data : const []);
   return rows.whereType<Map>().map((m) => m.cast<String, dynamic>()).toList();
 });
@@ -322,7 +317,6 @@ class _RecurringSheetState extends ConsumerState<_RecurringSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final custs = ref.watch(_recCustomersProvider);
     return Padding(
       padding: EdgeInsets.fromLTRB(AppSpacing.lg16, AppSpacing.lg16, AppSpacing.lg16, AppSpacing.lg16 + MediaQuery.of(context).viewInsets.bottom),
       child: Form(
@@ -342,24 +336,13 @@ class _RecurringSheetState extends ConsumerState<_RecurringSheet> {
               AppTextField(controller: _title, label: 'Title *', prefixIcon: Icons.title,
                   validator: (v) => (v == null || v.trim().isEmpty) ? 'Title is required' : null),
               const SizedBox(height: AppSpacing.md12),
-              const Padding(padding: EdgeInsets.only(bottom: AppSpacing.sm8), child: Text('Customer', style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.text1))),
-              custs.maybeWhen(
-                data: (list) => DropdownButtonFormField<int?>(
-                  value: _customerId,
-                  isExpanded: true,
-                  decoration: const InputDecoration(prefixIcon: Icon(Icons.person_outline, size: 18)),
-                  items: [
-                    const DropdownMenuItem<int?>(value: null, child: Text('— Select —')),
-                    ...list.map((c) => DropdownMenuItem<int?>(value: (c['id'] as num).toInt(), child: Text('${c['name'] ?? ''}', overflow: TextOverflow.ellipsis))),
-                  ],
-                  onChanged: (v) => setState(() => _customerId = v),
-                ),
-                orElse: () => DropdownButtonFormField<int?>(
-                  value: null,
-                  decoration: const InputDecoration(prefixIcon: Icon(Icons.person_outline, size: 18)),
-                  items: const [DropdownMenuItem<int?>(value: null, child: Text('— Select —'))],
-                  onChanged: null,
-                ),
+              // Searchable customer picker (same widget the invoice form uses) — a
+              // long customer list stays usable, and a preset customer (on edit)
+              // shows its name. Optional, mirroring the web's "— Select —".
+              SearchableFkDropdown(
+                label: 'Customer', endpoint: '/customers',
+                value: _customerId,
+                onChanged: (v) => setState(() => _customerId = v),
               ),
               const SizedBox(height: AppSpacing.md12),
               Row(children: [

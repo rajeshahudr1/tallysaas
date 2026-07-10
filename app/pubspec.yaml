@@ -24,6 +24,16 @@ dependencies:
   image_picker: ^1.1.2
   http_parser: ^4.0.2
 
+  # ─── File picking (Bank Reconciliation CSV import) ──────────
+  # file_picker → native document picker; we read bytes in-memory
+  # (withData:true) and parse the CSV in Dart, mirroring the web import.
+  file_picker: ^6.1.1
+
+  # ─── External links (field sales: call / WhatsApp / open on map) ──
+  # url_launcher → tel:, https://wa.me, and geo:/maps URLs from the
+  # customer detail + visit tracking screens.
+  url_launcher: ^6.2.5
+
   # ─── State management + DI ──────────────────────────────────
   # Riverpod = compile-safe DI + reactive providers. Every service and
   # piece of session state is exposed as a provider.

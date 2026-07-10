@@ -2,6 +2,8 @@
 /* views/field/tracking.ejs — SFA Phase 2 · Field Tracking (GPS visit log).
  * Admin sees every salesman's check-ins; a salesman sees their own. */
 var _visits = Array.isArray(visits) ? visits : [];
+var _salesmen = Array.isArray(salesmen) ? salesmen : [];
+var _spId = (typeof salesPersonId !== 'undefined' && salesPersonId) ? String(salesPersonId) : '';
 %>
 <%- include('../partials/page-head', {
     title: 'Field Tracking',
@@ -18,9 +20,17 @@ var _visits = Array.isArray(visits) ? visits : [];
             <span class="ft-count"><%= _visits.length %></span>
         </h2>
         <form method="get" action="/field-tracking" class="ft-filter">
+            <% if (_salesmen.length) { %>
+                <select name="sales_person_id" class="form-select form-select-sm">
+                    <option value="">All salesmen</option>
+                    <% _salesmen.forEach(function (s) { %>
+                        <option value="<%= s.id %>" <%= String(s.id) === _spId ? 'selected' : '' %>><%= s.name %></option>
+                    <% }); %>
+                </select>
+            <% } %>
             <input type="date" name="date" value="<%= date || '' %>" class="form-control form-control-sm" />
             <button type="submit" class="btn btn-primary btn-sm"><i class="fa-solid fa-filter me-1"></i>Filter</button>
-            <% if (date) { %><a href="/field-tracking" class="btn btn-light btn-sm">Clear</a><% } %>
+            <% if (date || _spId) { %><a href="/field-tracking" class="btn btn-light btn-sm">Clear</a><% } %>
         </form>
     </div>
 
@@ -46,9 +56,15 @@ var _visits = Array.isArray(visits) ? visits : [];
                 <% _visits.forEach(function (v) { %>
                     <tr>
                         <td><%= v.sales_person %></td>
-                        <td><strong><%= v.customer %></strong></td>
+                        <td>
+                            <strong><%= v.customer %></strong>
+                            <% if (v.customer_mobile) { %><div class="ft-sub"><i class="fa-solid fa-phone me-1"></i><a href="tel:<%= v.customer_mobile %>"><%= v.customer_mobile %></a></div><% } %>
+                        </td>
                         <td class="text-muted"><%= v.location %></td>
-                        <td class="text-muted"><%= v.checkin %></td>
+                        <td class="text-muted">
+                            <%= v.checkin %>
+                            <% if (v.lat != null && v.lng != null) { %><div class="ft-sub"><a href="https://maps.google.com/?q=<%= v.lat %>,<%= v.lng %>" target="_blank" rel="noopener"><i class="fa-solid fa-location-dot me-1"></i>Map</a></div><% } %>
+                        </td>
                         <td class="text-center">
                             <% if (v.within) { %>
                                 <span class="ft-badge ft-badge--ok"><i class="fa-solid fa-circle-check me-1"></i>Verified<% if (v.distance != null) { %> · <%= v.distance %>m<% } %></span>
@@ -58,7 +74,7 @@ var _visits = Array.isArray(visits) ? visits : [];
                                 <span class="ft-badge ft-badge--none">No GPS</span>
                             <% } %>
                         </td>
-                        <td class="text-muted" style="max-width:220px"><%= v.note %></td>
+                        <td class="text-muted" style="max-width:240px"><%= v.note || '—' %></td>
                     </tr>
                 <% }); %>
             </tbody>
@@ -97,7 +113,9 @@ var _visits = Array.isArray(visits) ? visits : [];
 
 <style>
     .ft-count{display:inline-block;margin-left:8px;min-width:24px;padding:1px 9px;font-size:12px;font-weight:700;color:#1e40af;background:#dbeafe;border:1px solid #bfdbfe;border-radius:999px;}
-    .ft-filter{display:flex;align-items:center;gap:8px;}
+    .ft-filter{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+    .ft-sub{font-size:12px;margin-top:2px;}
+    .ft-sub a{color:#2563eb;text-decoration:none;} .ft-sub a:hover{text-decoration:underline;}
     .ft-empty{padding:40px 16px;text-align:center;color:#64748b;}
     .ft-empty i{font-size:32px;color:#94a3b8;display:block;margin-bottom:10px;}
     .ft-badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;}

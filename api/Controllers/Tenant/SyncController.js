@@ -26,6 +26,7 @@ const masterDb = require('../../config/masterDb').db;   // licenses / agent_rele
 const R  = require('../../Helpers/response');
 const { friendlyReason } = require('../../Helpers/syncReason');
 const agentRelease = require('../../Helpers/agentRelease');
+const { loadRolePermissions } = require('../../Middlewares/rbac');   // role → Set<'module.action'> (for role-scoped bell)
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const DEFAULT_PER_PAGE = 10;
@@ -86,6 +87,7 @@ Object.assign(NOTIF_MODULE_META, {
     company:   { label: 'Company', path: '/companies' }, companies: { label: 'Company', path: '/companies' },
     user:      { label: 'User',    path: '/users' },     users:     { label: 'User',    path: '/users' },
     stock_adjustment: { label: 'Stock', path: '/inventory' }, inventory: { label: 'Stock', path: '/inventory' },
+    expense:   { label: 'Expense', path: '/expenses' },  expenses:  { label: 'Expense', path: '/expenses' },
 });
 function notifModuleMeta(module) {
     return NOTIF_MODULE_META[String(module || '').toLowerCase()] || { label: 'Record', path: '/' };
@@ -129,6 +131,22 @@ function historyToNotif(r, readSet) {
         when:  r.created_at,
         read:  readSet.has(key),
     };
+}
+// The permission-module slug a notification item belongs to, derived from its
+// deep-link ('/sales-invoices' → 'sales-invoices'). Used to SCOPE the company
+// action feed for a LIMITED custom role (e.g. an accountant) to only the modules
+// its role may VIEW — so it never sees company-wide activity it can't access.
+function notifPermModule(item) {
+    const m = String((item && item.link) || '').match(/^\/([a-z0-9-]+)/i);
+    return m ? m[1].toLowerCase() : '';
+}
+// Keep only the action notifications whose module this role holds `<module>.view`
+// for. Items with no resolvable module (generic '/') are dropped for a scoped role.
+function scopeNotifsToRole(items, permSet) {
+    return items.filter((it) => {
+        const slug = notifPermModule(it);
+        return slug && permSet.has(slug + '.view');
+    });
 }
 // Recent CLOUD user-actions (create/update/delete/revert) as notification items.
 // SOURCE='cloud' only — the per-record bulk-sync rows (source tally/agent) stay in
@@ -846,15 +864,24 @@ async function notifications(req, res) {
         //    MINUS sales-invoice rows (approve/reject are the admin's own actions,
         //    surfaced to the salesman instead) + sync failures.
         //  • everyone else→ the generic feed (unchanged).
+        const isAdminRole = !!(req.user && req.user.role_slug === 'company-admin');
         let recentOut;
+        let scopedUnread = null;   // set for a limited custom role → badge matches the list
         if (req.isSalesman) {
             recentOut = sfaItems.slice();
-        } else if (req.user && req.user.role_slug === 'company-admin') {
+        } else if (isAdminRole) {
             const nonInvoiceActions = actionItems.filter(
                 (it) => it.link !== '/sales-invoices' && it.link !== '/purchase-invoices');
             recentOut = sfaItems.concat(nonInvoiceActions).concat(failedItems);
         } else {
-            recentOut = actionItems.concat(failedItems);
+            // A LIMITED custom role (e.g. an accountant): show ONLY notifications for
+            // the modules this role may VIEW — never the whole-company feed. Sync
+            // failures + the agent-update entry are sync/admin concerns → excluded.
+            const perms = (req.user && req.user.role_id)
+                ? await loadRolePermissions(req.user.role_id) : new Set();
+            const scoped = scopeNotifsToRole(actionItems, perms);
+            recentOut = scoped;
+            scopedUnread = scoped.filter((it) => !it.read).length;
         }
         recentOut = recentOut
             .sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0))
@@ -868,8 +895,10 @@ async function notifications(req, res) {
         // ── New-agent-version notification — pinned to the TOP when present.
         // Auto-update=OFF agents need the operator to update; the bell is how
         // they find out. Best-effort: a lookup hiccup never sinks the feed.
-        // The agent-update entry is a sync/admin concern — NOT for a salesman.
-        const updateNotif = req.isSalesman ? null : await buildAgentUpdateNotif(companyId);
+        // The agent-update entry is a sync/admin concern — only the company-admin
+        // (who can act on it via the Sync Dashboard) sees it; salesmen + limited
+        // custom roles do not.
+        const updateNotif = isAdminRole ? await buildAgentUpdateNotif(companyId) : null;
         if (updateNotif) {
             recentOut.unshift({
                 id:    String(updateNotif.id),
@@ -892,10 +921,12 @@ async function notifications(req, res) {
         let unread;
         if (req.isSalesman) {
             unread = sfaUnread;
-        } else if (req.user && req.user.role_slug === 'company-admin') {
+        } else if (isAdminRole) {
             unread = sfaUnread + (await computeUnreadKeys(companyId, readSet, updateNotif)).length;
         } else {
-            unread = (await computeUnreadKeys(companyId, readSet, updateNotif)).length;
+            // Limited custom role → badge counts only the role-scoped unread items
+            // (so the number always matches what the dropdown actually shows).
+            unread = scopedUnread != null ? scopedUnread : 0;
         }
 
         return R.successResponse(res, {
@@ -1290,19 +1321,23 @@ async function notificationsAll(req, res) {
         const failedItems = failedRows.map((r) => failedLogToNotif(r, readSet));
 
         // Same per-role composition as the bell (see notifications()).
+        const isAdminRole = !!(req.user && req.user.role_slug === 'company-admin');
         let merged;
         if (req.isSalesman) {
             merged = sfaItems.slice();
-        } else if (req.user && req.user.role_slug === 'company-admin') {
+        } else if (isAdminRole) {
             const nonInvoiceActions = actionItems.filter(
                 (it) => it.link !== '/sales-invoices' && it.link !== '/purchase-invoices');
             merged = sfaItems.concat(nonInvoiceActions).concat(failedItems);
         } else {
-            merged = actionItems.concat(failedItems);
+            // Limited custom role (e.g. accountant) → ONLY the modules it may view.
+            const perms = (req.user && req.user.role_id)
+                ? await loadRolePermissions(req.user.role_id) : new Set();
+            merged = scopeNotifsToRole(actionItems, perms);
         }
         merged = merged.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
 
-        const updateNotif = req.isSalesman ? null : await buildAgentUpdateNotif(companyId);
+        const updateNotif = isAdminRole ? await buildAgentUpdateNotif(companyId) : null;
         if (updateNotif) {
             merged.unshift({
                 id:   String(updateNotif.id), kind: 'update',

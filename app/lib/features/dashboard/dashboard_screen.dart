@@ -35,10 +35,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // Fire-and-forget + best-effort (never blocks the dashboard or signs out).
     ref.read(authServiceProvider).refreshMe();
     // A salesman sees their FIELD dashboard here (below), so skip the company
-    // dashboard fetch — they lack 'dashboard' permission and it would 403.
+    // dashboard fetch — they lack 'dashboard' permission and it would 403. A
+    // non-salesman whose role has NO Dashboard module gets a welcome screen
+    // (below) instead — also no fetch, so we don't 403.
     final session = ref.read(sessionProvider);
-    final isSalesman = session is SessionSignedIn && session.user.isSalesman;
-    if (!isSalesman) _future = _load();
+    final user = session is SessionSignedIn ? session.user : null;
+    final canDash = user != null && !user.isSalesman && user.canModule('dashboard');
+    if (canDash) _future = _load();
   }
 
   // All-time dashboard (no date filter) — the numbers match the web, which is
@@ -60,6 +63,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     // is why it showed "Could not load the dashboard." for them.
     if (user != null && user.isSalesman) {
       return const FieldDashboardScreen();
+    }
+
+    // A signed-in user whose role has NO Dashboard module: show a friendly
+    // welcome instead of the KPI cards (which would 403). Mirrors the web.
+    if (user != null && !user.canModule('dashboard')) {
+      return _WelcomeDashboard(name: user.name);
     }
 
     return Scaffold(
@@ -420,6 +429,56 @@ class _Kpi {
   final IconData icon;
   final Color color;
   final String? module;
+}
+
+/// Shown to a signed-in user whose role has NO Dashboard module — a friendly
+/// welcome (with the notifications bell) instead of the KPI cards. Mirrors web.
+class _WelcomeDashboard extends StatelessWidget {
+  const _WelcomeDashboard({required this.name});
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Dashboard'),
+        actions: [
+          Consumer(builder: (_, r, __) {
+            final unread = r.watch(notificationsUnreadProvider).maybeWhen(data: (n) => n, orElse: () => 0);
+            return IconButton(
+              icon: unread > 0
+                  ? Badge(label: Text('$unread'), child: const Icon(Icons.notifications_outlined))
+                  : const Icon(Icons.notifications_outlined),
+              tooltip: 'Notifications',
+              onPressed: () => context.push('/notifications'),
+            );
+          }),
+        ],
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xl24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.waving_hand_outlined, size: 48, color: AppColors.primary),
+              const SizedBox(height: AppSpacing.md12),
+              Text('Welcome, $name!',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800)),
+              const SizedBox(height: AppSpacing.sm8),
+              Text('You\'re signed in. Use the menu to open the sections you have access to.',
+                  textAlign: TextAlign.center, style: theme.textTheme.bodyMedium?.copyWith(color: AppColors.text2)),
+              const SizedBox(height: AppSpacing.sm8),
+              Text('The KPI dashboard isn\'t part of your role — ask your administrator if you need it.',
+                  textAlign: TextAlign.center, style: theme.textTheme.bodySmall?.copyWith(color: AppColors.text3)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ErrorView extends StatelessWidget {

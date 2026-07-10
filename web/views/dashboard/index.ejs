@@ -32,6 +32,10 @@
  * ─────────────────────────────────────────────────────────── */
 
 // Guard every optional local so a missing-locals render never crashes.
+// welcomeOnly → a signed-in user whose role has NO Dashboard module: show a
+// friendly welcome instead of the KPI cards/charts (which they can't load).
+var _welcomeOnly = (typeof welcomeOnly !== 'undefined' && welcomeOnly);
+var _welcomeName = (typeof welcomeName !== 'undefined' && welcomeName) ? welcomeName : 'there';
 var _stats          = (typeof stats !== 'undefined' && stats) ? stats : [];
 var _salesChart     = (typeof salesChart !== 'undefined' && salesChart) ? salesChart : { labels: [], data: [] };
 var _syncChart      = (typeof syncChart !== 'undefined' && syncChart) ? syncChart : { labels: [], data: [] };
@@ -138,6 +142,26 @@ var _toneStroke = {
     breadcrumb: (typeof breadcrumb !== 'undefined' ? breadcrumb : [{ label: 'Dashboard' }]),
 }) %>
 
+<% if (_welcomeOnly) { %>
+<!-- ── Welcome (role has no Dashboard module) ─────────────────── -->
+<section class="card welcome-card">
+    <div class="welcome-icon"><i class="fa-solid fa-hand-sparkles"></i></div>
+    <h2 class="welcome-title">Welcome, <%= _welcomeName %>! 👋</h2>
+    <p class="welcome-text">
+        You're signed in. Use the menu on the left to open the sections you have access to.
+    </p>
+    <p class="welcome-sub">
+        The KPI dashboard isn't part of your role — if you need it, ask your administrator to grant the Dashboard permission.
+    </p>
+</section>
+<style>
+    .welcome-card { text-align:center; padding:48px 24px; max-width:640px; margin:24px auto; }
+    .welcome-icon { font-size:44px; color:#2563eb; margin-bottom:14px; }
+    .welcome-title { font-size:22px; font-weight:800; color:#1f2937; margin:0 0 10px; }
+    .welcome-text { font-size:15px; color:#374151; margin:0 0 8px; }
+    .welcome-sub { font-size:13px; color:#6b7280; margin:0; }
+</style>
+<% } else { %>
 <!-- ── 2. Stat cards (8, 4-per-row on desktop) ───────────────── -->
 <section class="stat-grid">
     <% _stats.forEach(function (s) { %>
@@ -242,3 +266,4 @@ var _toneStroke = {
 <script type="application/json" id="dashboardData">
     <%- JSON.stringify({ sales: _salesChart, sync: _syncChart }) %>
 </script>
+<% } %>

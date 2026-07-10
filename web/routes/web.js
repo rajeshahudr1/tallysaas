@@ -580,11 +580,26 @@ router.get('/', async (req, res, next) => {
         //    given only Products/Invoices) whose role has no dashboard.view.
         //    Company-admin always keeps the KPI dashboard.
         if (res.locals.isSuperAdmin) return res.redirect('/licenses');
-        if (res.locals.isSalesman
-            || (!res.locals.isCompanyAdmin
-                && typeof res.locals.canModule === 'function'
-                && !res.locals.canModule('dashboard'))) {
-            return res.redirect('/my-field');
+        // A field salesman lands on their own "My Field" dashboard (visits/approvals).
+        if (res.locals.isSalesman) return res.redirect('/my-field');
+        // A NON-salesman whose role was NOT granted the Dashboard module has no KPI
+        // page to show (the summary API would 403). Instead of bouncing them to the
+        // salesman screen, render the dashboard shell with a friendly WELCOME message
+        // and no figures — so they land somewhere sensible after login.
+        const _canDash = res.locals.isCompanyAdmin
+            || (typeof res.locals.canModule !== 'function')
+            || res.locals.canModule('dashboard');
+        if (!_canDash) {
+            return res.render('dashboard/index', {
+                title: 'Dashboard',
+                activeMenu: 'dashboard',
+                breadcrumb: [{ label: 'Dashboard' }],
+                welcomeOnly: true,
+                welcomeName: (res.locals.user && res.locals.user.name) || 'there',
+                // Empty datasets so the view's guards render nothing / never crash.
+                stats: [], salesChart: { labels: [], data: [] }, syncChart: { labels: [], data: [] },
+                recentInvoices: [], recentSync: [],
+            });
         }
         // No date filter — the dashboard is ALL-TIME so the numbers are stable and
         // identical on web + app (the app dropped its date picker too).
@@ -2018,23 +2033,37 @@ router.post('/sales-invoices/:id/resubmit', async (req, res, next) => {
 router.get('/field-tracking', async (req, res, next) => {
   try {
     const date = (req.query.date || '').trim();
-    const qs = date ? `?date=${encodeURIComponent(date)}` : '';
-    const [visitsR, pingsR] = await Promise.all([
+    const spId = String(req.query.sales_person_id || '').trim();
+    // Build the shared query string (date + salesman) once — the API scopes a
+    // salesman to their own visits regardless, so the filter only matters for admins.
+    const params = [];
+    if (date) params.push(`date=${encodeURIComponent(date)}`);
+    if (spId) params.push(`sales_person_id=${encodeURIComponent(spId)}`);
+    const qs = params.length ? `?${params.join('&')}` : '';
+    // Salesman list for the admin's filter dropdown (a salesman only sees self, so skip).
+    const salesmenP = res.locals.isSalesman
+        ? Promise.resolve({ body: { data: { data: [] } } })
+        : api.get(req, '/sales-persons?per_page=200').catch(() => ({ body: { data: { data: [] } } }));
+    const [visitsR, pingsR, salesmenR] = await Promise.all([
         api.get(req, `/field/visits${qs}`),
         api.get(req, `/field/locations${qs}`),
+        salesmenP,
     ]);
     const rows = (visitsR.body && visitsR.body.data && Array.isArray(visitsR.body.data.data)) ? visitsR.body.data.data : [];
     const visits = rows.map((v) => ({
-        id:           v.id,
-        customer:     v.customer || '—',
-        location:     v.location || '—',
-        sales_person: v.sales_person || '—',
+        id:              v.id,
+        customer:        v.customer || '—',
+        customer_mobile: v.customer_mobile || '',
+        location:        v.location || '—',
+        sales_person:    v.sales_person || '—',
         // Field tracking shows the full timestamp (date AND time) — a check-in at
         // 2:19 PM must read as such, not just the day.
         checkin:      fmtDateTime(v.checkin_at),
         checkout:     v.checkout_at ? fmtDateTime(v.checkout_at) : '',
         distance:     v.checkin_distance_m,
         within:       !!v.checkin_within,
+        lat:          v.checkin_lat,
+        lng:          v.checkin_lng,
         note:         v.note || '',
         status:       v.status,
     }));
@@ -2046,6 +2075,8 @@ router.get('/field-tracking', async (req, res, next) => {
         moved:        p.moved_m,
         at:           fmtDateTime(p.captured_at),
     }));
+    const srows = (salesmenR.body && salesmenR.body.data && Array.isArray(salesmenR.body.data.data)) ? salesmenR.body.data.data : [];
+    const salesmen = srows.map((s) => ({ id: s.id, name: s.name }));
     res.render('field/tracking', {
         title: 'Field Tracking',
         activeMenu: 'field-tracking',
@@ -2055,7 +2086,9 @@ router.get('/field-tracking', async (req, res, next) => {
         ],
         visits,
         pings,
+        salesmen,
         date,
+        salesPersonId: spId,
     });
   } catch (err) { next(err); }
 });
