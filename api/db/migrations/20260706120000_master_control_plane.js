@@ -24,6 +24,14 @@
 
 const fs = require('fs');
 const path = require('path');
+// Reuse the SAME permission catalogue provision.js uses, so knex-migrate and
+// provision.js seed an identical master (one source of truth).
+const { seedPermissions } = require('../provision');
+const passwords = require('../../Helpers/passwords');
+
+// Platform super-admin seeded on a fresh master (override via env if desired).
+const SUPER_ADMIN_EMAIL    = (process.env.SUPER_ADMIN_EMAIL || 'admin@tallysaas.test').trim();
+const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD || 'Admin@123';
 
 // The 11 master tables, dependents first (CASCADE covers the rest) — for down().
 const MASTER_TABLES = [
@@ -32,23 +40,45 @@ const MASTER_TABLES = [
     'permissions', 'users',
 ];
 
+// Full master setup in ONE migration, so `knex migrate:latest` on a fresh db
+// yields a ready-to-login master (schema + permission catalogue + super-admin).
+// Idempotent: the schema is applied only when absent, and the seeds no-op if
+// present — so a re-run (or a non-empty db) never throws "already exists".
 exports.up = async function up(knex) {
-    const sql = fs.readFileSync(path.join(__dirname, '..', 'master-schema.sql'), 'utf8');
-    // master-schema.sql is a multi-statement CREATE script; knex.raw runs it via
-    // pg's simple-query protocol (no bindings), which allows multiple statements.
-    await knex.raw(sql);
+    // 1) Schema — apply master-schema.sql only on a fresh db (the plain CREATE
+    //    TABLEs would abort with "already exists" on a re-run otherwise).
+    const hasUsers = await knex.schema.hasTable('users');
+    if (!hasUsers) {
+        const sql = fs.readFileSync(path.join(__dirname, '..', 'master-schema.sql'), 'utf8');
+        // master-schema.sql is a multi-statement CREATE script; knex.raw runs it via
+        // pg's simple-query protocol (no bindings), which allows multiple statements.
+        await knex.raw(sql);
+    }
 
-    // Auth model: role_id → a TENANT role id (plain int, no FK), so nullable
-    // (super-admin has no tenant); role_slug denormalised for login/bypass.
+    // 2) Auth model tweaks (idempotent). role_id → a TENANT role id (plain int,
+    //    no FK) so nullable (super-admin has no tenant); role_slug denormalised
+    //    for login/bypass. platform → per-platform sessions. sync_*_modules →
+    //    selective auto-sync (NULL = ALL). See Auth/AgentController.
     await knex.raw('ALTER TABLE users ALTER COLUMN role_id DROP NOT NULL').catch(() => {});
     await knex.raw('ALTER TABLE users ADD COLUMN IF NOT EXISTS role_slug varchar(64)').catch(() => {});
-    // Per-platform sessions: user_sessions.platform ('web'|'app') so a web login
-    // and an app login coexist (one live session per platform). See AuthController.
     await knex.raw("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS platform varchar(16)").catch(() => {});
-    // Selective auto-sync: which modules auto-push (Cloud→Tally) / auto-pull
-    // (Tally→Cloud). JSON array of module keys; NULL = ALL. See AgentController.
     await knex.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_push_modules text").catch(() => {});
     await knex.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_pull_modules text").catch(() => {});
+
+    // 3) Permission catalogue (23 modules × 5 actions). Idempotent.
+    await seedPermissions(knex);
+
+    // 4) Platform super-admin — no license, no tenant → role_id NULL; role_slug
+    //    'super-admin' drives the auth bypass. Created once (idempotent).
+    const existing = await knex('users').whereRaw('lower(email) = ?', [SUPER_ADMIN_EMAIL.toLowerCase()]).first('id');
+    if (!existing) {
+        const hash = await passwords.hash(SUPER_ADMIN_PASSWORD);
+        await knex('users').insert({
+            name: 'Super Admin', email: SUPER_ADMIN_EMAIL, password_hash: hash,
+            role_id: null, role_slug: 'super-admin', company_id: null, license_id: null,
+            status: 'Active', approval_status: 'approved',
+        });
+    }
 };
 
 exports.down = async function down(knex) {
