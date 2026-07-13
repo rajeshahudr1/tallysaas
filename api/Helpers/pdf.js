@@ -11,6 +11,35 @@
  * `--no-sandbox` is required when the API runs as root in a container/VPS.
  */
 
+const os   = require('os');
+const path = require('path');
+const fs   = require('fs');
+
+// ── Puppeteer dirs on a locked-down VPS ─────────────────────────────────────
+// At launch, Puppeteer resolves its config via cosmiconfig, which stat()s
+// ~/.config/puppeteer. When the API runs as a NON-root user but HOME still
+// points at /root, that stat throws EACCES — and because it is SYNCHRONOUS it
+// surfaces as an uncaughtException that takes the process down. Redirect the
+// config + browser-cache dirs to an app-owned, writable folder BEFORE puppeteer
+// is required, so nothing ever touches /root/.config. Each value is only set if
+// the operator hasn't already provided one (pm2 env wins).
+(function preparePuppeteerDirs() {
+    try {
+        const base  = process.env.PUPPETEER_HOME || path.join(__dirname, '..', '.puppeteer');
+        const cfg   = path.join(base, 'config');
+        const cache = process.env.PUPPETEER_CACHE_DIR || path.join(base, 'cache');
+        for (const d of [base, cfg, cache]) fs.mkdirSync(d, { recursive: true });
+        // Override HOME only if the current one isn't readable (don't disturb a
+        // working root setup).
+        let homeOk = false;
+        try { fs.accessSync(process.env.HOME || os.homedir(), fs.constants.R_OK | fs.constants.X_OK); homeOk = true; } catch (_) { /* unreadable */ }
+        if (!homeOk) process.env.HOME = base;
+        process.env.XDG_CONFIG_HOME   = process.env.XDG_CONFIG_HOME   || cfg;
+        process.env.XDG_CACHE_HOME    = process.env.XDG_CACHE_HOME    || path.join(base, 'xdg-cache');
+        process.env.PUPPETEER_CACHE_DIR = cache;
+    } catch (_) { /* best-effort — a real failure surfaces as a normal PDF error, not a crash */ }
+})();
+
 const puppeteer = require('puppeteer');
 
 let _browser = null;
