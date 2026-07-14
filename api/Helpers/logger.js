@@ -10,6 +10,9 @@
  *   logs/app-YYYY-MM-DD.log     — everything (INFO / WARN / ERROR / FATAL)
  *   logs/error-YYYY-MM-DD.log   — ERROR + FATAL only, so "what broke today" is
  *                                 one file per day, easy to open and grep.
+ *   logs/sync-YYYY-MM-DD.log    — Tally⇄cloud SYNC activity only (per-module
+ *                                 import breakdowns + sync failures), isolated so
+ *                                 a sync issue is found directly in one file.
  *
  * A NEW pair of files is used automatically each calendar day (the filename
  * carries the local date), so there is nothing to schedule — the "rotation" is
@@ -71,11 +74,28 @@ function emit(level, args, meta) {
     if (level === 'ERROR' || level === 'FATAL') append(`error-${date}.log`, line);
 }
 
+// DEDICATED SYNC channel → logs/sync-YYYY-MM-DD.log, so every Tally⇄cloud sync
+// line (per-module import breakdowns + sync failures) lands in ONE file per day
+// — open it directly when a sync issue appears, no grepping the busy app log.
+// Errors ALSO tee into error-*.log so "what broke today" stays complete.
+function emitSync(level, args, meta) {
+    const date = ymd();
+    const head = `[${stamp()}] [${level}]` + (meta ? ` [${meta}]` : '');
+    const line = `${head} ${fmt(args)}`;
+    append(`sync-${date}.log`, line);
+    if (level === 'ERROR' || level === 'FATAL') append(`error-${date}.log`, line);
+}
+
 const logger = {
     info:  (...args) => emit('INFO',  args),
     warn:  (...args) => emit('WARN',  args),
     error: (...args) => emit('ERROR', args),
     fatal: (...args) => emit('FATAL', args),
+
+    // Sync-only channel (→ logs/sync-*.log). Use for Tally⇄cloud sync activity.
+    sync:      (...args) => emitSync('INFO',  args),
+    syncWarn:  (...args) => emitSync('WARN',  args),
+    syncError: (...args) => emitSync('ERROR', args),
 
     /**
      * Log a request-scoped error with FULL context (request id, method, url,

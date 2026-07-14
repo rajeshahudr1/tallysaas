@@ -807,3 +807,104 @@
         setTimeout(function () { _unspin(el); }, parseInt(el.dataset.loaderMs, 10) || 2500);
     });
 })();
+
+/* ── Live list search — one box on EVERY list page, right of "Show entries".
+ * Injected into each page's .table-toolbar and applied SERVER-SIDE via the
+ * ?search= query param (the generic list route already forwards it, so it
+ * searches ALL records, not just the rows on screen). Debounced so results
+ * refresh a moment after you stop typing. Single source → works everywhere. ── */
+(function () {
+    function currentSearch() {
+        try { return new URLSearchParams(window.location.search).get('search') || ''; }
+        catch (_) { return ''; }
+    }
+    var _seq = 0;   // guards against out-of-order responses (fast typing)
+    function applySearch(value) {
+        var params;
+        try { params = new URLSearchParams(window.location.search); }
+        catch (_) { params = new URLSearchParams(); }
+        var v = (value || '').trim();
+        if (v) params.set('search', v); else params.delete('search');
+        params.delete('page');   // a new search always starts at page 1
+        var qs = params.toString();
+        var url = window.location.pathname + (qs ? '?' + qs : '');
+
+        // DYNAMIC: fetch the filtered page and swap ONLY the table + pagination
+        // in place — no full reload, so the search box keeps focus and there's
+        // no flash. Falls back to a normal navigation if anything looks off
+        // (e.g. the session expired and the server returned the login page).
+        var mySeq = ++_seq;
+        var wrap = document.querySelector('.data-table-wrap');
+        if (wrap) wrap.style.opacity = '0.45';
+        fetch(url, { headers: { 'X-Requested-With': 'fetch' }, credentials: 'same-origin' })
+            .then(function (r) {
+                if (!r.ok) throw new Error('bad status');
+                return r.text();
+            })
+            .then(function (html) {
+                if (mySeq !== _seq) return;   // a newer keystroke already fired
+                var doc = new DOMParser().parseFromString(html, 'text/html');
+                var newTable = doc.querySelector('.data-table-wrap');
+                var newPager = doc.querySelector('.pagination-bar');
+                var curTable = document.querySelector('.data-table-wrap');
+                if (!newTable || !curTable) { window.location.href = url; return; }
+                curTable.replaceWith(newTable);
+                var curPager = document.querySelector('.pagination-bar');
+                if (newPager && curPager) curPager.replaceWith(newPager);
+                else if (curPager && !newPager) curPager.remove();
+                if (window.history && window.history.replaceState) window.history.replaceState(null, '', url);
+            })
+            .catch(function () { window.location.href = url; })
+            .then(function () {
+                var w = document.querySelector('.data-table-wrap');
+                if (w) w.style.opacity = '';
+            });
+    }
+    function injectCss() {
+        if (document.getElementById('tbl-search-css')) return;
+        var st = document.createElement('style');
+        st.id = 'tbl-search-css';
+        st.textContent =
+            '.toolbar-search{display:inline-flex;align-items:center;position:relative}' +
+            '.toolbar-search i{position:absolute;left:10px;color:#9ca3af;font-size:12px;pointer-events:none}' +
+            '.toolbar-search input{min-width:200px;max-width:280px;padding-left:28px;font-size:13px}' +
+            '@media(max-width:575px){.toolbar-search{width:100%}.toolbar-search input{max-width:none;width:100%}}';
+        document.head.appendChild(st);
+    }
+    function enhance(toolbar) {
+        if (toolbar.querySelector('[data-table-search]')) return;   // already added
+        injectCss();
+        var wrap = document.createElement('div');
+        wrap.className = 'toolbar-search';
+        var icon = document.createElement('i');
+        icon.className = 'fa-solid fa-magnifying-glass';
+        var input = document.createElement('input');
+        input.type = 'search';
+        input.className = 'form-control form-control-sm';
+        input.placeholder = 'Search…';
+        input.setAttribute('data-table-search', '');
+        input.setAttribute('aria-label', 'Search this list');
+        input.value = currentSearch();
+        wrap.appendChild(icon);
+        wrap.appendChild(input);
+        toolbar.appendChild(wrap);   // flex space-between → sits on the right
+
+        var t = null;
+        input.addEventListener('input', function () {
+            clearTimeout(t);
+            t = setTimeout(function () { applySearch(input.value); }, 300);
+        });
+        input.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') { clearTimeout(t); applySearch(input.value); }
+        });
+        // After a search reload, keep the caret at the end so typing continues.
+        if (input.value) {
+            input.focus();
+            var val = input.value; input.value = ''; input.value = val;
+        }
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+        var bars = document.querySelectorAll('.table-toolbar');
+        for (var i = 0; i < bars.length; i++) enhance(bars[i]);
+    });
+})();

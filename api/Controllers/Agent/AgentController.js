@@ -30,6 +30,7 @@ const { runWithTenant } = require('../../config/db');
 const { getKnexForLicense } = require('../../config/tenantDb');
 const { recordHistory } = require('../../Helpers/history');
 const agentRelease      = require('../../Helpers/agentRelease');
+const { logger }        = require('../../Helpers/logger');
 
 // ── Toggleable agent diagnostics ────────────────────────────────
 // AGENT_DEBUG=1 in the api .env logs exactly WHAT each agent sent and WHAT the
@@ -850,10 +851,21 @@ async function importFromTally(req, res) {
         const counts = { customers_new: 0, customers_linked: 0, suppliers_new: 0,
             suppliers_linked: 0, products_new: 0, products_linked: 0,
             masters_updated: 0, vouchers_new: 0, journals_new: 0, locations_new: 0,
-            skipped: 0, failed: 0 };
+            skipped: 0, failed: 0,
+            // ── Diagnostic tallies (why a record didn't create a party) so a
+            //    "Tally had N but only M synced" case is obvious in the log. ──
+            ledgers_recv: 0, stock_recv: 0, groups_recv: 0,
+            cust_total: 0, supp_total: 0,   // classified customers/suppliers (new+updated+unchanged)
+            unclassified: 0,                // ledger is neither debtor nor creditor (Cash/Bank/P&L/expense — expected)
+            unchanged: 0,                   // alterid <= watermark (already synced — expected)
+            module_off: 0 };                // pull selection excluded this module
         // Per-record outcomes so the agent can show the pull ONE BY ONE
         // (created / linked / updated). Unchanged records are NOT listed here.
         const details = [];
+
+        // What Tally sent this pull (for the received→stored diagnostic log).
+        counts.stock_recv  = stockItems.length;
+        counts.groups_recv = groups.length;
 
         // ── Per-company watermark (the cloud OWNS it). Load or create the
         //    tally_sync_state row; master_alter_id is the largest Tally ALTERID
@@ -967,21 +979,49 @@ async function importFromTally(req, res) {
             .orderByRaw('is_tally_godown desc, id asc').first('id');
         const mainLocationId = _mainLoc ? _mainLoc.id : null;
 
+        // Classify a ledger as customer/supplier by walking its GROUP ANCESTRY,
+        // not just its direct parent's NAME. In Tally, customers commonly sit
+        // under SUB-groups of "Sundry Debtors" (e.g. "Local Sales", "Retail",
+        // "Debtors North") whose own name has no "debtor" — matching only the
+        // direct parent name silently dropped them (the "500 customers but only
+        // 127 synced" bug). Build a group name→parent map from the synced groups
+        // and follow the chain up until a Sundry Debtors/Creditors ancestor is
+        // hit. Falls back to a direct-name check when groups aren't available
+        // (older agent), so there is no regression.
+        const _groupParent = new Map();
+        for (const g of groups) {
+            const gn = String(g.name || '').trim().toLowerCase();
+            if (gn) _groupParent.set(gn, String(g.parent || '').trim().toLowerCase());
+        }
+        const _classify = (directParent) => {
+            let cur = String(directParent || '').trim().toLowerCase();
+            const seen = new Set();
+            let hops = 0;
+            while (cur && !seen.has(cur) && hops < 60) {
+                if (cur.includes('debtor')) return 'customers';
+                if (cur.includes('creditor')) return 'suppliers';
+                seen.add(cur);
+                cur = _groupParent.get(cur) || '';
+                hops += 1;
+            }
+            return null;
+        };
+
+        counts.ledgers_recv = ledgers.length;
         for (const l of ledgers) {
           try {
             const name = String(l.name || '').trim();
             if (!name) { counts.skipped += 1; continue; }
-            const parent = String(l.parent || '').toLowerCase();
-            const table = parent.includes('debtor') ? 'customers'
-                        : parent.includes('creditor') ? 'suppliers' : null;
-            if (!table) { counts.skipped += 1; continue; }   // skip Cash/Bank/P&L/etc.
+            const table = _classify(l.parent);
+            if (!table) { counts.skipped += 1; counts.unclassified += 1; continue; }   // Cash/Bank/P&L/expense — expected
+            if (table === 'customers') counts.cust_total += 1; else counts.supp_total += 1;
             // Selective AUTO-pull: skip this party if its module wasn't selected.
-            if (!SM.isEnabled(pullSel, table)) { counts.skipped += 1; continue; }
+            if (!SM.isEnabled(pullSel, table)) { counts.skipped += 1; counts.module_off += 1; continue; }
 
             const alterId = aid(l);
             // Incremental: an unchanged master (alterid present AND <= watermark)
             // is skipped without a DB hit. New/changed masters fall through.
-            if (alterId && alterId <= watermark) { counts.skipped += 1; continue; }
+            if (alterId && alterId <= watermark) { counts.skipped += 1; counts.unchanged += 1; continue; }
             if (alterId > maxAlterId) maxAlterId = alterId;
 
             const gstin = l.gstin ? String(l.gstin).trim() : null;
@@ -1520,6 +1560,23 @@ async function importFromTally(req, res) {
              `cust_new=${counts.customers_new} supp_new=${counts.suppliers_new} prod_new=${counts.products_new} ` +
              `updated=${counts.masters_updated} vouchers_new=${counts.vouchers_new} journals_new=${counts.journals_new} ` +
              `locations_new=${counts.locations_new} skipped=${counts.skipped}`);
+
+        // ── ALWAYS-ON per-module diagnostic (daily file api/logs/) so a
+        //    "Tally had N but only M synced" gap is obvious per module: how many
+        //    records Tally SENT vs how many the cloud STORED vs WHY the rest were
+        //    skipped (unclassified = correctly-ignored Cash/Bank/P&L; unchanged =
+        //    already synced; module_off = pull toggle off). ──
+        logger.sync(
+            `[import] "${companyName}" cid=${cid}${companyCreated ? ' (created)' : ''} | ` +
+            `LEDGERS recv=${counts.ledgers_recv} -> customers=${counts.cust_total} ` +
+            `(new ${counts.customers_new}, linked ${counts.customers_linked}), ` +
+            `suppliers=${counts.supp_total} (new ${counts.suppliers_new}, linked ${counts.suppliers_linked}), ` +
+            `unclassified=${counts.unclassified}, unchanged=${counts.unchanged}, module_off=${counts.module_off} | ` +
+            `STOCK recv=${counts.stock_recv} -> products new=${counts.products_new} | ` +
+            `GROUPS recv=${counts.groups_recv} | ` +
+            `VOUCHERS new=${counts.vouchers_new}, JOURNALS new=${counts.journals_new}, ` +
+            `LOCATIONS new=${counts.locations_new} | updated=${counts.masters_updated}, failed=${counts.failed}`,
+        );
         return R.successResponse(res, counts, 'Imported from Tally.');
     } catch (err) {
         console.error('AgentController.importFromTally error:', err);
@@ -1528,6 +1585,8 @@ async function importFromTally(req, res) {
         // diagnosable in the field instead of guessing.
         const detail = (err && (err.detail || err.message))
             ? String(err.detail || err.message).slice(0, 300) : 'unknown error';
+        // Also record the failure in the dedicated sync log (with company context).
+        try { logger.syncError(`[import] FAILED company="${req.body && req.body.company_name}" -> ${detail}`, err); } catch (_) {}
         return R.errorResponse(res, `Import failed: ${detail}`, 500);
     }
 }
