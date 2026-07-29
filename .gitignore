@@ -52,3 +52,14 @@ Thumbs.db
 *.bak
 *.tmp
 api/db/scripts/reset_keep_superadmin.sql
+# Generated docs screenshots + the scripts that capture/build them
+docs/screens/
+docs/TallySaaS-Project-Guide.doc
+docs/TallySaaS-Project-Guide - Copy.doc
+docs/build-doc.js
+docs/capture-app.js
+docs/resize-shots.js
+api/scripts/shoot-web.js
+docs/HOW-TO-FINISH.md
+api/scripts/seed-waytoweb-demo.js
+docs/TallySaaS-API.postman_collection.json
