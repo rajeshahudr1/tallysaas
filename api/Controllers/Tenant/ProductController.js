@@ -26,6 +26,30 @@
 const crud = require('../../Helpers/crudController');
 const db   = require('../../config/db').db;
 const { fullUrl } = require('../../Helpers/uploads');
+const customerUsers = require('./CustomerUserController');
+
+/**
+ * extraScope — for a customer-portal login (customers.user_id link): restrict
+ * to the products of their ASSIGNED categories; a category narrowed via
+ * customer_user_products shows only those specific products. Everyone else is
+ * unaffected. The loaded catalog is stashed on req for decorate() to price with.
+ */
+async function productExtraScope(qb, req) {
+    if (!req.isCustomerUser) return;
+    const catalog = await customerUsers.loadCatalog(req.companyId, req.customerId);
+    req._customerCatalog = catalog;
+    const catIds = Array.from(catalog.categories.keys());
+    if (!catIds.length) { qb.whereRaw('1 = 0'); return; }   // nothing assigned → empty list
+    qb.where(function () {
+        for (const catId of catIds) {
+            const narrowed = catalog.productsByCategory.get(catId);
+            this.orWhere(function () {
+                this.where('products.category_id', catId);
+                if (narrowed && narrowed.size) this.whereIn('products.id', Array.from(narrowed));
+            });
+        }
+    });
+}
 
 /** Attach each product's image gallery (absolute URLs) + a primary `image_url`,
  * fetched in one query for the whole page. So the web/app get ready-to-use
@@ -41,10 +65,25 @@ async function decorate(rows, req) {
     for (const im of imgs) {
         (byProduct[im.product_id] = byProduct[im.product_id] || []).push({ id: im.id, url: fullUrl(req, im.file_path) });
     }
-    return rows.map((r) => {
+    let out = rows.map((r) => {
         const gallery = byProduct[r.id] || [];
         return { ...r, images: gallery, image_url: gallery.length ? gallery[0].url : null };
     });
+    // Customer-portal login: replace the price with the LOCKED adjusted rate
+    // (sales_price × category discount/addition %) and hide the buy price. The
+    // catalog was loaded by productExtraScope on the same request.
+    if (req.isCustomerUser && req._customerCatalog) {
+        out = out.map((r) => {
+            const priced = customerUsers.priceProduct(req._customerCatalog, r);
+            return {
+                ...r,
+                sales_price:    priced.allowed ? priced.rate : r.sales_price,
+                rate:           priced.allowed ? priced.rate : r.sales_price,
+                purchase_price: null,
+            };
+        });
+    }
+    return out;
 }
 
 // Columns returned by list/get. `products.*` gives every base column; the
@@ -148,7 +187,13 @@ const controller = crud.build({
     },
     // Filter dropdowns (?key=value) → WHERE.
     filters: {
-        category: (qb, v) => qb.where('categories.name', v),
+        category:    (qb, v) => qb.where('categories.name', v),
+        // Category-wise listing by id — ?category_id=3 (safer than the name
+        // filter for API integrations; ignored when not a positive integer).
+        category_id: (qb, v) => {
+            const id = Number(v);
+            if (Number.isInteger(id) && id > 0) qb.where('products.category_id', id);
+        },
         gst_rate: (qb, v) => qb.where('products.gst_rate', v),
         hsn:      (qb, v) => qb.where('products.hsn_code', 'ilike', `%${v}%`),
     },
@@ -156,6 +201,7 @@ const controller = crud.build({
     buildInsert,
     buildUpdate,
     decorate,
+    extraScope: productExtraScope,
 });
 
 module.exports = {

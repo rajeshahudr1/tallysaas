@@ -304,6 +304,9 @@ app.use(async (req, res, next) => {
     // Field-sales salesman flag (from /me) — drives the Draft/Submit buttons and
     // the salesman "My Field" dashboard link.
     res.locals.isSalesman = !!(u && u.is_salesman);
+    // Customer-portal login (customers.user_id link) — sees only their assigned
+    // catalog; drives the "My Catalog / My Invoices" menu injection.
+    res.locals.isCustomerUser = !!(u && u.is_customer_user);
     // needsApproval — TRUE for EVERY non-admin (not only linked salesmen): their
     // sales invoices go through the company-admin approval queue, so the create
     // screen shows "Submit for Approval" instead of "Save & Send to Tally".

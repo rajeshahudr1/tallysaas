@@ -75,9 +75,17 @@ class MastersHubScreen extends ConsumerWidget {
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
     // RBAC: keep only the masters this role may see (admins see all).
+    // Customer-portal login: being the LINKED customer IS the entitlement for
+    // reading their scoped Products/Categories (mirrors the web + API gates) —
+    // their role usually carries no master grants, so allow those two here and
+    // hide every other master.
+    final isCustomerUser = user != null && user.isCustomerUser;
     final items = [
       for (final e in _items)
-        if (user == null || user.canModule(e.module)) e,
+        if (isCustomerUser
+            ? (e.module == 'products' || e.module == 'categories')
+            : (user == null || user.canModule(e.module)))
+          e,
     ];
 
     return Scaffold(

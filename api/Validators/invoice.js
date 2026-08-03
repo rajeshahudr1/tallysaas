@@ -33,6 +33,9 @@ const STATUSES = ['pending_tally', 'sent_to_tally', 'created', 'failed'];
 
 // Reusable optional positive-integer FK.
 const fkId = Joi.number().integer().positive();
+// Optional FK that also accepts an EXPLICIT null/'' (API clients send
+// "location_id": null for "none" — omit-only would 422 on that).
+const optFkId = fkId.allow(null, '');
 
 // Reusable optional short/long text — trimmed, blank/null allowed.
 const optText = (max) => Joi.string().trim().max(max).allow('', null);
@@ -43,7 +46,7 @@ const optText = (max) => Joi.string().trim().max(max).allow('', null);
  * quantity / rate / discount_pct / gst_rate.
  */
 const itemSchema = Joi.object({
-    product_id:   fkId.allow(null),
+    product_id:   fkId.allow(null, ''),
     description:  optText(2000),
     hsn:          optText(20),
     quantity:     Joi.number().greater(0).precision(2).required().messages({
@@ -77,8 +80,8 @@ const createSalesInvoiceSchema = Joi.object({
         'number.base':     'Customer is required.',
         'number.positive': 'Customer is required.',
     }),
-    location_id:     fkId,
-    sales_person_id: fkId,
+    location_id:     optFkId,
+    sales_person_id: optFkId,
 
     invoice_date:    Joi.date().iso().required().messages({
         'date.base':    'Invoice date is required.',
@@ -89,6 +92,10 @@ const createSalesInvoiceSchema = Joi.object({
     notes:           optText(2000),
 
     status:          Joi.string().valid(...STATUSES).default('pending_tally'),
+
+    // Payment mode (website/third-party users): 'cash' | 'online'. Drives the
+    // per-user cash_extra_pct / online_extra_pct surcharge on the locked rate.
+    payment_mode:    Joi.string().trim().lowercase().valid('cash', 'online').allow('', null),
 
     // Field-sales (SFA): a salesman may Save as Draft (true) instead of
     // submitting for approval. Admins/web ignore it. Optional, no default so the
@@ -110,7 +117,7 @@ const createPurchaseInvoiceSchema = Joi.object({
         'number.base':     'Supplier is required.',
         'number.positive': 'Supplier is required.',
     }),
-    location_id:      fkId,
+    location_id:      optFkId,
     supplier_bill_no: optText(60),
 
     invoice_date:     Joi.date().iso().required().messages({
@@ -137,13 +144,16 @@ const listInvoiceSchema = Joi.object({
     // SFA approval-status filter — the Invoice Approvals screen passes
     // ?approval=pending. Without this the strict query validator rejects it with
     // 422 ("approval is not allowed"), so the admin's queue always came back empty.
-    approval:    Joi.string().valid('draft', 'pending', 'approved', 'rejected'),
+    approval:    Joi.string().valid('draft', 'pending', 'approved', 'rejected', 'all').allow(''),
     page:        Joi.number().integer().min(1).default(1),
     per_page:    Joi.number().integer().min(1).max(100).default(10),
-    customer_id: fkId,
-    supplier_id: fkId,
+    customer_id: optFkId,
+    supplier_id: optFkId,
     date_from:   Joi.date().iso(),
     date_to:     Joi.date().iso(),
+    // Incremental sync (third-party pollers): 1 = updated today, or an ISO
+    // date/datetime — returns rows with updated_at >= cutoff.
+    last_update: Joi.alternatives().try(Joi.valid('1', 1), Joi.string().isoDate()).allow('', null),
 });
 
 module.exports = {

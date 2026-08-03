@@ -19,6 +19,10 @@ import '../../shared/widgets/form_dropdowns.dart';
 /// Mutable per-line state: the product FK + a controller per editable number.
 class LineRow {
   int? productId;
+  /// Captured from the picked product option — drives the qty-vs-stock guard
+  /// (mirrors the server rule) and the "In stock: N" helper text.
+  double? stock;
+  String? productName;
   final desc = TextEditingController();
   final qty = TextEditingController();
   final rate = TextEditingController();
@@ -100,10 +104,21 @@ InvoiceTotals computeInvoiceTotals(List<LineRow> rows) {
 }
 
 class LineItemCard extends StatelessWidget {
-  const LineItemCard({super.key, required this.row, required this.onChanged, this.onRemove});
+  const LineItemCard({
+    super.key,
+    required this.row,
+    required this.onChanged,
+    this.onRemove,
+    this.lockPricing = false,
+  });
   final LineRow row;
   final VoidCallback onChanged;
   final VoidCallback? onRemove;
+
+  /// Customer-portal login: Rate + Disc % are LOCKED (the price list decides;
+  /// the server ignores client values and recomputes — this keeps the on-screen
+  /// preview honest).
+  final bool lockPricing;
 
   @override
   Widget build(BuildContext context) {
@@ -117,7 +132,30 @@ class LineItemCard extends StatelessWidget {
               label: 'Product', endpoint: '/products',
               value: row.productId,
               onChanged: (v) { row.productId = v; onChanged(); },
+              // Capture stock + auto-fill rate/GST from the picked product
+              // (the rate is already price-list-adjusted for a portal login).
+              onItem: (o) {
+                row.stock = o?.stock;
+                row.productName = o?.name;
+                if (o?.rate != null) row.rate.text = o!.rate!.toString();
+                if (o?.gstRate != null) row.gst.text = o!.gstRate!.toString();
+                // Clamp a pre-typed qty to the fresh stock.
+                final q = double.tryParse(row.qty.text.trim()) ?? 0;
+                if (row.stock != null && q > row.stock!) {
+                  row.qty.text = row.stock!.toString();
+                }
+                onChanged();
+              },
             ),
+            if (row.stock != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('In stock: ${row.stock == row.stock!.roundToDouble() ? row.stock!.toInt() : row.stock}',
+                      style: theme.textTheme.bodySmall?.copyWith(color: AppColors.text3)),
+                ),
+              ),
             const SizedBox(height: AppSpacing.sm8),
             AppTextField(
               controller: row.desc, hint: 'Description (optional)',
@@ -129,11 +167,21 @@ class LineItemCard extends StatelessWidget {
                 Expanded(child: AppTextField(
                   controller: row.qty, hint: 'Qty',
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  onChanged: (_) => onChanged(),
+                  onChanged: (_) {
+                    // Live clamp: can't type more than the stock on hand.
+                    final q = double.tryParse(row.qty.text.trim()) ?? 0;
+                    if (row.stock != null && q > row.stock!) {
+                      row.qty.text = row.stock!.toString();
+                      row.qty.selection = TextSelection.fromPosition(
+                          TextPosition(offset: row.qty.text.length));
+                    }
+                    onChanged();
+                  },
                 )),
                 const SizedBox(width: AppSpacing.sm8),
                 Expanded(child: AppTextField(
                   controller: row.rate, hint: 'Rate',
+                  readOnly: lockPricing,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   onChanged: (_) => onChanged(),
                 )),
@@ -144,6 +192,7 @@ class LineItemCard extends StatelessWidget {
               children: [
                 Expanded(child: AppTextField(
                   controller: row.disc, hint: 'Disc %',
+                  readOnly: lockPricing,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                   onChanged: (_) => onChanged(),
                 )),
@@ -175,6 +224,34 @@ class LineItemCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Stock guard (every role — the server enforces the same rule): per product,
+/// the SUMMED quantity across lines may not exceed the stock captured when the
+/// product was picked. Returns a user-facing error message, or null when OK.
+String? validateLineStock(List<LineRow> rows) {
+  final need = <int, double>{};
+  final stockOf = <int, double>{};
+  final nameOf = <int, String>{};
+  for (final r in rows) {
+    final pid = r.productId;
+    if (pid == null) continue;
+    final q = double.tryParse(r.qty.text.trim()) ?? 0;
+    if (q <= 0) continue;
+    need[pid] = (need[pid] ?? 0) + q;
+    if (r.stock != null) stockOf[pid] = r.stock!;
+    if (r.productName != null) nameOf[pid] = r.productName!;
+  }
+  for (final e in need.entries) {
+    final stock = stockOf[e.key];
+    if (stock == null) continue;   // stock unknown → let the server decide
+    if (e.value > stock) {
+      final nm = nameOf[e.key] ?? 'this product';
+      final st = stock == stock.roundToDouble() ? stock.toInt().toString() : stock.toString();
+      return 'Not enough stock for "$nm" — only $st available.';
+    }
+  }
+  return null;
 }
 
 /// A read-only, tappable date display used for invoice / due dates.

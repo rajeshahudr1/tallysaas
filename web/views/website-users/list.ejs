@@ -1,0 +1,89 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/website-users/list.ejs — SETTINGS · Website Users.
+ * Route: GET /website-users  ·  activeMenu: 'website-users'.
+ *
+ * Third-party API users: fresh party + login + auto API token +
+ * cash/online pricing %. Edit opens the configure screen.
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof websiteUserRows !== 'undefined' && websiteUserRows) ? websiteUserRows : [];
+var _total   = (typeof websiteUsersTotal !== 'undefined') ? websiteUsersTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+
+var filterFields = [
+    { type: 'text',   name: 'search', label: 'Search', placeholder: 'Search by name, email, mobile...', colClass: 'col-md-4' },
+    { type: 'select', name: 'status', label: 'Status', options: [
+        { value: '', label: 'All Status' },
+        { value: 'Active', label: 'Active' },
+        { value: 'Inactive', label: 'Inactive' },
+        { value: 'Blocked', label: 'Blocked' },
+    ], colClass: 'col-md-4' },
+];
+
+var tableColumns = [
+    { key: 'name',       label: 'Name',       sortable: true,  type: 'text' },
+    { key: 'email',      label: 'Login Email', sortable: true, type: 'text' },
+    { key: 'mobile',     label: 'Mobile',     sortable: false, type: 'text' },
+    { key: 'token',      label: 'API Token',  sortable: false, type: 'badge' },
+    { key: 'cash_pct',   label: 'Cash +%',    sortable: false, type: 'text', align: 'center' },
+    { key: 'online_pct', label: 'Online +%',  sortable: false, type: 'text', align: 'center' },
+    { key: 'status',     label: 'Status',     sortable: true,  type: 'status' },
+    { key: 'created_at', label: 'Created At', sortable: true,  type: 'date' },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Website Users', infoKey: 'customers',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Website Users' },
+    ],
+    actions: [
+        { label: 'Add Website User', icon: 'fa-plus', gradient: true, href: '/website-users/add' },
+    ],
+}) %>
+
+<form id="wu-filters-form" autocomplete="off" method="get" action="/website-users">
+    <%- include('../partials/filter-card', {
+        filterId: 'wu-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'website-users-table',
+        basePath: '/website-users',
+        editable: true,
+        sortKeys: ['name', 'email', 'status', 'created_at'],
+        columns: tableColumns,
+        rows: _rows,
+        selectable: false,
+        showIndex: true,
+        actions: ['edit'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+</div>

@@ -25,7 +25,6 @@ var menu = [
     { label: 'Masters', items: [
         { key: 'companies',  label: 'Companies',     icon: 'fa-building',      href: '/companies',     perm: 'companies' },
         { key: 'locations',  label: 'Locations',     icon: 'fa-location-dot',  href: '/locations',     perm: 'locations' },
-        { key: 'sales',      label: 'Sales Persons', icon: 'fa-user-tie',      href: '/sales-persons', perm: 'sales-persons' },
         { key: 'customers',  label: 'Customers',     icon: 'fa-user-group',    href: '/customers',     perm: 'customers' },
         { key: 'suppliers',  label: 'Suppliers',     icon: 'fa-truck-field',   href: '/suppliers',     perm: 'suppliers' },
         { key: 'products',   label: 'Products',      icon: 'fa-box',           href: '/products',      perm: 'products' },
@@ -57,6 +56,9 @@ var menu = [
         { key: 'reports',   label: 'Reports',            icon: 'fa-chart-column', href: '/reports',   perm: 'reports' },
     ]},
     { label: 'Settings', items: [
+        { key: 'sales',    label: 'Sales Persons',        icon: 'fa-user-tie',    href: '/sales-persons', perm: 'sales-persons' },
+        { key: 'customer-users', label: 'Customer Users', icon: 'fa-user-lock',   href: '/customer-users', perm: 'customer-users' },
+        { key: 'website-users',  label: 'Website Users',  icon: 'fa-globe',       href: '/website-users',  perm: 'website-users' },
         { key: 'users',    label: 'Users',                icon: 'fa-users',       href: '/users', perm: 'users' },
         { key: 'accountant', label: 'Accountant Access',  icon: 'fa-user-tie',    href: '/accountant-access', perm: 'users' },
         { key: 'settings', label: 'Settings',             icon: 'fa-gear',        href: '/settings', perm: 'settings' },
@@ -94,14 +96,26 @@ if (_isSuperAdmin) {
 var _canMod = (typeof canModule === 'function') ? canModule : function () { return true; };
 var _canDo  = (typeof canDo === 'function') ? canDo : function () { return true; };
 var _isSalesman = (typeof isSalesman !== 'undefined') ? !!isSalesman : false;
+var _isCustomerUser = (typeof isCustomerUser !== 'undefined') ? !!isCustomerUser : false;
 // SFA — "Invoice Approvals" is for APPROVERS only (admins/managers with the
-// sales-invoices edit action), never for a salesman (they can't self-approve).
-var _canApprove = _canDo('sales-invoices', 'edit') && !_isSalesman;
+// sales-invoices edit action), never for a salesman or a customer login (they
+// can't self-approve; the API blocks them with 403 too).
+var _canApprove = _canDo('sales-invoices', 'edit') && !_isSalesman && !_isCustomerUser;
 // A salesman gets a "Field Sales · My Dashboard" group pinned right under Dashboard.
 if (_isSalesman) {
     menu.splice(1, 0, { label: 'Field Sales', items: [
         { key: 'my-field', label: 'My Dashboard', icon: 'fa-location-dot', href: '/my-field' },
     ]});
+}
+// A customer-portal login (customers.user_id link) uses the NORMAL menu — the
+// API scopes Products/Categories to their assigned catalog and Sales Invoices
+// to their own rows. Approver-only + field items never apply to them.
+if (_isCustomerUser) {
+    menu.forEach(function (g) {
+        g.items = (g.items || []).filter(function (it) {
+            return it.key !== 'field-tracking';
+        });
+    });
 }
 menu = menu.map(function (g) {
     g.items = (g.items || []).filter(function (it) {

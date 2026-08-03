@@ -171,6 +171,9 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
   Widget _body(SalesInvoicesState state) {
     final session = ref.read(sessionProvider);
     final isSalesman = session is SessionSignedIn && session.user.isSalesman;
+    // Customer-portal login: the Tally-sync lifecycle is a back-office concern
+    // — hide it for them too (matches the web list).
+    final isCustomerUser = session is SessionSignedIn && session.user.isCustomerUser;
     switch (state) {
       case SalesInvoicesLoading():
         return const LoadingState(message: 'Loading invoices…');
@@ -211,7 +214,7 @@ class _SalesInvoicesScreenState extends ConsumerState<SalesInvoicesScreen> {
                 inv,
                 // A salesman only cares about approval, not the Tally-sync
                 // lifecycle — hide the sync-status pill for them (matches web).
-                showSyncStatus: !isSalesman,
+                showSyncStatus: !isSalesman && !isCustomerUser,
                 onTap: () async {
                   await context.push('/sales-invoices/${inv.id}');
                   if (context.mounted) {

@@ -30,6 +30,12 @@ var _invNo    = (typeof nextInvoiceNo !== 'undefined' && nextInvoiceNo) ? nextIn
  * the route passes their own {id,name} to pre-fill (read-only) the field. */
 var _mySP     = (typeof mySalesPerson !== 'undefined' && mySalesPerson) ? mySalesPerson : null;
 var _isSalesman = (typeof isSalesman !== 'undefined' && isSalesman) ? true : false;
+// Customer-portal login: the invoice is always THEIR OWN — customer is pinned
+// in the background (hidden input; the API forces it anyway), and Location /
+// Sales Person don't apply. Only Invoice No / Invoice Date / Due Date show.
+var _isCustomerUser = (typeof isCustomerUser !== 'undefined' && isCustomerUser) ? true : false;
+// The /customers list is API-scoped to ONLY their own row for a customer login.
+var _myCust = _isCustomerUser && _custs.length ? _custs[0] : null;
 
 /* EDIT mode — an existing invoice is being edited (draft/pending/rejected). The
  * header + line items pre-fill and the form PUTs to /:id/update (re-submits). */
@@ -76,7 +82,7 @@ function _customerOpts(list, sel) {
 
 /* Products as a JS array for the searchable line-item picker (autocomplete). */
 var _productsJson = JSON.stringify(_products.map(function (p) {
-    return { id: p.id, name: p.name, hsn: p.hsn || '', unit: p.unit || '', rate: p.rate || 0, gst: p.gst || 0 };
+    return { id: p.id, name: p.name, hsn: p.hsn || '', unit: p.unit || '', rate: p.rate || 0, gst: p.gst || 0, stock: (p.stock != null ? p.stock : 0) };
 }));
 
 // SFA — EVERY non-admin submits for approval (can't send straight to Tally); the
@@ -134,12 +140,19 @@ var headActions =
         <div class="inv-body">
             <div class="form-grid">
 
+                <% if (_isCustomerUser) { %>
+                    <%# Customer login: the party is THEMSELVES — pinned via a hidden
+                        input (the API forces their customer_id server-side too). %>
+                    <input type="hidden" id="inv-customer" name="customer_id"
+                           value="<%= _myCust ? _myCust.id : ((_edit && _edit.customer_id) || '') %>">
+                <% } else { %>
                 <div class="form-group">
                     <label class="form-label" for="inv-customer">Customer<span class="req">*</span></label>
                     <select class="form-select" id="inv-customer" name="customer_id" required>
                         <%- _customerOpts(_custs, _edit && _edit.customer_id) %>
                     </select>
                 </div>
+                <% } %>
 
                 <div class="form-group">
                     <label class="form-label" for="inv-no">Invoice No</label>
@@ -152,6 +165,7 @@ var headActions =
                     <input type="date" class="form-control" id="inv-date" name="invoice_date" value="<%= _dv(_edit && _edit.invoice_date, true) %>" required>
                 </div>
 
+                <% if (!_isCustomerUser) { %>
                 <div class="form-group">
                     <label class="form-label" for="inv-location">Location</label>
                     <% if (_isSalesman) { %>
@@ -179,6 +193,7 @@ var headActions =
                         </select>
                     <% } %>
                 </div>
+                <% } /* end !_isCustomerUser (Location + Sales Person hidden) */ %>
 
                 <div class="form-group">
                     <label class="form-label" for="inv-due">Due Date</label>
@@ -326,6 +341,25 @@ var headActions =
     // that customer's location. For a salesman the Location is a read-only pair
     // (#inv-location-label + hidden #inv-location); for an admin it's a <select>
     // — we add the option if it isn't already there, then select it.
+    // Customer-portal login: the rate is LOCKED (server recomputes it from the
+    // assigned catalog anyway) and per-line Disc % doesn't apply (pricing lives
+    // in the category %). Lock the inputs as rows appear so the on-screen totals
+    // match what the API will actually save.
+    <% if (_isCustomerUser) { %>
+    document.addEventListener('DOMContentLoaded', function () {
+        var body = document.getElementById('li-body');
+        if (!body) return;
+        function lockRows() {
+            body.querySelectorAll('.li-rate, .li-disc').forEach(function (inp) {
+                inp.readOnly = true;
+                inp.classList.add('bg-light');
+                inp.title = 'Rate is fixed by your price list';
+            });
+        }
+        lockRows();
+        new MutationObserver(lockRows).observe(body, { childList: true });
+    });
+    <% } %>
     document.addEventListener('DOMContentLoaded', function () {
         var cust = document.getElementById('inv-customer');
         if (!cust) return;

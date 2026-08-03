@@ -116,6 +116,7 @@ function canCustomerRead(req, res, next) {
     const user = req.user || {};
     if (user.role_slug === 'super-admin') return next();
     if (req.isSalesman) return next();               // linked salesman → assigned customers only
+    if (req.isCustomerUser) return next();           // customer login → ONLY their own row
     return can('customers', 'view')(req, res, next);
 }
 
@@ -133,7 +134,44 @@ function canRefRead(module) {
         const user = req.user || {};
         if (user.role_slug === 'super-admin') return next();
         if (req.isSalesman) return next();           // salesman reads reference labels
+        if (req.isCustomerUser) return next();       // customer login reads its OWN scoped refs
         return can(module, 'view')(req, res, next);
+    };
+}
+
+/**
+ * Product-READ gate. A customer-portal login (customers.user_id link) needs to
+ * SEE products to build an order/invoice, even though their role usually does
+ * NOT carry `products.view`. Being a LINKED customer IS the entitlement — and
+ * ProductController narrows their list to ONLY the assigned catalog (at the
+ * locked adjusted rate), so they read their catalog and nothing more. Everyone
+ * else (salesmen included — unchanged behaviour) must hold `products.view`.
+ * Gates ONLY reads; writes stay on the strict can('products', …).
+ */
+function canProductRead(req, res, next) {
+    const user = req.user || {};
+    if (user.role_slug === 'super-admin') return next();
+    if (req.isCustomerUser) return next();           // linked customer → own catalog only
+    return can('products', 'view')(req, res, next);
+}
+
+/**
+ * Own-invoice gate (sales invoices). A customer-portal / website-user login
+ * creates + reads THEIR OWN invoices even when their role carries no
+ * sales-invoices grant — being the LINKED customer IS the entitlement. The
+ * controller already forces customer_id to their own row, recomputes locked
+ * rates, scopes list/get to their customer, and routes them through the
+ * approval queue — so this can never touch anyone else's data. Everyone else
+ * stays on the strict can('sales-invoices', action). Only 'view'/'create' are
+ * ever granted this way (approve/reject/delete stay strict + are additionally
+ * 403'd for portal logins in the controller).
+ */
+function canOwnInvoice(action) {
+    return function ownInvoiceMiddleware(req, res, next) {
+        const user = req.user || {};
+        if (user.role_slug === 'super-admin') return next();
+        if (req.isCustomerUser && (action === 'view' || action === 'create')) return next();
+        return can('sales-invoices', action)(req, res, next);
     };
 }
 
@@ -151,6 +189,8 @@ module.exports = {
     canField,
     canCustomerRead,
     canRefRead,
+    canProductRead,
+    canOwnInvoice,
     clearCache,
     loadRolePermissions,
     FORBIDDEN_MSG,

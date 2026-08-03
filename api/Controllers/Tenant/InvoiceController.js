@@ -35,6 +35,7 @@ const R  = require('../../Helpers/response');
 const { recordHistory } = require('../../Helpers/history');
 const { htmlToPdf } = require('../../Helpers/pdf');
 const { invoicePdfHtml } = require('../../Helpers/transactionPdf');
+const customerUsers = require('./CustomerUserController');
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND_MSG    = 'Invoice not found.';
@@ -197,6 +198,9 @@ async function listByType(req, res, type) {
         // Field-sales scoping: a salesman sees ONLY the invoices THEY created
         // (not the whole company's / their location's). Admins are unrestricted.
         if (req.isSalesman) qb = qb.where('invoices.created_by', req.user.sub);
+        // A customer-portal login sees EVERY invoice cut for THEIR customer —
+        // their own portal orders AND the ones the office raised for them.
+        if (req.isCustomerUser) qb = qb.where('invoices.customer_id', req.customerId);
 
         if (status)   qb = qb.where('invoices.status', status);
         // Approval-status filter (SFA). The Sales list + register show REAL sales
@@ -220,6 +224,20 @@ async function listByType(req, res, type) {
         if (partyId)  qb = qb.where(partyCol, partyId);
         if (dateFrom) qb = qb.where('invoices.invoice_date', '>=', dateFrom);
         if (dateTo)   qb = qb.where('invoices.invoice_date', '<=', dateTo);
+
+        // Incremental-sync filter (?last_update=...) — third-party pollers
+        // (WooCommerce etc.) fetch only rows CHANGED since a point in time.
+        //   • last_update=1          → updated TODAY (since local midnight)
+        //   • last_update=YYYY-MM-DD → updated on/after that date/datetime
+        const lastUpdate = (req.query.last_update || '').toString().trim();
+        if (lastUpdate) {
+            let since = lastUpdate;
+            if (lastUpdate === '1') {
+                since = new Date();
+                since.setHours(0, 0, 0, 0);
+            }
+            qb = qb.where('invoices.updated_at', '>=', since);
+        }
 
         if (search) {
             const like = `%${search}%`;
@@ -326,6 +344,9 @@ async function monthlyByType(req, res, type) {
             .whereNull('invoices.deleted_at');
         if (req.locationId != null) qb = qb.where('invoices.location_id', req.locationId);
         if (req.isSalesman) qb = qb.where('invoices.created_by', req.user.sub);
+        // A customer-portal login sees EVERY invoice cut for THEIR customer —
+        // their own portal orders AND the ones the office raised for them.
+        if (req.isCustomerUser) qb = qb.where('invoices.customer_id', req.customerId);
         if (req.query.date_from) qb = qb.where('invoices.invoice_date', '>=', req.query.date_from);
         if (req.query.date_to)   qb = qb.where('invoices.invoice_date', '<=', req.query.date_to);
         // Same approval gate as the list — the register's month totals + counts
@@ -364,7 +385,7 @@ async function monthlyByType(req, res, type) {
         // be applied to a SCOPED view — a salesman (own invoices) or a
         // location-restricted user must see the sum of THEIR OWN invoices, not
         // the company total. For those, keep the reconstructed per-row total.
-        const scoped = req.isSalesman || req.locationId != null;
+        const scoped = req.isSalesman || req.isCustomerUser || req.locationId != null;
         const snapType = type === 'purchase' ? 'purchase_register' : 'sales_register';
         const snap = scoped ? null : await tallyReportSnapshot(req.companyId, snapType);
         const byName = {};
@@ -409,6 +430,7 @@ async function get(req, res) {
         if (req.locationId != null) invoiceQ.where('invoices.location_id', req.locationId);
         // A salesman can only open an invoice THEY created.
         if (req.isSalesman) invoiceQ.where('invoices.created_by', req.user.sub);
+        if (req.isCustomerUser) invoiceQ.where('invoices.customer_id', req.customerId);
         const invoice = await invoiceQ.select(...LIST_COLUMNS).first();
         if (!invoice) return R.errorResponse(res, NOT_FOUND_MSG, 404);
 
@@ -484,6 +506,97 @@ async function get(req, res) {
 }
 
 /**
+ * Customer-portal (customers.user_id link) invoice lock-down. MUTATES `body`:
+ *   • customer_id is forced to the linked customer (client value ignored).
+ *   • every line MUST reference an assigned product — else returns a 422 msg.
+ *   • line rate/discount from the client are IGNORED — the rate is recomputed
+ *     from products.sales_price × the category's discount/addition %, so a
+ *     tampered request can never buy at a made-up price.
+ * Returns an error message string, or null when the body is valid + repriced.
+ */
+async function enforceCustomerCatalog(req, body) {
+    body.customer_id = req.customerId;
+    const catalog = await customerUsers.loadCatalog(req.companyId, req.customerId);
+    // Payment-mode surcharge (website/API users): cash_extra_pct or
+    // online_extra_pct from THEIR customer row, applied on top of the
+    // category-adjusted rate. Plain customer users keep both at 0 → no-op.
+    let modePct = 0;
+    const mode = String(body.payment_mode || '').toLowerCase();
+    if (mode === 'cash' || mode === 'online') {
+        const custRow = await db('customers').where('id', req.customerId)
+            .first('cash_extra_pct', 'online_extra_pct');
+        if (custRow) {
+            modePct = mode === 'cash'
+                ? (Number(custRow.cash_extra_pct) || 0)
+                : (Number(custRow.online_extra_pct) || 0);
+        }
+    }
+    const items = body.items || [];
+    const prodIds = items.map((it) => Number(it.product_id)).filter(Boolean);
+    if (!prodIds.length || prodIds.length !== items.length) {
+        return 'Each line must be one of your assigned products.';
+    }
+    const prods = await db('products')
+        .where('company_id', req.companyId)
+        .whereNull('deleted_at')
+        .whereIn('id', prodIds)
+        .select('id', 'category_id', 'sales_price', 'gst_rate', 'hsn_code', 'unit', 'name');
+    const byId = new Map(prods.map((p) => [Number(p.id), p]));
+    for (const it of items) {
+        const p = byId.get(Number(it.product_id));
+        const priced = p ? customerUsers.priceProduct(catalog, p) : { allowed: false };
+        if (!priced.allowed) {
+            return 'One of the products is not in your assigned catalog.';
+        }
+        it.rate         = modePct
+            ? Math.round(priced.rate * (1 + modePct / 100) * 100) / 100
+            : priced.rate;                      // locked, server-computed
+        it.discount_pct = 0;                    // pricing lives in the category %
+        it.gst_rate     = Number(p.gst_rate) || 0;
+        if (!it.hsn)  it.hsn  = p.hsn_code || null;
+        if (!it.unit) it.unit = p.unit || null;
+        if (!it.description) it.description = p.name;
+    }
+    return null;
+}
+
+/**
+ * SALES stock guard — EVERY login (admin / salesman / customer) may only sell
+ * what is actually on hand: per product, the summed line qty must not exceed
+ * products.opening_stock (the Tally closing balance the Inventory screen shows
+ * as "current"). Lines without a product_id (free-text) are not stock-tracked.
+ * `excludeInvoiceId` skips nothing today (cloud invoices don't decrement stock)
+ * but keeps the signature ready for a movement ledger.
+ * Returns an error message string, or null when every line fits the stock.
+ */
+async function checkSalesStock(req, items) {
+    const need = new Map();   // product_id → total qty requested
+    for (const it of items || []) {
+        const pid = Number(it.product_id);
+        if (!pid) continue;
+        need.set(pid, (need.get(pid) || 0) + (Number(it.quantity) || 0));
+    }
+    if (!need.size) return null;
+
+    const prods = await db('products')
+        .where('company_id', req.companyId)
+        .whereNull('deleted_at')
+        .whereIn('id', Array.from(need.keys()))
+        .select('id', 'name', 'opening_stock');
+    const byId = new Map(prods.map((p) => [Number(p.id), p]));
+
+    for (const [pid, qty] of need) {
+        const p = byId.get(pid);
+        if (!p) continue;   // FK/catalog checks handle unknown products
+        const stock = Number(p.opening_stock) || 0;
+        if (qty > stock) {
+            return `Not enough stock for "${p.name}" — only ${stock} available, you asked for ${qty}.`;
+        }
+    }
+    return null;
+}
+
+/**
  * Shared create implementation. `type` is 'sales' or 'purchase'; the body has
  * already been validated by the matching Joi schema. Header + lines are written
  * inside a single transaction; invoice_no is generated under that transaction
@@ -493,6 +606,19 @@ async function createByType(req, res, type) {
     try {
         const body    = req.body;
         const isSales = type === 'sales';
+
+        // Customer-portal login: lock the invoice to their own customer +
+        // catalog at server-computed rates (see enforceCustomerCatalog).
+        if (isSales && req.isCustomerUser) {
+            const errMsg = await enforceCustomerCatalog(req, body);
+            if (errMsg) return R.errorResponse(res, errMsg, 422);
+        }
+        // Stock guard: a sales line can't exceed what's on hand (every role).
+        if (isSales) {
+            const stockErr = await checkSalesStock(req, body.items);
+            if (stockErr) return R.errorResponse(res, stockErr, 422);
+        }
+
         const { items, totals } = computeTotals(body.items);
 
         // Approval + draft (SFA). EVERY non-admin user's SALES invoice needs a
@@ -551,6 +677,7 @@ async function createByType(req, res, type) {
                 round_off:       totals.round_off,
                 total:           totals.total,
                 status:          body.status || 'pending_tally',
+                payment_mode:    isSales ? (body.payment_mode || null) : null,
                 approval_status: approvalStatus,
                 notes:           body.notes || null,
                 created_by:      req.user && req.user.sub ? req.user.sub : null,
@@ -691,7 +818,7 @@ async function pdf(req, res) {
 async function approve(req, res) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
-    if (req.isSalesman) return R.errorResponse(res, 'You are not allowed to approve invoices.', 403);
+    if (req.isSalesman || req.isCustomerUser) return R.errorResponse(res, 'You are not allowed to approve invoices.', 403);
     try {
         const inv = await db('invoices')
             .where({ id, company_id: req.companyId, type: 'sales' })
@@ -731,7 +858,7 @@ async function approve(req, res) {
 async function reject(req, res) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
-    if (req.isSalesman) return R.errorResponse(res, 'You are not allowed to reject invoices.', 403);
+    if (req.isSalesman || req.isCustomerUser) return R.errorResponse(res, 'You are not allowed to reject invoices.', 403);
     const reason = String(req.body.reason || req.body.rejected_reason || '').trim();
     if (!reason) return R.errorResponse(res, 'Please give a reason for rejecting.', 422);
     try {
@@ -806,6 +933,14 @@ async function updateDraft(req, res) {
         if (inv.approval_status === 'approved') {
             return R.errorResponse(res, 'This invoice is approved and locked — it can no longer be edited.', 422);
         }
+        // Customer-portal login: same catalog + locked-rate enforcement as create.
+        if (req.isCustomerUser) {
+            const errMsg = await enforceCustomerCatalog(req, body);
+            if (errMsg) return R.errorResponse(res, errMsg, 422);
+        }
+        // Stock guard: same as create — a draft edit can't oversell either.
+        const stockErr = await checkSalesStock(req, body.items);
+        if (stockErr) return R.errorResponse(res, stockErr, 422);
         const { items, totals } = computeTotals(body.items);
         const updated = await db.transaction(async (trx) => {
             const now = new Date();

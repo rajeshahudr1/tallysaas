@@ -216,6 +216,23 @@ function build(config) {
             if (cFrom) qb = qb.where(`${table}.created_at`, '>=', cFrom);
             if (cTo)   qb = qb.where(`${table}.created_at`, '<=', `${cTo} 23:59:59`);
 
+            // Incremental-sync filter (?last_update=...) — for third-party
+            // integrations (e.g. WooCommerce) that poll for CHANGED rows only.
+            //   • last_update=1            → rows updated TODAY (since local midnight)
+            //   • last_update=YYYY-MM-DD   → rows updated ON/AFTER that date
+            //   • (full ISO datetime also works — passed straight to updated_at >=)
+            const lastUpdate = (req.query.last_update || '').toString().trim();
+            if (lastUpdate) {
+                let since;
+                if (lastUpdate === '1') {
+                    since = new Date();
+                    since.setHours(0, 0, 0, 0);
+                } else {
+                    since = lastUpdate;
+                }
+                qb = qb.where(`${table}.updated_at`, '>=', since);
+            }
+
             // Declarative per-resource filters (?key=value → custom WHERE).
             if (filters) {
                 for (const [key, applyFn] of Object.entries(filters)) {

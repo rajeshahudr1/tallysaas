@@ -113,7 +113,27 @@
             row.querySelector('.li-unit').value = p ? (p.unit || '') : '';
             if (p && p.rate != null) row.querySelector('.li-rate').value = p.rate;
             if (p && p.gst != null)  row.querySelector('.li-gst').value  = p.gst;
+            // Stock cap — Qty can't exceed what's on hand (the api enforces the
+            // same rule; this just stops it at the keyboard).
+            var qty = row.querySelector('.li-qty');
+            if (qty) {
+                if (p && p.stock != null) {
+                    qty.max = p.stock;
+                    qty.title = 'In stock: ' + p.stock;
+                    if ((parseFloat(qty.value) || 0) > p.stock) qty.value = p.stock;
+                } else {
+                    qty.removeAttribute('max'); qty.title = '';
+                }
+            }
             recalcRow(row); recalcTotals();
+        }
+
+        // Clamp a row's Qty to the picked product's stock as the user types.
+        function clampQty(row) {
+            var qty = row.querySelector('.li-qty');
+            if (!qty || qty.max === '' || qty.max == null) return;
+            var maxV = parseFloat(qty.max);
+            if (!isNaN(maxV) && (parseFloat(qty.value) || 0) > maxV) qty.value = maxV;
         }
 
         // Searchable product picker: filter the catalogue as the user types and
@@ -191,7 +211,10 @@
         function wireRow(row) {
             wireProductPicker(row);
             row.querySelectorAll('.li-qty, .li-rate, .li-disc, .li-gst').forEach(function (inp) {
-                inp.addEventListener('input', function () { recalcRow(row); recalcTotals(); });
+                inp.addEventListener('input', function () {
+                    if (inp.classList.contains('li-qty')) clampQty(row);
+                    recalcRow(row); recalcTotals();
+                });
             });
             row.querySelector('.li-remove').addEventListener('click', function () {
                 if (tbody.querySelectorAll('.li-row').length > 1) {

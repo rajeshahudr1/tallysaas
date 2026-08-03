@@ -65,6 +65,13 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       return const FieldDashboardScreen();
     }
 
+    // Customer-portal login: a simple stats dashboard of THEIR data (assigned
+    // categories/products + their own invoices) with tappable cards. Mirrors
+    // the web portal dashboard; the API scopes every count to them.
+    if (user != null && user.isCustomerUser) {
+      return const _CustomerDashboard();
+    }
+
     // A signed-in user whose role has NO Dashboard module: show a friendly
     // welcome instead of the KPI cards (which would 403). Mirrors the web.
     if (user != null && !user.canModule('dashboard')) {
@@ -498,6 +505,129 @@ class _ErrorView extends StatelessWidget {
           const SizedBox(height: AppSpacing.md12),
           OutlinedButton.icon(onPressed: onRetry, icon: const Icon(Icons.refresh), label: const Text('Retry')),
         ],
+      ),
+    );
+  }
+}
+
+/// Customer-portal dashboard — simple, tappable stat cards of THE CUSTOMER'S
+/// OWN data (assigned categories/products + their invoices). Counts come from
+/// the API-scoped list metas, so they always match what the customer may see:
+///   My Categories / My Products      — list meta.total (catalog-scoped)
+///   My Invoices / Invoice Amount     — ?approval=all meta.total / grand_total
+///   Pending / Approved               — ?approval=pending|approved meta.total
+/// Mirrors the web portal dashboard (cards navigate to the same screens).
+class _CustomerDashboard extends ConsumerStatefulWidget {
+  const _CustomerDashboard();
+
+  @override
+  ConsumerState<_CustomerDashboard> createState() => _CustomerDashboardState();
+}
+
+class _CustomerDashboardState extends ConsumerState<_CustomerDashboard> {
+  late Future<List<({num total, num amount})>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<({num total, num amount})> _meta(String path) async {
+    try {
+      final data = await ref.read(apiClientProvider).get(path);
+      final m = (data is Map && data['meta'] is Map) ? data['meta'] as Map : const {};
+      num n(Object? v) => v is num ? v : (num.tryParse('$v') ?? 0);
+      return (total: n(m['total']), amount: n(m['grand_total']));
+    } catch (_) {
+      return (total: 0, amount: 0); // best-effort card; never breaks the page
+    }
+  }
+
+  Future<List<({num total, num amount})>> _load() => Future.wait([
+        _meta('/categories?per_page=1'),
+        _meta('/products?per_page=1'),
+        _meta('/sales-invoices?per_page=1&approval=all'),
+        _meta('/sales-invoices?per_page=1&approval=pending'),
+        _meta('/sales-invoices?per_page=1&approval=approved'),
+      ]);
+
+  void _refresh() => setState(() => _future = _load());
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Dashboard'),
+        actions: [
+          Consumer(builder: (_, r, __) {
+            final unread = r.watch(notificationsUnreadProvider).maybeWhen(data: (n) => n, orElse: () => 0);
+            return IconButton(
+              icon: unread > 0
+                  ? Badge(label: Text('$unread'), child: const Icon(Icons.notifications_outlined))
+                  : const Icon(Icons.notifications_outlined),
+              tooltip: 'Notifications',
+              onPressed: () => context.push('/notifications'),
+            );
+          }),
+          IconButton(icon: const Icon(Icons.refresh), tooltip: 'Refresh', onPressed: _refresh),
+        ],
+      ),
+      body: FutureBuilder<List<({num total, num amount})>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return _ErrorView(message: 'Could not load your dashboard.', onRetry: _refresh);
+          }
+          final d = snap.data ?? const <({num total, num amount})>[];
+          ({num total, num amount}) at(int i) =>
+              i < d.length ? d[i] : (total: 0, amount: 0);
+          final cards = <({String label, String value, IconData icon, Color color, String route})>[
+            (label: 'My Categories',     value: Fmt.num0(at(0).total),  icon: Icons.category_outlined,     color: const Color(0xFF7C3AED), route: '/categories'),
+            (label: 'My Products',       value: Fmt.num0(at(1).total),  icon: Icons.inventory_2_outlined,  color: const Color(0xFF0D9488), route: '/products'),
+            (label: 'My Invoices',       value: Fmt.num0(at(2).total),  icon: Icons.receipt_long_outlined, color: const Color(0xFF2563EB), route: '/sales-invoices'),
+            (label: 'Invoice Amount',    value: Fmt.inr(at(2).amount),  icon: Icons.currency_rupee,        color: const Color(0xFF4F46E5), route: '/sales-invoices'),
+            (label: 'Pending Invoices',  value: Fmt.num0(at(3).total),  icon: Icons.hourglass_top,         color: const Color(0xFFD97706), route: '/sales-invoices'),
+            (label: 'Approved Invoices', value: Fmt.num0(at(4).total),  icon: Icons.check_circle_outline,  color: const Color(0xFF16A34A), route: '/sales-invoices'),
+          ];
+          return RefreshIndicator(
+            onRefresh: () async => _refresh(),
+            child: GridView.count(
+              padding: const EdgeInsets.all(AppSpacing.md12),
+              crossAxisCount: 2,
+              mainAxisSpacing: AppSpacing.sm8,
+              crossAxisSpacing: AppSpacing.sm8,
+              childAspectRatio: 1.45,
+              children: [
+                for (final k in cards)
+                  AppCard(
+                    padding: const EdgeInsets.all(AppSpacing.md12),
+                    onTap: () => context.push(k.route),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Container(
+                          width: 34, height: 34,
+                          decoration: BoxDecoration(
+                            color: k.color.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(AppRadius.sm8),
+                          ),
+                          child: Icon(k.icon, size: 18, color: k.color),
+                        ),
+                        const SizedBox(height: AppSpacing.sm8),
+                        Text(k.value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.text1)),
+                        Text(k.label, style: const TextStyle(fontSize: 12, color: AppColors.text2)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

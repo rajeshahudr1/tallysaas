@@ -20,6 +20,8 @@ class AppUser {
     this.permissions = const [],
     this.isSalesman = false,
     this.salesPersonId,
+    this.isCustomerUser = false,
+    this.customerId,
     this.license,
   });
 
@@ -36,6 +38,14 @@ class AppUser {
   /// scoping. From `GET /me` (`is_salesman` / `sales_person_id`).
   final bool isSalesman;
   final int? salesPersonId;
+
+  /// Customer portal — true when this user is a LINKED customer login
+  /// (customers.user_id points at them; website/API users included). The API
+  /// scopes their catalog/invoices; the app mirrors the web portal UI (locked
+  /// customer + rate on the invoice form, simple stats dashboard, no approvals).
+  /// From `GET /me` (`is_customer_user` / `customer_id`).
+  final bool isCustomerUser;
+  final int? customerId;
 
   /// The user's licence plan summary (company-admin+): valid-until, plan limits
   /// (max companies/users) and how many company slots are used/remaining. Null
@@ -93,6 +103,8 @@ class AppUser {
       permissions: _strList(j['permissions']),
       isSalesman: j['is_salesman'] == true,
       salesPersonId: _toInt(j['sales_person_id']),
+      isCustomerUser: j['is_customer_user'] == true,
+      customerId: _toInt(j['customer_id']),
       license: LicenseInfo.fromJson(j['license'] is Map ? Map<String, dynamic>.from(j['license'] as Map) : null),
     );
   }
@@ -109,6 +121,8 @@ class AppUser {
         'permissions': permissions,
         'is_salesman': isSalesman,
         'sales_person_id': salesPersonId,
+        'is_customer_user': isCustomerUser,
+        'customer_id': customerId,
         'license': license?.toJson(),
       };
 

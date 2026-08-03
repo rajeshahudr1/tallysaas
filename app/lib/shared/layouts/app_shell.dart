@@ -69,7 +69,11 @@ class AppShell extends ConsumerWidget {
           label: 'Dashboard',
         ),
       ),
-      if (show(user?.canAny(_masters) ?? false))
+      // Customer-portal login: the Masters tab carries their scoped Products /
+      // Categories and the Txns tab their invoices — being the LINKED customer
+      // is the entitlement (mirrors the web + API), so both tabs stay visible
+      // even when the role has no master grants.
+      if (show((user?.canAny(_masters) ?? false) || (user?.isCustomerUser ?? false)))
         (
           branch: 1,
           dest: const NavigationDestination(
@@ -78,7 +82,7 @@ class AppShell extends ConsumerWidget {
             label: 'Masters',
           ),
         ),
-      if (show(user?.canAny(_txns) ?? false))
+      if (show((user?.canAny(_txns) ?? false) || (user?.isCustomerUser ?? false)))
         (
           branch: 2,
           dest: const NavigationDestination(

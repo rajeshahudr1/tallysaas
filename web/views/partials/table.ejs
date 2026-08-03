@@ -229,13 +229,15 @@ function _alignClass(col) {
                                                 data-record="<%= JSON.stringify(_details) %>" data-record-title="<%= _label %>">
                                             <i class="fa-regular fa-eye me-2 text-muted"></i>View</button></li>
                                     <% } %>
-                                    <% if (_actions.indexOf('edit') > -1) { %>
-                                        <% if (_canLink && _editable && !_locked) { %>
+                                    <%# A LOCKED row (e.g. an approved invoice a non-admin may no
+                                        longer touch) HIDES Edit + Delete entirely — a disabled
+                                        button just invites confusion. View + Print stay. %>
+                                    <% if (_actions.indexOf('edit') > -1 && !_locked) { %>
+                                        <% if (_canLink && _editable) { %>
                                             <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/edit">
                                                 <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</a></li>
                                         <% } else { %>
-                                            <li><button class="dropdown-item" type="button" disabled
-                                                    <% if (_locked) { %>title="Approved — locked"<% } %>>
+                                            <li><button class="dropdown-item" type="button" disabled>
                                                 <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</button></li>
                                         <% } %>
                                     <% } %>
@@ -243,15 +245,14 @@ function _alignClass(col) {
                                         <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/print" target="_blank">
                                             <i class="fa-solid fa-print me-2 text-muted"></i>Print</a></li>
                                     <% } %>
-                                    <% if (_actions.indexOf('delete') > -1) { %>
+                                    <% if (_actions.indexOf('delete') > -1 && !_locked) { %>
                                         <li><hr class="dropdown-divider"></li>
-                                        <% if (_canLink && !_locked) { %>
+                                        <% if (_canLink) { %>
                                             <li><button class="dropdown-item text-danger" type="button"
                                                     data-row-delete data-delete-url="<%= _base %>/<%= _idVal %>" data-delete-label="<%= _label %>">
                                                 <i class="fa-regular fa-trash-can me-2"></i>Delete</button></li>
                                         <% } else { %>
-                                            <li><button class="dropdown-item text-danger" type="button" disabled
-                                                    <% if (_locked) { %>title="Approved — locked"<% } %>>
+                                            <li><button class="dropdown-item text-danger" type="button" disabled>
                                                 <i class="fa-regular fa-trash-can me-2"></i>Delete</button></li>
                                         <% } %>
                                     <% } %>

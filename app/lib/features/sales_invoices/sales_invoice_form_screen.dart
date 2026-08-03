@@ -65,6 +65,11 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
     if (session is SessionSignedIn && session.user.isSalesman) {
       _salesPersonId = session.user.salesPersonId;
     }
+    // Customer-portal login: the invoice is always THEIR OWN — pin their
+    // customer id (the API forces it server-side too) and skip the picker.
+    if (session is SessionSignedIn && session.user.isCustomerUser) {
+      _customerId = session.user.customerId;
+    }
     if (_isEdit) {
       _loadForEdit();
     } else {
@@ -159,7 +164,16 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
     // SFA — a linked salesman's invoice goes for approval (or saves as a draft);
     // an admin's saves straight through. Drives the confirmation message.
     final session = ref.read(sessionProvider);
-    final isSalesman = session is SessionSignedIn && session.user.isSalesman;
+    final sUser = session is SessionSignedIn ? session.user : null;
+    final isSalesman = (sUser?.isSalesman ?? false) || (sUser?.isCustomerUser ?? false);
+
+    // Stock guard (every role — mirrors the server rule): the summed qty per
+    // product may not exceed the stock captured when the product was picked.
+    final stockErr = validateLineStock(_rows);
+    if (stockErr != null) {
+      _showError(stockErr);
+      return;
+    }
 
     setState(() => _busy = true);
     try {
@@ -216,6 +230,7 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
     final isSalesman = user?.isSalesman ?? false;
+    final isCustomerUser = user?.isCustomerUser ?? false;
     final title = _isEdit ? 'Edit Invoice' : 'New Sales Invoice';
     if (_isEdit && _loadingEdit) {
       return Scaffold(
@@ -243,17 +258,21 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
           // Searchable customer picker; on select we AUTO-fill the Location from
           // that customer's own location (mirrors the web). Assignment-scoped by
           // the API, so a salesman sees only their assigned customers.
-          SearchableFkDropdown(
-            label: 'Customer *', endpoint: '/customers',
-            value: _customerId,
-            onChanged: (v) => setState(() => _customerId = v),
-            onItem: (o) => setState(() {
-              if (o?.locationId != null) {
-                _locationId = o!.locationId;
-                _locationName = o.locationName;
-              }
-            }),
-          ),
+          if (isCustomerUser)
+            // Customer-portal: the party is THEMSELVES — locked (API-forced).
+            _ReadOnlyField(label: 'Customer', value: user?.name)
+          else
+            SearchableFkDropdown(
+              label: 'Customer *', endpoint: '/customers',
+              value: _customerId,
+              onChanged: (v) => setState(() => _customerId = v),
+              onItem: (o) => setState(() {
+                if (o?.locationId != null) {
+                  _locationId = o!.locationId;
+                  _locationName = o.locationName;
+                }
+              }),
+            ),
           const SizedBox(height: AppSpacing.md12),
           Row(
             children: [
@@ -271,7 +290,10 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
           const SizedBox(height: AppSpacing.md12),
           // Location — a salesman can't list locations (403); it auto-fills from
           // the picked customer and shows read-only. An admin picks it normally.
-          if (isSalesman)
+          // A customer-portal login doesn't deal in locations at all — hidden.
+          if (isCustomerUser)
+            const SizedBox.shrink()
+          else if (isSalesman)
             _ReadOnlyField(
               label: 'Location',
               value: _locationName ?? (_locationId != null ? 'Selected' : null),
@@ -282,9 +304,12 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
               label: 'Location', endpoint: '/locations',
               value: _locationId, onChanged: (v) => setState(() => _locationId = v),
             ),
-          const SizedBox(height: AppSpacing.md12),
-          // Sales Person — login IS the sales person for a salesman: read-only self.
-          if (isSalesman)
+          if (!isCustomerUser) const SizedBox(height: AppSpacing.md12),
+          // Sales Person — login IS the sales person for a salesman: read-only
+          // self. Hidden for a customer-portal login (doesn't apply).
+          if (isCustomerUser)
+            const SizedBox.shrink()
+          else if (isSalesman)
             _ReadOnlyField(label: 'Sales Person', value: user?.name)
           else
             FkDropdown(
@@ -308,6 +333,10 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
           for (final row in _rows)
             LineItemCard(
               row: row,
+              // Customer-portal: the rate comes from THEIR price list and the
+              // per-line Disc % doesn't apply — both locked; the server ignores
+              // client values and recomputes anyway (tamper-proof).
+              lockPricing: isCustomerUser,
               onChanged: () => setState(() {}),
               onRemove: _rows.length > 1 ? () => _removeRow(row) : null,
             ),
@@ -336,7 +365,8 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
 
           Builder(builder: (_) {
             final session = ref.watch(sessionProvider);
-            final isSalesman = session is SessionSignedIn && session.user.isSalesman;
+            final sUser = session is SessionSignedIn ? session.user : null;
+            final isSalesman = (sUser?.isSalesman ?? false) || (sUser?.isCustomerUser ?? false);
             if (_isEdit) {
               // Editing an un-approved invoice → save re-submits it for approval.
               return Column(children: [

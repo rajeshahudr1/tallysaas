@@ -146,6 +146,15 @@ async function salesPersonForUser(req) {
  * location scoping already applied by the factory stays intact.
  */
 async function customerExtraScope(qb, req) {
+    // Customer-portal login: they see ONLY their own customer row (needed by the
+    // invoice form's party dropdown; the API forces their id on create anyway).
+    if (req.isCustomerUser) {
+        qb.where('customers.id', req.customerId);
+        return;
+    }
+    // Website users (third-party API parties) live on the Website Users screen,
+    // not in the customer master list.
+    qb.where('customers.is_website_user', false);
     const salesPersonId = await salesPersonForUser(req);
     if (salesPersonId == null) return; // not a sales-person-user → unrestricted
     qb.whereIn('customers.id', (sub) => {

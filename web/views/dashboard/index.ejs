@@ -35,6 +35,9 @@
 // welcomeOnly → a signed-in user whose role has NO Dashboard module: show a
 // friendly welcome instead of the KPI cards/charts (which they can't load).
 var _welcomeOnly = (typeof welcomeOnly !== 'undefined' && welcomeOnly);
+// statsOnly → stat cards only (no charts / recent sections) — the customer
+// portal's simple dashboard (My Categories / My Products / My Invoices).
+var _statsOnly = (typeof statsOnly !== 'undefined' && statsOnly);
 var _welcomeName = (typeof welcomeName !== 'undefined' && welcomeName) ? welcomeName : 'there';
 var _stats          = (typeof stats !== 'undefined' && stats) ? stats : [];
 var _salesChart     = (typeof salesChart !== 'undefined' && salesChart) ? salesChart : { labels: [], data: [] };
@@ -167,7 +170,8 @@ var _toneStroke = {
     <% _stats.forEach(function (s) { %>
         <% var t = _trends[s.label] || { dir: 'up', text: '', spark: [] }; %>
         <% var stroke = _toneStroke[s.tone] || _toneStroke.blue; %>
-        <article class="stat-card stat-card--<%= s.tone %>">
+        <% if (s.href) { %><a href="<%= s.href %>" class="stat-card-link"><% } %>
+        <article class="stat-card stat-card--<%= s.tone %> <%= s.href ? 'stat-card--clickable' : '' %>">
             <div class="stat-card-top">
                 <span class="stat-icon"><i class="fa-solid <%= s.icon %>"></i></span>
                 <% if (t.text) { %>
@@ -183,9 +187,16 @@ var _toneStroke = {
             </div>
             <div class="stat-spark-wrap"><%- _spark(t.spark, stroke) %></div>
         </article>
+        <% if (s.href) { %></a><% } %>
     <% }); %>
 </section>
+<style>
+    .stat-card-link { text-decoration: none; color: inherit; display: block; }
+    .stat-card--clickable { cursor: pointer; transition: transform .12s ease, box-shadow .12s ease; }
+    .stat-card--clickable:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.08); }
+</style>
 
+<% if (!_statsOnly) { %>
 <!-- ── 3. Charts row (Sales Overview + Tally Sync Status) ─────── -->
 <section class="chart-row">
     <!-- Sales Overview — Chart.js line (canvas id read by dashboard.js) -->
@@ -266,4 +277,5 @@ var _toneStroke = {
 <script type="application/json" id="dashboardData">
     <%- JSON.stringify({ sales: _salesChart, sync: _syncChart }) %>
 </script>
+<% } /* end !_statsOnly */ %>
 <% } %>

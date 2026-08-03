@@ -53,9 +53,21 @@ class PagedResult<T> {
 /// …). Always fetched from the API — never hardcoded — so web + app stay in
 /// sync. Maps the same {id,name} rows the web's `fetchOptions` consumes.
 class OptionItem {
-  const OptionItem({required this.id, required this.name, this.locationId, this.locationName});
+  const OptionItem({
+    required this.id, required this.name,
+    this.locationId, this.locationName,
+    this.stock, this.rate, this.gstRate,
+  });
   final int id;
   final String name;
+
+  /// Present on product options — current stock on hand (opening_stock),
+  /// the effective rate (sales_price; already price-list-adjusted for a
+  /// customer-portal login) and the GST %. Drives the invoice line's rate/GST
+  /// auto-fill + the qty-vs-stock guard (the API enforces the same rule).
+  final double? stock;
+  final double? rate;
+  final double? gstRate;
 
   /// Present on customer options — the customer's own location (id + label), so
   /// picking a customer AUTO-fills the invoice's Location field (mirrors the web).
@@ -67,12 +79,22 @@ class OptionItem {
         name: (j['name'] ?? '').toString(),
         locationId: _toInt(j['location_id']),
         locationName: (j['location'] == null) ? null : j['location'].toString(),
+        stock: _toDouble(j['opening_stock']),
+        rate: _toDouble(j['rate'] ?? j['sales_price']),
+        gstRate: _toDouble(j['gst_rate']),
       );
 
   @override
   bool operator ==(Object other) => other is OptionItem && other.id == id;
   @override
   int get hashCode => id;
+}
+
+double? _toDouble(Object? v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  final s = v.toString().trim();
+  return s.isEmpty ? null : double.tryParse(s);
 }
 
 int? _toInt(Object? v) {

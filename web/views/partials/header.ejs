@@ -23,6 +23,11 @@ var _notif     = (typeof notificationCount !== 'undefined') ? notificationCount 
 // dropdown (companies of the chosen license); everyone else gets only the
 // COMPANY dropdown (their license is implicit from login, so it stays hidden).
 var _isSuper   = (typeof isSuperAdmin !== 'undefined') && isSuperAdmin;
+// Salesman + customer-portal logins work in ONE fixed company (their own) —
+// hide the company switcher + Install App cluster; the company stays pinned
+// in the session/background.
+var _fixedCompany = ((typeof isSalesman !== 'undefined') && !!isSalesman)
+    || ((typeof isCustomerUser !== 'undefined') && !!isCustomerUser);
 var _licenses  = (typeof licenses !== 'undefined' && licenses) ? licenses : [];
 var _selLic    = (typeof selectedLicense !== 'undefined' && selectedLicense) ? selectedLicense : null;
 // REAL sync-activity feed for the bell (see web/index.js → GET /sync/notifications).
@@ -76,7 +81,7 @@ function _relTime(v) {
         <%# Company/License switcher, mobile switcher + Install App are all TENANT
             controls — Super Admin operates on the platform (license-scoped pages
             carry their own license picker), so hide this whole block for them. %>
-        <% if (!_isSuper) { %>
+        <% if (!_isSuper && !_fixedCompany) { %>
         <!-- ── Top switcher ───────────────────────────────────────────
              Desktop (≥lg): inline License (super-admin) + Company dropdowns.
              Mobile  (<lg): ONE compact button → #switcherModal popup, because

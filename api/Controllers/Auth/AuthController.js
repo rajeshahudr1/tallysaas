@@ -326,6 +326,8 @@ async function login(req, res) {
         // approval UI and the "see only my invoices" scoping. Stashed on the
         // session at login so res.locals.isSalesman works without a /me round-trip.
         let salesPersonId = null;
+        let customerUserId = null;   // customers.user_id link → customer-portal login
+        let websiteUserInfo = null;  // linked customer row incl. website-user pricing %
         const adminish = ['super-admin', 'company-admin', 'admin', 'owner']
             .includes(user.role_slug);
         if (!adminish && user.company_id && user.license_id) {
@@ -335,6 +337,29 @@ async function login(req, res) {
                 .where({ user_id: user.id, company_id: user.company_id })
                 .whereNull('deleted_at').first('id');
             if (sp) salesPersonId = Number(sp.id);
+            let custLink = null;
+            if (!sp) {
+                custLink = await tdb('customers')
+                    .where({ user_id: user.id, company_id: user.company_id })
+                    .whereNull('deleted_at')
+                    .first('id', 'is_website_user', 'cash_extra_pct', 'online_extra_pct');
+                if (custLink) customerUserId = Number(custLink.id);
+            }
+            websiteUserInfo = custLink;
+            // License-module gate for LINKED portal logins: if the super-admin
+            // removed the module this login rides on, refuse the sign-in with a
+            // clear message (the per-request middleware blocks live sessions).
+            {
+                const { entitledSlugSet } = require('../../Helpers/entitlements');
+                const entitled = await entitledSlugSet(user.license_id);
+                const needSlug = sp
+                    ? 'sales-persons.view'
+                    : (custLink ? (custLink.is_website_user ? 'website-users.view' : 'customer-users.view') : null);
+                if (needSlug && entitled && !entitled.has(needSlug)) {
+                    return R.errorResponse(res,
+                        'This login has been disabled — the module is not enabled on your license.', 403);
+                }
+            }
         }
 
         // License validity + limits — powers the "your licence expires in N days"
@@ -353,9 +378,20 @@ async function login(req, res) {
                 role_slug:       user.role_slug,
                 company_id:      user.company_id,
                 permissions,
-                is_salesman:     !!salesPersonId,
-                sales_person_id: salesPersonId,
-                license:         licenseInfo,
+                is_salesman:      !!salesPersonId,
+                sales_person_id:  salesPersonId,
+                is_customer_user: !!customerUserId,
+                customer_id:      customerUserId,
+                // Website-user block: an OBJECT when this login is a linked
+                // WEBSITE user (pricing knobs for the cash/online rate preview —
+                // the server still applies the authoritative % on invoice
+                // create), and null otherwise (null = not a website user).
+                website_user: (websiteUserInfo && websiteUserInfo.is_website_user) ? {
+                    customer_id:      Number(websiteUserInfo.id),
+                    cash_extra_pct:   Number(websiteUserInfo.cash_extra_pct)   || 0,
+                    online_extra_pct: Number(websiteUserInfo.online_extra_pct) || 0,
+                } : null,
+                license:          licenseInfo,
             },
             expires_in: EXPIRES_IN,
         }, 'Login successful.');
@@ -435,6 +471,8 @@ async function me(req, res) {
         // points user_id at them)? Drives the app/web draft + approval UI and the
         // "see only my created invoices" scoping. Admins/owners are never salesmen.
         let salesPersonId = null;
+        let customerUserId = null;   // customers.user_id link → customer-portal login
+        let websiteUserInfo = null;  // linked customer row incl. website-user pricing %
         const adminish = ['super-admin', 'company-admin', 'admin', 'owner']
             .includes(user.role_slug);
         if (!adminish && user.company_id) {
@@ -443,6 +481,29 @@ async function me(req, res) {
                 .whereNull('deleted_at')
                 .first('id');
             if (sp) salesPersonId = Number(sp.id);
+            let custLink = null;
+            if (!sp) {
+                custLink = await db('customers')
+                    .where({ user_id: userId, company_id: user.company_id })
+                    .whereNull('deleted_at')
+                    .first('id', 'is_website_user', 'cash_extra_pct', 'online_extra_pct');
+                if (custLink) customerUserId = Number(custLink.id);
+            }
+            websiteUserInfo = custLink;
+            // License-module gate (mirrors login): a live session whose module
+            // was switched off gets a 401 here → the web/app bounce to login,
+            // where the same gate shows the clear "disabled" message.
+            {
+                const { entitledSlugSet } = require('../../Helpers/entitlements');
+                const entitled = await entitledSlugSet(user.license_id);
+                const needSlug = sp
+                    ? 'sales-persons.view'
+                    : (custLink ? (custLink.is_website_user ? 'website-users.view' : 'customer-users.view') : null);
+                if (needSlug && entitled && !entitled.has(needSlug)) {
+                    return R.errorResponse(res,
+                        'This login has been disabled — the module is not enabled on your license.', 401);
+                }
+            }
         }
 
         // License validity + limits — so the app/web can warn the company before
@@ -465,9 +526,17 @@ async function me(req, res) {
                 slug: user.role_slug,
             },
             permissions,
-            is_salesman:     !!salesPersonId,
-            sales_person_id: salesPersonId,
-            license:         licenseInfo,
+            is_salesman:      !!salesPersonId,
+            sales_person_id:  salesPersonId,
+            is_customer_user: !!customerUserId,
+            customer_id:      customerUserId,
+            // Website-user block (mirrors login): object = website user, null = not.
+            website_user: (websiteUserInfo && websiteUserInfo.is_website_user) ? {
+                customer_id:      Number(websiteUserInfo.id),
+                cash_extra_pct:   Number(websiteUserInfo.cash_extra_pct)   || 0,
+                online_extra_pct: Number(websiteUserInfo.online_extra_pct) || 0,
+            } : null,
+            license:          licenseInfo,
         });
     } catch (err) {
         console.error('AuthController.me error:', err);

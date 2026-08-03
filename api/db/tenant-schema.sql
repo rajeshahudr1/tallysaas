@@ -2255,3 +2255,111 @@ ALTER TABLE ONLY public.users
 
 ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_role_id_foreign FOREIGN KEY (role_id) REFERENCES public.roles(id) ON DELETE RESTRICT;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Customer Users (customer portal login) — 2026-07-30
+-- A customer master row may be LINKED to a login user (customers.user_id), the
+-- same pattern as sales_persons.user_id. The linked login sees ONLY the
+-- categories/products assigned below, at a per-category adjusted (locked) rate:
+--   rate = sales_price × (1 − discount_pct/100) × (1 + addition_pct/100)
+-- customer_user_products narrows a category to specific items; NO rows for a
+-- category = the whole category is allowed.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS user_id bigint;
+
+CREATE TABLE IF NOT EXISTS public.customer_user_categories (
+    id bigint NOT NULL,
+    company_id bigint NOT NULL,
+    customer_id bigint NOT NULL,
+    category_id bigint NOT NULL,
+    discount_pct numeric(6,2) DEFAULT '0'::numeric NOT NULL,
+    addition_pct numeric(6,2) DEFAULT '0'::numeric NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.customer_user_categories_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.customer_user_categories_id_seq OWNED BY public.customer_user_categories.id;
+ALTER TABLE ONLY public.customer_user_categories ALTER COLUMN id SET DEFAULT nextval('public.customer_user_categories_id_seq'::regclass);
+
+CREATE TABLE IF NOT EXISTS public.customer_user_products (
+    id bigint NOT NULL,
+    company_id bigint NOT NULL,
+    customer_id bigint NOT NULL,
+    category_id bigint NOT NULL,
+    product_id bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE SEQUENCE IF NOT EXISTS public.customer_user_products_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+ALTER SEQUENCE public.customer_user_products_id_seq OWNED BY public.customer_user_products.id;
+ALTER TABLE ONLY public.customer_user_products ALTER COLUMN id SET DEFAULT nextval('public.customer_user_products_id_seq'::regclass);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_categories_pkey') THEN
+        ALTER TABLE ONLY public.customer_user_categories ADD CONSTRAINT customer_user_categories_pkey PRIMARY KEY (id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_categories_unique') THEN
+        ALTER TABLE ONLY public.customer_user_categories ADD CONSTRAINT customer_user_categories_unique UNIQUE (company_id, customer_id, category_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_products_pkey') THEN
+        ALTER TABLE ONLY public.customer_user_products ADD CONSTRAINT customer_user_products_pkey PRIMARY KEY (id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_products_unique') THEN
+        ALTER TABLE ONLY public.customer_user_products ADD CONSTRAINT customer_user_products_unique UNIQUE (company_id, customer_id, product_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_categories_company_id_foreign') THEN
+        ALTER TABLE ONLY public.customer_user_categories ADD CONSTRAINT customer_user_categories_company_id_foreign FOREIGN KEY (company_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_categories_customer_id_foreign') THEN
+        ALTER TABLE ONLY public.customer_user_categories ADD CONSTRAINT customer_user_categories_customer_id_foreign FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_categories_category_id_foreign') THEN
+        ALTER TABLE ONLY public.customer_user_categories ADD CONSTRAINT customer_user_categories_category_id_foreign FOREIGN KEY (category_id) REFERENCES public.categories(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_products_company_id_foreign') THEN
+        ALTER TABLE ONLY public.customer_user_products ADD CONSTRAINT customer_user_products_company_id_foreign FOREIGN KEY (company_id) REFERENCES public.companies(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_products_customer_id_foreign') THEN
+        ALTER TABLE ONLY public.customer_user_products ADD CONSTRAINT customer_user_products_customer_id_foreign FOREIGN KEY (customer_id) REFERENCES public.customers(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'customer_user_products_product_id_foreign') THEN
+        ALTER TABLE ONLY public.customer_user_products ADD CONSTRAINT customer_user_products_product_id_foreign FOREIGN KEY (product_id) REFERENCES public.products(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS customer_user_categories_customer_idx ON public.customer_user_categories (company_id, customer_id);
+CREATE INDEX IF NOT EXISTS customer_user_products_customer_idx ON public.customer_user_products (company_id, customer_id, category_id);
+CREATE INDEX IF NOT EXISTS customers_user_id_idx ON public.customers (user_id);
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Website Users (third-party API users) — 2026-07-30
+-- A website user IS a customers row (is_website_user=true) created fresh from
+-- the Website Users screen, with a login (customers.user_id) + the same catalog
+-- assignment tables as customer users. Extras:
+--   api_token         — auto-generated bearer for the /ext/* third-party API
+--   cash_extra_pct    — extra % added on the rate when payment_mode = 'cash'
+--   online_extra_pct  — extra % added when payment_mode = 'online'
+-- invoices.payment_mode records which mode priced the invoice.
+-- ─────────────────────────────────────────────────────────────────────────────
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS is_website_user boolean NOT NULL DEFAULT false;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS api_token character varying(80);
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS cash_extra_pct numeric(6,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS online_extra_pct numeric(6,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.invoices  ADD COLUMN IF NOT EXISTS payment_mode character varying(20);
+CREATE UNIQUE INDEX IF NOT EXISTS customers_api_token_uq ON public.customers (api_token) WHERE api_token IS NOT NULL;

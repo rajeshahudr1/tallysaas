@@ -1,0 +1,93 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/customer-users/list.ejs — SETTINGS · Customer Users.
+ * Route: GET /customer-users  ·  activeMenu: 'customer-users'.
+ *
+ * Lists every customer with whether a portal LOGIN is linked; the
+ * Edit action opens the configure screen (login + catalog + pricing).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   customerUserRows   [ rows ]  — table body
+ *   customerUsersTotal number    — pagination total
+ *   page, perPage      numbers
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof customerUserRows !== 'undefined' && customerUserRows) ? customerUserRows : [];
+var _total   = (typeof customerUsersTotal !== 'undefined') ? customerUsersTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+
+var filterFields = [
+    { type: 'text',   name: 'search', label: 'Search', placeholder: 'Search by name, mobile, email...', colClass: 'col-md-4' },
+    { type: 'select', name: 'status', label: 'Status', options: [
+        { value: '', label: 'All Status' },
+        { value: 'Active', label: 'Active' },
+        { value: 'Inactive', label: 'Inactive' },
+        { value: 'Blocked', label: 'Blocked' },
+    ], colClass: 'col-md-4' },
+];
+
+var tableColumns = [
+    { key: 'name',       label: 'Customer',   sortable: true,  type: 'text' },
+    { key: 'mobile',     label: 'Mobile',     sortable: true,  type: 'text' },
+    { key: 'email',      label: 'Email',      sortable: true,  type: 'text' },
+    { key: 'group',      label: 'Group',      sortable: false, type: 'text' },
+    { key: 'login',      label: 'Login',      sortable: false, type: 'badge' },
+    { key: 'status',     label: 'Status',     sortable: true,  type: 'status' },
+    { key: 'created_at', label: 'Created At', sortable: true,  type: 'date' },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Customer Users', infoKey: 'customers',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Customer Users' },
+    ],
+    actions: [],
+}) %>
+
+<form id="cu-filters-form" autocomplete="off" method="get" action="/customer-users">
+    <%- include('../partials/filter-card', {
+        filterId: 'cu-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: false,
+    }) %>
+</form>
+
+<div class="card">
+
+    <!-- Toolbar: "Show entries" (left). app.js injects the LIVE search box
+         (server-side ?search=) into every .table-toolbar — same as Customers. -->
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+    </div>
+
+    <%- include('../partials/table', {
+        tableId: 'customer-users-table',
+        basePath: '/customer-users',
+        editable: true,
+        sortKeys: ['name', 'mobile', 'email', 'status', 'created_at'],
+        columns: tableColumns,
+        rows: _rows,
+        selectable: false,
+        showIndex: true,
+        actions: ['edit'],
+    }) %>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+</div>

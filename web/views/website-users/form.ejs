@@ -1,0 +1,386 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/website-users/form.ejs — SETTINGS · Add / Configure Website User.
+ * Routes: GET /website-users/add → POST /website-users
+ *         GET /website-users/:id/edit → POST /website-users/:id
+ *
+ * Cards:
+ *   1. Profile & Login — name / mobile / email / password / role / status
+ *   2. API Token (edit only) — full token + Copy + Regenerate
+ *   3. Payment-mode pricing — Cash +% and Online +% (surcharge on the rate)
+ *   4. Assigned Catalog (edit only) — same category/product picker as
+ *      Customer Users (c-prefixed keys; see that form's field-name note).
+ * ─────────────────────────────────────────────────────────── */
+
+var _rec   = (typeof record !== 'undefined' && record) ? record : null;
+var _roles = (typeof roleOptions !== 'undefined' && roleOptions) ? roleOptions : [];
+var _cats  = (typeof categoryRows !== 'undefined' && categoryRows) ? categoryRows : [];
+var _prods = (typeof productsByCategory !== 'undefined' && productsByCategory) ? productsByCategory : {};
+var _asg   = (typeof assignments !== 'undefined' && assignments) ? assignments : { user: null, categories: [] };
+var _isEdit = !!_rec;
+
+var _byCat = {};
+(_asg.categories || []).forEach(function (c) { _byCat[String(c.category_id)] = c; });
+var _login = _asg.user || (_rec && _rec.login) || null;
+%>
+
+<%- include('../partials/page-head', {
+    title: _isEdit ? 'Configure Website User' : 'Add Website User', infoKey: 'customers',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Website Users', href: '/website-users' },
+        { label: _isEdit ? (_rec.name || 'Configure') : 'Add Website User' },
+    ],
+    actions: [],
+}) %>
+
+<% if (_isEdit) { %>
+<!-- ── API Token (outside the main form — Regenerate is its own POST) ── -->
+<div class="card mb-3">
+    <div class="card-header"><i class="fa-solid fa-key me-2"></i>API Token (for third-party integration)</div>
+    <div class="card-body">
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+            <input type="text" class="form-control font-monospace" style="max-width:560px"
+                   id="wu-token" value="<%= _rec.api_token || '' %>" readonly>
+            <button type="button" class="btn btn-outline-primary" id="wu-token-copy">
+                <i class="fa-regular fa-copy me-1"></i>Copy
+            </button>
+            <form method="post" action="/website-users/<%= _rec.id %>/regenerate-token" class="m-0"
+                  onsubmit="return confirm('Regenerate the token? The OLD token stops working immediately.');">
+                <button type="submit" class="btn btn-outline-danger">
+                    <i class="fa-solid fa-rotate me-1"></i>Regenerate
+                </button>
+            </form>
+        </div>
+        <div class="form-text mt-2">
+            Third-party calls send this as <code>X-Api-Token</code> header on the <code>/api/v1/ext/*</code> endpoints
+            (products, categories, sales-invoices). Regenerating kills the old token instantly.
+        </div>
+    </div>
+</div>
+<% } %>
+
+<form method="post" action="<%= _isEdit ? ('/website-users/' + _rec.id) : '/website-users' %>" autocomplete="off">
+
+    <!-- ── 1. Profile & Login ───────────────────────────────── -->
+    <div class="card mb-3">
+        <div class="card-header"><i class="fa-solid fa-user-gear me-2"></i>Profile &amp; Login</div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label">Name<span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" name="name" required
+                           value="<%= _rec ? (_rec.name || '') : '' %>" placeholder="Website / portal user name">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Mobile</label>
+                    <input type="text" class="form-control" name="mobile"
+                           value="<%= _rec ? (_rec.mobile || '') : '' %>">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Login Email<span class="text-danger">*</span></label>
+                    <input type="email" class="form-control" name="login_email" <%= _isEdit ? '' : 'required' %>
+                           value="<%= _login ? _login.email : (_rec ? (_rec.email || '') : '') %>"
+                           placeholder="user@example.com">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Password <%= _isEdit ? '(blank = unchanged)' : '' %><%= _isEdit ? '' : '*' %></label>
+                    <input type="password" class="form-control" name="password" minlength="8" <%= _isEdit ? '' : 'required' %>
+                           placeholder="<%= _isEdit ? '••••••••' : 'Min 8 characters' %>">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Role</label>
+                    <select class="form-select" name="role_id">
+                        <% _roles.forEach(function (r) { %>
+                            <option value="<%= r.id %>" <%= (_login && Number(_login.role_id) === Number(r.id)) ? 'selected' : '' %>><%= r.name %></option>
+                        <% }); %>
+                    </select>
+                    <div class="form-text">The role must include sales-invoices view + create.</div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Status</label>
+                    <select class="form-select" name="login_status">
+                        <% ['Active', 'Inactive', 'Blocked'].forEach(function (s) { %>
+                            <option value="<%= s %>" <%= ((_login && _login.status === s) || (!_login && _rec && _rec.status === s)) ? 'selected' : '' %>><%= s %></option>
+                        <% }); %>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── 2. Payment-mode pricing ──────────────────────────── -->
+    <div class="card mb-3">
+        <div class="card-header">
+            <i class="fa-solid fa-money-bill-transfer me-2"></i>Payment-Mode Pricing
+            <span class="text-muted small ms-2">Extra % added ON TOP of the category-adjusted rate, by payment mode</span>
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <label class="form-label">Cash — extra %</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control" name="cash_extra_pct" min="0" step="0.01"
+                               value="<%= _rec ? (Number(_rec.cash_extra_pct) || 0) : 0 %>">
+                        <span class="input-group-text">%</span>
+                    </div>
+                    <div class="form-text">e.g. 10 = cash invoices cost 10% more.</div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">Online — extra %</label>
+                    <div class="input-group">
+                        <input type="number" class="form-control" name="online_extra_pct" min="0" step="0.01"
+                               value="<%= _rec ? (Number(_rec.online_extra_pct) || 0) : 0 %>">
+                        <span class="input-group-text">%</span>
+                    </div>
+                    <div class="form-text">0 = no surcharge for online payment.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <% if (_isEdit) { %>
+    <!-- ── 3. Assigned Catalog (same picker as Customer Users) ── -->
+    <div class="card mb-3">
+        <div class="card-header d-flex align-items-center flex-wrap gap-2">
+            <span><i class="fa-solid fa-tags me-2"></i>Assigned Catalog</span>
+            <span class="text-muted small">Final rate = sales price − Discount % + Addition % (+ payment-mode %)</span>
+            <span class="ms-auto d-flex gap-2">
+                <button type="button" class="btn btn-sm btn-outline-primary" id="cu-cat-select-all">
+                    <i class="fa-solid fa-check-double me-1"></i>Select All
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="cu-cat-unselect-all">
+                    <i class="fa-solid fa-xmark me-1"></i>Unselect All
+                </button>
+            </span>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th style="width:44px"></th>
+                        <th>Category</th>
+                        <th style="width:140px">Discount %</th>
+                        <th style="width:140px">Addition %</th>
+                        <th style="width:220px">Products</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <% _cats.forEach(function (c) {
+                    var saved   = _byCat[String(c.id)] || null;
+                    var checked = !!saved;
+                    var plist   = _prods[String(c.id)] || [];
+                    var savedProds = {};
+                    (saved && saved.product_ids || []).forEach(function (pid) { savedProds[String(pid)] = true; });
+                    var narrowedCount = (saved && saved.product_ids) ? saved.product_ids.length : 0;
+                %>
+                    <tr>
+                        <td>
+                            <input class="form-check-input cu-cat-check" type="checkbox"
+                                   name="cat_ids[]" value="<%= c.id %>" data-cat="<%= c.id %>"
+                                   <%= checked ? 'checked' : '' %>>
+                        </td>
+                        <td class="fw-semibold"><%= c.name %></td>
+                        <td>
+                            <input type="number" class="form-control form-control-sm" name="disc[c<%= c.id %>]"
+                                   min="0" max="100" step="0.01" value="<%= saved ? saved.discount_pct : 0 %>"
+                                   <%= checked ? '' : 'disabled' %>>
+                        </td>
+                        <td>
+                            <input type="number" class="form-control form-control-sm" name="add[c<%= c.id %>]"
+                                   min="0" step="0.01" value="<%= saved ? saved.addition_pct : 0 %>"
+                                   <%= checked ? '' : 'disabled' %>>
+                        </td>
+                        <td>
+                            <% if (plist.length) { %>
+                                <button class="btn btn-sm btn-outline-secondary cu-prod-btn" type="button"
+                                        id="cu-prod-btn-<%= c.id %>" data-cat="<%= c.id %>" data-total="<%= plist.length %>"
+                                        data-bs-toggle="modal" data-bs-target="#cu-prod-modal-<%= c.id %>"
+                                        <%= checked ? '' : 'disabled' %>>
+                                    <i class="fa-solid fa-box-open me-1"></i>
+                                    <span class="cu-prod-btn-label"><%= narrowedCount ? (narrowedCount + ' of ' + plist.length + ' selected') : ('All (' + plist.length + ')') %></span>
+                                </button>
+                            <% } else { %>
+                                <span class="text-muted small">No products</span>
+                            <% } %>
+                            <span id="cu-prod-inputs-<%= c.id %>">
+                                <input type="hidden" name="prod[c<%= c.id %>][]" value="">
+                                <% Object.keys(savedProds).forEach(function (pid) { %>
+                                    <input type="hidden" name="prod[c<%= c.id %>][]" value="<%= pid %>">
+                                <% }); %>
+                            </span>
+                        </td>
+                    </tr>
+                <% }); %>
+                <% if (!_cats.length) { %>
+                    <tr><td colspan="5" class="text-center text-muted py-4">No categories yet — create categories first.</td></tr>
+                <% } %>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <% } else { %>
+    <div class="alert alert-info">
+        <i class="fa-solid fa-circle-info me-1"></i>
+        Save first — then the API token and the category/product catalog assignment appear on the edit screen.
+    </div>
+    <% } %>
+
+    <div class="d-flex gap-2 mb-4">
+        <button type="submit" class="btn btn-primary"><i class="fa-solid fa-floppy-disk me-1"></i>Save</button>
+        <a href="/website-users" class="btn btn-light">Cancel</a>
+    </div>
+</form>
+
+<% if (_isEdit) { %>
+<!-- ── Product picker modals (outside the form; Done copies ticks in) ── -->
+<% _cats.forEach(function (c) {
+    var plist = _prods[String(c.id)] || [];
+    if (!plist.length) return;
+    var saved = _byCat[String(c.id)] || null;
+    var savedProds = {};
+    (saved && saved.product_ids || []).forEach(function (pid) { savedProds[String(pid)] = true; });
+%>
+<div class="modal fade" id="cu-prod-modal-<%= c.id %>" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fa-solid fa-box-open me-2"></i><%= c.name %> — Select Products</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="d-flex gap-2 mb-3 flex-wrap">
+                    <div class="input-group input-group-sm" style="max-width:280px">
+                        <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+                        <input type="text" class="form-control cu-prod-search" data-cat="<%= c.id %>"
+                               placeholder="Search products...">
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-primary cu-prod-select-all" data-cat="<%= c.id %>">
+                        <i class="fa-solid fa-check-double me-1"></i>Select All
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary cu-prod-unselect-all" data-cat="<%= c.id %>">
+                        <i class="fa-solid fa-xmark me-1"></i>Unselect All
+                    </button>
+                    <span class="ms-auto text-muted small align-self-center">
+                        No selection = ALL products of this category are allowed.
+                    </span>
+                </div>
+                <div class="row row-cols-1 row-cols-md-2 g-2">
+                    <% plist.forEach(function (p) { %>
+                        <div class="col cu-prod-item-<%= c.id %>" data-search="<%= (p.name + ' ' + (p.sku || '')).toLowerCase() %>">
+                            <label class="form-check border rounded p-2 w-100 m-0 d-flex align-items-center gap-2">
+                                <input class="form-check-input cu-prod-tick-<%= c.id %> ms-1 mt-0" type="checkbox"
+                                       value="<%= p.id %>" <%= savedProds[String(p.id)] ? 'checked' : '' %>>
+                                <span class="form-check-label flex-grow-1">
+                                    <%= p.name %><%= p.sku ? (' (' + p.sku + ')') : '' %>
+                                </span>
+                                <span class="text-muted small">₹<%= p.sales_price %></span>
+                            </label>
+                        </div>
+                    <% }); %>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary cu-prod-done" data-cat="<%= c.id %>" data-bs-dismiss="modal">
+                    <i class="fa-solid fa-check me-1"></i>Done
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+<% }); %>
+<% } %>
+
+<script>
+(function () {
+    // Copy the API token.
+    var copyBtn = document.getElementById('wu-token-copy');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', function () {
+            var inp = document.getElementById('wu-token');
+            inp.select(); inp.setSelectionRange(0, 200);
+            try { navigator.clipboard.writeText(inp.value); } catch (_) { document.execCommand('copy'); }
+            copyBtn.innerHTML = '<i class="fa-solid fa-check me-1"></i>Copied';
+            setTimeout(function () { copyBtn.innerHTML = '<i class="fa-regular fa-copy me-1"></i>Copy'; }, 1500);
+        });
+    }
+
+    // ── Catalog picker wiring (same behaviour as the Customer Users form) ──
+    function setRowState(cat, on) {
+        document.querySelectorAll('[name="disc[c' + cat + ']"], [name="add[c' + cat + ']"]').forEach(function (el) { el.disabled = !on; });
+        var btn = document.getElementById('cu-prod-btn-' + cat);
+        if (btn) btn.disabled = !on;
+    }
+    document.querySelectorAll('.cu-cat-check').forEach(function (cb) {
+        cb.addEventListener('change', function () { setRowState(cb.getAttribute('data-cat'), cb.checked); });
+    });
+
+    // EITHER Discount % OR Addition % per category.
+    function pairRule(cat) {
+        var disc = document.querySelector('[name="disc[c' + cat + ']"]');
+        var add  = document.querySelector('[name="add[c' + cat + ']"]');
+        if (!disc || !add) return;
+        function sync(src, other) {
+            var v = Number(src.value) || 0;
+            if (v > 0) { other.value = 0; other.readOnly = true; other.classList.add('bg-light'); }
+            else { other.readOnly = false; other.classList.remove('bg-light'); }
+        }
+        disc.addEventListener('input', function () { sync(disc, add); });
+        add.addEventListener('input',  function () { sync(add, disc); });
+        if ((Number(disc.value) || 0) > 0) { add.readOnly = true; add.classList.add('bg-light'); }
+        if ((Number(add.value)  || 0) > 0) { disc.readOnly = true; disc.classList.add('bg-light'); }
+    }
+    document.querySelectorAll('.cu-cat-check').forEach(function (cb) { pairRule(cb.getAttribute('data-cat')); });
+
+    var selAll = document.getElementById('cu-cat-select-all');
+    var unselAll = document.getElementById('cu-cat-unselect-all');
+    function setAllCats(on) {
+        document.querySelectorAll('.cu-cat-check').forEach(function (cb) {
+            cb.checked = on;
+            setRowState(cb.getAttribute('data-cat'), on);
+        });
+    }
+    if (selAll)   selAll.addEventListener('click', function () { setAllCats(true); });
+    if (unselAll) unselAll.addEventListener('click', function () { setAllCats(false); });
+
+    document.querySelectorAll('.cu-prod-search').forEach(function (inp) {
+        inp.addEventListener('input', function () {
+            var q = inp.value.trim().toLowerCase();
+            document.querySelectorAll('.cu-prod-item-' + inp.getAttribute('data-cat')).forEach(function (item) {
+                item.style.display = (!q || item.getAttribute('data-search').indexOf(q) !== -1) ? '' : 'none';
+            });
+        });
+    });
+    function setVisibleTicks(cat, on) {
+        document.querySelectorAll('.cu-prod-item-' + cat).forEach(function (item) {
+            if (item.style.display === 'none') return;
+            var t = item.querySelector('input[type="checkbox"]');
+            if (t) t.checked = on;
+        });
+    }
+    document.querySelectorAll('.cu-prod-select-all').forEach(function (btn) {
+        btn.addEventListener('click', function () { setVisibleTicks(btn.getAttribute('data-cat'), true); });
+    });
+    document.querySelectorAll('.cu-prod-unselect-all').forEach(function (btn) {
+        btn.addEventListener('click', function () { setVisibleTicks(btn.getAttribute('data-cat'), false); });
+    });
+    document.querySelectorAll('.cu-prod-done').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var cat = btn.getAttribute('data-cat');
+            var ticked = Array.prototype.filter.call(
+                document.querySelectorAll('.cu-prod-tick-' + cat), function (t) { return t.checked; }
+            ).map(function (t) { return t.value; });
+
+            var holder = document.getElementById('cu-prod-inputs-' + cat);
+            holder.innerHTML = '<input type="hidden" name="prod[c' + cat + '][]" value="">'
+                + ticked.map(function (id) { return '<input type="hidden" name="prod[c' + cat + '][]" value="' + id + '">'; }).join('');
+
+            var btnEl = document.getElementById('cu-prod-btn-' + cat);
+            var total = btnEl ? btnEl.getAttribute('data-total') : '';
+            var label = btnEl ? btnEl.querySelector('.cu-prod-btn-label') : null;
+            if (label) label.textContent = ticked.length ? (ticked.length + ' of ' + total + ' selected') : ('All (' + total + ')');
+        });
+    });
+})();
+</script>

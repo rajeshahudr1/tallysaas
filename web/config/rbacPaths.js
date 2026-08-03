@@ -25,6 +25,8 @@ const PATH_TO_MODULE = {
     'bank-reconciliation': 'bank-reconciliation', 'recurring-invoices': 'recurring-invoices',
     einvoices: 'einvoice', expenses: 'expenses', analytics: 'reports',
     'accountant-access': 'users', reminders: 'payments', settings: 'settings',
+    'customer-users': 'customer-users',
+    'website-users': 'website-users',
 };
 
 /** Resolve a URL path (or bare segment) to its module slug, or null if unknown. */

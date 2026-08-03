@@ -44,6 +44,17 @@
  */
 
 const db = require('../config/db').db;
+const R  = require('../Helpers/response');
+const { entitledSlugSet } = require('../Helpers/entitlements');
+
+// Portal-link entitlement gate: which license MODULE a linked login rides on.
+// When the super-admin removes that module from the licence, the linked login
+// is dead on EVERY request (not just hidden menus) — 403 with a clear message.
+const DISABLED_MSG = 'This login has been disabled — the module is not enabled on your license.';
+async function moduleEnabled(licenseId, slug) {
+    const entitled = await entitledSlugSet(licenseId);   // null = no licence gate
+    return !entitled || entitled.has(slug);
+}
 
 async function resolveLocation(req, res, next) {
     const user = req.user || {};
@@ -52,6 +63,9 @@ async function resolveLocation(req, res, next) {
     req.locationId = null;
     req.salesPersonId = null;
     req.isSalesman = false;
+    // Customer-portal login (customers.user_id link) — mirrors the salesman flags.
+    req.customerId = null;
+    req.isCustomerUser = false;
     // needsApproval — TRUE for EVERY non-admin user (not only linked salesmen):
     // their sales invoices must be approved by a company-admin before they count
     // / sync to Tally. ONLY company-admin + super-admin (+ admin/owner) bypass.
@@ -93,8 +107,36 @@ async function resolveLocation(req, res, next) {
                 .whereNull('deleted_at')
                 .first('id');
             if (sp) {
+                // License gate: the salesman portal rides on the 'sales-persons'
+                // module — removed from the licence ⇒ this login stops working.
+                if (!await moduleEnabled(user.license_id, 'sales-persons.view')) {
+                    return R.errorResponse(res, DISABLED_MSG, 403);
+                }
                 req.isSalesman = true;
                 req.salesPersonId = Number(sp.id);
+            }
+            // Customer-portal scoping: a user LINKED to a customers row is a
+            // customer login. They see ONLY their assigned categories/products
+            // (customer_user_categories/_products), their invoices are forced to
+            // their own customer_id with server-computed locked rates, and they
+            // go through the same approval queue. Salesman link wins if both
+            // somehow exist (a user should never be both).
+            if (!sp) {
+                const cust = await db('customers')
+                    .where({ user_id: userId, company_id: req.companyId })
+                    .whereNull('deleted_at')
+                    .first('id', 'is_website_user');
+                if (cust) {
+                    // License gate: customer logins ride on 'customer-users',
+                    // website/API logins on 'website-users'.
+                    const modSlug = cust.is_website_user
+                        ? 'website-users.view' : 'customer-users.view';
+                    if (!await moduleEnabled(user.license_id, modSlug)) {
+                        return R.errorResponse(res, DISABLED_MSG, 403);
+                    }
+                    req.isCustomerUser = true;
+                    req.customerId = Number(cust.id);
+                }
             }
         }
         return next();
@@ -106,6 +148,8 @@ async function resolveLocation(req, res, next) {
         req.locationId = null;
         req.salesPersonId = null;
         req.isSalesman = false;
+        req.customerId = null;
+        req.isCustomerUser = false;
         req.needsApproval = !['super-admin', 'company-admin', 'admin', 'owner']
             .includes(user.role_slug);
         return next();

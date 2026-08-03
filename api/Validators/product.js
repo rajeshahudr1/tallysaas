@@ -114,6 +114,8 @@ const listProductSchema = Joi.object({
     per_page: Joi.number().integer().min(1).max(100).default(20),
     sort:     Joi.string().trim().max(40).allow('', null),
     order:    Joi.string().trim().lowercase().valid('asc', 'desc').allow('', null),
+    // Incremental sync: 1 = updated today, or an ISO date/datetime cutoff.
+    last_update: Joi.alternatives().try(Joi.valid('1', 1), Joi.string().isoDate()).allow('', null),
 }).unknown(true);   // allow filter params (category / gst_rate / hsn / dates)
 
 module.exports = {

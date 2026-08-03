@@ -28,10 +28,14 @@ function _opts(all, list) {
 }
 
 /* ── FilterCard config (5 fields) ───────────────────────────── */
+/* The Tally-sync Status filter is a back-office concern — hidden for salesman /
+ * customer logins (matches the hidden Status column below). */
+var _hideTally = ((typeof isSalesman !== 'undefined' && isSalesman)
+    || (typeof isCustomerUser !== 'undefined' && isCustomerUser)) ? true : false;
 var filterFields = [
     { type: 'text',   name: 'search',       label: 'Search',       placeholder: 'Invoice no / customer...', colClass: 'filter-col-fifth' },
     { type: 'select', name: 'customer',     label: 'Customer',     options: _opts('All Customers', _custs),  colClass: 'filter-col-fifth' },
-    { type: 'select', name: 'status',       label: 'Status',       options: _opts('All Status', _statuses),  colClass: 'filter-col-fifth' },
+    ...(_hideTally ? [] : [{ type: 'select', name: 'status', label: 'Status', options: _opts('All Status', _statuses), colClass: 'filter-col-fifth' }]),
     { type: 'date',   name: 'date_from',    label: 'Date From',                                              colClass: 'filter-col-fifth' },
     { type: 'date',   name: 'date_to',      label: 'Date To',                                                colClass: 'filter-col-fifth' },
 ];
@@ -41,7 +45,7 @@ var filterFields = [
 /* A salesman only cares about the APPROVAL state — the Tally-sync lifecycle
  * ('Pending Tally' / 'Sent to Tally' …) is a back-office concern, so hide that
  * 'Status' column for them. Admins keep both. */
-var _isSalesmanCol = (typeof isSalesman !== 'undefined' && isSalesman) ? true : false;
+var _isSalesmanCol = _hideTally;
 var tableColumns = [
     { key: 'date',       label: 'Date',         sortable: true,  type: 'date' },
     { key: 'customer',   label: 'Particulars',  sortable: true,  type: 'text' },

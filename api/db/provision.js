@@ -46,6 +46,7 @@ const MODULES = [
     'products', 'categories', 'sales-invoices', 'purchase-invoices', 'payments',
     'receipts', 'expenses', 'inventory', 'tally-sync', 'reports', 'users', 'settings',
     'einvoice', 'recurring-invoices', 'bank-reconciliation', 'field-sales', 'gps-tracking',
+    'customer-users', 'website-users',
 ];
 const ACTIONS = ['view', 'create', 'edit', 'delete', 'export'];
 // Built-in system roles. Only these two are seeded; a company creates its own

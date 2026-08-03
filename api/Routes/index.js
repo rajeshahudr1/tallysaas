@@ -42,7 +42,7 @@ const { resolveCompany }  = require('../Middlewares/companyScope');
 const { resolveLocation } = require('../Middlewares/locationScope');
 const { resolveTenant }   = require('../Middlewares/tenantResolver');
 const { superAdminBridge } = require('../Middlewares/superAdminBridge');
-const { can, canField, canCustomerRead, canRefRead } = require('../Middlewares/rbac');
+const { can, canField, canCustomerRead, canRefRead, canProductRead, canOwnInvoice } = require('../Middlewares/rbac');
 const { validate }        = require('../Middlewares/validate');
 
 // ── Validators ────────────────────────────────────────────────────
@@ -106,11 +106,19 @@ const {
 const { inviteAccountantSchema } = require('../Validators/accountant');
 const { createCompanySchema, listCompanySchema } = require('../Validators/company');
 const { createJournalSchema, listJournalSchema } = require('../Validators/journal');
+const {
+    loginSchema:   customerUserLoginSchema,
+    catalogSchema: customerUserCatalogSchema,
+} = require('../Validators/customerUser');
+const { createWebsiteUserSchema, updateWebsiteUserSchema } = require('../Validators/websiteUser');
+const { authenticateApiToken, extFullAccess } = require('../Middlewares/apiToken');
 const { createAdjustmentSchema }                 = require('../Validators/inventory');
 
 // ── Controllers ───────────────────────────────────────────────────
 const AuthController          = require('../Controllers/Auth/AuthController');
 const CustomerController      = require('../Controllers/Tenant/CustomerController');
+const CustomerUserController  = require('../Controllers/Tenant/CustomerUserController');
+const WebsiteUserController   = require('../Controllers/Tenant/WebsiteUserController');
 const LocationController      = require('../Controllers/Tenant/LocationController');
 const SalesPersonController   = require('../Controllers/Tenant/SalesPersonController');
 const SupplierController      = require('../Controllers/Tenant/SupplierController');
@@ -390,6 +398,87 @@ router.delete(
     CustomerController.destroy,
 );
 
+// Customer-User (customer portal login) — mirrors the sales-person login +
+// assignment endpoints. Reads gate on customers.view, writes on customers.edit,
+// so a role without edit gets a server-side 403 regardless of the UI state.
+router.get(
+    '/customers/:id/assignments',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customer-users', 'view'),
+    CustomerUserController.getAssignments,
+);
+router.post(
+    '/customers/:id/login',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customer-users', 'edit'),
+    validate(customerUserLoginSchema),
+    CustomerUserController.setLogin,
+);
+router.put(
+    '/customers/:id/catalog',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customer-users', 'edit'),
+    validate(customerUserCatalogSchema),
+    CustomerUserController.setCatalog,
+);
+
+// ───────────────────────────────────────────────────────────────────
+// Website Users (third-party API users). A website user IS a fresh customers
+// row (is_website_user) + login + api_token; catalog assignment reuses the
+// /customers/:id/catalog endpoints above. Same customers.* permission gates.
+// ───────────────────────────────────────────────────────────────────
+router.get('/website-users',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('website-users', 'view'),
+    WebsiteUserController.list);
+router.get('/website-users/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('website-users', 'view'),
+    WebsiteUserController.get);
+router.post('/website-users',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('website-users', 'create'),
+    validate(createWebsiteUserSchema), WebsiteUserController.create);
+router.put('/website-users/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('website-users', 'edit'),
+    validate(updateWebsiteUserSchema), WebsiteUserController.update);
+router.post('/website-users/:id/regenerate-token',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('website-users', 'edit'),
+    WebsiteUserController.regenerateToken);
+
+// ───────────────────────────────────────────────────────────────────
+// Third-party EXT API (X-Api-Token / Bearer wt_… — no JWT). The token maps to
+// a website user; requests behave exactly like that user's portal session:
+// catalog-scoped lists at locked adjusted rates, invoices forced to their own
+// customer with server-side pricing (+ cash/online surcharge via payment_mode)
+// and the approval queue.
+// ───────────────────────────────────────────────────────────────────
+router.get('/ext/categories',
+    authenticateApiToken, validate(listCategorySchema, 'query'), CategoryController.list);
+router.get('/ext/products',
+    authenticateApiToken, validate(listProductSchema, 'query'), ProductController.list);
+router.get('/ext/sales-invoices',
+    authenticateApiToken, validate(listInvoiceSchema, 'query'), InvoiceController.listSales);
+router.get('/ext/sales-invoices/:id',
+    authenticateApiToken, InvoiceController.get);
+router.post('/ext/sales-invoices',
+    authenticateApiToken, validate(createSalesInvoiceSchema), InvoiceController.createSales);
+
+// EXT integration endpoints (extFullAccess lifts the portal self-scoping so
+// the token manages the COMPANY's data — it is the company's own credential):
+// Customer master CRUD — the SAME CustomerController the JWT routes use.
+router.get('/ext/customers',
+    authenticateApiToken, extFullAccess, validate(listCustomerSchema, 'query'), CustomerController.list);
+router.get('/ext/customers/:id',
+    authenticateApiToken, extFullAccess, CustomerController.get);
+router.post('/ext/customers',
+    authenticateApiToken, extFullAccess, validate(createCustomerSchema), CustomerController.create);
+router.put('/ext/customers/:id',
+    authenticateApiToken, extFullAccess, validate(updateCustomerSchema), CustomerController.update);
+// Location list — for the customer add/edit form's location_id dropdown.
+router.get('/ext/locations',
+    authenticateApiToken, extFullAccess, validate(listLocationSchema, 'query'), LocationController.list);
+// Company-wide invoice list (filter by ?customer_id + status/approval/dates/
+// search) + full invoice details — same InvoiceController as the JWT routes.
+router.get('/ext/invoices',
+    authenticateApiToken, extFullAccess, validate(listInvoiceSchema, 'query'), InvoiceController.listSales);
+router.get('/ext/invoices/:id',
+    authenticateApiToken, extFullAccess, InvoiceController.get);
+
 // ───────────────────────────────────────────────────────────────────
 // Locations (protected tenant CRUD)
 // ───────────────────────────────────────────────────────────────────
@@ -638,14 +727,14 @@ router.delete('/products/:id/images/:imageId', authenticate, resolveTenant, reso
 
 router.get(
     '/products',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canProductRead,
     validate(listProductSchema, 'query'),
     ProductController.list,
 );
 
 router.get(
     '/products/:id',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canProductRead,
     ProductController.get,
 );
 
@@ -714,32 +803,32 @@ router.delete(
 
 router.get(
     '/sales-invoices',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('view'),
     validate(listInvoiceSchema, 'query'),
     InvoiceController.listSales,
 );
 
 router.get(
     '/sales-invoices/monthly',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('view'),
     InvoiceController.monthlySales,
 );
 
 router.get(
     '/sales-invoices/:id',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('view'),
     InvoiceController.get,
 );
 
 router.get(
     '/sales-invoices/:id/pdf',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'view'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('view'),
     InvoiceController.pdf,
 );
 
 router.post(
     '/sales-invoices',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('create'),
     validate(createSalesInvoiceSchema),
     InvoiceController.createSales,
 );
@@ -748,7 +837,7 @@ router.post(
 // draft-only + ownership). save_as_draft=false in the body ALSO submits it.
 router.put(
     '/sales-invoices/:id',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('create'),
     validate(createSalesInvoiceSchema),
     InvoiceController.updateDraft,
 );
@@ -756,7 +845,7 @@ router.put(
 // SFA — a salesman submits their own draft for approval ('draft' → 'pending').
 router.post(
     '/sales-invoices/:id/submit',
-    authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'create'),
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('create'),
     InvoiceController.submitDraft,
 );
 

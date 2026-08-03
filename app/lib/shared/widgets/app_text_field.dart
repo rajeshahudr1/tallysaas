@@ -19,6 +19,7 @@ class AppTextField extends StatelessWidget {
     this.onSubmitted,
     this.onChanged,
     this.enabled = true,
+    this.readOnly = false,
     this.maxLines = 1,
     this.suffix,
   });
@@ -38,6 +39,10 @@ class AppTextField extends StatelessWidget {
   final ValueChanged<String>? onSubmitted;
   final ValueChanged<String>? onChanged;
   final bool enabled;
+  /// Visible + focusable but NOT editable (e.g. a locked, price-list-driven
+  /// rate on the customer portal). Unlike [enabled]=false the value stays
+  /// readable at full contrast and still submits.
+  final bool readOnly;
   final int maxLines;
   /// Optional trailing widget (e.g. a show-password toggle).
   final Widget? suffix;
@@ -68,6 +73,7 @@ class AppTextField extends StatelessWidget {
           onFieldSubmitted: onSubmitted,
           onChanged: onChanged,
           enabled: enabled,
+          readOnly: readOnly,
           maxLines: obscure ? 1 : maxLines,
         ),
       ],

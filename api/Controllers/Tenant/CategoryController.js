@@ -25,6 +25,21 @@
 const crud = require('../../Helpers/crudController');
 const db   = require('../../config/db').db;
 
+/**
+ * extraScope — a customer-portal login (customers.user_id link) sees ONLY the
+ * categories assigned to them in customer_user_categories. Everyone else is
+ * unaffected (scope only ever narrows).
+ */
+async function categoryExtraScope(qb, req) {
+    if (!req.isCustomerUser) return;
+    qb.whereIn('categories.id', (sub) => {
+        sub.select('category_id')
+            .from('customer_user_categories')
+            .where('company_id', req.companyId)
+            .where('customer_id', req.customerId);
+    });
+}
+
 // Columns returned by list/get. `categories.*` gives every base column; the
 // aliased self-join adds a human-readable label for the parent FK.
 const LIST_COLUMNS = [
@@ -101,6 +116,7 @@ const controller = crud.build({
     baseQuery,
     buildInsert,
     buildUpdate,
+    extraScope: categoryExtraScope,
 });
 
 module.exports = {

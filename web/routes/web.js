@@ -125,6 +125,15 @@ router.use((req, res, next) => {
     };
     if (RBAC_ADMIN_ONLY_PATH.has(seg)) return isAdmin ? next() : forbid();
     const mod = RBAC_MODULE_BY_PATH[seg];
+    // Customer-portal login: being the LINKED customer entitles them to READ
+    // their scoped catalog pages even when the role carries no products/
+    // categories grant (mirrors the API's canProductRead/canRefRead). Writes
+    // (add/edit/delete tails) still fall through to the strict action gate.
+    if (res.locals.isCustomerUser && req.method === 'GET'
+        && (seg === 'products' || seg === 'categories')
+        && parts.length === 1) {
+        return next();
+    }
     if (mod && typeof res.locals.canModule === 'function') {
         // Module-level (view) gate — a role with no access to the module at all.
         if (!res.locals.canModule(mod)) return forbid();
@@ -464,6 +473,9 @@ async function fetchInvoiceProducts(req, priceField) {
         id: p.id, name: p.name, hsn: p.hsn_code || '', unit: p.unit || '',
         rate: p[priceField] != null ? parseFloat(p[priceField]) : 0,
         gst:  p.gst_rate != null ? parseFloat(p.gst_rate) : 0,
+        // Current stock on hand (Tally closing balance) — the create screen caps
+        // the line Qty at this; the api enforces the same rule server-side.
+        stock: p.opening_stock != null ? parseFloat(p.opening_stock) : 0,
     }));
 }
 
@@ -582,6 +594,46 @@ router.get('/', async (req, res, next) => {
         if (res.locals.isSuperAdmin) return res.redirect('/licenses');
         // A field salesman lands on their own "My Field" dashboard (visits/approvals).
         if (res.locals.isSalesman) return res.redirect('/my-field');
+        // A customer-portal login gets a simple stats dashboard: their assigned
+        // categories/products (API-scoped lists) + their own invoices. The list
+        // meta.total carries the counts — no dashboard.view permission needed.
+        if (res.locals.isCustomerUser) {
+            const cuGrp = (v) => Number(v || 0).toLocaleString('en-IN');
+            const cuInr = (v) => '₹' + cuGrp(v);
+            const cuMeta = (r) => {
+                const m = (r && r.body && r.body.data && r.body.data.meta) || {};
+                return {
+                    total: Number.isFinite(Number(m.total)) ? Number(m.total) : 0,
+                    amount: Number(m.grand_total) || 0,
+                };
+            };
+            const [catR, prodR, allR, pendR, apprR] = await Promise.all([
+                api.get(req, '/categories?per_page=1').catch(() => null),
+                api.get(req, '/products?per_page=1').catch(() => null),
+                api.get(req, '/sales-invoices?per_page=1&approval=all').catch(() => null),
+                api.get(req, '/sales-invoices?per_page=1&approval=pending').catch(() => null),
+                api.get(req, '/sales-invoices?per_page=1&approval=approved').catch(() => null),
+            ]);
+            const inv = cuMeta(allR), pend = cuMeta(pendR), appr = cuMeta(apprR);
+            return res.render('dashboard/index', {
+                title: 'Dashboard',
+                activeMenu: 'dashboard',
+                breadcrumb: [{ label: 'Dashboard' }],
+                welcomeOnly: false,
+                statsOnly: true,
+                welcomeName: (res.locals.user && res.locals.user.name) || 'there',
+                stats: [
+                    { label: 'My Categories',     value: cuGrp(cuMeta(catR).total),  icon: 'fa-tags',              tone: 'purple', href: '/categories' },
+                    { label: 'My Products',       value: cuGrp(cuMeta(prodR).total), icon: 'fa-box',               tone: 'teal',   href: '/products' },
+                    { label: 'My Invoices',       value: cuGrp(inv.total),           icon: 'fa-file-invoice',      tone: 'blue',   href: '/sales-invoices' },
+                    { label: 'Invoice Amount',    value: cuInr(inv.amount),          icon: 'fa-indian-rupee-sign', tone: 'indigo', href: '/sales-invoices' },
+                    { label: 'Pending Invoices',  value: cuGrp(pend.total),          icon: 'fa-hourglass-half',    tone: 'amber',  href: '/sales-invoices?approval=pending' },
+                    { label: 'Approved Invoices', value: cuGrp(appr.total),          icon: 'fa-circle-check',      tone: 'green',  href: '/sales-invoices?approval=approved' },
+                ],
+                salesChart: { labels: [], data: [] }, syncChart: { labels: [], data: [] },
+                recentInvoices: [], recentSync: [],
+            });
+        }
         // A NON-salesman whose role was NOT granted the Dashboard module has no KPI
         // page to show (the summary API would 403). Instead of bouncing them to the
         // salesman screen, render the dashboard shell with a friendly WELCOME message
@@ -1384,6 +1436,272 @@ router.post('/sales-persons', async (req, res, next) => {
         }
         // To the edit page so the per-location customer checklists are available.
         return req.session.save(() => res.redirect(id ? `/sales-persons/${id}/edit` : '/sales-persons'));
+    } catch (err) { next(err); }
+});
+
+/* ── SETTINGS · Customer Users (customer portal logins) ───────
+ * A customer gets a LOGIN (like a sales person) + an assigned catalog:
+ * categories with per-category Discount % / Addition %, optionally narrowed to
+ * specific products. The linked login sees ONLY that catalog at the locked
+ * adjusted rate and creates invoices that enter the approval queue. */
+router.get('/customer-users', async (req, res, next) => {
+    try {
+        const { rows, meta } = await apiList(req, '/customers');
+        const customerUserRows = rows.map((r) => ({
+            id: r.id, name: r.name, mobile: r.mobile || '', email: r.email || '',
+            group: r.customer_group || '',
+            login: r.user_id ? 'Yes' : 'No',
+            status: r.status, created_at: fmtDate(r.created_at),
+        }));
+        res.render('customer-users/list', {
+            title: 'Customer Users',
+            activeMenu: 'customer-users',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Customer Users' }],
+            customerUserRows, customerUsersTotal: meta.total, page: meta.page, perPage: meta.per_page,
+        });
+    } catch (err) { next(err); }
+});
+
+/* Edit screen: login card + catalog (categories × pricing % × product ticks). */
+router.get('/customer-users/:id/edit', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const [record, roleOptions, catRes, prodRes] = await Promise.all([
+            fetchRecord(req, '/customers', id),
+            fetchRoleOptions(req),
+            api.get(req, '/categories?per_page=100'),
+            api.get(req, '/products?per_page=100'),
+        ]);
+        if (!record) { setFlash(req, 'error', 'Customer not found.'); return req.session.save(() => res.redirect('/customer-users')); }
+
+        const categories = (catRes.body && catRes.body.data && Array.isArray(catRes.body.data.data)) ? catRes.body.data.data : [];
+        const products   = (prodRes.body && prodRes.body.data && Array.isArray(prodRes.body.data.data)) ? prodRes.body.data.data : [];
+        const productsByCategory = {};
+        for (const p of products) {
+            if (p.category_id == null) continue;
+            const key = String(p.category_id);
+            (productsByCategory[key] = productsByCategory[key] || []).push({
+                id: p.id, name: p.name, sku: p.sku || '', sales_price: p.sales_price,
+            });
+        }
+
+        // Saved assignments (login summary + catalog config) for prefill.
+        let assignments = { user: null, categories: [] };
+        try {
+            const ar = await api.get(req, `/customers/${id}/assignments`);
+            if (apiOk(ar) && ar.body.data) assignments = ar.body.data;
+        } catch (_) { /* best-effort prefill */ }
+
+        res.render('customer-users/form', {
+            title: 'Configure Customer User',
+            activeMenu: 'customer-users',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Customer Users', href: '/customer-users' },
+                { label: record.name || 'Configure' },
+            ],
+            record, roleOptions,
+            categoryRows: categories.map((c) => ({ id: c.id, name: c.name })),
+            productsByCategory,
+            assignments,
+        });
+    } catch (err) { next(err); }
+});
+
+/* Save: forward the login (opt-in via login_email) to POST /customers/:id/login,
+ * then the catalog to PUT /customers/:id/catalog. Both are API-enforced
+ * (customers.edit + company scoping) — the UI is only a convenience layer. */
+router.post('/customer-users/:id', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const b  = req.body;
+        const warnings = [];
+
+        // Login (only when an email was supplied — password optional on update).
+        const loginEmail = (b.login_email || '').trim();
+        if (loginEmail) {
+            const payload = { email: loginEmail, role_id: _num(b.role_id) };
+            const pass = (b.password || '').trim();
+            if (pass) payload.password = pass;
+            if (b.login_status) payload.status = b.login_status;
+            const lr = await api.post(req, `/customers/${id}/login`, payload);
+            if (!apiOk(lr)) warnings.push(apiError(lr, 'Could not save the login.'));
+        }
+
+        // Catalog: cat_ids[] + disc[c<catId>] + add[c<catId>] + prod[c<catId>][].
+        // The 'c' prefix keeps the maps OBJECT-keyed — a bare numeric key becomes
+        // a sparse array index under the extended (qs) parser and gets COMPACTED,
+        // silently losing which category a % belonged to (same trick as the
+        // sales-person 'loc' keys).
+        const catIds = toPosIntArray(b.cat_ids);
+        const discMap = (b.disc && typeof b.disc === 'object') ? b.disc : {};
+        const addMap  = (b.add  && typeof b.add  === 'object') ? b.add  : {};
+        const prodMap = (b.prod && typeof b.prod === 'object') ? b.prod : {};
+        const categories = catIds.map((catId) => ({
+            category_id:  catId,
+            discount_pct: Number(discMap['c' + catId]) || 0,
+            addition_pct: Number(addMap['c' + catId])  || 0,
+            product_ids:  toPosIntArray(prodMap['c' + catId]),
+        }));
+        const cr = await api.put(req, `/customers/${id}/catalog`, { categories });
+        if (!apiOk(cr)) warnings.push(apiError(cr, 'Could not save the catalog.'));
+
+        if (warnings.length) setFlash(req, 'error', warnings.join(' '));
+        else setFlash(req, 'success', 'Customer user saved successfully.');
+        return req.session.save(() => res.redirect(`/customer-users/${id}/edit`));
+    } catch (err) { next(err); }
+});
+
+/* ── SETTINGS · Website Users (third-party API users) ─────────
+ * A website user is a FRESH party + login + auto API token + cash/online
+ * pricing %; catalog assignment reuses the /customers/:id/catalog API (a
+ * website user IS a customers row under the hood). */
+router.get('/website-users', async (req, res, next) => {
+    try {
+        const { rows, meta } = await apiList(req, '/website-users');
+        const websiteUserRows = rows.map((r) => ({
+            id: r.id, name: r.name, email: r.login_email || r.email || '', mobile: r.mobile || '',
+            cash_pct: (Number(r.cash_extra_pct) || 0) + '%',
+            online_pct: (Number(r.online_extra_pct) || 0) + '%',
+            token: r.api_token ? (String(r.api_token).slice(0, 12) + '…') : '—',
+            status: r.status, created_at: fmtDate(r.created_at),
+        }));
+        res.render('website-users/list', {
+            title: 'Website Users',
+            activeMenu: 'website-users',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Website Users' }],
+            websiteUserRows, websiteUsersTotal: meta.total, page: meta.page, perPage: meta.per_page,
+        });
+    } catch (err) { next(err); }
+});
+
+router.get('/website-users/add', async (req, res, next) => {
+    try {
+        const roleOptions = await fetchRoleOptions(req);
+        res.render('website-users/form', {
+            title: 'Add Website User',
+            activeMenu: 'website-users',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Website Users', href: '/website-users' },
+                { label: 'Add Website User' },
+            ],
+            record: null, roleOptions,
+            categoryRows: [], productsByCategory: {}, assignments: { user: null, categories: [] },
+        });
+    } catch (err) { next(err); }
+});
+
+router.post('/website-users', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const payload = {
+            name: b.name, email: (b.login_email || '').trim(), password: (b.password || '').trim(),
+            role_id: _num(b.role_id), mobile: b.mobile || undefined,
+            cash_extra_pct: Number(b.cash_extra_pct) || 0,
+            online_extra_pct: Number(b.online_extra_pct) || 0,
+            status: b.login_status || 'Active',
+        };
+        const result = await api.post(req, '/website-users', payload);
+        if (!apiOk(result)) {
+            setFlash(req, 'error', apiError(result, 'Could not create the website user.'));
+            return req.session.save(() => res.redirect('/website-users/add'));
+        }
+        const id = result.body.data && result.body.data.id;
+        setFlash(req, 'success', (result.body && result.body.msg) || 'Website user created.');
+        // Straight to edit so the operator can copy the token + assign the catalog.
+        return req.session.save(() => res.redirect(id ? `/website-users/${id}/edit` : '/website-users'));
+    } catch (err) { next(err); }
+});
+
+router.get('/website-users/:id/edit', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const [wuRes, roleOptions, catRes, prodRes] = await Promise.all([
+            api.get(req, `/website-users/${id}`),
+            fetchRoleOptions(req),
+            api.get(req, '/categories?per_page=100'),
+            api.get(req, '/products?per_page=100'),
+        ]);
+        const record = apiOk(wuRes) ? wuRes.body.data : null;
+        if (!record) { setFlash(req, 'error', 'Website user not found.'); return req.session.save(() => res.redirect('/website-users')); }
+
+        const categories = (catRes.body && catRes.body.data && Array.isArray(catRes.body.data.data)) ? catRes.body.data.data : [];
+        const products   = (prodRes.body && prodRes.body.data && Array.isArray(prodRes.body.data.data)) ? prodRes.body.data.data : [];
+        const productsByCategory = {};
+        for (const p of products) {
+            if (p.category_id == null) continue;
+            const key = String(p.category_id);
+            (productsByCategory[key] = productsByCategory[key] || []).push({
+                id: p.id, name: p.name, sku: p.sku || '', sales_price: p.sales_price,
+            });
+        }
+        let assignments = { user: record.login || null, categories: [] };
+        try {
+            const ar = await api.get(req, `/customers/${id}/assignments`);
+            if (apiOk(ar) && ar.body.data) assignments = { user: record.login || ar.body.data.user, categories: ar.body.data.categories || [] };
+        } catch (_) { /* best-effort prefill */ }
+
+        res.render('website-users/form', {
+            title: 'Configure Website User',
+            activeMenu: 'website-users',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Website Users', href: '/website-users' },
+                { label: record.name || 'Configure' },
+            ],
+            record, roleOptions,
+            categoryRows: categories.map((c) => ({ id: c.id, name: c.name })),
+            productsByCategory, assignments,
+        });
+    } catch (err) { next(err); }
+});
+
+router.post('/website-users/:id', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const b  = req.body;
+        const warnings = [];
+
+        const payload = {
+            name: b.name || undefined, mobile: b.mobile || undefined,
+            cash_extra_pct: Number(b.cash_extra_pct) || 0,
+            online_extra_pct: Number(b.online_extra_pct) || 0,
+        };
+        if ((b.login_email || '').trim()) payload.email = (b.login_email || '').trim();
+        if (_num(b.role_id)) payload.role_id = _num(b.role_id);
+        if ((b.password || '').trim()) payload.password = (b.password || '').trim();
+        if (b.login_status) payload.status = b.login_status;
+        const ur = await api.put(req, `/website-users/${id}`, payload);
+        if (!apiOk(ur)) warnings.push(apiError(ur, 'Could not update the website user.'));
+
+        // Catalog (same c-prefixed keys as the customer-users form).
+        const catIds = toPosIntArray(b.cat_ids);
+        const discMap = (b.disc && typeof b.disc === 'object') ? b.disc : {};
+        const addMap  = (b.add  && typeof b.add  === 'object') ? b.add  : {};
+        const prodMap = (b.prod && typeof b.prod === 'object') ? b.prod : {};
+        const categories = catIds.map((catId) => ({
+            category_id:  catId,
+            discount_pct: Number(discMap['c' + catId]) || 0,
+            addition_pct: Number(addMap['c' + catId])  || 0,
+            product_ids:  toPosIntArray(prodMap['c' + catId]),
+        }));
+        const cr = await api.put(req, `/customers/${id}/catalog`, { categories });
+        if (!apiOk(cr)) warnings.push(apiError(cr, 'Could not save the catalog.'));
+
+        if (warnings.length) setFlash(req, 'error', warnings.join(' '));
+        else setFlash(req, 'success', 'Website user saved successfully.');
+        return req.session.save(() => res.redirect(`/website-users/${id}/edit`));
+    } catch (err) { next(err); }
+});
+
+router.post('/website-users/:id/regenerate-token', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const r = await api.post(req, `/website-users/${id}/regenerate-token`, {});
+        if (apiOk(r)) setFlash(req, 'success', 'API token regenerated. Old token stopped working.');
+        else setFlash(req, 'error', apiError(r, 'Could not regenerate the token.'));
+        return req.session.save(() => res.redirect(`/website-users/${id}/edit`));
     } catch (err) { next(err); }
 });
 

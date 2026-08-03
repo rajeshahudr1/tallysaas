@@ -99,8 +99,10 @@ class TransactionsHubScreen extends ConsumerWidget {
     final user = session is SessionSignedIn ? session.user : null;
     final items = <_TxnEntry>[
       // (My Field is reached from the Dashboard tab, so it's NOT duplicated here.)
-      // SFA — Invoice Approvals for approvers (edit perm, not a field salesman).
-      if (user != null && user.can('sales-invoices', 'edit') && !user.isSalesman)
+      // SFA — Invoice Approvals for approvers (edit perm; never a salesman or a
+      // customer-portal login — they can't self-approve, the API 403s them too).
+      if (user != null && user.can('sales-invoices', 'edit')
+          && !user.isSalesman && !user.isCustomerUser)
         const _TxnEntry(
           title: 'Invoice Approvals',
           subtitle: 'Approve or reject salesman invoices',
@@ -109,7 +111,11 @@ class TransactionsHubScreen extends ConsumerWidget {
           route: '/sales-invoices/approvals',
         ),
       for (final e in _items)
-        if (user == null || user.canModule(e.module)) e,
+        // Customer-portal login: only their own Sales Invoices apply here.
+        if (user != null && user.isCustomerUser
+            ? (e.module == 'sales-invoices' && user.canModule('sales-invoices'))
+            : (user == null || user.canModule(e.module)))
+          e,
     ];
 
     return Scaffold(
