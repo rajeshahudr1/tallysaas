@@ -24,9 +24,14 @@ const PATH_TO_MODULE = {
     reports: 'reports', users: 'users',
     'bank-reconciliation': 'bank-reconciliation', 'recurring-invoices': 'recurring-invoices',
     einvoices: 'einvoice', expenses: 'expenses', analytics: 'reports',
-    'accountant-access': 'users', reminders: 'payments', settings: 'settings',
+    reminders: 'payments', settings: 'settings',
     'customer-users': 'customer-users',
     'website-users': 'website-users',
+    cash: 'cash-bank', bank: 'cash-bank',
+    receivables: 'receivables', payables: 'payables',
+    'accountant-access': 'accountant',
+    roles: 'roles',
+    'field-tracking': 'field-sales',
 };
 
 /** Resolve a URL path (or bare segment) to its module slug, or null if unknown. */
