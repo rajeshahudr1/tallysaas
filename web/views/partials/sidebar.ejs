@@ -126,9 +126,9 @@ var menu = [
 // company's allowed modules under Licenses → Permissions, NOT company roles — so
 // it never sees this item. Plain users never see it either.
 if (_isCompanyAdmin) {
-    var _settings = menu.find(function (g) { return g.label === 'Settings'; });
-    if (_settings) {
-        _settings.items.unshift({ key: 'roles', label: 'Roles & Permissions', icon: 'fa-user-shield', href: '/roles' });
+    var _cfg = menu.find(function (g) { return g.label === 'Configurations'; });
+    if (_cfg) {
+        _cfg.items.unshift({ key: 'roles', label: 'Roles & Permissions', icon: 'fa-user-shield', href: '/roles' });
     }
 }
 
@@ -137,11 +137,9 @@ if (_isCompanyAdmin) {
 // primary workflow, so PIN it to the TOP — right under Dashboard, above Masters.
 if (_isSuperAdmin) {
     menu.splice(1, 0, { label: 'Platform Admin', icon: 'fa-shield-halved', items: [
-        { key: 'licenses',       label: 'Licenses',       icon: 'fa-key',                href: '/licenses' },
-        { key: 'agent-releases', label: 'Agent Updates',  icon: 'fa-cloud-arrow-up',     href: '/agent-releases' },
-        { key: 'app-releases',   label: 'App Updates',    icon: 'fa-mobile-screen-button', href: '/app-releases' },
-        { key: 'einvoice-gsp',   label: 'e-Invoice GSP',  icon: 'fa-file-invoice-dollar', href: '/einvoice-gsp' },
-        { key: 'gps-settings',   label: 'GPS Tracking',   icon: 'fa-location-crosshairs',  href: '/gps-settings' },
+        { key: 'licenses',       label: 'Licenses',      icon: 'fa-key',                  href: '/licenses' },
+        { key: 'agent-releases', label: 'Agent Updates', icon: 'fa-cloud-arrow-up',       href: '/agent-releases' },
+        { key: 'app-releases',   label: 'App Updates',   icon: 'fa-mobile-screen-button', href: '/app-releases' },
     ]});
 }
 
@@ -156,12 +154,6 @@ var _isCustomerUser = (typeof isCustomerUser !== 'undefined') ? !!isCustomerUser
 // sales-invoices edit action), never for a salesman or a customer login (they
 // can't self-approve; the API blocks them with 403 too).
 var _canApprove = _canDo('sales-invoices', 'edit') && !_isSalesman && !_isCustomerUser;
-// A salesman gets a "Field Sales · My Dashboard" group pinned right under Dashboard.
-if (_isSalesman) {
-    menu.splice(1, 0, { label: 'Field Sales', items: [
-        { key: 'my-field', label: 'My Dashboard', icon: 'fa-location-dot', href: '/my-field' },
-    ]});
-}
 // A customer-portal login (customers.user_id link) uses the NORMAL menu — the
 // API scopes Products/Categories to their assigned catalog and Sales Invoices
 // to their own rows. Approver-only + field items never apply to them.
@@ -174,7 +166,9 @@ if (_isCustomerUser) {
 }
 menu = menu.map(function (g) {
     g.items = (g.items || []).filter(function (it) {
-        if (it.soon) return !_isSuperAdmin;
+        if (it.soon)         return !_isSuperAdmin;
+        if (it.salesmanOnly) return _isSalesman;
+        if (it.superOnly)    return _isSuperAdmin;
         if (it.adminOnly) return _isCompanyAdmin || _isSuperAdmin;
         if (it.approve)   return _canApprove;
         if (it.perm)      return _canMod(it.perm);
@@ -198,9 +192,9 @@ if (_isSuperAdmin) {
         if (g.label === 'Platform Admin') return g;
         // Keep the Settings group's platform-relevant items (Users, Settings) —
         // NOT "Roles & Permissions" (that is a per-company / tenant feature).
-        if (g.label === 'Settings') {
+        if (g.label === 'Configurations') {
             g.items = (g.items || []).filter(function (it) {
-                return it.key === 'users' || it.key === 'settings';
+                return it.key === 'users' || it.key === 'settings' || it.key === 'einvoice-gsp';
             });
             return g;
         }
@@ -228,7 +222,7 @@ if (_isSuperAdmin) {
                         data-group="<%= gid %>" aria-expanded="<%= groupActive ? 'true' : 'false' %>"
                         <%= groupActive ? 'data-group-active' : '' %> aria-controls="grp-<%= gid %>">
                     <i class="fa-solid <%= group.icon || 'fa-folder' %> sidebar-section-icon" aria-hidden="true"></i>
-                    <span class="sidebar-section-text"><%- group.label %></span>
+                    <span class="sidebar-section-text"><%= group.label %></span>
                     <i class="fa-solid fa-chevron-down sidebar-section-caret"></i>
                 </button>
                 <ul class="sidebar-list sidebar-group" id="grp-<%= gid %>" data-group-items="<%= gid %>">
