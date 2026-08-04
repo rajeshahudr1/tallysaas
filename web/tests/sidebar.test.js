@@ -2,12 +2,15 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const ejs = require('ejs');
+const { MENU_TREE } = require('../lib/menuTree');
 
 const SIDEBAR = path.join(__dirname, '..', 'views', 'partials', 'sidebar.ejs');
 
 // Renders the sidebar partial with sane defaults. Any local can be overridden.
 // canModule/canDo default to "allow everything" so tests see the full menu
-// unless they deliberately restrict it.
+// unless they deliberately restrict it. `menuTree` mirrors what web/index.js
+// puts on res.locals — a fresh deep copy per render, since the partial's own
+// role logic mutates the array.
 function renderSidebar(locals) {
     return ejs.render(require('node:fs').readFileSync(SIDEBAR, 'utf8'), Object.assign({
         activeMenu: '',
@@ -17,6 +20,7 @@ function renderSidebar(locals) {
         isCustomerUser: false,
         canModule: function () { return true; },
         canDo: function () { return true; },
+        menuTree: JSON.parse(JSON.stringify(MENU_TREE)),
     }, locals || {}), { filename: SIDEBAR });
 }
 

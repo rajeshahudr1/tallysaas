@@ -17,20 +17,16 @@ var _isSuperAdmin = (typeof isSuperAdmin !== 'undefined') ? !!isSuperAdmin : fal
 var _isCompanyAdmin = (typeof isCompanyAdmin !== 'undefined') ? !!isCompanyAdmin : false;
 
 // Menu अब web/lib/menuTree.js में है (sidebar + License Modules screen दोनों वहीं
-// से बनते हैं)। हर render पर एक गहरी copy लें — नीचे की role-logic array को
-// mutate करती है (Roles inject, super-admin strip), और require() cache साझा है।
+// से बनते हैं)। web/index.js इसे हर request पर `res.locals.menuTree` के रूप में एक
+// गहरी copy देता है — नीचे की role-logic array को mutate करती है (Roles inject,
+// super-admin strip), इसलिए यहाँ एक और गहरी copy लेकर मूल local को untouched
+// छोड़ते हैं (उसी render में partial दुबारा भी शामिल हो सकता है)।
 //
 // NOTE: EJS templates compile to `new Function(...)` with NO closure over this
 // file's own `require` — a bare `require(...)` call here throws "require is not
-// defined" (proven: it works under `node -e` because Node happens to leak
-// `require` onto globalThis there, but NOT under a normal `node file.js`/
-// `node --test` process, which is how both the real app and sidebar.test.js run).
-// `process` IS a genuine JS global everywhere, so we bounce through
-// `process.mainModule.require('module')` to get Node's `module` core module,
-// then build a `require` scoped to *this* file's real path (`__filename`,
-// which EJS does inject as a local when compileDebug is on, the default).
-var _menuRequire = process.mainModule.require('module').createRequire(__filename);
-var menu = JSON.parse(JSON.stringify(_menuRequire('../../lib/menuTree').MENU_TREE));
+// defined". So the tree is read from a view local (the ordinary Express
+// pattern) instead of requiring the module directly from the template.
+var menu = JSON.parse(JSON.stringify((typeof menuTree !== 'undefined' && menuTree) ? menuTree : []));
 
 // "Roles & Permissions" (/roles) — a COMPANY-ADMIN feature. Roles live in the
 // company's own tenant db and are built from the MODULES the platform admin

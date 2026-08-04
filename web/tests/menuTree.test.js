@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { MENU_TREE, MODULE_GROUPS } = require('../lib/menuTree');
+const { MODULES } = require('../../api/db/provision');
 
 test('every menu item carries a module slug', () => {
     for (const g of MENU_TREE) {
@@ -20,6 +21,16 @@ test('the borrowed perms are gone — each screen has its own module', () => {
     assert.strictEqual(byKey['journals'], 'journals');
     assert.strictEqual(byKey['accountant'], 'accountant');
     assert.strictEqual(byKey['field-tracking'], 'field-sales');
+});
+
+test('every module used in MENU_TREE exists in the permission catalogue', () => {
+    const catalogue = new Set(MODULES);
+    for (const g of MENU_TREE) {
+        for (const it of g.items) {
+            assert.ok(catalogue.has(it.module),
+                `item "${it.key}" uses module "${it.module}", which is not in api/db/provision.js MODULES`);
+        }
+    }
 });
 
 test('MODULE_GROUPS lists every module exactly once, in menu order', () => {

@@ -221,6 +221,12 @@ app.use(async (req, res, next) => {
     // (injected in _layout.ejs) for client-side JS.
     res.locals.brand = require('./config/brand');
     res.locals.moduleInfo = require('./config/moduleInfo').MODULE_INFO;
+    // Sidebar menu tree — single source of truth (web/lib/menuTree.js), shared
+    // with the License Modules screen. Exposed as a view local so sidebar.ejs
+    // reads it directly instead of reaching for `require` (unavailable inside a
+    // compiled EJS template). A fresh deep copy per render: the sidebar's
+    // role logic below mutates the array (Roles inject, super-admin strip).
+    res.locals.menuTree = JSON.parse(JSON.stringify(require('./lib/menuTree').MENU_TREE));
 
     // One-shot flash message (set by POST handlers, shown on the next page).
     res.locals.flash = (req.session && req.session.flash) || null;
@@ -382,13 +388,43 @@ app.use(async (req, res, next) => {
                 if (selectedLicenseId != null) {
                     const cr = await api.callApi(req, 'GET', '/my-companies?license_id=' + encodeURIComponent(selectedLicenseId));
                     if (cr.body && cr.body.status === 200 && cr.body.data && Array.isArray(cr.body.data.data)) {
-                        companies = cr.body.data.data.map((c) => ({ id: c.id, name: c.name }));
+                        companies = cr.body.data.data.map((c) => ({
+                        id: c.id, name: c.name,
+                        // Backs the switcher's "Synced <when>" caption.
+                        syncedAt: c.tally_synced_at || null,
+                        dirty: !!c.tally_dirty,
+                        // Company Information panel (switcher ⋮ → Info).
+                        booksFrom: c.books_from || null,
+                        financialYear: c.financial_year || null,
+                        createdAt: c.created_at || null,
+                        lastPullAt: c.last_pull_at || null,
+                        lastPushAt: c.last_push_at || null,
+                        // A company belonging to ANOTHER licence is one shared
+                        // with this user (accountant access), not their own.
+                        shared: c.license_id != null && u && u.license_id != null
+                            && String(c.license_id) !== String(u.license_id),
+                    }));
                     }
                 }
             } else {
                 const cr = await api.callApi(req, 'GET', '/my-companies');
                 if (cr.body && cr.body.status === 200 && cr.body.data && Array.isArray(cr.body.data.data)) {
-                    companies = cr.body.data.data.map((c) => ({ id: c.id, name: c.name }));
+                    companies = cr.body.data.data.map((c) => ({
+                        id: c.id, name: c.name,
+                        // Backs the switcher's "Synced <when>" caption.
+                        syncedAt: c.tally_synced_at || null,
+                        dirty: !!c.tally_dirty,
+                        // Company Information panel (switcher ⋮ → Info).
+                        booksFrom: c.books_from || null,
+                        financialYear: c.financial_year || null,
+                        createdAt: c.created_at || null,
+                        lastPullAt: c.last_pull_at || null,
+                        lastPushAt: c.last_push_at || null,
+                        // A company belonging to ANOTHER licence is one shared
+                        // with this user (accountant access), not their own.
+                        shared: c.license_id != null && u && u.license_id != null
+                            && String(c.license_id) !== String(u.license_id),
+                    }));
                 }
             }
         } catch (_) { /* non-fatal — empty switcher below */ }
@@ -416,7 +452,8 @@ app.use(async (req, res, next) => {
     // transient /my-companies hiccup — or a Forbidden/error page render — never
     // regresses the header to "No company" for a user who HAS a company.
     res.locals.company = selCompany
-        ? { id: selCompany.id, name: selCompany.name }
+        ? { id: selCompany.id, name: selCompany.name,
+            syncedAt: selCompany.syncedAt || null, dirty: !!selCompany.dirty }
         : (req.session.companyId != null && req.session.companyName
             ? { id: req.session.companyId, name: req.session.companyName }
             : null);

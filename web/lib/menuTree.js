@@ -40,7 +40,7 @@ const MENU_TREE = [
         { key: 'receivables',   label: 'Receivables',          icon: 'fa-hand-holding-dollar', href: '/receivables',            module: 'receivables' },
         { key: 'sales-orders',  label: 'Sales Order',          icon: 'fa-cart-shopping',     href: '#', soon: true, module: 'sales-orders' },
         { key: 'dely-notes',    label: 'Delivery Note',        icon: 'fa-truck-fast',        href: '#', soon: true, module: 'delivery-notes' },
-        { key: 'approvals',     label: 'Invoice Approvals',    icon: 'fa-clipboard-check',   href: '/sales-invoices/approvals', approve: true, module: 'approvals' },
+        { key: 'approvals',     label: 'Invoice Approvals',    icon: 'fa-clipboard-check',   href: '/sales-invoices/approvals', approve: true, module: 'sales-invoices' },
         { key: 'recurring',     label: 'Recurring Invoices',   icon: 'fa-repeat',            href: '/recurring-invoices',       module: 'recurring-invoices' },
         { key: 'einvoice',      label: 'e-Invoice & e-Way',    icon: 'fa-file-circle-check', href: '/einvoices',                module: 'einvoice' },
         { key: 'einvoice-dash', label: 'e-Invoice Dashboard',  icon: 'fa-gauge-high',        href: '/einvoices/dashboard',      module: 'einvoice' },
@@ -89,16 +89,16 @@ const MENU_TREE = [
     { label: 'Field Sales', icon: 'fa-location-dot', items: [
         { key: 'my-field',     label: 'My Dashboard',  icon: 'fa-location-dot',        href: '/my-field',     salesmanOnly: true, module: 'field-sales' },
         { key: 'sales',        label: 'Sales Persons', icon: 'fa-user-tie',            href: '/sales-persons', module: 'sales-persons' },
-        { key: 'gps-settings', label: 'GPS Tracking',  icon: 'fa-location-crosshairs', href: '/gps-settings',  adminOnly: true, module: 'gps-settings' },
+        { key: 'gps-settings', label: 'GPS Tracking',  icon: 'fa-location-crosshairs', href: '/gps-settings',  adminOnly: true, module: 'gps-tracking' },
     ]},
     { label: 'Portals', icon: 'fa-globe', items: [
         { key: 'customer-users', label: 'Customer Users', icon: 'fa-user-lock', href: '/customer-users', module: 'customer-users' },
         { key: 'website-users',  label: 'Website Users',  icon: 'fa-globe',     href: '/website-users',  module: 'website-users' },
     ]},
     { label: 'Tally Sync', icon: 'fa-rotate', items: [
-        { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',            href: '/sync-dashboard', adminOnly: true, module: 'sync-dash' },
-        { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check',        href: '/sync-logs',      adminOnly: true, module: 'sync-logs' },
-        { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',        adminOnly: true, module: 'history' },
+        { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',            href: '/sync-dashboard', adminOnly: true, module: 'tally-sync' },
+        { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check',        href: '/sync-logs',      adminOnly: true, module: 'tally-sync' },
+        { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',        adminOnly: true, module: 'tally-sync' },
     ]},
     { label: 'Configurations', icon: 'fa-sliders', items: [
         { key: 'settings',     label: 'Settings',           icon: 'fa-gear',         href: '/settings',           module: 'settings' },
@@ -106,7 +106,7 @@ const MENU_TREE = [
         { key: 'accountant',   label: 'Accountant Access',  icon: 'fa-user-tie',     href: '/accountant-access',  module: 'accountant' },
         { key: 'companies',    label: 'Companies',          icon: 'fa-building',     href: '/companies',          module: 'companies' },
         { key: 'locations',    label: 'Locations',          icon: 'fa-location-dot', href: '/locations',          module: 'locations' },
-        { key: 'einvoice-gsp', label: 'e-Invoice GSP',      icon: 'fa-file-invoice-dollar', href: '/einvoice-gsp', superOnly: true, module: 'einvoice-gsp' },
+        { key: 'einvoice-gsp', label: 'e-Invoice GSP',      icon: 'fa-file-invoice-dollar', href: '/einvoice-gsp', superOnly: true, module: 'einvoice' },
     ]},
     { label: null, items: [
         { key: 'gst-search',  label: 'GST Search',  icon: 'fa-magnifying-glass', href: '#', soon: true, module: 'gst-search' },
