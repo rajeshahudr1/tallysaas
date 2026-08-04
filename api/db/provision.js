@@ -34,6 +34,7 @@ const { Client } = require('pg');
 const passwords  = require('../Helpers/passwords');
 const licenseKey = require('../Helpers/licenseKey');
 const keyCrypto  = require('../Helpers/keyCrypto');
+const { migrateTenant } = require('./migrate-tenants');
 
 const MASTER_DB    = String(process.env.MASTER_DB_DATABASE || 'tallysaas_master');
 const DB_NAME_RE   = /^[a-z_][a-z0-9_]{0,62}$/i;
@@ -47,6 +48,12 @@ const MODULES = [
     'receipts', 'expenses', 'inventory', 'tally-sync', 'reports', 'users', 'settings',
     'einvoice', 'recurring-invoices', 'bank-reconciliation', 'field-sales', 'gps-tracking',
     'customer-users', 'website-users',
+    // ── menu-driven modules (4 Aug 2026) — हर sidebar item का अपना module ──
+    'journals', 'cash-bank', 'receivables', 'payables', 'accountant', 'roles',
+    // ── अभी-न-बने ("Soon") modules — entitlement पहले से तैयार ──
+    'quotations', 'sales-orders', 'purchase-orders', 'delivery-notes', 'receipt-notes',
+    'credit-notes', 'debit-notes', 'contra', 'stock-journal', 'physical-stock',
+    'collect-payments', 'gst-search', 'data-backup',
 ];
 const ACTIONS = ['view', 'create', 'edit', 'delete', 'export'];
 // Built-in system roles. Only these two are seeded; a company creates its own
@@ -225,6 +232,11 @@ async function provisionLicense(opts, ctx = {}) {
                 await runSchemaFile(t, 'tenant-schema.sql');
                 log('✓ applied tenant-schema.sql');
             }
+            // Bring the fresh tenant up to the CURRENT schema. tenant-schema.sql is
+            // the baseline; everything added since lives in db/migrations_tenant/
+            // (each migration is guarded, so re-stating a baseline object no-ops).
+            // Without this a new licence would be born older than the fleet.
+            await migrateTenant(t, { log: (s) => log(s.trim()) });
             // 3) tenant RBAC — NO default company. Companies come from the Tally
             //    sync (agent importFromTally find-or-create) or a manual "Add
             //    Company", so a fresh licence starts with ZERO companies. Creating
