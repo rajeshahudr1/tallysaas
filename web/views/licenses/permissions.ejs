@@ -150,13 +150,26 @@ var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 
             return Array.prototype.slice.call(table.querySelectorAll('input[name="perm"][data-action="' + act + '"]'));
         }
         function setAll(list, val) { list.forEach(function (cb) { cb.checked = val; }); }
+        // `perm` checkboxes belonging to rows tagged with the given group label.
+        // Compares dataset.group directly (no selector string built from the
+        // label), so labels containing quotes or other selector-special
+        // characters can't break the lookup.
+        function groupPerms(label) {
+            var out = [];
+            table.querySelectorAll('tr[data-group]').forEach(function (row) {
+                if (row.dataset.group === label) {
+                    out = out.concat(perms(row));
+                }
+            });
+            return out;
+        }
         // Reflect a summary checkbox from the cells it controls (tri-state).
         function reflect(box, list) {
             var on = list.filter(function (c) { return c.checked; }).length;
             box.checked = list.length > 0 && on === list.length;
             box.indeterminate = on > 0 && on < list.length;
         }
-        // Re-sync every summary box (master + columns + rows) from the cells.
+        // Re-sync every summary box (master + columns + rows + groups) from the cells.
         function sync() {
             table.querySelectorAll('[data-col-action]').forEach(function (h) {
                 reflect(h, colPerms(h.getAttribute('data-col-action')));
@@ -165,6 +178,9 @@ var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 
                 reflect(r, perms(r.closest('tr')));
             });
             if (master) reflect(master, perms());
+            document.querySelectorAll('.rbac-group-all').forEach(function (box) {
+                reflect(box, groupPerms(box.dataset.group));
+            });
         }
 
         // MASTER — flip the WHOLE grid.
@@ -189,22 +205,15 @@ var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 
         sync();   // initial state from the pre-checked grants
 
         // Group-level toggle (sidebar-section header checkbox) — flips every
-        // `perm` cell whose row carries that group's data-group, tri-state
-        // reflecting the group's own selection state.
+        // `perm` cell whose row carries that group's data-group. Its own
+        // checked/indeterminate state is recomputed centrally by sync(), same
+        // as the master/column/row boxes, so it stays correct no matter which
+        // control last touched the grid.
         document.querySelectorAll('.rbac-group-all').forEach(function (box) {
-            var rows = document.querySelectorAll('[data-group="' + box.dataset.group + '"] input[name="perm"]');
-            function syncGroup() {
-                var on = 0;
-                rows.forEach(function (r) { if (r.checked) on++; });
-                box.checked = on === rows.length && rows.length > 0;
-                box.indeterminate = on > 0 && on < rows.length;
-            }
             box.addEventListener('change', function () {
-                rows.forEach(function (r) { r.checked = box.checked; });
+                setAll(groupPerms(box.dataset.group), box.checked);
                 sync();
             });
-            rows.forEach(function (r) { r.addEventListener('change', syncGroup); });
-            syncGroup();
         });
     })();
 </script>
