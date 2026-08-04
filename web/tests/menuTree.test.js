@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { MENU_TREE, MODULE_GROUPS } = require('../lib/menuTree');
+const { MENU_TREE, MODULE_GROUPS, groupModules } = require('../lib/menuTree');
 const { MODULES } = require('../../api/db/provision');
 
 test('every menu item carries a module slug', () => {
@@ -45,4 +45,32 @@ test('MODULE_GROUPS lists every module exactly once, in menu order', () => {
     const inTree = new Set();
     for (const g of MENU_TREE) for (const it of g.items) inTree.add(it.module);
     assert.deepStrictEqual(new Set(seen), inTree);
+});
+
+test('MODULE_GROUPS merges the three unlabelled MENU_TREE groups into one General section', () => {
+    const generalGroups = MODULE_GROUPS.filter((g) => g.label === 'General');
+    assert.strictEqual(generalGroups.length, 1, 'expected exactly one General group, found ' + generalGroups.length);
+    // dashboard (1st unlabelled group), collect-payments (2nd), gst-search + data-backup (3rd)
+    assert.deepStrictEqual(generalGroups[0].modules, ['dashboard', 'collect-payments', 'gst-search', 'data-backup']);
+});
+
+test('groupModules puts API modules under their menu group, unknown ones in Other', () => {
+    const api = [
+        { key: 'cash-bank', label: 'Cash Bank' },
+        { key: 'customers', label: 'Customers' },
+        { key: 'mystery-module', label: 'Mystery Module' },
+    ];
+    const groups = groupModules(api);
+    const byLabel = Object.fromEntries(groups.map((g) => [g.label, g.modules.map((m) => m.key)]));
+    assert.deepStrictEqual(byLabel['Cash & Bank'], ['cash-bank']);
+    assert.deepStrictEqual(byLabel['Parties'], ['customers']);
+    assert.deepStrictEqual(byLabel['Other'], ['mystery-module']);
+    // कोई module चुपचाप गायब न हो
+    const total = groups.reduce((n, g) => n + g.modules.length, 0);
+    assert.strictEqual(total, api.length);
+});
+
+test('groupModules drops groups that have no modules from the API', () => {
+    const groups = groupModules([{ key: 'customers', label: 'Customers' }]);
+    assert.deepStrictEqual(groups.map((g) => g.label), ['Parties']);
 });

@@ -1638,3 +1638,22 @@ a.action-btn { text-decoration: none; }
     border: 1px solid currentColor;
     opacity: .8;
 }
+
+/* ── License Modules: sidebar-जैसा group header (rbac-matrix is a <table>,
+   so the header is a full-width <td colspan> row, not a CSS-grid column) ──── */
+.rbac-matrix .rbac-group-head {
+    padding: .5rem .75rem;
+    margin-top: .25rem;
+    background: var(--surface-2, rgba(0, 0, 0, .03));
+    border-radius: .375rem;
+    font-weight: 600;
+    font-size: .8125rem;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+}
+.rbac-group-label {
+    display: flex;
+    align-items: center;
+    margin: 0;
+    cursor: pointer;
+}

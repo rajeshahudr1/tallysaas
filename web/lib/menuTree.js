@@ -115,9 +115,13 @@ const MENU_TREE = [
 ];
 
 // MENU_TREE से derive — group order वही, हर module सिर्फ़ पहली बार जहाँ दिखा वहीं।
+// MENU_TREE में तीन unlabelled (label: null) groups हैं — वे सब "General" बन जाते
+// हैं, इसलिए यहाँ label से merge किया जाता है ताकि एक ही नाम की तीन अलग-अलग
+// sections न बनें; order पहली बार दिखने वाले position से तय होता है।
 const MODULE_GROUPS = (function build() {
     const seen = new Set();
     const out = [];
+    const byLabel = new Map(); // label -> entry in `out`
     for (const g of MENU_TREE) {
         const mods = [];
         for (const it of g.items) {
@@ -125,9 +129,43 @@ const MODULE_GROUPS = (function build() {
             seen.add(it.module);
             mods.push(it.module);
         }
-        if (mods.length) out.push({ label: g.label || 'General', icon: g.icon || 'fa-folder', modules: mods });
+        if (!mods.length) continue;
+        const label = g.label || 'General';
+        const existing = byLabel.get(label);
+        if (existing) {
+            existing.modules.push(...mods);
+        } else {
+            const entry = { label: label, icon: g.icon || 'fa-folder', modules: mods };
+            byLabel.set(label, entry);
+            out.push(entry);
+        }
     }
     return out;
 })();
 
-module.exports = { MENU_TREE, MODULE_GROUPS };
+/**
+ * API से आई modules list ([{key,label}]) को sidebar के groups में बाँटता है।
+ * जो module किसी menu group में नहीं मिलता वो आख़िर में "Other" में जाता है —
+ * ताकि entitlement screen से कोई module चुपचाप गायब न हो। खाली groups गिरते हैं।
+ */
+function groupModules(apiModules) {
+    const list = Array.isArray(apiModules) ? apiModules : [];
+    const byKey = new Map(list.map((m) => [m.key, m]));
+    const used = new Set();
+    const out = [];
+    for (const g of MODULE_GROUPS) {
+        const mods = [];
+        for (const key of g.modules) {
+            const m = byKey.get(key);
+            if (!m || used.has(key)) continue;
+            used.add(key);
+            mods.push(m);
+        }
+        if (mods.length) out.push({ label: g.label, icon: g.icon, modules: mods });
+    }
+    const rest = list.filter((m) => !used.has(m.key));
+    if (rest.length) out.push({ label: 'Other', icon: 'fa-cubes', modules: rest });
+    return out;
+}
+
+module.exports = { MENU_TREE, MODULE_GROUPS, groupModules };

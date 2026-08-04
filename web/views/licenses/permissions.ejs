@@ -25,6 +25,7 @@
 
 var _lic     = (typeof license !== 'undefined' && license) ? license : {};
 var _modules = (typeof modules !== 'undefined' && modules) ? modules : [];
+var _groups  = (typeof groups !== 'undefined' && groups) ? groups : [{ label: 'Other', icon: 'fa-cubes', modules: _modules }];
 var _actions = (typeof actions !== 'undefined' && actions) ? actions : [];
 var _granted = (typeof granted !== 'undefined' && granted) ? granted : {};
 var _all     = (typeof allGranted !== 'undefined') ? !!allGranted : false;
@@ -90,21 +91,33 @@ var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 
                         </tr>
                     </thead>
                     <tbody>
-                        <% _modules.forEach(function (m) { %>
-                            <% var gm = (_granted && _granted[m.key]) ? _granted[m.key] : {}; %>
-                            <tr>
-                                <td>
-                                    <%= m.label %>
-                                    <input type="checkbox" class="ms-2" data-row-toggle title="Toggle row">
+                        <% _groups.forEach(function (grp) { %>
+                            <tr class="rbac-group-row">
+                                <td class="rbac-group-head" colspan="<%= _actions.length + 1 %>">
+                                    <label class="rbac-group-label">
+                                        <input type="checkbox" class="form-check-input rbac-group-all"
+                                               data-group="<%= grp.label %>" aria-label="Toggle all modules in <%= grp.label %>">
+                                        <i class="fa-solid <%= grp.icon %> ms-2 me-2 text-primary"></i>
+                                        <span><%= grp.label %></span>
+                                    </label>
                                 </td>
-                                <% _actions.forEach(function (a) { %>
-                                    <td>
-                                        <input type="checkbox" name="perm" value="<%= m.key %>.<%= a %>"
-                                               data-action="<%= a %>"
-                                               <%= gm[a] ? 'checked' : '' %>>
-                                    </td>
-                                <% }); %>
                             </tr>
+                            <% grp.modules.forEach(function (m) { %>
+                                <% var gm = (_granted && _granted[m.key]) ? _granted[m.key] : {}; %>
+                                <tr data-group="<%= grp.label %>">
+                                    <td>
+                                        <%= m.label %>
+                                        <input type="checkbox" class="ms-2" data-row-toggle title="Toggle row">
+                                    </td>
+                                    <% _actions.forEach(function (a) { %>
+                                        <td>
+                                            <input type="checkbox" name="perm" value="<%= m.key %>.<%= a %>"
+                                                   data-action="<%= a %>"
+                                                   <%= gm[a] ? 'checked' : '' %>>
+                                        </td>
+                                    <% }); %>
+                                </tr>
+                            <% }); %>
                         <% }); %>
                     </tbody>
                 </table>
@@ -174,5 +187,24 @@ var _actionIcons = { view: 'fa-eye', create: 'fa-plus', edit: 'fa-pen', delete: 
         });
 
         sync();   // initial state from the pre-checked grants
+
+        // Group-level toggle (sidebar-section header checkbox) — flips every
+        // `perm` cell whose row carries that group's data-group, tri-state
+        // reflecting the group's own selection state.
+        document.querySelectorAll('.rbac-group-all').forEach(function (box) {
+            var rows = document.querySelectorAll('[data-group="' + box.dataset.group + '"] input[name="perm"]');
+            function syncGroup() {
+                var on = 0;
+                rows.forEach(function (r) { if (r.checked) on++; });
+                box.checked = on === rows.length && rows.length > 0;
+                box.indeterminate = on > 0 && on < rows.length;
+            }
+            box.addEventListener('change', function () {
+                rows.forEach(function (r) { r.checked = box.checked; });
+                sync();
+            });
+            rows.forEach(function (r) { r.addEventListener('change', syncGroup); });
+            syncGroup();
+        });
     })();
 </script>

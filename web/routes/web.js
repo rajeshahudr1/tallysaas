@@ -5587,6 +5587,7 @@ router.get('/licenses/:id/permissions', requireSuperAdmin, async (req, res, next
             ],
             license:    data.license || { id },
             modules:    Array.isArray(data.modules) ? data.modules : [],
+            groups:     require('../lib/menuTree').groupModules(Array.isArray(data.modules) ? data.modules : []),
             actions:    Array.isArray(data.actions) ? data.actions : ['view', 'create', 'edit', 'delete', 'export'],
             granted:    data.granted || {},
             allGranted: !!data.all_granted,
