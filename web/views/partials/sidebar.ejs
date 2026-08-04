@@ -22,7 +22,8 @@ var menu = [
     { label: null, items: [
         { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/', perm: 'dashboard' },
     ]},
-    { label: 'Masters', items: [
+    { label: 'Masters', icon: 'fa-folder-open', items: [
+        { key: 'quotation', label: 'Quotation', icon: 'fa-file-lines', href: '#', soon: true },
         { key: 'companies',  label: 'Companies',     icon: 'fa-building',      href: '/companies',     perm: 'companies' },
         { key: 'locations',  label: 'Locations',     icon: 'fa-location-dot',  href: '/locations',     perm: 'locations' },
         { key: 'customers',  label: 'Customers',     icon: 'fa-user-group',    href: '/customers',     perm: 'customers' },
@@ -30,7 +31,7 @@ var menu = [
         { key: 'products',   label: 'Products',      icon: 'fa-box',           href: '/products',      perm: 'products' },
         { key: 'categories', label: 'Categories',    icon: 'fa-tags',          href: '/categories',    perm: 'categories' },
     ]},
-    { label: 'Transactions', items: [
+    { label: 'Transactions', icon: 'fa-right-left', items: [
         { key: 'sales-inv',    label: 'Sales Invoices',    icon: 'fa-file-invoice',     href: '/sales-invoices',    perm: 'sales-invoices' },
         { key: 'approvals',    label: 'Invoice Approvals', icon: 'fa-clipboard-check',  href: '/sales-invoices/approvals', approve: true },
         { key: 'field-tracking', label: 'Field Tracking',  icon: 'fa-map-location-dot', href: '/field-tracking',           approve: true },
@@ -46,16 +47,20 @@ var menu = [
         { key: 'bank',         label: 'Bank Reconciliation', icon: 'fa-building-columns', href: '/bank-reconciliation', perm: 'bank-reconciliation' },
         { key: 'inventory',    label: 'Inventory',         icon: 'fa-warehouse',        href: '/inventory',         perm: 'inventory' },
     ]},
-    { label: 'Tally Sync', items: [
+    { label: 'Cash & Bank', icon: 'fa-sack-dollar', items: [
+        { key: 'cash', label: 'Cash', icon: 'fa-money-bill-1', href: '/cash', perm: 'dashboard' },
+        { key: 'bank-ledgers', label: 'Bank', icon: 'fa-building-columns', href: '/bank', perm: 'dashboard' },
+    ]},
+    { label: 'Tally Sync', icon: 'fa-rotate', items: [
         { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',     href: '/sync-dashboard', adminOnly: true },
         { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check', href: '/sync-logs',      adminOnly: true },
         { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',  adminOnly: true },
     ]},
-    { label: 'Reports', items: [
+    { label: 'Reports', icon: 'fa-chart-simple', items: [
         { key: 'analytics', label: 'Business Analytics', icon: 'fa-chart-pie',    href: '/analytics', perm: 'reports' },
         { key: 'reports',   label: 'Reports',            icon: 'fa-chart-column', href: '/reports',   perm: 'reports' },
     ]},
-    { label: 'Settings', items: [
+    { label: 'Settings', icon: 'fa-sliders', items: [
         { key: 'sales',    label: 'Sales Persons',        icon: 'fa-user-tie',    href: '/sales-persons', perm: 'sales-persons' },
         { key: 'customer-users', label: 'Customer Users', icon: 'fa-user-lock',   href: '/customer-users', perm: 'customer-users' },
         { key: 'website-users',  label: 'Website Users',  icon: 'fa-globe',       href: '/website-users',  perm: 'website-users' },
@@ -81,7 +86,7 @@ if (_isCompanyAdmin) {
 // and is shown ONLY for the super-admin (cross-company operator). It is their
 // primary workflow, so PIN it to the TOP — right under Dashboard, above Masters.
 if (_isSuperAdmin) {
-    menu.splice(1, 0, { label: 'Platform Admin', items: [
+    menu.splice(1, 0, { label: 'Platform Admin', icon: 'fa-shield-halved', items: [
         { key: 'licenses',       label: 'Licenses',       icon: 'fa-key',                href: '/licenses' },
         { key: 'agent-releases', label: 'Agent Updates',  icon: 'fa-cloud-arrow-up',     href: '/agent-releases' },
         { key: 'app-releases',   label: 'App Updates',    icon: 'fa-mobile-screen-button', href: '/app-releases' },
@@ -119,6 +124,7 @@ if (_isCustomerUser) {
 }
 menu = menu.map(function (g) {
     g.items = (g.items || []).filter(function (it) {
+        if (it.soon) return !_isSuperAdmin;
         if (it.adminOnly) return _isCompanyAdmin || _isSuperAdmin;
         if (it.approve)   return _canApprove;
         if (it.perm)      return _canMod(it.perm);
@@ -169,17 +175,27 @@ if (_isSuperAdmin) {
                 <% var gid = group.label.toLowerCase().replace(/[^a-z0-9]+/g, '-'); %>
                 <% var groupActive = group.items.some(function (it) { return it.key === _active; }); %>
                 <button type="button" class="sidebar-section sidebar-section-toggle"
-                        data-group="<%= gid %>" aria-expanded="true" aria-controls="grp-<%= gid %>">
-                    <span><%= group.label %></span>
+                        data-group="<%= gid %>" aria-expanded="<%= groupActive ? 'true' : 'false' %>"
+                        <%= groupActive ? 'data-group-active' : '' %> aria-controls="grp-<%= gid %>">
+                    <i class="fa-solid <%= group.icon || 'fa-folder' %> sidebar-section-icon" aria-hidden="true"></i>
+                    <span class="sidebar-section-text"><%= group.label %></span>
                     <i class="fa-solid fa-chevron-down sidebar-section-caret"></i>
                 </button>
                 <ul class="sidebar-list sidebar-group" id="grp-<%= gid %>" data-group-items="<%= gid %>">
                     <% group.items.forEach(function (item) { %>
                         <li>
-                            <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>">
-                                <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
-                                <span class="sidebar-link-text"><%= item.label %></span>
-                            </a>
+                            <% if (item.soon) { %>
+                                <span class="sidebar-link is-disabled" aria-disabled="true" title="<%= item.label %> — coming soon">
+                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <span class="sidebar-link-text"><%= item.label %></span>
+                                    <span class="sidebar-soon">Soon</span>
+                                </span>
+                            <% } else { %>
+                                <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>" title="<%= item.label %>">
+                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <span class="sidebar-link-text"><%= item.label %></span>
+                                </a>
+                            <% } %>
                         </li>
                     <% }); %>
                 </ul>
@@ -187,10 +203,18 @@ if (_isSuperAdmin) {
                 <ul class="sidebar-list">
                     <% group.items.forEach(function (item) { %>
                         <li>
-                            <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>">
-                                <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
-                                <span class="sidebar-link-text"><%= item.label %></span>
-                            </a>
+                            <% if (item.soon) { %>
+                                <span class="sidebar-link is-disabled" aria-disabled="true" title="<%= item.label %> — coming soon">
+                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <span class="sidebar-link-text"><%= item.label %></span>
+                                    <span class="sidebar-soon">Soon</span>
+                                </span>
+                            <% } else { %>
+                                <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>" title="<%= item.label %>">
+                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <span class="sidebar-link-text"><%= item.label %></span>
+                                </a>
+                            <% } %>
                         </li>
                     <% }); %>
                 </ul>

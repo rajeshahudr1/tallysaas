@@ -46,6 +46,7 @@
 
     /* Layout metrics */
     --sidebar-w:     260px;
+    --sidebar-rail-w: 72px;    /* collapsed (icon-only) sidebar */
     --header-h:      70px;
 
     /* Stat-card tones (icon chips) */
@@ -80,9 +81,11 @@ a { text-decoration: none; }
     z-index: 1040;
     flex-direction: column;
     overflow: hidden;
+    transition: width .18s ease;
 }
 .app-main {
     margin-left: var(--sidebar-w);
+    transition: margin-left .18s ease;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
@@ -159,6 +162,10 @@ a { text-decoration: none; }
 .sidebar-section-toggle:focus,
 .sidebar-section-toggle:focus-visible,
 .sidebar-section-toggle:active { outline: none !important; box-shadow: none !important; }
+/* Group icon — the only thing left of a group header on the icon rail, so
+   every group stays recognisable when the sidebar is collapsed. */
+.sidebar-section-icon { font-size: 13px; width: 18px; text-align: center; opacity: .8; flex: 0 0 auto; }
+.sidebar-section-text { flex: 1 1 auto; }
 .sidebar-section-caret { font-size: 9px; transition: transform .2s ease; opacity: .55; }
 .sidebar-section-toggle.is-collapsed .sidebar-section-caret { transform: rotate(-90deg); }
 .sidebar-list { list-style: none; margin: 0; padding: 0; overflow: hidden; }
@@ -232,6 +239,67 @@ a { text-decoration: none; }
 }
 .topbar-hamburger:hover { background: #F3F4F6; }
 
+/* ── Desktop sidebar collapse (topbar ☰) ─────────────────────────
+ * Below 992px the ☰ opens Bootstrap's offcanvas drawer (untouched).
+ * At ≥992px it instead narrows the sidebar to an icon rail: every text
+ * label, section heading and group caret is hidden and .app-main's
+ * margin follows. The state is remembered in localStorage by app.js. */
+@media (min-width: 992px) {
+    .topbar-hamburger { display: grid; }
+
+    body.sidebar-collapsed .sidebar { width: var(--sidebar-rail-w); }
+    body.sidebar-collapsed .app-main { margin-left: var(--sidebar-rail-w); }
+
+    /* .sidebar-inner is normally pinned to the FULL sidebar width. It has to
+       follow the rail too — otherwise it stays 260px wide inside a 72px
+       overflow:hidden shell, and centring the links pushes their icons out
+       past the visible edge, leaving an apparently empty rail. */
+    body.sidebar-collapsed .sidebar-inner { width: var(--sidebar-rail-w); }
+
+    body.sidebar-collapsed .sidebar-brand-text,
+    body.sidebar-collapsed .sidebar-link-text,
+    body.sidebar-collapsed .sidebar-section-text,
+    body.sidebar-collapsed .sidebar-section-caret,
+    body.sidebar-collapsed .sidebar-foot { display: none; }
+
+    /* A group header keeps its ICON on the rail (clicking it still expands the
+       group) — without it the rail would show a few links and no structure. */
+    body.sidebar-collapsed .sidebar-section:not(.sidebar-section-toggle) { display: none; }
+    body.sidebar-collapsed .sidebar-section-toggle {
+        justify-content: center; gap: 0; padding: 12px 0 6px;
+    }
+    body.sidebar-collapsed .sidebar-section-icon { font-size: 15px; width: auto; }
+
+    body.sidebar-collapsed .sidebar-brand,
+    body.sidebar-collapsed .sidebar-link { justify-content: center; gap: 0; padding-left: 0; padding-right: 0; }
+    body.sidebar-collapsed .sidebar-nav { padding-left: 8px; padding-right: 8px; }
+    body.sidebar-collapsed .sidebar-link.is-active::before { left: -8px; }
+
+    /* Hover-peek: while collapsed, hovering the rail floats the FULL menu
+       over the page. .app-main's margin is untouched, so the page never
+       reflows — the menu just overlays and retracts on mouse-out. Clicking
+       ☰ is what makes the expansion permanent. */
+    body.sidebar-collapsed .sidebar:hover { width: var(--sidebar-w); box-shadow: 0 0 24px rgba(0,0,0,.28); }
+    body.sidebar-collapsed .sidebar:hover .sidebar-inner { width: var(--sidebar-w); }
+    body.sidebar-collapsed .sidebar:hover .sidebar-brand-text,
+    body.sidebar-collapsed .sidebar:hover .sidebar-link-text,
+    body.sidebar-collapsed .sidebar:hover .sidebar-section-text,
+    body.sidebar-collapsed .sidebar:hover .sidebar-section-caret { display: revert; }
+    body.sidebar-collapsed .sidebar:hover .sidebar-section { display: block; }
+    /* Hovered open: the header goes back to icon + label + chevron. */
+    body.sidebar-collapsed .sidebar:hover .sidebar-section-toggle {
+        display: flex; justify-content: space-between; gap: 8px; padding: 16px 12px 6px;
+    }
+    body.sidebar-collapsed .sidebar:hover .sidebar-section-icon { font-size: 13px; width: 18px; }
+    body.sidebar-collapsed .sidebar:hover .sidebar-brand,
+    body.sidebar-collapsed .sidebar:hover .sidebar-link {
+        justify-content: flex-start; gap: 12px; padding-left: 12px; padding-right: 12px;
+    }
+    body.sidebar-collapsed .sidebar:hover .sidebar-brand { padding-left: 20px; padding-right: 20px; }
+    body.sidebar-collapsed .sidebar:hover .sidebar-nav { padding-left: 12px; padding-right: 12px; }
+    body.sidebar-collapsed .sidebar:hover .sidebar-link.is-active::before { left: -12px; }
+}
+
 .topbar-search {
     position: relative;
     flex: 1 1 auto;
@@ -285,6 +353,45 @@ a { text-decoration: none; }
 .topbar-company-btn:hover { background: #F9FAFB; }
 .topbar-company-btn i { color: var(--primary); }
 .topbar-company-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Stacked trigger — company name over its last-sync caption, so the freshness
+   of everything on screen is readable without opening the menu. */
+.topbar-company-btn--stacked { height: 46px; align-items: center; }
+.topbar-company-lines { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; }
+.topbar-company-sync { font-size: 11px; font-weight: 500; color: var(--muted); }
+
+/* Company menu — sectioned (My / Shared), one row per company with its own
+   sync caption and an "open in Tally" action. */
+.company-menu { min-width: 320px; padding: 6px; }
+.company-menu-head {
+    font-size: 12px; font-weight: 600; color: var(--text);
+    text-transform: none; letter-spacing: 0; padding: 8px 10px 4px;
+}
+.company-menu-row { display: flex; align-items: center; border-radius: 8px; }
+.company-menu-row:hover { background: #F3F4F6; }
+.company-menu-item {
+    display: flex; align-items: center; gap: 10px; flex: 1 1 auto;
+    padding: 8px 10px; border-radius: 8px; white-space: normal;
+}
+.company-menu-item:hover, .company-menu-item:focus { background: transparent; }
+.company-menu-lines { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.company-menu-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.company-menu-sync { font-size: 11px; color: #16A34A; }
+.company-menu-sync.is-pending { color: #D97706; }
+.company-menu-check { color: #16A34A; font-size: 13px; margin-left: 8px; }
+.company-menu-row.is-current { background: #F0FDF4; }
+.company-menu-actions { flex: 0 0 auto; display: inline-flex; align-items: center; padding-right: 4px; }
+
+/* Company Information — label/value rows, value right-aligned like the
+   reference panel. */
+.company-info-list { margin: 0; }
+.company-info-list > div {
+    display: flex; justify-content: space-between; gap: 16px;
+    padding: 9px 0; border-bottom: 1px solid var(--border);
+}
+.company-info-list > div:last-child { border-bottom: 0; }
+.company-info-list dt { font-weight: 600; color: var(--text); margin: 0; }
+.company-info-list dd { margin: 0; color: var(--muted); text-align: right; }
 
 .topbar-icon-btn {
     position: relative;
@@ -780,6 +887,350 @@ select.affix {
 .stat-value { font-size: 24px; font-weight: 700; color: var(--text); line-height: 1.1; }
 .stat-spark { height: 28px; width: 100%; }
 
+/* KPI panels (dashboard Summary / Need Attention) */
+.kpi-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+    margin-bottom: 22px;
+}
+.kpi-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+.kpi-panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px;
+    padding: 13px 16px;
+    border-bottom: 1px solid var(--border);
+}
+.kpi-panel-title {
+    font-size: 15px; font-weight: 600; color: var(--text); margin: 0;
+    display: inline-flex; align-items: center; gap: 8px;
+}
+.kpi-panel--danger .kpi-panel-head { background: #FEF2F2; }
+.kpi-panel--danger .kpi-panel-title-icon { color: var(--danger); font-size: 14px; }
+
+/* 2x2 tile grid — the 1px gap over a border-coloured background draws the
+   hairline dividers, so no per-tile borders are needed. */
+.kpi-tiles {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--border);
+}
+.kpi-tile {
+    background: var(--card);
+    padding: 13px 16px;
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    min-height: 70px;
+    transition: background .12s ease;
+}
+a.kpi-tile:hover { background: #F9FAFB; }
+.kpi-tile-label {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-size: 12px; font-weight: 600; letter-spacing: .03em;
+    text-transform: uppercase; color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.kpi-tile-label-text { display: inline-flex; align-items: center; gap: 6px; }
+.kpi-tile-lock { font-size: 12px; color: var(--text-muted); }
+.kpi-tile-chevron { font-size: 13px; color: #9CA3AF; flex: 0 0 auto; }
+.kpi-tile-value { font-size: 17px; font-weight: 700; color: var(--text); line-height: 1.15; }
+.kpi-tile-sub { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+.kpi-tile-sub strong { color: var(--text); font-weight: 700; }
+.kpi-panel--danger .kpi-tile-value { color: var(--danger); }
+
+/* Range select in the Summary panel header. */
+/* Native select (see the `no-search` class in routes/web.js): the browser
+   renders the option list itself, so every period label shows in full
+   instead of being ellipsised by a custom dropdown. */
+.kpi-panel-select {
+    font: inherit; font-size: 12px;
+    padding: 6px 26px 6px 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); color: var(--text);
+    cursor: pointer; max-width: 100%;
+}
+
+/* Sales & Receipt + Receivables panels (dashboard row 2) */
+.sr-figures {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
+    margin-bottom: 16px;
+}
+.sr-figure {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 12px;
+    background: #F9FAFB; border: 1px solid var(--border); border-radius: 8px;
+}
+.sr-figure-label { font-size: 13px; color: var(--text-muted); }
+.sr-figure-value { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; }
+
+.sr-footer {
+    display: grid; grid-template-columns: repeat(2, 1fr);
+    border-top: 1px solid var(--border); margin-top: 16px;
+}
+.sr-footer-cell { padding: 11px 8px; text-align: center; }
+.sr-footer-cell + .sr-footer-cell { border-left: 1px solid var(--border); }
+.sr-footer-label {
+    font-size: 12px; font-weight: 600; letter-spacing: .03em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;
+}
+.sr-footer-value { font-size: 15px; font-weight: 700; color: var(--text); }
+.sr-footer-delta {
+    font-size: 12px; font-weight: 700; margin-top: 3px;
+    display: inline-flex; align-items: center; gap: 4px; color: var(--success);
+}
+.sr-footer-delta.is-down { color: var(--danger); }
+
+/* Receivables */
+.recv-total {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 12px; margin-bottom: 14px;
+    background: #F9FAFB; border: 1px solid var(--border); border-radius: 8px;
+}
+/* Donut takes the leftover space; the legend claims only the width its
+   longest band label needs, so "45 - 90 Days" never wraps onto two lines. */
+.recv-body {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px; align-items: center;
+}
+.recv-canvas-wrap { position: relative; height: 172px; min-width: 0; }
+.recv-legend { display: flex; flex-direction: column; gap: 6px; }
+.recv-legend-row { display: flex; align-items: center; gap: 9px; font-size: 12px; }
+.recv-legend-swatch { width: 20px; height: 6px; border-radius: 3px; flex: 0 0 auto; }
+.recv-legend-text { display: flex; flex-direction: column; line-height: 1.3; }
+.recv-legend-band { color: var(--text-muted); white-space: nowrap; }
+.recv-legend-amount { font-weight: 700; color: var(--text); white-space: nowrap; }
+.sr-footer--three { grid-template-columns: repeat(3, 1fr); }
+
+/* Row-2 cards: tighter padding + a shorter bar chart than the generic
+   .chart-card, so both panels stay close to the reference's height. */
+.chart-card--sr, .chart-card--recv { padding: 16px; display: flex; flex-direction: column; }
+.chart-card--sr .chart-card-canvas-wrap { height: 205px; }
+.chart-card--sr .chart-card-head, .chart-card--recv .chart-card-head { margin-bottom: 12px; }
+.chart-card--sr .sr-footer, .chart-card--recv .sr-footer { margin-top: auto; }
+.chart-card--sr .chart-card-title, .chart-card--recv .chart-card-title { font-size: 15px; }
+
+/* Top 10 + Day Book (dashboard row 3) */
+.top10-tabbar { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); }
+.top10-tabs {
+    display: flex; gap: 4px;
+    overflow-x: auto; overflow-y: hidden;
+    flex: 1 1 auto; min-width: 0;
+    padding: 0 0 8px;
+    scroll-behavior: smooth;
+    /* The native bar is hidden — the chevrons are the affordance. */
+    scrollbar-width: none; -ms-overflow-style: none;
+}
+.top10-tabs::-webkit-scrollbar { display: none; }
+.top10-scroll {
+    flex: 0 0 auto;
+    width: 26px; height: 26px; margin-bottom: 8px;
+    display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 50%;
+    background: var(--card); color: var(--text-muted);
+    font-size: 10px; cursor: pointer;
+}
+.top10-scroll:hover { background: #F3F4F6; color: var(--text); }
+.top10-scroll[hidden] { display: none; }
+.top10-tab {
+    flex: 0 0 auto;
+    border: 0; border-bottom: 2px solid transparent; background: transparent;
+    padding: 8px 14px; border-radius: 0;
+    font-size: 13px; font-weight: 500; color: var(--text-muted);
+    white-space: nowrap; cursor: pointer;
+    transition: color .12s ease, border-color .12s ease;
+}
+.top10-tab:hover { color: var(--text); }
+.top10-tab.is-active {
+    color: var(--primary); font-weight: 600;
+    border-bottom-color: var(--primary);
+    background: transparent; box-shadow: none;
+}
+.top10-panel[hidden] { display: none; }
+.top10-list { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.top10-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 2px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+.top10-list > li:last-child .top10-item { border-bottom: 0; }
+a.top10-item { text-decoration: none; color: inherit; transition: background .12s ease; }
+a.top10-item:hover { background: #F9FAFB; }
+a.top10-item:hover .top10-name { text-decoration: underline; }
+.top10-rank {
+    flex: 0 0 auto; width: 26px; text-align: center;
+    font-size: 13px; font-weight: 700; color: var(--text-muted);
+}
+/* Medals for the top three, plain numerals below. */
+.top10-rank--1 { color: #D97706; }
+.top10-rank--2 { color: #9CA3AF; }
+.top10-rank--3 { color: #B45309; }
+.top10-name { flex: 1 1 auto; min-width: 0; color: #2563EB; }
+.top10-value { flex: 0 0 auto; font-weight: 600; color: var(--text); white-space: nowrap; }
+.top10-qty {
+    flex: 0 0 auto; width: 56px; text-align: right;
+    color: var(--text-muted); white-space: nowrap;
+}
+.top10-empty, .daybook-empty {
+    padding: 40px 12px; text-align: center;
+    color: var(--text-muted); font-size: 13px;
+}
+
+/* Day Book */
+.daybook-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.daybook-pill {
+    border: 1px solid transparent; background: transparent;
+    padding: 6px 12px; border-radius: 8px;
+    font-size: 13px; font-weight: 500; color: var(--text-muted);
+    cursor: pointer; text-decoration: none;
+}
+.daybook-pill:hover { background: #F3F4F6; color: var(--text); }
+.daybook-pill.is-active {
+    background: var(--card); border-color: var(--border);
+    color: var(--text); font-weight: 600; box-shadow: var(--shadow);
+}
+.daybook-date {
+    font: inherit; font-size: 13px;
+    padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); color: var(--text); cursor: pointer;
+}
+.daybook-date.is-active { border-color: #2563EB; font-weight: 600; }
+.daybook-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.daybook-table th {
+    text-align: left; font-weight: 600; color: var(--text-muted);
+    padding: 8px 6px; border-bottom: 1px solid var(--border); white-space: nowrap;
+}
+.daybook-table td { padding: 9px 6px; border-bottom: 1px solid var(--border); }
+.daybook-table tr:last-child td { border-bottom: 0; }
+.daybook-table .is-num { text-align: right; white-space: nowrap; font-weight: 600; }
+.daybook-scroll { max-height: 320px; overflow-y: auto; }
+.daybook-voucher { color: #2563EB; text-decoration: none; }
+.daybook-voucher:hover { text-decoration: underline; }
+
+/* A panel awaiting its AJAX replacement: dimmed and inert, but still laid
+   out so the page never jumps while the fragment is in flight. A veil +
+   spinner sits over the panel so the wait is visible, not just a dim card. */
+[data-dash-section].is-loading { position: relative; pointer-events: none; }
+[data-dash-section].is-loading > * { opacity: .45; transition: opacity .12s ease; }
+[data-dash-section].is-loading::before {
+    content: ''; position: absolute; inset: 0; z-index: 4; border-radius: inherit;
+    background: rgba(255, 255, 255, .35);
+}
+[data-dash-section].is-loading::after {
+    content: ''; position: absolute; z-index: 5;
+    top: 50%; left: 50%; margin: -14px 0 0 -14px;
+    width: 28px; height: 28px; border-radius: 50%;
+    border: 3px solid rgba(22, 163, 74, .22);
+    border-top-color: #16A34A;
+    animation: dash-spin .7s linear infinite;
+}
+@keyframes dash-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    [data-dash-section].is-loading::after { animation-duration: 2s; }
+}
+
+/* Day Book date picker — a themed popup calendar. The native
+   <input type="date"> picker is browser-styled and cannot follow the theme,
+   so dashboard.js builds this instead. */
+.dp-wrap { position: relative; }
+.dp {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 1050;
+    width: 268px; padding: 12px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; box-shadow: 0 12px 32px rgba(16,24,40,.16);
+}
+.dp-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-bottom: 10px;
+}
+.dp-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.dp-nav {
+    width: 26px; height: 26px; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--card); color: var(--text-muted);
+    font-size: 10px; cursor: pointer;
+}
+.dp-nav:hover { background: #F3F4F6; color: var(--text); }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.dp-dow {
+    text-align: center; font-size: 10px; font-weight: 600;
+    color: var(--text-muted); padding: 4px 0;
+}
+.dp-day {
+    border: 0; background: transparent; cursor: pointer;
+    height: 30px; border-radius: 8px;
+    font-size: 12px; color: var(--text);
+}
+.dp-day:hover { background: #F3F4F6; }
+.dp-day.is-muted { color: #C4C9D2; }
+.dp-day.is-today { font-weight: 700; color: var(--primary); }
+.dp-day.is-selected { background: var(--primary); color: #fff; font-weight: 700; }
+.dp-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+}
+.dp-value { font-size: 12px; font-weight: 600; color: var(--text); }
+.dp-actions { display: flex; gap: 6px; }
+.dp-btn {
+    border: 1px solid var(--border); background: var(--card); color: var(--text);
+    padding: 5px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
+}
+.dp-btn:hover { background: #F3F4F6; }
+.dp-btn--apply { background: var(--primary); border-color: var(--primary); color: #fff; }
+.dp-btn--apply:hover { background: var(--primary-700); }
+
+/* Cash & Bank screens */
+.ledger-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.ledger-head-total { font-size: 15px; color: var(--text-muted); }
+.ledger-head-total strong { font-size: 20px; color: var(--text); font-weight: 700; }
+.ledger-head-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ledger-head-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ledger-meta-item { font-size: 12px; color: var(--text-muted); }
+.ledger-dc { font-size: 12px; font-weight: 600; color: var(--text-muted); }
+.ledger-table { padding: 0 4px; }
+.ledger-table th, .ledger-table td { padding: 12px 14px; }
+.ledger-foot {
+    padding: 12px 14px; font-size: 12px; color: var(--text-muted);
+    border-top: 1px solid var(--border);
+}
+.ledger-foot--split {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+}
+.ledger-balances { color: var(--text-muted); }
+.ledger-balances strong { color: var(--text); }
+.ledger-pager { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Set Reminder (per-party schedule) */
+.rem-form { padding: 4px 2px 8px; }
+.rem-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border);
+}
+.rem-row:last-of-type { border-bottom: 0; }
+.rem-row--toggle { justify-content: flex-start; gap: 10px; cursor: pointer; }
+.rem-label { font-size: 13px; color: var(--text); }
+.rem-hint { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+.rem-note { font-size: 11px; color: var(--text-muted); margin: 6px 2px 0; line-height: 1.5; }
+.rem-actions { margin-top: 14px; }
+.rem-preview {
+    white-space: pre-wrap;
+    background: #F9FAFB; border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px; font-size: 12px; line-height: 1.6; color: var(--text);
+}
+
 /* Chart cards */
 .chart-row {
     display: grid;
@@ -808,7 +1259,7 @@ select.affix {
     padding: 18px 20px;
     border-bottom: 1px solid var(--border);
 }
-.recent-card-title { font-size: 16px; font-weight: 600; margin: 0; }
+.recent-card-title { font-size: 15px; font-weight: 600; margin: 0; }
 .recent-card-link { font-size: 13px; color: var(--primary); font-weight: 500; }
 
 /* Recent sync activity list */
@@ -818,6 +1269,11 @@ select.affix {
     padding: 12px 20px;
 }
 .sync-list-item + .sync-list-item { border-top: 1px solid var(--border); }
+/* Sync rows are links (to that record's list, filtered) — give them the
+   same affordance the Day Book and Top 10 rows have. */
+a.sync-list-item { color: inherit; text-decoration: none; transition: background .12s ease; }
+a.sync-list-item:hover { background: #F9FAFB; }
+a.sync-list-item .sync-list-module { color: var(--primary); }
 .sync-list-icon {
     width: 36px; height: 36px; border-radius: 10px;
     display: grid; place-items: center; flex: 0 0 auto;
@@ -858,6 +1314,7 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
     .topbar-switch-caret { font-size: 11px; color: var(--text-muted); }
 
     .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .kpi-row   { grid-template-columns: 1fr; }
     .chart-row { grid-template-columns: 1fr; }
     .recent-row { grid-template-columns: 1fr; }
     .page { padding: 20px 16px 96px; }
@@ -867,6 +1324,9 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
     .form-grid { grid-template-columns: 1fr; }
     .form-group.col-span-2, .form-group.col-span-3 { grid-column: span 1; }
     .stat-grid { grid-template-columns: 1fr; }
+    .kpi-tiles { grid-template-columns: 1fr; }
+    .recv-body { grid-template-columns: 1fr; }
+    .sr-figures { grid-template-columns: 1fr; }
 
     .page-head-actions { width: 100%; }
     .page-head-actions .btn,
@@ -1157,3 +1617,24 @@ a.action-btn { text-decoration: none; }
 .lic-pill strong { color: #0F172A; margin-left: 3px; font-weight: 700; }
 .lic-pill-warn { background: #FEF3C7; border-color: #FDE68A; color: #92400E; }
 .lic-pill-warn strong { color: #78350F; }
+
+/* ── Sidebar: not-yet-built module (menu में दिखता है, click नहीं होता) ───── */
+.sidebar-link.is-disabled {
+    display: flex;
+    align-items: center;
+    opacity: .45;
+    cursor: not-allowed;
+    pointer-events: none;
+    user-select: none;
+}
+.sidebar-soon {
+    margin-left: auto;
+    font-size: .625rem;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: .05rem .35rem;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    opacity: .8;
+}
