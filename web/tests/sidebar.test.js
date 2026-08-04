@@ -29,3 +29,34 @@ test('a `soon` item renders as a dead span with a Soon pill, not a link', () => 
     // and it must NOT be clickable
     assert.doesNotMatch(html, /<a class="sidebar-link[^"]*"[^>]*>\s*<i[^>]*><\/i>\s*<span class="sidebar-link-text">Quotation</);
 });
+
+test('groups appear in the LiveKeeping order', () => {
+    const html = renderSidebar();
+    const order = [...html.matchAll(/class="sidebar-section-text">([^<]+)</g)].map(m => m[1]);
+    assert.deepStrictEqual(order, [
+        'Create Vouchers', 'Sales', 'Purchase', 'Cash & Bank', 'Parties',
+        'Items', 'Reports', 'My Entries', 'Field Sales', 'Portals',
+        'Tally Sync', 'Configurations',
+    ]);
+});
+
+test('every LiveKeeping voucher type is present', () => {
+    const html = renderSidebar();
+    for (const label of ['Quotation', 'Sales Order', 'Contra', 'Purchase Order',
+                         'Credit Note', 'Debit Note', 'Stock Journal',
+                         'Physical Stock', 'Receipt Note', 'Delivery Note',
+                         'Collect Payments', 'GST Search', 'Data Backup']) {
+        assert.match(html, new RegExp('sidebar-link-text">' + label + '<'), label + ' missing');
+    }
+});
+
+test('our own modules keep working links inside their new groups', () => {
+    const html = renderSidebar();
+    for (const href of ['/sales-invoices', '/receivables', '/payables', '/cash',
+                        '/bank', '/bank-reconciliation', '/customers', '/suppliers',
+                        '/products', '/inventory', '/reports', '/field-tracking',
+                        '/customer-users', '/website-users', '/sync-dashboard',
+                        '/roles', '/settings']) {
+        assert.match(html, new RegExp('href="' + href + '"'), href + ' missing');
+    }
+});

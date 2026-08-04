@@ -22,51 +22,101 @@ var menu = [
     { label: null, items: [
         { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/', perm: 'dashboard' },
     ]},
-    { label: 'Masters', icon: 'fa-folder-open', items: [
-        { key: 'quotation', label: 'Quotation', icon: 'fa-file-lines', href: '#', soon: true },
-        { key: 'companies',  label: 'Companies',     icon: 'fa-building',      href: '/companies',     perm: 'companies' },
-        { key: 'locations',  label: 'Locations',     icon: 'fa-location-dot',  href: '/locations',     perm: 'locations' },
-        { key: 'customers',  label: 'Customers',     icon: 'fa-user-group',    href: '/customers',     perm: 'customers' },
-        { key: 'suppliers',  label: 'Suppliers',     icon: 'fa-truck-field',   href: '/suppliers',     perm: 'suppliers' },
-        { key: 'products',   label: 'Products',      icon: 'fa-box',           href: '/products',      perm: 'products' },
-        { key: 'categories', label: 'Categories',    icon: 'fa-tags',          href: '/categories',    perm: 'categories' },
+    { label: 'Create Vouchers', icon: 'fa-plus', items: [
+        { key: 'new-quotation',   label: 'Quotation',        icon: 'fa-file-lines',        href: '#', soon: true },
+        { key: 'new-sales-inv',   label: 'Sales Invoice',    icon: 'fa-file-invoice',      href: '/sales-invoices/create',    perm: 'sales-invoices' },
+        { key: 'new-receipt',     label: 'Receipt',          icon: 'fa-receipt',           href: '/receipts/add',             perm: 'receipts' },
+        { key: 'new-payment',     label: 'Payment',          icon: 'fa-money-bill-wave',   href: '/payments/add',             perm: 'payments' },
+        { key: 'new-sales-order', label: 'Sales Order',      icon: 'fa-cart-shopping',     href: '#', soon: true },
+        { key: 'new-purchase',    label: 'Purchase Invoice', icon: 'fa-file-import',       href: '/purchase-invoices/create', perm: 'purchase-invoices' },
+        { key: 'new-journal',     label: 'Journal',          icon: 'fa-book',              href: '/journals',                 perm: 'journals' },
+        { key: 'new-contra',      label: 'Contra',           icon: 'fa-right-left',        href: '#', soon: true },
+        { key: 'new-po',          label: 'Purchase Order',   icon: 'fa-cart-flatbed',      href: '#', soon: true },
+        { key: 'new-credit-note', label: 'Credit Note',      icon: 'fa-file-circle-minus', href: '#', soon: true },
+        { key: 'new-debit-note',  label: 'Debit Note',       icon: 'fa-file-circle-plus',  href: '#', soon: true },
+        { key: 'new-stock-jrnl',  label: 'Stock Journal',    icon: 'fa-boxes-packing',     href: '#', soon: true },
+        { key: 'new-phys-stock',  label: 'Physical Stock',   icon: 'fa-clipboard-list',    href: '#', soon: true },
+        { key: 'new-recpt-note',  label: 'Receipt Note',     icon: 'fa-dolly',             href: '#', soon: true },
+        { key: 'new-dely-note',   label: 'Delivery Note',    icon: 'fa-truck-fast',        href: '#', soon: true },
     ]},
-    { label: 'Transactions', icon: 'fa-right-left', items: [
-        { key: 'sales-inv',    label: 'Sales Invoices',    icon: 'fa-file-invoice',     href: '/sales-invoices',    perm: 'sales-invoices' },
-        { key: 'approvals',    label: 'Invoice Approvals', icon: 'fa-clipboard-check',  href: '/sales-invoices/approvals', approve: true },
-        { key: 'field-tracking', label: 'Field Tracking',  icon: 'fa-map-location-dot', href: '/field-tracking',           approve: true },
-        { key: 'recurring',    label: 'Recurring Invoices', icon: 'fa-repeat',          href: '/recurring-invoices', perm: 'recurring-invoices' },
-        { key: 'einvoice',     label: 'e-Invoice & e-Way', icon: 'fa-file-circle-check', href: '/einvoices',        perm: 'einvoice' },
-        { key: 'einvoice-dash', label: 'e-Invoice Dashboard', icon: 'fa-gauge-high',    href: '/einvoices/dashboard', perm: 'einvoice' },
-        { key: 'purchase-inv', label: 'Purchase Invoices', icon: 'fa-file-import',      href: '/purchase-invoices', perm: 'purchase-invoices' },
-        { key: 'payments',     label: 'Payments',          icon: 'fa-money-bill-wave',  href: '/payments',          perm: 'payments' },
-        { key: 'receipts',     label: 'Receipts',          icon: 'fa-receipt',          href: '/receipts',          perm: 'receipts' },
-        { key: 'reminders',    label: 'Payment Reminders', icon: 'fa-bell',             href: '/reminders',         perm: 'payments' },
-        { key: 'journals',     label: 'Journals',          icon: 'fa-book',             href: '/journals',          perm: 'journals' },
-        { key: 'expenses',     label: 'Expenses',          icon: 'fa-wallet',           href: '/expenses',          perm: 'expenses' },
-        { key: 'bank',         label: 'Bank Reconciliation', icon: 'fa-building-columns', href: '/bank-reconciliation', perm: 'bank-reconciliation' },
-        { key: 'inventory',    label: 'Inventory',         icon: 'fa-warehouse',        href: '/inventory',         perm: 'inventory' },
+    { label: 'Sales', icon: 'fa-chart-line', items: [
+        { key: 'sales-inv',     label: 'Sales',                icon: 'fa-file-invoice',      href: '/sales-invoices',           perm: 'sales-invoices' },
+        { key: 'credit-notes',  label: 'Credit Note',          icon: 'fa-file-circle-minus', href: '#', soon: true },
+        { key: 'receipts',      label: 'Receipt',              icon: 'fa-receipt',           href: '/receipts',                 perm: 'receipts' },
+        { key: 'receivables',   label: 'Receivables',          icon: 'fa-hand-holding-dollar', href: '/receivables',            perm: 'reports' },
+        { key: 'sales-orders',  label: 'Sales Order',          icon: 'fa-cart-shopping',     href: '#', soon: true },
+        { key: 'dely-notes',    label: 'Delivery Note',        icon: 'fa-truck-fast',        href: '#', soon: true },
+        { key: 'approvals',     label: 'Invoice Approvals',    icon: 'fa-clipboard-check',   href: '/sales-invoices/approvals', approve: true },
+        { key: 'recurring',     label: 'Recurring Invoices',   icon: 'fa-repeat',            href: '/recurring-invoices',       perm: 'recurring-invoices' },
+        { key: 'einvoice',      label: 'e-Invoice & e-Way',    icon: 'fa-file-circle-check', href: '/einvoices',                perm: 'einvoice' },
+        { key: 'einvoice-dash', label: 'e-Invoice Dashboard',  icon: 'fa-gauge-high',        href: '/einvoices/dashboard',      perm: 'einvoice' },
+        { key: 'reminders',     label: 'Payment Reminders',    icon: 'fa-bell',              href: '/reminders',                perm: 'payments' },
+    ]},
+    { label: 'Purchase', icon: 'fa-cart-flatbed', items: [
+        { key: 'purchase-inv', label: 'Purchase',       icon: 'fa-file-import',      href: '/purchase-invoices', perm: 'purchase-invoices' },
+        { key: 'debit-notes',  label: 'Debit Note',     icon: 'fa-file-circle-plus', href: '#', soon: true },
+        { key: 'payments',     label: 'Payment',        icon: 'fa-money-bill-wave',  href: '/payments',          perm: 'payments' },
+        { key: 'payables',     label: 'Payables',       icon: 'fa-hand-holding-dollar', href: '/payables',       perm: 'reports' },
+        { key: 'purch-orders', label: 'Purchase Order', icon: 'fa-cart-flatbed',     href: '#', soon: true },
+        { key: 'recpt-notes',  label: 'Receipt Note',   icon: 'fa-dolly',            href: '#', soon: true },
+        { key: 'expenses',     label: 'Expenses',       icon: 'fa-wallet',           href: '/expenses',          perm: 'expenses' },
     ]},
     { label: 'Cash & Bank', icon: 'fa-sack-dollar', items: [
-        { key: 'cash', label: 'Cash', icon: 'fa-money-bill-1', href: '/cash', perm: 'dashboard' },
-        { key: 'bank-ledgers', label: 'Bank', icon: 'fa-building-columns', href: '/bank', perm: 'dashboard' },
+        { key: 'cash',         label: 'Cash',                icon: 'fa-money-bill-1',     href: '/cash',                perm: 'dashboard' },
+        { key: 'bank-ledgers', label: 'Bank',                icon: 'fa-building-columns', href: '/bank',                perm: 'dashboard' },
+        { key: 'bank',         label: 'Bank Reconciliation', icon: 'fa-scale-balanced',   href: '/bank-reconciliation', perm: 'bank-reconciliation' },
+        { key: 'journals',     label: 'Journals',            icon: 'fa-book',             href: '/journals',            perm: 'journals' },
     ]},
-    { label: 'Tally Sync', icon: 'fa-rotate', items: [
-        { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',     href: '/sync-dashboard', adminOnly: true },
-        { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check', href: '/sync-logs',      adminOnly: true },
-        { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',  adminOnly: true },
+    { label: null, items: [
+        { key: 'collect-payments', label: 'Collect Payments', icon: 'fa-credit-card', href: '#', soon: true },
+    ]},
+    { label: 'Parties', icon: 'fa-address-book', items: [
+        { key: 'customers', label: 'Customers', icon: 'fa-user-group',  href: '/customers', perm: 'customers' },
+        { key: 'suppliers', label: 'Suppliers', icon: 'fa-truck-field', href: '/suppliers', perm: 'suppliers' },
+    ]},
+    { label: 'Items', icon: 'fa-box', items: [
+        { key: 'products',   label: 'Products',   icon: 'fa-box',       href: '/products',   perm: 'products' },
+        { key: 'categories', label: 'Categories', icon: 'fa-tags',      href: '/categories', perm: 'categories' },
+        { key: 'inventory',  label: 'Inventory',  icon: 'fa-warehouse', href: '/inventory',  perm: 'inventory' },
     ]},
     { label: 'Reports', icon: 'fa-chart-simple', items: [
-        { key: 'analytics', label: 'Business Analytics', icon: 'fa-chart-pie',    href: '/analytics', perm: 'reports' },
         { key: 'reports',   label: 'Reports',            icon: 'fa-chart-column', href: '/reports',   perm: 'reports' },
+        { key: 'analytics', label: 'Business Analytics', icon: 'fa-chart-pie',    href: '/analytics', perm: 'reports' },
     ]},
-    { label: 'Settings', icon: 'fa-sliders', items: [
-        { key: 'sales',    label: 'Sales Persons',        icon: 'fa-user-tie',    href: '/sales-persons', perm: 'sales-persons' },
-        { key: 'customer-users', label: 'Customer Users', icon: 'fa-user-lock',   href: '/customer-users', perm: 'customer-users' },
-        { key: 'website-users',  label: 'Website Users',  icon: 'fa-globe',       href: '/website-users',  perm: 'website-users' },
-        { key: 'users',    label: 'Users',                icon: 'fa-users',       href: '/users', perm: 'users' },
-        { key: 'accountant', label: 'Accountant Access',  icon: 'fa-user-tie',    href: '/accountant-access', perm: 'users' },
-        { key: 'settings', label: 'Settings',             icon: 'fa-gear',        href: '/settings', perm: 'settings' },
+    { label: 'My Entries', icon: 'fa-square-check', items: [
+        { key: 'my-vouchers',   label: 'My Vouchers',    icon: 'fa-file-lines',        href: '#', soon: true },
+        { key: 'my-quotations', label: 'My Quotations',  icon: 'fa-file-signature',    href: '#', soon: true },
+        { key: 'my-eway',       label: 'My eWay Bills',  icon: 'fa-truck-fast',        href: '#', soon: true },
+        { key: 'my-einvoices',  label: 'My eInvoices',   icon: 'fa-file-circle-check', href: '#', soon: true },
+        { key: 'my-parties',    label: 'My Parties',     icon: 'fa-address-book',      href: '#', soon: true },
+        { key: 'my-stock',      label: 'My Stock Items', icon: 'fa-boxes-stacked',     href: '#', soon: true },
+        { key: 'field-tracking', label: 'Tracking Report', icon: 'fa-map-location-dot', href: '/field-tracking', approve: true },
+    ]},
+    { label: 'Field Sales', icon: 'fa-location-dot', items: [
+        { key: 'my-field',     label: 'My Dashboard',  icon: 'fa-location-dot',        href: '/my-field',     salesmanOnly: true },
+        { key: 'sales',        label: 'Sales Persons', icon: 'fa-user-tie',            href: '/sales-persons', perm: 'sales-persons' },
+        { key: 'gps-settings', label: 'GPS Tracking',  icon: 'fa-location-crosshairs', href: '/gps-settings',  adminOnly: true },
+    ]},
+    { label: 'Portals', icon: 'fa-globe', items: [
+        { key: 'customer-users', label: 'Customer Users', icon: 'fa-user-lock', href: '/customer-users', perm: 'customer-users' },
+        { key: 'website-users',  label: 'Website Users',  icon: 'fa-globe',     href: '/website-users',  perm: 'website-users' },
+    ]},
+    { label: 'Tally Sync', icon: 'fa-rotate', items: [
+        { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',            href: '/sync-dashboard', adminOnly: true },
+        { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check',        href: '/sync-logs',      adminOnly: true },
+        { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',        adminOnly: true },
+    ]},
+    { label: 'Configurations', icon: 'fa-sliders', items: [
+        { key: 'settings',     label: 'Settings',           icon: 'fa-gear',         href: '/settings',           perm: 'settings' },
+        { key: 'users',        label: 'Users',              icon: 'fa-users',        href: '/users',              perm: 'users' },
+        { key: 'accountant',   label: 'Accountant Access',  icon: 'fa-user-tie',     href: '/accountant-access',  perm: 'users' },
+        { key: 'companies',    label: 'Companies',          icon: 'fa-building',     href: '/companies',          perm: 'companies' },
+        { key: 'locations',    label: 'Locations',          icon: 'fa-location-dot', href: '/locations',          perm: 'locations' },
+        { key: 'einvoice-gsp', label: 'e-Invoice GSP',      icon: 'fa-file-invoice-dollar', href: '/einvoice-gsp', superOnly: true },
+    ]},
+    { label: null, items: [
+        { key: 'gst-search',  label: 'GST Search',  icon: 'fa-magnifying-glass', href: '#', soon: true },
+        { key: 'data-backup', label: 'Data Backup', icon: 'fa-cloud-arrow-up',   href: '#', soon: true },
     ]},
 ];
 
@@ -178,7 +228,7 @@ if (_isSuperAdmin) {
                         data-group="<%= gid %>" aria-expanded="<%= groupActive ? 'true' : 'false' %>"
                         <%= groupActive ? 'data-group-active' : '' %> aria-controls="grp-<%= gid %>">
                     <i class="fa-solid <%= group.icon || 'fa-folder' %> sidebar-section-icon" aria-hidden="true"></i>
-                    <span class="sidebar-section-text"><%= group.label %></span>
+                    <span class="sidebar-section-text"><%- group.label %></span>
                     <i class="fa-solid fa-chevron-down sidebar-section-caret"></i>
                 </button>
                 <ul class="sidebar-list sidebar-group" id="grp-<%= gid %>" data-group-items="<%= gid %>">
