@@ -90,6 +90,7 @@ function buildInsert(body) {
         opening_balance_type:    body.opening_balance_type,
         country:                 body.country,
         state:                   body.state,
+        city:                    body.city,
         pincode:                 body.pincode,
         gst_registration_type:   body.gst_registration_type,
         notes:             body.notes,
@@ -105,7 +106,7 @@ const UPDATABLE = [
     'location_id', 'sales_person_id', 'customer_group_id',
     'opening_balance', 'credit_limit', 'status',
     'billing_address', 'shipping_address', 'is_tally_ledger',
-    'ledger_group', 'opening_balance_type', 'country', 'state', 'pincode', 'gst_registration_type',
+    'ledger_group', 'opening_balance_type', 'country', 'state', 'city', 'pincode', 'gst_registration_type',
     'notes', 'internal_remarks', 'custom_fields',
 ];
 

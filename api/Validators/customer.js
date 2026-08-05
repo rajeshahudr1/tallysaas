@@ -77,6 +77,7 @@ const createCustomerSchema = Joi.object({
     opening_balance_type:  Joi.string().valid(...BALANCE_TYPES).default('Cr'),
     country:                optText(64),
     state:                   Joi.string().trim().max(100).valid(...STATE_NAMES).allow('', null),
+    city:                    optText(120),
     pincode:                optText(12),
     gst_registration_type:  Joi.string().trim().max(40).valid(...GST_REGISTRATION_TYPES).allow('', null),
 
@@ -118,6 +119,7 @@ const updateCustomerSchema = Joi.object({
     opening_balance_type:  Joi.string().valid(...BALANCE_TYPES),
     country:                optText(64),
     state:                   Joi.string().trim().max(100).valid(...STATE_NAMES).allow('', null),
+    city:                    optText(120),
     pincode:                optText(12),
     gst_registration_type:  Joi.string().trim().max(40).valid(...GST_REGISTRATION_TYPES).allow('', null),
 

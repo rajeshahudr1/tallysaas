@@ -153,6 +153,7 @@ const GpsSettingsController    = require('../Controllers/SuperAdmin/GpsSettingsC
 const AgentCommandController  = require('../Controllers/Tenant/AgentCommandController');
 const DashboardController     = require('../Controllers/Tenant/DashboardController');
 const TallyLedgerController   = require('../Controllers/Tenant/TallyLedgerController');
+const GeoController           = require('../Controllers/Tenant/GeoController');
 const FieldController         = require('../Controllers/Tenant/FieldController');
 const InventoryController     = require('../Controllers/Tenant/InventoryController');
 const UserController          = require('../Controllers/Tenant/UserController');
@@ -1064,6 +1065,26 @@ router.get(
     '/tally/ledger-groups',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
     TallyLedgerController.ledgerGroupOptions,
+);
+
+// Country/State/City lookups for the customer address form's cascading
+// dropdowns (static data, see Helpers/geo.js).
+router.get(
+    '/geo/countries',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
+    GeoController.countries,
+);
+
+router.get(
+    '/geo/states',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
+    GeoController.states,
+);
+
+router.get(
+    '/geo/cities',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
+    GeoController.cities,
 );
 
 // SFA — the logged-in salesman's field dashboard (assigned locations + their
