@@ -92,8 +92,15 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
         // Call right before a popup opens: closes every other registered
         // popup first, then tracks this one so a later open (or an outside
         // click/Esc) can close it in turn.
+        // Re-registering the SAME popup must not close it: a single click fires
+        // both mousedown and focus, and each one re-opens (and so re-registers)
+        // the combobox. Closing "everything else" blindly would run this popup's
+        // own close() right after it opened, so the menu flashed shut and the
+        // field looked dead. Close only the OTHERS.
         function registerPopup(els, closeFn) {
-            closeAllPopups();
+            var others = openPopups.filter(function (p) { return p.close !== closeFn; });
+            openPopups = [];
+            others.forEach(function (p) { p.close(); });
             openPopups = [{ els: els, close: closeFn }];
         }
         function forgetPopup(closeFn) {
