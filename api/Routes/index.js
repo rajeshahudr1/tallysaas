@@ -1467,6 +1467,40 @@ router.delete(
     JournalController.destroy,
 );
 
+// Contra vouchers — a cash⇄bank transfer. Same JournalController handlers as
+// Journals (it's the same `journals` table/vch_type catalogue), gated on its
+// own 'contra' module and always forced to vch_type: 'Contra' at the route
+// level (not in the controller) so the Journal path above stays untouched.
+function forceContraType(req, res, next) {
+    if (req.method === 'GET') req.query.vch_type = 'Contra';
+    else req.body.vch_type = 'Contra';
+    next();
+}
+router.get(
+    '/contra',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('contra', 'view'),
+    forceContraType,
+    validate(listJournalSchema, 'query'),
+    JournalController.list,
+);
+router.get(
+    '/contra/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('contra', 'view'),
+    JournalController.get,
+);
+router.post(
+    '/contra',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('contra', 'create'),
+    forceContraType,
+    validate(createJournalSchema),
+    JournalController.create,
+);
+router.delete(
+    '/contra/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('contra', 'delete'),
+    JournalController.destroy,
+);
+
 // Reports — Tally-style registers (GST breakup, day book, outstanding, GST).
 router.get(
     '/reports/sales-register',

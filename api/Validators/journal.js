@@ -20,6 +20,9 @@ const createJournalSchema = Joi.object({
 const listJournalSchema = Joi.object({
     search:    Joi.string().trim().max(191).allow('', null),
     status:    Joi.string().valid(...STATUSES),
+    // वैकल्पिक: एक ही voucher family दिखाओ (Contra का अपना screen इसी से चलता है)।
+    // कोई default नहीं — न भेजा जाए तो Journals का पुराना व्यवहार अछूता रहे।
+    vch_type:  Joi.string().valid(...VCH_TYPES),
     date_from: Joi.string().trim().allow('', null),
     date_to:   Joi.string().trim().allow('', null),
     page:      Joi.number().integer().min(1).default(1),

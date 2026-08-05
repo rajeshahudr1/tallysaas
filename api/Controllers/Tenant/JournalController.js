@@ -15,6 +15,7 @@
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
 const { recordHistory } = require('../../Helpers/history');
+const { resolveBuckets } = require('../../Helpers/ledgerGroups');
 
 const OOPS_MSG = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND = 'Journal not found.';
@@ -35,6 +36,9 @@ async function list(req, res) {
         const { page, perPage } = parsePagination(req.query);
         let qb = db('journals').where('company_id', req.companyId).whereNull('deleted_at');
         if (req.query.status) qb = qb.where('status', req.query.status);
+        // वैकल्पिक: एक ही voucher family दिखाओ (Contra का अपना screen इसी से चलता है)।
+        // न भेजा जाए तो सब लौटे — Journals का पुराना व्यवहार अछूता।
+        if (req.query.vch_type) qb = qb.where('vch_type', req.query.vch_type);
         if (req.query.search) {
             const like = `%${String(req.query.search).trim()}%`;
             qb = qb.where((b) => {
@@ -55,6 +59,21 @@ async function list(req, res) {
         return R.successResponse(res, { data: rows, meta: { total: Number(count), page, per_page: perPage, grand_total: grandTotal } });
     } catch (err) {
         console.error('journals.list error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/** GET /api/v1/journals/:id (and /contra/:id) — a single voucher. */
+async function get(req, res) {
+    try {
+        const id = Number(req.params.id);
+        const row = await db('journals').where({ id, company_id: req.companyId }).whereNull('deleted_at')
+            .select('id', 'voucher_no', 'vch_type', 'journal_date', 'dr_ledger', 'cr_ledger', 'amount', 'narration', 'status', 'created_at')
+            .first();
+        if (!row) return R.errorResponse(res, NOT_FOUND, 404);
+        return R.successResponse(res, row);
+    } catch (err) {
+        console.error('journals.get error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);
     }
 }
@@ -83,9 +102,51 @@ async function monthly(req, res) {
     }
 }
 
+/**
+ * Contra का पूरा मतलब ही नक़दी और बैंक के बीच अदला-बदली है — इसलिए इसके दोनों
+ * ledger cash या bank bucket के होने चाहिए। यह जाँच server पर है, form पर नहीं:
+ * form सिर्फ़ सुविधा है, नियम यहाँ रहता है।
+ *
+ * ledger का parent group name सीधे tally_ledgers से पढ़ते हैं (agent इसे नाम से
+ * sync करता है), फिर ledgerGroups.js के parent-chain walker से बकेट तय करते हैं।
+ * ledger cloud में न मिले (अभी sync नहीं हुआ) तो null लौटाते हैं — caller तय
+ * करे कि उसे block करना है या ढील देनी है।
+ */
+async function isCashOrBankLedger(name, companyId) {
+    const ledger = await db('tally_ledgers')
+        .where('company_id', companyId).where('name', name)
+        .whereNull('deleted_at')
+        .select('parent').first();
+    if (!ledger) return null; // ledger ही sync नहीं हुआ — caller तय करे
+
+    const groups = await db('tally_groups').where('company_id', companyId)
+        .whereNull('deleted_at')
+        .select('name', 'parent', 'primary_group');
+    const bucketOf = resolveBuckets(groups);
+    const bucket = bucketOf.get(ledger.parent);
+    return bucket === 'cash' || bucket === 'bank';
+}
+
 async function create(req, res) {
     try {
         const b = req.body;
+
+        if (b.vch_type === 'Contra') {
+            // यदि company के tally_groups अभी sync ही नहीं हुए (नए tenant में यही
+            // हाल है), तो जाँच पास होने दें — वरना Tally data न आया tenant Contra
+            // बना ही नहीं पाएगा।
+            const groupsSynced = await db('tally_groups').where('company_id', req.companyId)
+                .whereNull('deleted_at').first();
+            if (groupsSynced) {
+                for (const [field, label] of [['dr_ledger', 'To (Dr)'], ['cr_ledger', 'From (Cr)']]) {
+                    const ok = await isCashOrBankLedger(b[field], req.companyId);
+                    if (ok === false) {
+                        return R.errorResponse(res, `${label} ledger "${b[field]}" is not a cash or bank ledger — Contra needs both sides to be cash/bank.`, 422);
+                    }
+                }
+            }
+        }
+
         // Auto-number JV-0001 (per company).
         const [{ count }] = await db('journals').where('company_id', req.companyId).count({ count: '*' });
         const voucherNo = 'JV-' + String(Number(count) + 1).padStart(4, '0');
@@ -149,4 +210,4 @@ async function destroy(req, res) {
     }
 }
 
-module.exports = { list, monthly, create, destroy };
+module.exports = { list, get, monthly, create, destroy, isCashOrBankLedger };
