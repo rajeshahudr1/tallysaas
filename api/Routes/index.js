@@ -103,6 +103,10 @@ const {
     listPurchaseOrderSchema,
 } = require('../Validators/purchaseOrder');
 const {
+    createDeliveryNoteSchema,
+    listDeliveryNoteSchema,
+} = require('../Validators/deliveryNote');
+const {
     createPaymentSchema,
     createReceiptSchema,
     listPaymentSchema,
@@ -152,6 +156,7 @@ const InvoiceController       = require('../Controllers/Tenant/InvoiceController
 const QuotationController     = require('../Controllers/Tenant/QuotationController');
 const SalesOrderController    = require('../Controllers/Tenant/SalesOrderController');
 const PurchaseOrderController = require('../Controllers/Tenant/PurchaseOrderController');
+const DeliveryNoteController  = require('../Controllers/Tenant/DeliveryNoteController');
 const PaymentController       = require('../Controllers/Tenant/PaymentController');
 const LicenseController       = require('../Controllers/SuperAdmin/LicenseController');
 const CompanyController       = require('../Controllers/SuperAdmin/CompanyController');
@@ -919,6 +924,21 @@ router.post('/sales-orders/:id/convert', authenticate, resolveTenant, resolveCom
     can('sales-orders', 'edit'), SalesOrderController.convert);
 router.delete('/sales-orders/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('sales-orders', 'delete'), SalesOrderController.destroy);
+
+router.get('/delivery-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('delivery-notes', 'view'), validate(listDeliveryNoteSchema, 'query'), DeliveryNoteController.list);
+router.get('/delivery-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('delivery-notes', 'view'), DeliveryNoteController.get);
+router.get('/delivery-notes/:id/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('delivery-notes', 'view'), DeliveryNoteController.pdf);
+router.post('/delivery-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('delivery-notes', 'create'), validate(createDeliveryNoteSchema), DeliveryNoteController.create);
+router.put('/delivery-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('delivery-notes', 'edit'), validate(createDeliveryNoteSchema), DeliveryNoteController.updateDraft);
+router.post('/delivery-notes/:id/convert', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('delivery-notes', 'edit'), DeliveryNoteController.convert);
+router.delete('/delivery-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('delivery-notes', 'delete'), DeliveryNoteController.destroy);
 
 router.get('/purchase-orders', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('purchase-orders', 'view'), validate(listPurchaseOrderSchema, 'query'), PurchaseOrderController.list);

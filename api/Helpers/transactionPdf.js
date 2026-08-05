@@ -318,6 +318,74 @@ function purchaseOrderPdfHtml(o, ctx = {}) {
     return { html: wrap(ctx, title, inner), landscape: false };
 }
 
+/**
+ * Build delivery-note PDF HTML. o = DeliveryNoteController.get's data
+ * object. Same layout as salesOrderPdfHtml but titled "DELIVERY NOTE", shows
+ * a "Dispatch date" line (the day goods actually left) instead of "Due on",
+ * and cites the referenced sales order (if any) via "Against SO".
+ */
+function deliveryNotePdfHtml(o, ctx = {}) {
+    const title = 'DELIVERY NOTE';
+    const party = o.customer || null;
+    const partyLabel = 'Bill To';
+    const partyName = (typeof party === 'string' && party) || (party && party.name) || 'Cash / Walk-in';
+    const partyGstin = (party && (party.gstin || party.gst_no)) || '';
+
+    const items = (Array.isArray(o.items) ? o.items : []).map(normItem);
+
+    const rowsHtml = items.length
+        ? items.map((it, i) => `<tr>
+            <td class="c">${i + 1}</td>
+            <td>${esc(it.name)}</td>
+            <td>${esc(it.hsn)}</td>
+            <td class="num">${esc(it.qty)}</td>
+            <td>${esc(it.unit)}</td>
+            <td class="num">${inr(it.rate)}</td>
+            <td class="num">${it.disc !== '' && it.disc != null ? esc(it.disc) + '%' : ''}</td>
+            <td class="num">${inr(it.amount)}</td>
+          </tr>`).join('')
+        : `<tr><td colspan="8" class="empty">No line items.</td></tr>`;
+
+    const totalRow = (label, val, strong) =>
+        `<tr${strong ? ' class="grand"' : ''}><td>${esc(label)}</td><td class="num">${inr(val)}</td></tr>`;
+
+    const num = (v) => Number(v || 0);
+    let totals = '';
+    totals += totalRow('Taxable', o.taxable);
+    if (num(o.cgst))     totals += totalRow('CGST', o.cgst);
+    if (num(o.sgst))     totals += totalRow('SGST', o.sgst);
+    if (num(o.igst))     totals += totalRow('IGST', o.igst);
+    if (num(o.discount)) totals += totalRow('Discount', o.discount);
+    if (num(o.round_off)) totals += totalRow('Round Off', o.round_off);
+    totals += totalRow('Total', o.total, true);
+
+    const inner = `
+      <div class="meta-grid">
+        <div class="party">
+          <div class="lbl">${esc(partyLabel)}</div>
+          <div class="pname">${esc(partyName) || '—'}</div>
+          ${partyGstin ? `<div class="pgst">GSTIN: ${esc(partyGstin)}</div>` : ''}
+        </div>
+        <div class="inv-meta">
+          <div><span>Note No</span><b>${esc(o.note_no || '')}</b></div>
+          <div><span>Date</span><b>${fmtDate(o.note_date)}</b></div>
+          ${o.dispatch_date ? `<div><span>Dispatch date</span><b>${fmtDate(o.dispatch_date)}</b></div>` : ''}
+          ${o.sales_order_id ? `<div><span>Against SO</span><b>#${esc(o.sales_order_id)}</b></div>` : ''}
+        </div>
+      </div>
+      <table class="rpt">
+        <thead><tr>
+          <th class="c">#</th><th>Item</th><th>HSN</th><th class="num">Qty</th><th>Unit</th>
+          <th class="num">Rate</th><th class="num">Disc</th><th class="num">Amount</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div class="totals-wrap"><table class="totals">${totals}</table></div>
+      ${o.notes ? `<div class="notes"><b>Notes:</b> ${esc(o.notes)}</div>` : ''}`;
+
+    return { html: wrap(ctx, title, inner), landscape: false };
+}
+
 function wrap(ctx, title, inner) {
     return `<!doctype html><html><head><meta charset="utf-8"><style>
       * { box-sizing: border-box; }
@@ -358,4 +426,4 @@ function wrap(ctx, title, inner) {
     </body></html>`;
 }
 
-module.exports = { invoicePdfHtml, quotationPdfHtml, salesOrderPdfHtml, purchaseOrderPdfHtml };
+module.exports = { invoicePdfHtml, quotationPdfHtml, salesOrderPdfHtml, purchaseOrderPdfHtml, deliveryNotePdfHtml };
