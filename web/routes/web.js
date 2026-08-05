@@ -3201,6 +3201,101 @@ router.post('/purchase-orders', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Delivery Notes (list) ────────────────────────
+ * GET /delivery-notes — same shape as /sales-orders. `delivery_status` is
+ * the delivery-note-specific lifecycle filter (pending/invoiced/cancelled)
+ * — DeliveryNoteController.list reads that exact param name (NOT `status`,
+ * which is reserved for the Tally-sync lifecycle). Forwarded through
+ * apiList()'s basePath query string, same trick the sales/purchase order
+ * lists use for `order_status`. */
+router.get('/delivery-notes', async (req, res, next) => {
+  try {
+    const deliveryStatus = String(req.query.delivery_status || '').trim();
+
+    let basePath = '/delivery-notes';
+    const qsParts = [];
+    if (deliveryStatus) qsParts.push('delivery_status=' + encodeURIComponent(deliveryStatus));
+    if (qsParts.length) basePath += '?' + qsParts.join('&');
+
+    const { rows, meta } = await apiList(req, basePath);
+    const deliveryNoteRows = rows.map((r) => ({
+        id: r.id,
+        customer: r.customer || '',
+        date: fmtDate(r.note_date),
+        note_no: r.note_no,
+        dispatch_date: fmtDate(r.dispatch_date),
+        amount: r.total,
+        status: r.delivery_status || 'pending',
+    }));
+
+    res.render('delivery-notes/list', {
+        title: 'Delivery Notes',
+        activeMenu: 'dely-notes',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Delivery Notes' },
+        ],
+        deliveryNoteRows,
+        deliveryNotesTotal: meta.total,
+        page:    meta.page,
+        perPage: meta.per_page,
+        deliveryStatus,
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /delivery-notes/:id/pdf — stream the api's rendered PDF straight
+ * through (same pattern as /sales-orders/:id/pdf → api.fetchBinary). */
+router.get('/delivery-notes/:id/pdf', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await api.fetchBinary(req, `/delivery-notes/${id}/pdf`);
+    if (r.status !== 200 || !r.buffer) {
+        setFlash(req, 'error', 'Could not generate the delivery note PDF.');
+        return req.session.save(() => res.redirect('/delivery-notes'));
+    }
+    res.setHeader('Content-Type', r.contentType || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="delivery-note-${id}.pdf"`);
+    return res.end(r.buffer);
+  } catch (err) { next(err); }
+});
+
+/* POST /delivery-notes/:id/convert — turns the delivery note into a Sales
+ * Invoice; on success send the user straight into the freshly-created
+ * invoice, same destination/logic as /sales-orders/:id/convert. */
+router.post('/delivery-notes/:id/convert', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/delivery-notes/${req.params.id}/convert`, {});
+    if (apiOk(result)) {
+        const body = result.body || {};
+        const invoiceId = body.data && body.data.invoice_id;
+        let invoiceNo = invoiceId;
+        if (invoiceId) {
+            const inv = await api.get(req, `/sales-invoices/${invoiceId}`).catch(() => null);
+            if (inv && apiOk(inv) && inv.body.data && inv.body.data.invoice_no) invoiceNo = inv.body.data.invoice_no;
+        }
+        setFlash(req, 'success', invoiceId ? `Converted to invoice ${invoiceNo}.` : (body.message || 'Converted to invoice.'));
+        const dest = invoiceId
+            ? `/sales-invoices?approval=all&search=${encodeURIComponent(invoiceNo)}`
+            : '/delivery-notes';
+        return req.session.save(() => res.redirect(dest));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not convert this delivery note.'));
+    return req.session.save(() => res.redirect('/delivery-notes'));
+  } catch (err) { next(err); }
+});
+
+/* POST /delivery-notes/:id/delete — soft delete, matches /sales-orders/:id/delete. */
+router.post('/delivery-notes/:id/delete', async (req, res, next) => {
+  try {
+    const result = await api.del(req, `/delivery-notes/${req.params.id}`);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Delivery note deleted.')
+                      : apiError(result, 'Could not delete the delivery note.'));
+    return req.session.save(() => res.redirect('/delivery-notes'));
+  } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {

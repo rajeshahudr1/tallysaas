@@ -31,7 +31,7 @@ const MENU_TREE = [
         { key: 'new-stock-jrnl',  label: 'Stock Journal',    icon: 'fa-boxes-packing',     href: '#', soon: true, module: 'stock-journal' },
         { key: 'new-phys-stock',  label: 'Physical Stock',   icon: 'fa-clipboard-list',    href: '#', soon: true, module: 'physical-stock' },
         { key: 'new-recpt-note',  label: 'Receipt Note',     icon: 'fa-dolly',             href: '#', soon: true, module: 'receipt-notes' },
-        { key: 'new-dely-note',   label: 'Delivery Note',    icon: 'fa-truck-fast',        href: '#', soon: true, module: 'delivery-notes' },
+        { key: 'new-dely-note',   label: 'Delivery Note',    icon: 'fa-truck-fast',        href: '/delivery-notes/create', module: 'delivery-notes' },
     ]},
     { label: 'Sales', icon: 'fa-chart-line', items: [
         { key: 'sales-inv',     label: 'Sales',                icon: 'fa-file-invoice',      href: '/sales-invoices',           module: 'sales-invoices' },
@@ -39,7 +39,7 @@ const MENU_TREE = [
         { key: 'receipts',      label: 'Receipt',              icon: 'fa-receipt',           href: '/receipts',                 module: 'receipts' },
         { key: 'receivables',   label: 'Receivables',          icon: 'fa-hand-holding-dollar', href: '/receivables',            module: 'receivables' },
         { key: 'sales-orders',  label: 'Sales Order',          icon: 'fa-cart-shopping',     href: '/sales-orders', module: 'sales-orders' },
-        { key: 'dely-notes',    label: 'Delivery Note',        icon: 'fa-truck-fast',        href: '#', soon: true, module: 'delivery-notes' },
+        { key: 'dely-notes',    label: 'Delivery Note',        icon: 'fa-truck-fast',        href: '/delivery-notes', module: 'delivery-notes' },
         { key: 'approvals',     label: 'Invoice Approvals',    icon: 'fa-clipboard-check',   href: '/sales-invoices/approvals', approve: true, module: 'sales-invoices' },
         { key: 'recurring',     label: 'Recurring Invoices',   icon: 'fa-repeat',            href: '/recurring-invoices',       module: 'recurring-invoices' },
         { key: 'einvoice',      label: 'e-Invoice & e-Way',    icon: 'fa-file-circle-check', href: '/einvoices',                module: 'einvoice' },
