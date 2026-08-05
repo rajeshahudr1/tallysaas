@@ -2576,7 +2576,6 @@ router.get('/quotations', async (req, res, next) => {
         valid_till: fmtDate(r.valid_till),
         amount: r.total,
         status: r.quote_status || 'open',
-        _lockActions: r.quote_status === 'accepted' || r.quote_status === 'rejected',
     }));
 
     res.render('quotations/list', {

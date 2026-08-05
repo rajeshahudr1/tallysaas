@@ -48,6 +48,14 @@ function _inr(v) {
     var n = Number(v || 0);
     return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+
+/* RBAC: gate Convert (edit) / Delete row actions the same way
+ * partials/table.ejs does — View + PDF stay visible to anyone who can
+ * already see the list. canPath() is set in index.js; guarded so a
+ * missing helper never blanks the actions. */
+var _canPath3 = (typeof canPath === 'function') ? canPath : function () { return true; };
+var _canEditQuotation   = _canPath3('/quotations', 'edit');
+var _canDeleteQuotation = _canPath3('/quotations', 'delete');
 %>
 
 <%- include('../partials/page-head', {
@@ -132,7 +140,7 @@ function _inr(v) {
                                         <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
                                     <li><a class="dropdown-item" href="/quotations/<%= r.id %>/pdf" target="_blank">
                                         <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
-                                    <% if (_convertible) { %>
+                                    <% if (_convertible && _canEditQuotation) { %>
                                         <li>
                                             <form method="post" action="/quotations/<%= r.id %>/convert" style="margin:0">
                                                 <button class="dropdown-item" type="submit">
@@ -140,12 +148,14 @@ function _inr(v) {
                                             </form>
                                         </li>
                                     <% } %>
+                                    <% if (_canDeleteQuotation) { %>
                                     <li><hr class="dropdown-divider"></li>
                                     <li>
                                         <button class="dropdown-item text-danger" type="button"
                                                 data-row-delete data-delete-url="/quotations/<%= r.id %>" data-delete-label="<%= r.quotation_no %>">
                                             <i class="fa-regular fa-trash-can me-2"></i>Delete</button>
                                     </li>
+                                    <% } %>
                                 </ul>
                             </div>
                         </td>
