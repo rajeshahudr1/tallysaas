@@ -332,9 +332,21 @@ window.QuotationCalc = { lineAmount, formTotals };
 
         // Generic searchable combobox: input + hidden(optional) + menu div,
         // matching the li-prod-* widget already shipped for the item picker.
-        // opts: { input, hidden, menu, list, getLabel, getValue, onChoose }
+        // opts: { input, hidden, menu, list, getLabel, getValue, getSubLabel,
+        //         onChoose, clearBtn, createLabel, onCreate }
+        //
+        // Behaviour (change 3): once a value is picked, the field is NOT done —
+        // focusing/clicking it again reopens the FULL list (not filtered down to
+        // the one already-chosen label) so a different item can be picked;
+        // typing still filters as usual. clearBtn (×) wipes the selection.
         function makeCombobox(opts) {
             var active = -1, items = [];
+            var CREATE_MARK = { __create: true };
+
+            function fullList() {
+                var list = opts.list.slice(0, 50);
+                return opts.createLabel ? [CREATE_MARK].concat(list) : list;
+            }
 
             function place() {
                 var r = opts.input.getBoundingClientRect();
@@ -351,8 +363,15 @@ window.QuotationCalc = { lineAmount, formTotals };
                 } else {
                     list.forEach(function (it, i) {
                         var d = document.createElement('div');
-                        d.className = 'li-prod-item';
                         d.setAttribute('data-i', i);
+                        if (it === CREATE_MARK) {
+                            d.className = 'li-prod-item li-prod-create';
+                            d.innerHTML = '<i class="fa-solid fa-circle-plus"></i><span>' + opts.createLabel + '</span>';
+                            d.addEventListener('mousedown', function (e) { e.preventDefault(); if (opts.onCreate) opts.onCreate(); });
+                            opts.menu.appendChild(d);
+                            return;
+                        }
+                        d.className = 'li-prod-item';
                         var sub = opts.getSubLabel ? opts.getSubLabel(it) : '';
                         if (sub) {
                             d.textContent = '';
@@ -377,14 +396,20 @@ window.QuotationCalc = { lineAmount, formTotals };
                 var q = opts.input.value.trim().toLowerCase();
                 var list = !q ? opts.list.slice(0, 50)
                     : opts.list.filter(function (it) { return opts.getLabel(it).toLowerCase().indexOf(q) > -1; }).slice(0, 50);
+                if (opts.createLabel) list = [CREATE_MARK].concat(list);
                 render(list);
             }
             function close() { opts.menu.hidden = true; }
+            function updateClear() {
+                if (!opts.clearBtn) return;
+                opts.clearBtn.hidden = !(opts.hidden && opts.hidden.value);
+            }
             function choose(i) {
                 var it = items[i];
-                if (!it) return;
+                if (!it || it === CREATE_MARK) return;
                 opts.input.value = opts.getLabel(it);
                 if (opts.hidden) opts.hidden.value = opts.getValue(it);
+                updateClear();
                 close();
                 if (opts.onChoose) opts.onChoose(it);
             }
@@ -399,8 +424,11 @@ window.QuotationCalc = { lineAmount, formTotals };
             window.addEventListener('scroll', function () { if (!opts.menu.hidden) place(); }, true);
             window.addEventListener('resize', function () { if (!opts.menu.hidden) place(); });
 
-            opts.input.addEventListener('input', function () { if (opts.hidden) opts.hidden.value = ''; filter(); });
-            opts.input.addEventListener('focus', function () { if (!opts.input.disabled) filter(); });
+            opts.input.addEventListener('input', function () { if (opts.hidden) opts.hidden.value = ''; updateClear(); filter(); });
+            // Focusing/clicking an already-filled field reopens the FULL list
+            // (LiveKeeping behaviour), not a filter of the current label.
+            opts.input.addEventListener('focus', function () { if (!opts.input.disabled) render(fullList()); });
+            opts.input.addEventListener('mousedown', function () { if (!opts.input.disabled && opts.menu.hidden) render(fullList()); });
             opts.input.addEventListener('keydown', function (e) {
                 if (e.key === 'Escape') { close(); return; } // close, keep focus — no blur()
                 if (opts.menu.hidden) return;
@@ -410,7 +438,30 @@ window.QuotationCalc = { lineAmount, formTotals };
             });
             opts.input.addEventListener('blur', function () { setTimeout(close, 150); });
 
-            return { open: function () { openField(opts.input); filter(); } };
+            if (opts.clearBtn) {
+                opts.clearBtn.addEventListener('mousedown', function (e) { e.preventDefault(); });
+                opts.clearBtn.addEventListener('click', function () {
+                    opts.input.value = '';
+                    if (opts.hidden) opts.hidden.value = '';
+                    updateClear();
+                    openField(opts.input);
+                    render(fullList());
+                });
+                updateClear();
+            }
+
+            // Insert a freshly-created item at the front of the live list, select
+            // it, and continue the flow — used by the "Create New Customer" row.
+            function addAndSelect(it) {
+                opts.list.unshift(it);
+                opts.input.value = opts.getLabel(it);
+                if (opts.hidden) opts.hidden.value = opts.getValue(it);
+                updateClear();
+                close();
+                if (opts.onChoose) opts.onChoose(it);
+            }
+
+            return { open: function () { openField(opts.input); filter(); }, addAndSelect: addAndSelect };
         }
 
         var dateEl = document.getElementById('q-date');
@@ -445,10 +496,87 @@ window.QuotationCalc = { lineAmount, formTotals };
             input:  document.getElementById('q-party'),
             hidden: document.getElementById('q-party-id'),
             menu:   document.getElementById('q-party-menu'),
+            clearBtn: document.getElementById('q-party-clear'),
             list:   PARTIES,
             getLabel: function (p) { return p.name; },
+            // Outstanding balance would go here (getSubLabel) if it were part
+            // of the party options this page already loads — it is not
+            // (fetchCustomerInvoiceOptions only returns id/name/location; the
+            // customers API's opening_balance ≠ a real closing balance and
+            // computing one needs a per-customer ledger query), so the
+            // right-hand figure is left out rather than shipping a fake ₹0.00.
             getValue: function (p) { return p.id; },
             onChoose: unlockLedgerOrDate,
+            createLabel: 'Create New Customer',
+            onCreate: openNewCustomerModal,
+        });
+
+        // ── "Create New Customer" modal (change 4) ──
+        // On save: create via /quotations/create/quick-customer (proxies the
+        // real customers API), insert+select the new party in-memory, and
+        // continue the normal auto-advance flow — nothing already typed on
+        // the voucher is touched.
+        var ncModalEl = document.getElementById('q-new-customer-modal');
+        var ncModal = (ncModalEl && window.bootstrap && window.bootstrap.Modal)
+            ? new window.bootstrap.Modal(ncModalEl) : null;
+        var ncErr = document.getElementById('q-nc-error');
+        var ncSave = document.getElementById('q-nc-save');
+
+        function openNewCustomerModal() {
+            if (!ncModal) return;
+            if (ncErr) ncErr.hidden = true;
+            var nameEl = document.getElementById('q-nc-name');
+            if (nameEl) nameEl.value = document.getElementById('q-party').value.trim();
+            ['q-nc-mobile', 'q-nc-email', 'q-nc-gst', 'q-nc-address'].forEach(function (id) {
+                var el = document.getElementById(id); if (el) el.value = '';
+            });
+            ncModal.show();
+            ncModalEl.addEventListener('shown.bs.modal', function focusOnce() {
+                ncModalEl.removeEventListener('shown.bs.modal', focusOnce);
+                if (nameEl) nameEl.focus();
+            });
+        }
+
+        if (ncSave) ncSave.addEventListener('click', function () {
+            var name = (document.getElementById('q-nc-name').value || '').trim();
+            if (ncErr) ncErr.hidden = true;
+            if (!name) {
+                if (ncErr) { ncErr.textContent = 'Party name is required.'; ncErr.hidden = false; }
+                return;
+            }
+            var payload = {
+                name:    name,
+                mobile:  document.getElementById('q-nc-mobile').value || '',
+                email:   document.getElementById('q-nc-email').value || '',
+                gst_number: document.getElementById('q-nc-gst').value || '',
+                billing_address: document.getElementById('q-nc-address').value || '',
+            };
+            ncSave.disabled = true;
+            // Form-urlencoded, not JSON — the web app only mounts
+            // express.urlencoded() (see web/index.js), so a JSON body would
+            // arrive as an empty req.body server-side.
+            var form = new URLSearchParams();
+            Object.keys(payload).forEach(function (k) { form.append(k, payload[k]); });
+            fetch(window.QUOTATION_QUICK_CUSTOMER_URL || '/quotations/create/quick-customer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: form.toString(),
+            })
+                .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+                .then(function (res) {
+                    ncSave.disabled = false;
+                    if (!res.j || !res.j.ok) {
+                        var msg = (res.j && res.j.error) || 'Could not create customer.';
+                        if (ncErr) { ncErr.textContent = msg; ncErr.hidden = false; }
+                        return;
+                    }
+                    if (ncModal) ncModal.hide();
+                    partyBox.addAndSelect({ id: res.j.data.id, name: res.j.data.name });
+                })
+                .catch(function () {
+                    ncSave.disabled = false;
+                    if (ncErr) { ncErr.textContent = 'Could not reach the server.'; ncErr.hidden = false; }
+                });
         });
 
         var ledgerBox = LEDGERS.length ? makeCombobox({

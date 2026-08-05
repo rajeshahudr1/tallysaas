@@ -2717,6 +2717,37 @@ router.get('/quotations/create', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/* ── POST /quotations/create/quick-customer — "Create New Customer" row
+ * pinned atop the Party combobox (Defect 4). AJAX/JSON only: creates the
+ * customer via the SAME api the full Customers form uses, then hands back
+ * {id,name} so quotation.js can insert+select it in-memory without a page
+ * reload (the voucher already in progress must not be lost). Kept minimal —
+ * name + the handful of obviously-useful optional fields the modal exposes;
+ * everything else defaults exactly like POST /customers does. */
+router.post('/quotations/create/quick-customer', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const payload = {
+            name:        (b.name || '').trim(),
+            mobile:      b.mobile || undefined,
+            email:       b.email || undefined,
+            gst_number:  b.gst_number || undefined,
+            billing_address: b.billing_address || undefined,
+        };
+        if (!payload.name) {
+            return res.status(422).json({ ok: false, error: 'Customer name is required.' });
+        }
+        const result = await api.post(req, '/customers', payload);
+        if (apiOk(result) && result.body && result.body.data) {
+            const row = result.body.data;
+            return res.json({ ok: true, data: { id: row.id, name: row.name } });
+        }
+        return res.status(422).json({ ok: false, error: apiError(result, 'Could not create customer.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not create customer.' });
+    }
+});
+
 /* ── POST /quotations — create a quotation via the api. Header fields submit
  * normally; line items ride the hidden items_json (serialised by
  * /js/quotation.js). The api computes all totals inside a db transaction. */

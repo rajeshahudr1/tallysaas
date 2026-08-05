@@ -56,6 +56,9 @@ var _today = new Date().toISOString().slice(0, 10);
                 <i class="fa-solid fa-arrow-left"></i>
             </a>
             <span>Create Quotation Voucher</span>
+            <a class="q-list-btn" href="/quotations">
+                <i class="fa-solid fa-list-ul me-1"></i>View Quotations
+            </a>
         </div>
 
         <div class="inv-body">
@@ -66,6 +69,9 @@ var _today = new Date().toISOString().slice(0, 10);
                         <input type="text" class="form-control li-product-search" id="q-party"
                                placeholder="Search party…" autocomplete="off" required>
                         <input type="hidden" name="customer_id" id="q-party-id">
+                        <button type="button" class="li-prod-clear" id="q-party-clear" title="Clear party" aria-label="Clear party" hidden>
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
                         <div class="li-prod-menu" id="q-party-menu" hidden></div>
                     </div>
                 </div>
@@ -229,11 +235,58 @@ var _today = new Date().toISOString().slice(0, 10);
     </tr>
 </template>
 
+<!-- ── "Create New Customer" modal — pinned row atop the Party list (Defect 4).
+     Fields mirror what POST /quotations/create/quick-customer forwards to the
+     real customers API: name (required) + the obviously-useful optionals. No
+     Tally-ledger-only fields — our customer model doesn't have them. -->
+<div class="modal fade" id="q-new-customer-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Party</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="q-nc-error alert alert-danger py-2 px-3" id="q-nc-error" hidden></div>
+                <div class="form-group mb-3">
+                    <label class="form-label" for="q-nc-name">Party Name<span class="req">*</span></label>
+                    <input type="text" class="form-control" id="q-nc-name" maxlength="191" required>
+                </div>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label class="form-label" for="q-nc-mobile">Mobile</label>
+                        <input type="text" class="form-control" id="q-nc-mobile" maxlength="30">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="q-nc-email">Email</label>
+                        <input type="email" class="form-control" id="q-nc-email" maxlength="191">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="q-nc-gst">GST Number</label>
+                    <input type="text" class="form-control" id="q-nc-gst" maxlength="30">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="q-nc-address">Billing Address</label>
+                    <textarea class="form-control" id="q-nc-address" rows="2" maxlength="2000"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="q-nc-save">
+                    <i class="fa-solid fa-check me-1"></i>Save Party
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <%# Products / parties / sales-ledgers for the searchable comboboxes. %>
 <script>
     window.QUOTATION_PRODUCTS = <%- _productsJson %>;
     window.QUOTATION_PARTIES  = <%- _partiesJson %>;
     window.QUOTATION_LEDGERS  = <%- _ledgersJson %>;
+    window.QUOTATION_QUICK_CUSTOMER_URL = '/quotations/create/quick-customer';
 </script>
 
 <style>
@@ -269,4 +322,58 @@ var _today = new Date().toISOString().slice(0, 10);
         color: #fff; background: rgba(255,255,255,.15); vertical-align: middle;
     }
     .q-back:hover { background: rgba(255,255,255,.28); color: #fff; }
+
+    /* Full-bleed header bar (change 1) — LiveKeeping's header spans the
+       ENTIRE content area, flush against the sidebar and the right edge,
+       with nothing else above it. <main class="page"> pads 24px 28px (see
+       theme.css), so pull the bar out by that exact amount and square its
+       top corners; the rest of the card (below the bar) stays inset as
+       normal. Media query mirrors theme.css's own `.page` mobile padding. */
+    .q-voucher { overflow: visible; }
+    .voucher-head {
+        display: flex; align-items: center;
+        margin: -24px -28px 16px;
+        border-radius: 0;
+    }
+    .voucher-head span { flex: 0 0 auto; }
+    @media (max-width: 767.98px) {
+        .voucher-head { margin: -20px -16px 16px; }
+    }
+
+    /* "View Quotations" header button (change 2) — sits after the title,
+       pushed to the far right of the full-bleed bar. */
+    .q-list-btn {
+        margin-left: auto;
+        display: inline-flex; align-items: center;
+        padding: 6px 14px; border-radius: 6px;
+        font-size: 12.5px; font-weight: 600;
+        color: #fff; background: rgba(255,255,255,.15);
+        border: 1px solid rgba(255,255,255,.35);
+    }
+    .q-list-btn:hover { background: rgba(255,255,255,.28); color: #fff; }
+
+    /* Party/Ledger clear (×) button (change 3) — only shown once a value is
+       picked; sits inside the combobox cell, to the left of the dropdown's
+       own scrollbar gutter. */
+    .li-prod-clear {
+        position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+        width: 18px; height: 18px; border: 0; border-radius: 50%;
+        background: transparent; color: #9ca3af; font-size: 11px;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .li-prod-clear:hover { background: #f3f4f6; color: #374151; }
+    .li-prod-cell:has(.li-prod-clear:not([hidden])) .li-product-search { padding-right: 26px; }
+
+    /* Row sub-value (balance/parent) right-aligned opposite the label
+       (change 3 — party rows show outstanding balance on the right when
+       available; ledger rows already used getSubLabel for the parent). */
+    .li-prod-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .li-prod-item .li-prod-sub { flex: 0 0 auto; text-align: right; }
+
+    /* "Create New Customer" pinned row (change 4). */
+    .li-prod-item.li-prod-create {
+        color: var(--primary); font-weight: 600; gap: 6px;
+        border-bottom: 1px solid var(--border, #e5e7eb);
+    }
+    .li-prod-item.li-prod-create:hover { background: #eef2ff; }
 </style>
