@@ -527,9 +527,14 @@ window.QuotationCalc = { lineAmount, formTotals };
             if (ncErr) ncErr.hidden = true;
             var nameEl = document.getElementById('q-nc-name');
             if (nameEl) nameEl.value = document.getElementById('q-party').value.trim();
-            ['q-nc-mobile', 'q-nc-email', 'q-nc-gst', 'q-nc-address'].forEach(function (id) {
+            ['q-nc-mobile', 'q-nc-email', 'q-nc-gst', 'q-nc-address',
+             'q-nc-ledger-group', 'q-nc-opening-balance', 'q-nc-pincode'].forEach(function (id) {
                 var el = document.getElementById(id); if (el) el.value = '';
             });
+            var obType = document.getElementById('q-nc-opening-balance-type'); if (obType) obType.value = 'Cr';
+            var country = document.getElementById('q-nc-country'); if (country) country.value = 'India';
+            var stateEl = document.getElementById('q-nc-state'); if (stateEl) stateEl.value = '';
+            var regType = document.getElementById('q-nc-gst-reg-type'); if (regType) regType.value = '';
             ncModal.show();
             ncModalEl.addEventListener('shown.bs.modal', function focusOnce() {
                 ncModalEl.removeEventListener('shown.bs.modal', focusOnce);
@@ -544,12 +549,20 @@ window.QuotationCalc = { lineAmount, formTotals };
                 if (ncErr) { ncErr.textContent = 'Party name is required.'; ncErr.hidden = false; }
                 return;
             }
+            function fieldVal(id) { var el = document.getElementById(id); return el ? (el.value || '') : ''; }
             var payload = {
                 name:    name,
-                mobile:  document.getElementById('q-nc-mobile').value || '',
-                email:   document.getElementById('q-nc-email').value || '',
-                gst_number: document.getElementById('q-nc-gst').value || '',
-                billing_address: document.getElementById('q-nc-address').value || '',
+                mobile:  fieldVal('q-nc-mobile'),
+                email:   fieldVal('q-nc-email'),
+                gst_number: fieldVal('q-nc-gst'),
+                billing_address: fieldVal('q-nc-address'),
+                ledger_group: fieldVal('q-nc-ledger-group'),
+                opening_balance: fieldVal('q-nc-opening-balance'),
+                opening_balance_type: fieldVal('q-nc-opening-balance-type'),
+                country: fieldVal('q-nc-country'),
+                state: fieldVal('q-nc-state'),
+                pincode: fieldVal('q-nc-pincode'),
+                gst_registration_type: fieldVal('q-nc-gst-reg-type'),
             };
             ncSave.disabled = true;
             // Form-urlencoded, not JSON — the web app only mounts

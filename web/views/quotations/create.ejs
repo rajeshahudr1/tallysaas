@@ -25,6 +25,9 @@ var _sps      = (typeof salesPersonOptions !== 'undefined' && salesPersonOptions
 var _products = (typeof invoiceProducts !== 'undefined' && invoiceProducts) ? invoiceProducts : [];
 var _ledgers  = (typeof salesLedgerOptions !== 'undefined' && salesLedgerOptions) ? salesLedgerOptions : [];
 var _qNo      = (typeof nextQuotationNo !== 'undefined' && nextQuotationNo) ? nextQuotationNo : '';
+var _ncLedgerGroups = (typeof ledgerGroupOptions !== 'undefined' && ledgerGroupOptions) ? ledgerGroupOptions : [];
+var _ncStates       = (typeof gstStates !== 'undefined' && gstStates) ? gstStates : [];
+var _ncGstRegTypes  = (typeof gstRegistrationTypes !== 'undefined' && gstRegistrationTypes) ? gstRegistrationTypes : [];
 
 function _esc(s) {
     return String(s == null ? '' : s)
@@ -269,6 +272,58 @@ var _today = new Date().toISOString().slice(0, 10);
                 <div class="form-group">
                     <label class="form-label" for="q-nc-address">Billing Address</label>
                     <textarea class="form-control" id="q-nc-address" rows="2" maxlength="2000"></textarea>
+                </div>
+
+                <button type="button" class="btn btn-link p-0 mb-2" data-bs-toggle="collapse" data-bs-target="#q-nc-more" aria-expanded="false">
+                    <i class="fa-solid fa-chevron-down me-1"></i>More details
+                </button>
+                <div class="collapse" id="q-nc-more">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-ledger-group">Ledger Group</label>
+                            <% if (_ncLedgerGroups.length) { %>
+                            <input type="text" class="form-control" id="q-nc-ledger-group" list="q-nc-ledger-group-options" placeholder="Search a Tally group" maxlength="191" autocomplete="off">
+                            <datalist id="q-nc-ledger-group-options">
+                                <% _ncLedgerGroups.forEach(function (g) { %><option value="<%= g %>"><% }); %>
+                            </datalist>
+                            <% } else { %>
+                            <input type="text" class="form-control" id="q-nc-ledger-group" placeholder="e.g. Sundry Debtors" maxlength="191">
+                            <% } %>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-opening-balance">Opening Balance</label>
+                            <div class="input-group">
+                                <span class="input-group-text">₹</span>
+                                <input type="number" class="form-control" id="q-nc-opening-balance" placeholder="0" min="0" step="1">
+                                <select class="form-select" id="q-nc-opening-balance-type" style="max-width:90px;flex:0 0 auto;">
+                                    <option value="Cr" selected>Cr</option>
+                                    <option value="Dr">Dr</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-country">Country</label>
+                            <input type="text" class="form-control" id="q-nc-country" value="India" maxlength="64">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-state">State</label>
+                            <select class="form-select" id="q-nc-state">
+                                <option value="" selected>Select state</option>
+                                <% _ncStates.forEach(function (s) { %><option value="<%= s.name %>"><%= s.name %></option><% }); %>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-pincode">Pincode</label>
+                            <input type="text" class="form-control" id="q-nc-pincode" maxlength="12">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-gst-reg-type">GST Registration Type</label>
+                            <select class="form-select" id="q-nc-gst-reg-type">
+                                <option value="" selected>Select registration type</option>
+                                <% _ncGstRegTypes.forEach(function (t) { %><option value="<%= t %>"><%= t %></option><% }); %>
+                            </select>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">

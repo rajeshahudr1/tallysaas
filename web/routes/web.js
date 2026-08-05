@@ -24,6 +24,7 @@ const { requireAuth } = require('../Middlewares/sessionGuard');
 const AuthController   = require('../Controllers/AuthController');
 const { friendlyReason, RESTART_HELP } = require('../Helpers/syncReason');
 const { buildRanges, resolveRange, DEFAULT_RANGE } = require('../lib/date-ranges');
+const { GST_STATES, GST_REGISTRATION_TYPES } = require('../../api/config/gstStates');
 
 // Multipart receiver for the Agent-Updates upload (the exe is held in memory,
 // then streamed on to the api). 200MB cap mirrors the api's own limit; a single
@@ -381,6 +382,19 @@ async function fetchOptions(req, basePath) {
     const { body } = await api.get(req, `${basePath}?per_page=100`);
     const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
     return rows.map((r) => ({ id: r.id, name: r.name }));
+}
+
+/* Tally party-eligible ledger groups (Sundry Debtors / Sundry Creditors
+ * ancestry) as plain group-name strings for the customer form's "Ledger
+ * Group" field. `customers.ledger_group` stores the NAME (free text on the
+ * table), not a Tally group id, so only the names are kept — unlike
+ * fetchOptions() which returns {id,name} pairs for real FK <select>s.
+ * Empty when no Tally groups are synced yet (two of three demo tenants) —
+ * the form falls back to a plain text input in that case. */
+async function fetchLedgerGroupOptions(req) {
+    const { body } = await api.get(req, '/tally/ledger-groups');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    return rows.map((r) => r.name).filter(Boolean);
 }
 
 /* Customer options for the invoice form — id + name PLUS the customer's own
@@ -2693,12 +2707,13 @@ function parseQuotationItems(raw) {
  * customer + their location; products carry the line-item defaults). */
 router.get('/quotations/create', async (req, res, next) => {
   try {
-    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions] = await Promise.all([
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions] = await Promise.all([
         fetchCustomerInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchOptions(req, '/sales-persons'),
         fetchInvoiceProducts(req, 'sales_price'),
         fetchSalesLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
     ]);
     res.render('quotations/create', {
         title: 'Create Quotation',
@@ -2710,6 +2725,7 @@ router.get('/quotations/create', async (req, res, next) => {
         ],
 
         customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
+        ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         nextQuotationNo: 'Auto-generated on save',
 
         pageScript: '<script src="/js/quotation.js" defer></script>',
@@ -2733,6 +2749,13 @@ router.post('/quotations/create/quick-customer', async (req, res) => {
             email:       b.email || undefined,
             gst_number:  b.gst_number || undefined,
             billing_address: b.billing_address || undefined,
+            ledger_group:          b.ledger_group || undefined,
+            opening_balance:       (b.opening_balance === '' || b.opening_balance == null) ? undefined : Number(b.opening_balance),
+            opening_balance_type:  b.opening_balance_type || undefined,
+            country:               b.country || undefined,
+            state:                 b.state || undefined,
+            pincode:               b.pincode || undefined,
+            gst_registration_type: b.gst_registration_type || undefined,
         };
         if (!payload.name) {
             return res.status(422).json({ ok: false, error: 'Customer name is required.' });
@@ -5431,6 +5454,7 @@ router.get('/customers', async (req, res, next) => {
             id:              r.id,
             name:            r.name,
             location:        r.location || '',
+            state:           r.state || '',
             mobile:          r.mobile || '',
             gst:             r.gst_number || '',
             opening_balance: r.opening_balance,
@@ -5449,16 +5473,21 @@ router.get('/customers', async (req, res, next) => {
                 { group: 'Tax & Statutory' },
                 { label: 'GST Number', value: r.gst_number || '—' },
                 { label: 'PAN Number', value: r.pan_number || '—' },
+                { label: 'GST Registration Type', value: r.gst_registration_type || '—' },
                 { group: 'Address' },
                 { label: 'Billing Address', value: r.billing_address || '—' },
                 { label: 'Shipping Address', value: r.shipping_address || '—' },
+                { label: 'Country', value: r.country || '—' },
+                { label: 'State', value: r.state || '—' },
+                { label: 'Pincode', value: r.pincode || '—' },
                 { group: 'Financial' },
-                { label: 'Opening Balance', value: (r.opening_balance != null ? String(r.opening_balance) : '—') },
+                { label: 'Opening Balance', value: (r.opening_balance != null ? (String(r.opening_balance) + ' ' + (r.opening_balance_type || 'Cr')) : '—') },
                 { label: 'Credit Limit', value: (r.credit_limit != null ? String(r.credit_limit) : '—') },
                 { group: 'Assignment' },
                 { label: 'Location', value: r.location || '—' },
                 { label: 'Sales Person', value: r.sales_person || '—' },
                 { label: 'Customer Group', value: r.customer_group || '—' },
+                { label: 'Ledger Group', value: r.ledger_group || '—' },
                 { group: 'Notes' },
                 { label: 'Notes', value: r.notes || '—' },
                 { label: 'Internal Remarks', value: r.internal_remarks || '—' },
@@ -5493,10 +5522,11 @@ router.get('/customers', async (req, res, next) => {
  * from the api as { id, name } so the form submits real foreign keys. */
 router.get('/customers/add', async (req, res, next) => {
     try {
-        const [locationOptions, salesPersonOptions, customerGroupOptions] = await Promise.all([
+        const [locationOptions, salesPersonOptions, customerGroupOptions, ledgerGroupOptions] = await Promise.all([
             fetchOptions(req, '/locations'),
             fetchOptions(req, '/sales-persons'),
             fetchOptions(req, '/customer-groups'),
+            fetchLedgerGroupOptions(req),
         ]);
         res.render('customers/form', {
             title: 'Add Customer',
@@ -5506,7 +5536,8 @@ router.get('/customers/add', async (req, res, next) => {
                 { label: 'Customers', href: '/customers' },
                 { label: 'Add Customer' },
             ],
-            locationOptions, salesPersonOptions, customerGroupOptions,
+            locationOptions, salesPersonOptions, customerGroupOptions, ledgerGroupOptions,
+            gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         });
     } catch (err) { next(err); }
 });
@@ -5538,6 +5569,12 @@ router.post('/customers', async (req, res, next) => {
             notes:             b.notes || undefined,
             internal_remarks:  b.internal_remarks || undefined,
             custom_fields:     assembleCustomFields(b),
+            ledger_group:          b.ledger_group || undefined,
+            opening_balance_type:  b.opening_balance_type || undefined,
+            country:               b.country || undefined,
+            state:                 b.state || undefined,
+            pincode:               b.pincode || undefined,
+            gst_registration_type: b.gst_registration_type || undefined,
         };
         const result = await api.post(req, '/customers', payload);
         if (apiOk(result)) {
@@ -5581,17 +5618,19 @@ const _num = (v) => (v === '' || v == null ? undefined : Number(v));
 router.get('/customers/:id/edit', async (req, res, next) => {
     try {
         const id = Number(req.params.id);
-        const [record, locationOptions, salesPersonOptions, customerGroupOptions] = await Promise.all([
+        const [record, locationOptions, salesPersonOptions, customerGroupOptions, ledgerGroupOptions] = await Promise.all([
             fetchRecord(req, '/customers', id),
             fetchOptions(req, '/locations'),
             fetchOptions(req, '/sales-persons'),
             fetchOptions(req, '/customer-groups'),
+            fetchLedgerGroupOptions(req),
         ]);
         if (!record) { setFlash(req, 'error', 'Customer not found.'); return req.session.save(() => res.redirect('/customers')); }
         res.render('customers/form', {
             title: 'Edit Customer', activeMenu: 'customers',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Customers', href: '/customers' }, { label: 'Edit Customer' }],
-            record, locationOptions, salesPersonOptions, customerGroupOptions,
+            record, locationOptions, salesPersonOptions, customerGroupOptions, ledgerGroupOptions,
+            gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         });
     } catch (err) { next(err); }
 });
@@ -5607,6 +5646,9 @@ router.post('/customers/:id', async (req, res, next) => {
             billing_address: b.billing_address || undefined, shipping_address: b.shipping_address || undefined,
             is_tally_ledger: asBool(b.is_tally_ledger), notes: b.notes || undefined, internal_remarks: b.internal_remarks || undefined,
             custom_fields: assembleCustomFields(b),
+            ledger_group: b.ledger_group || undefined, opening_balance_type: b.opening_balance_type || undefined,
+            country: b.country || undefined, state: b.state || undefined, pincode: b.pincode || undefined,
+            gst_registration_type: b.gst_registration_type || undefined,
         };
         const result = await api.put(req, `/customers/${id}`, payload);
         if (apiOk(result)) { setFlash(req, 'success', 'Customer updated successfully.'); return req.session.save(() => res.redirect('/customers')); }

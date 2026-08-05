@@ -9,12 +9,18 @@
  *
  * Expected locals (routes/web.js → res.render):
  *   locationOptions / salesPersonOptions / customerGroupOptions — [{id,name}]
+ *   ledgerGroupOptions — [string] Tally group names (may be empty — falls
+ *                        back to a plain text input when no groups synced)
+ *   gstStates — [{code,name}]  gstRegistrationTypes — [string]
  *   record  — the row being edited (edit mode)  — optional
  * ─────────────────────────────────────────────────────────── */
 
 var _locations      = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
 var _salesPersons   = (typeof salesPersonOptions !== 'undefined' && salesPersonOptions) ? salesPersonOptions : [];
 var _customerGroups = (typeof customerGroupOptions !== 'undefined' && customerGroupOptions) ? customerGroupOptions : [];
+var _ledgerGroups   = (typeof ledgerGroupOptions !== 'undefined' && ledgerGroupOptions) ? ledgerGroupOptions : [];
+var _gstStates      = (typeof gstStates !== 'undefined' && gstStates) ? gstStates : [];
+var _gstRegTypes    = (typeof gstRegistrationTypes !== 'undefined' && gstRegistrationTypes) ? gstRegistrationTypes : [];
 
 var _rec    = (typeof record !== 'undefined' && record) ? record : null;
 var _isEdit = !!_rec;
@@ -97,6 +103,21 @@ var headActions =
                     </select>
                 </div>
                 <div class="form-group">
+                    <label class="form-label" for="cust-ledger-group">Ledger Group</label>
+                    <% if (_ledgerGroups.length) { %>
+                    <input type="text" class="form-control" id="cust-ledger-group" name="ledger_group"
+                           list="ledger-group-options" placeholder="Search or type a Tally group"
+                           value="<%= _v('ledger_group') %>" maxlength="191" autocomplete="off">
+                    <datalist id="ledger-group-options">
+                        <% _ledgerGroups.forEach(function (g) { %><option value="<%= g %>"><% }); %>
+                    </datalist>
+                    <% } else { %>
+                    <input type="text" class="form-control" id="cust-ledger-group" name="ledger_group"
+                           placeholder="e.g. Sundry Debtors" value="<%= _v('ledger_group') %>" maxlength="191">
+                    <div class="form-hint">No Tally groups synced yet — type the group name.</div>
+                    <% } %>
+                </div>
+                <div class="form-group">
                     <label class="form-label" for="cust-email">Email</label>
                     <div class="input-affix">
                         <span class="affix affix--prefix"><i class="fa-solid fa-envelope"></i></span>
@@ -171,6 +192,30 @@ var headActions =
                               rows="4" maxlength="2000" placeholder="Building, street, area, city, state, pincode…"><%= _v('billing_address') %></textarea>
                 </div>
             </div>
+
+            <hr class="form-divider">
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="cust-country">Country</label>
+                    <input type="text" class="form-control" id="cust-country" name="country"
+                           value="<%= _isEdit ? _v('country') : (_v('country') || 'India') %>" placeholder="India" maxlength="64">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cust-state">State</label>
+                    <select class="form-select" id="cust-state" name="state">
+                        <option value="" <%= !_v('state') ? 'selected' : '' %>>Select state</option>
+                        <% _gstStates.forEach(function (s) { %>
+                        <option value="<%= s.name %>" <%= String(_v('state')) === s.name ? 'selected' : '' %>><%= s.name %></option>
+                        <% }); %>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cust-pincode">Pincode</label>
+                    <input type="text" class="form-control" id="cust-pincode" name="pincode"
+                           value="<%= _v('pincode') %>" placeholder="382350" maxlength="12">
+                </div>
+            </div>
         </div><!-- /#address -->
 
         <!-- ════ GST & Tax Details ════ -->
@@ -185,6 +230,15 @@ var headActions =
                     <label class="form-label" for="cust-pan">PAN Number</label>
                     <input type="text" class="form-control text-uppercase" id="cust-pan" name="pan_number"
                            value="<%= _v('pan_number') %>" placeholder="ABCDE1234F" maxlength="30">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cust-gst-reg-type">GST Registration Type</label>
+                    <select class="form-select" id="cust-gst-reg-type" name="gst_registration_type">
+                        <option value="" <%= !_v('gst_registration_type') ? 'selected' : '' %>>Select registration type</option>
+                        <% _gstRegTypes.forEach(function (t) { %>
+                        <option value="<%= t %>" <%= String(_v('gst_registration_type')) === t ? 'selected' : '' %>><%= t %></option>
+                        <% }); %>
+                    </select>
                 </div>
             </div>
         </div><!-- /#gst -->
@@ -202,10 +256,14 @@ var headActions =
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="cust-opening-balance">Opening Balance</label>
-                    <div class="input-affix">
-                        <input type="number" class="form-control has-suffix" id="cust-opening-balance" name="opening_balance"
+                    <div class="input-group">
+                        <span class="input-group-text">₹</span>
+                        <input type="number" class="form-control" id="cust-opening-balance" name="opening_balance"
                                placeholder="0" value="<%= _v('opening_balance') %>" min="0" step="1">
-                        <span class="affix affix--suffix">₹</span>
+                        <select class="form-select" id="cust-opening-balance-type" name="opening_balance_type" style="max-width:90px;flex:0 0 auto;">
+                            <option value="Cr" <%= (!_isEdit || String(_v('opening_balance_type')) === 'Cr') ? 'selected' : '' %>>Cr</option>
+                            <option value="Dr" <%= String(_v('opening_balance_type')) === 'Dr' ? 'selected' : '' %>>Dr</option>
+                        </select>
                     </div>
                 </div>
             </div>
