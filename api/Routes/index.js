@@ -91,6 +91,10 @@ const {
     listInvoiceSchema,
 } = require('../Validators/invoice');
 const {
+    createQuotationSchema,
+    listQuotationSchema,
+} = require('../Validators/quotation');
+const {
     createPaymentSchema,
     createReceiptSchema,
     listPaymentSchema,
@@ -137,6 +141,7 @@ const { productImagesMiddleware } = require('../Helpers/uploads');
 const ProductController       = require('../Controllers/Tenant/ProductController');
 const CustomerGroupController = require('../Controllers/Tenant/CustomerGroupController');
 const InvoiceController       = require('../Controllers/Tenant/InvoiceController');
+const QuotationController     = require('../Controllers/Tenant/QuotationController');
 const PaymentController       = require('../Controllers/Tenant/PaymentController');
 const LicenseController       = require('../Controllers/SuperAdmin/LicenseController');
 const CompanyController       = require('../Controllers/SuperAdmin/CompanyController');
@@ -867,6 +872,26 @@ router.delete(
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('sales-invoices', 'delete'),
     InvoiceController.destroy,
 );
+
+// ───────────────────────────────────────────────────────────────────
+// Quotations (bespoke controller — header + nested items, totals computed
+// server-side; no ledger/stock/GST effect until converted to a sales invoice)
+// ───────────────────────────────────────────────────────────────────
+
+router.get('/quotations', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'view'), validate(listQuotationSchema, 'query'), QuotationController.list);
+router.get('/quotations/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'view'), QuotationController.get);
+router.get('/quotations/:id/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'view'), QuotationController.pdf);
+router.post('/quotations', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'create'), validate(createQuotationSchema), QuotationController.create);
+router.put('/quotations/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'edit'), validate(createQuotationSchema), QuotationController.updateDraft);
+router.post('/quotations/:id/convert', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'edit'), QuotationController.convert);
+router.delete('/quotations/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'delete'), QuotationController.destroy);
 
 // ───────────────────────────────────────────────────────────────────
 // Purchase Invoices (same bespoke controller, type='purchase')

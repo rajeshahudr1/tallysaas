@@ -118,6 +118,73 @@ function invoicePdfHtml(inv, ctx = {}) {
     return { html: wrap(ctx, title, inner), landscape: false };
 }
 
+/**
+ * Build quotation PDF HTML. q = QuotationController.get's data object.
+ * Same layout as invoicePdfHtml but titled "QUOTATION", shows a "Valid till"
+ * line instead of a due date, and never shows "Amount Due" (a quotation has
+ * no payment lifecycle).
+ */
+function quotationPdfHtml(q, ctx = {}) {
+    const title = 'QUOTATION';
+    const party = q.customer || null;
+    const partyLabel = 'Bill To';
+    const partyName = (typeof party === 'string' && party) || (party && party.name) || 'Cash / Walk-in';
+    const partyGstin = (party && (party.gstin || party.gst_no)) || '';
+
+    const items = (Array.isArray(q.items) ? q.items : []).map(normItem);
+
+    const rowsHtml = items.length
+        ? items.map((it, i) => `<tr>
+            <td class="c">${i + 1}</td>
+            <td>${esc(it.name)}</td>
+            <td>${esc(it.hsn)}</td>
+            <td class="num">${esc(it.qty)}</td>
+            <td>${esc(it.unit)}</td>
+            <td class="num">${inr(it.rate)}</td>
+            <td class="num">${it.disc !== '' && it.disc != null ? esc(it.disc) + '%' : ''}</td>
+            <td class="num">${inr(it.amount)}</td>
+          </tr>`).join('')
+        : `<tr><td colspan="8" class="empty">No line items.</td></tr>`;
+
+    const totalRow = (label, val, strong) =>
+        `<tr${strong ? ' class="grand"' : ''}><td>${esc(label)}</td><td class="num">${inr(val)}</td></tr>`;
+
+    const num = (v) => Number(v || 0);
+    let totals = '';
+    totals += totalRow('Taxable', q.taxable);
+    if (num(q.cgst))     totals += totalRow('CGST', q.cgst);
+    if (num(q.sgst))     totals += totalRow('SGST', q.sgst);
+    if (num(q.igst))     totals += totalRow('IGST', q.igst);
+    if (num(q.discount)) totals += totalRow('Discount', q.discount);
+    if (num(q.round_off)) totals += totalRow('Round Off', q.round_off);
+    totals += totalRow('Total', q.total, true);
+
+    const inner = `
+      <div class="meta-grid">
+        <div class="party">
+          <div class="lbl">${esc(partyLabel)}</div>
+          <div class="pname">${esc(partyName) || '—'}</div>
+          ${partyGstin ? `<div class="pgst">GSTIN: ${esc(partyGstin)}</div>` : ''}
+        </div>
+        <div class="inv-meta">
+          <div><span>Quotation No</span><b>${esc(q.quotation_no || '')}</b></div>
+          <div><span>Date</span><b>${fmtDate(q.quotation_date)}</b></div>
+          ${q.valid_till ? `<div><span>Valid till</span><b>${fmtDate(q.valid_till)}</b></div>` : ''}
+        </div>
+      </div>
+      <table class="rpt">
+        <thead><tr>
+          <th class="c">#</th><th>Item</th><th>HSN</th><th class="num">Qty</th><th>Unit</th>
+          <th class="num">Rate</th><th class="num">Disc</th><th class="num">Amount</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div class="totals-wrap"><table class="totals">${totals}</table></div>
+      ${q.notes ? `<div class="notes"><b>Notes:</b> ${esc(q.notes)}</div>` : ''}`;
+
+    return { html: wrap(ctx, title, inner), landscape: false };
+}
+
 function wrap(ctx, title, inner) {
     return `<!doctype html><html><head><meta charset="utf-8"><style>
       * { box-sizing: border-box; }
@@ -158,4 +225,4 @@ function wrap(ctx, title, inner) {
     </body></html>`;
 }
 
-module.exports = { invoicePdfHtml };
+module.exports = { invoicePdfHtml, quotationPdfHtml };
