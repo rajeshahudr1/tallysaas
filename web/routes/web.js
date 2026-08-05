@@ -403,7 +403,7 @@ async function fetchCustomerInvoiceOptions(req) {
 async function fetchSalesLedgerOptions(req) {
     const { body } = await api.get(req, '/tally/ledgers/sales-options');
     const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    return rows.map((r) => ({ id: r.id, name: r.name, parent: r.parent || '' }));
 }
 
 /* Assignable roles as {id,name,slug} for the Sales-Person login-role select —
