@@ -7711,4 +7711,111 @@ router.post('/agent-releases/upload', requireSuperAdmin, (req, res) => {
     });
 });
 
+/* ── TRANSACTIONS · Credit Note / Debit Note ─────────────────────────────
+ * ReturnNoteController (api) runs BOTH kinds off one controller keyed on
+ * `kind` ('credit'|'debit') — this file mirrors that: one handler per verb,
+ * parameterised the same way, wired twice (once per kind) so the two paths
+ * can never silently drift apart. Credit Note's party is a customer and its
+ * "against bill" is a sales invoice; Debit Note's party is a supplier and
+ * its "against bill" is a purchase invoice.
+ *
+ * List/create views: views/return-notes/list.ejs, views/return-notes/create.ejs
+ * (one view file each, switching on `kind`). Client engine: /js/return-note.js.
+ */
+const RETURN_NOTE_CFG = {
+    credit: {
+        apiPath: '/credit-notes', activeMenu: 'credit-notes', label: 'Credit Note',
+        partyLabel: 'Customer', billApiPath: '/sales-invoices',
+    },
+    debit: {
+        apiPath: '/debit-notes', activeMenu: 'debit-notes', label: 'Debit Note',
+        partyLabel: 'Supplier', billApiPath: '/purchase-invoices',
+    },
+};
+
+/* GET /credit-notes and GET /debit-notes — same shape as /delivery-notes.
+ * `against_invoice_id` on each row only carries the original bill's numeric
+ * id (ReturnNoteController.LIST_COLUMNS doesn't join it) — fetch the
+ * handful of distinct bills referenced on THIS page from the appropriate
+ * invoice endpoint so the list can show the bill's human invoice_no instead
+ * of a bare id. */
+async function handleReturnNoteList(req, res, next, kind) {
+  try {
+    const cfg = RETURN_NOTE_CFG[kind];
+    const { rows, meta } = await apiList(req, cfg.apiPath);
+
+    const billIds = Array.from(new Set(
+        rows.map((r) => r.against_invoice_id).filter((v) => v != null)));
+    const billNoById = {};
+    await Promise.all(billIds.map(async (id) => {
+        const r = await api.get(req, `${cfg.billApiPath}/${id}`).catch(() => null);
+        if (r && apiOk(r) && r.body && r.body.data) billNoById[id] = r.body.data.invoice_no;
+    }));
+
+    const returnNoteRows = rows.map((r) => ({
+        id: r.id,
+        party: (kind === 'credit' ? r.customer : r.supplier) || '',
+        date: fmtDate(r.invoice_date),
+        note_no: r.invoice_no,
+        against_bill: r.against_invoice_id ? (billNoById[r.against_invoice_id] || `#${r.against_invoice_id}`) : '',
+        amount: r.total,
+        tally_guid: r.tally_guid || null,
+    }));
+
+    res.render('return-notes/list', {
+        title: cfg.label + 's',
+        kind,
+        partyLabel: cfg.partyLabel,
+        activeMenu: cfg.activeMenu,
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: cfg.label + 's' },
+        ],
+        returnNoteRows,
+        returnNotesTotal: meta.total,
+        page:    meta.page,
+        perPage: meta.per_page,
+    });
+  } catch (err) { next(err); }
+}
+router.get('/credit-notes', (req, res, next) => handleReturnNoteList(req, res, next, 'credit'));
+router.get('/debit-notes',  (req, res, next) => handleReturnNoteList(req, res, next, 'debit'));
+
+/* GET /credit-notes/:id/pdf and /debit-notes/:id/pdf — stream the api's
+ * rendered PDF straight through (same pattern as /delivery-notes/:id/pdf). */
+async function handleReturnNotePdf(req, res, next, kind) {
+  try {
+    const cfg = RETURN_NOTE_CFG[kind];
+    const id = Number(req.params.id);
+    const r = await api.fetchBinary(req, `${cfg.apiPath}/${id}/pdf`);
+    if (r.status !== 200 || !r.buffer) {
+        setFlash(req, 'error', `Could not generate the ${cfg.label.toLowerCase()} PDF.`);
+        return req.session.save(() => res.redirect(cfg.apiPath));
+    }
+    res.setHeader('Content-Type', r.contentType || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${kind}-note-${id}.pdf"`);
+    return res.end(r.buffer);
+  } catch (err) { next(err); }
+}
+router.get('/credit-notes/:id/pdf', (req, res, next) => handleReturnNotePdf(req, res, next, 'credit'));
+router.get('/debit-notes/:id/pdf',  (req, res, next) => handleReturnNotePdf(req, res, next, 'debit'));
+
+/* POST /credit-notes/:id/delete and /debit-notes/:id/delete — soft delete,
+ * matches /delivery-notes/:id/delete. Tally-origin rows 409 at the api;
+ * the list view never renders the Delete action for them in the first
+ * place, but a stale tab could still POST here, so surface the api's
+ * message either way. */
+async function handleReturnNoteDelete(req, res, next, kind) {
+  try {
+    const cfg = RETURN_NOTE_CFG[kind];
+    const result = await api.del(req, `${cfg.apiPath}/${req.params.id}`);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || `${cfg.label} deleted.`)
+                      : apiError(result, `Could not delete the ${cfg.label.toLowerCase()}.`));
+    return req.session.save(() => res.redirect(cfg.apiPath));
+  } catch (err) { next(err); }
+}
+router.post('/credit-notes/:id/delete', (req, res, next) => handleReturnNoteDelete(req, res, next, 'credit'));
+router.post('/debit-notes/:id/delete',  (req, res, next) => handleReturnNoteDelete(req, res, next, 'debit'));
+
 module.exports = router;

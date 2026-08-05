@@ -125,3 +125,16 @@ test('Receipt Note is live in both menus, not "Soon"', () => {
     assert.strictEqual(byKey['recpt-notes'].soon, undefined, 'Purchase → Receipt Note still soon');
     assert.strictEqual(byKey['recpt-notes'].href, '/receipt-notes');
 });
+
+test('Credit Note and Debit Note are live in both menus, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['new-credit-note'].soon, undefined);
+    assert.strictEqual(byKey['new-credit-note'].href, '/credit-notes/create');
+    assert.strictEqual(byKey['credit-notes'].soon, undefined);
+    assert.strictEqual(byKey['credit-notes'].href, '/credit-notes');
+    assert.strictEqual(byKey['new-debit-note'].soon, undefined);
+    assert.strictEqual(byKey['new-debit-note'].href, '/debit-notes/create');
+    assert.strictEqual(byKey['debit-notes'].soon, undefined);
+    assert.strictEqual(byKey['debit-notes'].href, '/debit-notes');
+});

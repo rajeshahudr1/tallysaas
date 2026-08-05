@@ -1,0 +1,179 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/return-notes/list.ejs — TRANSACTIONS · Credit Notes / Debit Notes.
+ * Routes: GET /credit-notes, GET /debit-notes. activeMenu: 'credit-notes' /
+ * 'debit-notes'.
+ *
+ * ONE view handles BOTH kinds — title, first column label and hrefs all
+ * switch on the `kind` local ('credit'|'debit') so the two paths cannot
+ * silently drift apart. Own copy of views/delivery-notes/list.ejs's layout.
+ *
+ * Source column: a row synced FROM Tally carries `tally_guid` — it cannot be
+ * edited/deleted here (the api 409s), so the list shows WHY by displaying
+ * "Tally" instead of "Cloud" and hiding the Delete action for that row.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   kind               'credit' | 'debit'
+ *   partyLabel         string  — 'Customer' | 'Supplier'
+ *   returnNoteRows     [ rows ]  — table body
+ *   returnNotesTotal   number   — pagination total
+ *   page, perPage      numbers
+ * ─────────────────────────────────────────────────────────── */
+
+var _kind    = (typeof kind !== 'undefined' && kind) ? kind : 'credit';
+var _rows    = (typeof returnNoteRows !== 'undefined' && returnNoteRows) ? returnNoteRows : [];
+var _total   = (typeof returnNotesTotal !== 'undefined') ? returnNotesTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _partyLabel = (typeof partyLabel !== 'undefined' && partyLabel) ? partyLabel : (_kind === 'credit' ? 'Customer' : 'Supplier');
+var _pageTitle  = _kind === 'credit' ? 'Credit Notes' : 'Debit Notes';
+var _basePath   = _kind === 'credit' ? '/credit-notes' : '/debit-notes';
+var _createHref = _basePath + '/create';
+
+/* ── FilterCard config — date range + search only (no status lifecycle
+ * for notes, unlike delivery/receipt notes). ──────────────────────── */
+var filterFields = [
+    { type: 'text', name: 'search',    label: 'Search',    placeholder: 'Note no / ' + _partyLabel.toLowerCase() + '...', colClass: 'filter-col-fifth' },
+    { type: 'date', name: 'date_from', label: 'Date From', colClass: 'filter-col-fifth' },
+    { type: 'date', name: 'date_to',   label: 'Date To',   colClass: 'filter-col-fifth' },
+];
+
+function _inr(v) {
+    var n = Number(v || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/* RBAC: gate Delete row action the same way partials/table.ejs does —
+ * View + PDF stay visible to anyone who can already see the list.
+ * canPath() is set in index.js; guarded so a missing helper never blanks
+ * the actions. */
+var _canPath4 = (typeof canPath === 'function') ? canPath : function () { return true; };
+var _canDeleteReturnNote = _canPath4(_basePath, 'delete');
+%>
+
+<%- include('../partials/page-head', {
+    title: _pageTitle, infoKey: _basePath.slice(1),
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _pageTitle },
+    ],
+    actions: [
+        { label: 'Create ' + (_kind === 'credit' ? 'Credit Note' : 'Debit Note'), icon: 'fa-plus', gradient: true, href: _createHref },
+    ],
+}) %>
+
+<form id="return-note-filters-form" autocomplete="off" method="get" action="<%= _basePath %>">
+    <%- include('../partials/filter-card', {
+        filterId: 'return-note-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: true,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+    </div>
+
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="return-notes-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th><%= _partyLabel %></th>
+                    <th>Date</th>
+                    <th>Note No</th>
+                    <th>Against Bill</th>
+                    <th class="text-end">Amount</th>
+                    <th>Source</th>
+                    <th class="text-end data-table-actions-head">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="8">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            No records found.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _rows.forEach(function (r, i) { %>
+                    <% var _fromTally = !!r.tally_guid; %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td><%= r.party %></td>
+                        <td><%= r.date %></td>
+                        <td><%= r.note_no %></td>
+                        <td><%= r.against_bill || '—' %></td>
+                        <td class="text-end"><span class="data-table-money"><%= _inr(r.amount) %></span></td>
+                        <td>
+                            <% if (_fromTally) { %>
+                                <span class="pill-status pill-status--info" title="Synced from Tally — cannot be edited or deleted here">
+                                    <i class="fa-solid fa-rotate me-1"></i>Tally</span>
+                            <% } else { %>
+                                <span class="pill-status pill-status--muted">
+                                    <i class="fa-solid fa-cloud me-1"></i>Cloud</span>
+                            <% } %>
+                        </td>
+                        <td class="text-end data-table-actions">
+                            <div class="dropdown d-inline-block">
+                                <button class="action-btn action-btn--menu" type="button"
+                                        data-bs-toggle="dropdown" aria-expanded="false" title="Actions" aria-label="Actions">
+                                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="<%= _basePath %>/<%= r.id %>/pdf" target="_blank">
+                                        <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
+                                    <li><a class="dropdown-item" href="<%= _basePath %>/<%= r.id %>/pdf" target="_blank">
+                                        <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
+                                    <% if (!_fromTally && _canDeleteReturnNote) { %>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <button class="dropdown-item text-danger" type="button"
+                                                data-row-delete data-delete-url="<%= _basePath %>/<%= r.id %>" data-delete-label="<%= r.note_no %>">
+                                            <i class="fa-regular fa-trash-can me-2"></i>Delete</button>
+                                    </li>
+                                    <% } %>
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>
