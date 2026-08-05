@@ -2898,6 +2898,125 @@ router.post('/quotations', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* Parse the hidden items_json from a SALES ORDER form into the api's item
+ * shape — same shape/fields as parseQuotationItems (godown/tax_inclusive
+ * carried through) since sales_order_items has the same columns as
+ * quotation_items; kept as its own function (not shared) in case the two
+ * diverge later. */
+function parseSalesOrderItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id:    it.product_id ? Number(it.product_id) : undefined,
+        description:   it.description || undefined,
+        hsn:           it.hsn || undefined,
+        quantity:      Number(it.quantity) || 0,
+        unit:          it.unit || undefined,
+        rate:          Number(it.rate) || 0,
+        discount_pct:  Number(it.discount_pct) || 0,
+        gst_rate:      Number(it.gst_rate) || 0,
+        godown:        it.godown || undefined,
+        tax_inclusive: !!it.tax_inclusive,
+    })).filter((it) => it.quantity > 0);
+}
+
+/* ── TRANSACTIONS · Create Sales Order (GET /sales-orders/create) — same
+ * option sources as the quotation create screen. */
+router.get('/sales-orders/create', async (req, res, next) => {
+  try {
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions] = await Promise.all([
+        fetchCustomerInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchOptions(req, '/sales-persons'),
+        fetchInvoiceProducts(req, 'sales_price'),
+        fetchSalesLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
+    ]);
+    res.render('sales-orders/create', {
+        title: 'Create Sales Order',
+        activeMenu: 'sales-orders',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Sales Orders', href: '/sales-orders' },
+            { label: 'Create Sales Order' },
+        ],
+
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
+        ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        nextSalesOrderNo: 'Auto-generated on save',
+
+        pageScript: '<script src="/js/sales-order.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* ── POST /sales-orders/create/quick-customer — "Create New Customer" row
+ * pinned atop the Party combobox, same shape as
+ * POST /quotations/create/quick-customer. AJAX/JSON only. */
+router.post('/sales-orders/create/quick-customer', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const payload = {
+            name:        (b.name || '').trim(),
+            mobile:      b.mobile || undefined,
+            email:       b.email || undefined,
+            gst_number:  b.gst_number || undefined,
+            billing_address: b.billing_address || undefined,
+            ledger_group:          b.ledger_group || undefined,
+            opening_balance:       (b.opening_balance === '' || b.opening_balance == null) ? undefined : Number(b.opening_balance),
+            opening_balance_type:  b.opening_balance_type || undefined,
+            country:               b.country || undefined,
+            state:                 b.state || undefined,
+            city:                  b.city || undefined,
+            pincode:               b.pincode || undefined,
+            gst_registration_type: b.gst_registration_type || undefined,
+            notes:                 b.notes || undefined,
+        };
+        if (!payload.name) {
+            return res.status(422).json({ ok: false, error: 'Customer name is required.' });
+        }
+        const result = await api.post(req, '/customers', payload);
+        if (apiOk(result) && result.body && result.body.data) {
+            const row = result.body.data;
+            return res.json({ ok: true, data: { id: row.id, name: row.name } });
+        }
+        return res.status(422).json({ ok: false, error: apiError(result, 'Could not create customer.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not create customer.' });
+    }
+});
+
+/* ── POST /sales-orders — create a sales order via the api. Header fields
+ * submit normally; line items ride the hidden items_json (serialised by
+ * /js/sales-order.js). The api computes all totals inside a db transaction. */
+router.post('/sales-orders', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            customer_id:     num(b.customer_id),
+            location_id:     num(b.location_id),
+            sales_person_id: num(b.sales_person_id),
+            order_no:        b.order_no || undefined,
+            order_date:      b.order_date || undefined,
+            due_on:          b.due_on || undefined,
+            ledger_name:     b.ledger_name || undefined,
+            notes:           b.notes || undefined,
+            items:           parseSalesOrderItems(b.items_json),
+        };
+        const result = await api.post(req, '/sales-orders', payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `Sales order ${(result.body.data && result.body.data.order_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect('/sales-orders'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create sales order.'));
+        return req.session.save(() => res.redirect('/sales-orders/create'));
+    } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {
