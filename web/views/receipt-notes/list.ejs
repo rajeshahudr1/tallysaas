@@ -1,0 +1,185 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/receipt-notes/list.ejs — PURCHASE · Receipt Notes.
+ * Route: GET /receipt-notes.
+ * activeMenu: 'recpt-notes'.
+ *
+ * Own copy of views/delivery-notes/list.ejs (Receipt Note is the same
+ * voucher one direction over — supplier-side instead of customer-side).
+ *
+ * receipt_status badge: pending → info (blue), invoiced → success (green),
+ * cancelled → muted (grey). Reuses the existing pill-status--* classes from
+ * partials/table.ejs — no new CSS.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   receiptNoteRows   [ rows ]  — table body
+ *   receiptNotesTotal number   — pagination total
+ *   page, perPage      numbers
+ *   receiptStatus      string   — currently-applied receipt_status filter
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof receiptNoteRows !== 'undefined' && receiptNoteRows) ? receiptNoteRows : [];
+var _total   = (typeof receiptNotesTotal !== 'undefined') ? receiptNotesTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _pageTitle = 'Receipt Notes';
+
+/* ── FilterCard config ──────────────────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',           label: 'Search',       placeholder: 'Note no / supplier...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'receipt_status',   label: 'Status',       options: [
+        { value: '',           label: 'All Status' },
+        { value: 'pending',    label: 'Pending' },
+        { value: 'invoiced',   label: 'Invoiced' },
+        { value: 'cancelled',  label: 'Cancelled' },
+    ], colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from',    label: 'Date From',                                                colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_to',      label: 'Date To',                                                  colClass: 'filter-col-fifth' },
+];
+
+function _statusPillClass(s) {
+    s = String(s || '').toLowerCase();
+    if (s === 'invoiced')  return 'pill-status--success';
+    if (s === 'cancelled') return 'pill-status--muted';
+    return 'pill-status--info'; // pending
+}
+function _inr(v) {
+    var n = Number(v || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/* RBAC: gate Convert (edit) / Delete row actions the same way
+ * partials/table.ejs does — View + PDF stay visible to anyone who can
+ * already see the list. canPath() is set in index.js; guarded so a
+ * missing helper never blanks the actions. */
+var _canPath3 = (typeof canPath === 'function') ? canPath : function () { return true; };
+var _canEditReceiptNote   = _canPath3('/receipt-notes', 'edit');
+var _canDeleteReceiptNote = _canPath3('/receipt-notes', 'delete');
+%>
+
+<%- include('../partials/page-head', {
+    title: _pageTitle, infoKey: 'receipt-notes',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _pageTitle },
+    ],
+    actions: [
+        { label: 'Create Receipt Note', icon: 'fa-plus', gradient: true, href: '/receipt-notes/create' },
+    ],
+}) %>
+
+<form id="receipt-note-filters-form" autocomplete="off" method="get" action="/receipt-notes">
+    <%- include('../partials/filter-card', {
+        filterId: 'receipt-note-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: true,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+    </div>
+
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="receipt-notes-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th>Supplier</th>
+                    <th>Date</th>
+                    <th>Note No</th>
+                    <th>Received On</th>
+                    <th class="text-end">Amount</th>
+                    <th>Status</th>
+                    <th class="text-end data-table-actions-head">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="8">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            No records found.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _rows.forEach(function (r, i) { %>
+                    <% var _convertible = !(r.status === 'invoiced' || r.status === 'cancelled'); %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td><%= r.supplier %></td>
+                        <td><%= r.date %></td>
+                        <td><%= r.note_no %></td>
+                        <td><%= r.received_date %></td>
+                        <td class="text-end"><span class="data-table-money"><%= _inr(r.amount) %></span></td>
+                        <td><span class="pill-status <%= _statusPillClass(r.status) %>"><%= r.status %></span></td>
+                        <td class="text-end data-table-actions">
+                            <div class="dropdown d-inline-block">
+                                <button class="action-btn action-btn--menu" type="button"
+                                        data-bs-toggle="dropdown" aria-expanded="false" title="Actions" aria-label="Actions">
+                                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="/receipt-notes/<%= r.id %>/edit">
+                                        <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
+                                    <li><a class="dropdown-item" href="/receipt-notes/<%= r.id %>/pdf" target="_blank">
+                                        <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
+                                    <% if (_convertible && _canEditReceiptNote) { %>
+                                        <li>
+                                            <form method="post" action="/receipt-notes/<%= r.id %>/convert" style="margin:0">
+                                                <button class="dropdown-item" type="submit">
+                                                    <i class="fa-solid fa-right-left me-2 text-muted"></i>Convert to Invoice</button>
+                                            </form>
+                                        </li>
+                                    <% } %>
+                                    <% if (_canDeleteReceiptNote) { %>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <button class="dropdown-item text-danger" type="button"
+                                                data-row-delete data-delete-url="/receipt-notes/<%= r.id %>" data-delete-label="<%= r.note_no %>">
+                                            <i class="fa-regular fa-trash-can me-2"></i>Delete</button>
+                                    </li>
+                                    <% } %>
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

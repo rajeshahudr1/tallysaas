@@ -30,7 +30,7 @@ const MENU_TREE = [
         { key: 'new-debit-note',  label: 'Debit Note',       icon: 'fa-file-circle-plus',  href: '#', soon: true, module: 'debit-notes' },
         { key: 'new-stock-jrnl',  label: 'Stock Journal',    icon: 'fa-boxes-packing',     href: '#', soon: true, module: 'stock-journal' },
         { key: 'new-phys-stock',  label: 'Physical Stock',   icon: 'fa-clipboard-list',    href: '#', soon: true, module: 'physical-stock' },
-        { key: 'new-recpt-note',  label: 'Receipt Note',     icon: 'fa-dolly',             href: '#', soon: true, module: 'receipt-notes' },
+        { key: 'new-recpt-note',  label: 'Receipt Note',     icon: 'fa-dolly',             href: '/receipt-notes/create', module: 'receipt-notes' },
         { key: 'new-dely-note',   label: 'Delivery Note',    icon: 'fa-truck-fast',        href: '/delivery-notes/create', module: 'delivery-notes' },
     ]},
     { label: 'Sales', icon: 'fa-chart-line', items: [
@@ -52,7 +52,7 @@ const MENU_TREE = [
         { key: 'payments',     label: 'Payment',        icon: 'fa-money-bill-wave',  href: '/payments',          module: 'payments' },
         { key: 'payables',     label: 'Payables',       icon: 'fa-hand-holding-dollar', href: '/payables',       module: 'payables' },
         { key: 'purch-orders', label: 'Purchase Order', icon: 'fa-cart-flatbed',     href: '/purchase-orders', module: 'purchase-orders' },
-        { key: 'recpt-notes',  label: 'Receipt Note',   icon: 'fa-dolly',            href: '#', soon: true, module: 'receipt-notes' },
+        { key: 'recpt-notes',  label: 'Receipt Note',   icon: 'fa-dolly',            href: '/receipt-notes', module: 'receipt-notes' },
         { key: 'expenses',     label: 'Expenses',       icon: 'fa-wallet',           href: '/expenses',          module: 'expenses' },
     ]},
     { label: 'Cash & Bank', icon: 'fa-sack-dollar', items: [

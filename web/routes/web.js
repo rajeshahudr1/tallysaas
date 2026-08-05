@@ -3446,6 +3446,99 @@ router.post('/delivery-notes', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Receipt Notes (list) ────────────────────────
+ * GET /receipt-notes — same shape as /delivery-notes. `receipt_status` is
+ * the receipt-note-specific lifecycle filter (pending/invoiced/cancelled)
+ * — ReceiptNoteController.list reads that exact param name (NOT `status`,
+ * which is reserved for the Tally-sync lifecycle). */
+router.get('/receipt-notes', async (req, res, next) => {
+  try {
+    const receiptStatus = String(req.query.receipt_status || '').trim();
+
+    let basePath = '/receipt-notes';
+    const qsParts = [];
+    if (receiptStatus) qsParts.push('receipt_status=' + encodeURIComponent(receiptStatus));
+    if (qsParts.length) basePath += '?' + qsParts.join('&');
+
+    const { rows, meta } = await apiList(req, basePath);
+    const receiptNoteRows = rows.map((r) => ({
+        id: r.id,
+        supplier: r.supplier || '',
+        date: fmtDate(r.note_date),
+        note_no: r.note_no,
+        received_date: fmtDate(r.received_date),
+        amount: r.total,
+        status: r.receipt_status || 'pending',
+    }));
+
+    res.render('receipt-notes/list', {
+        title: 'Receipt Notes',
+        activeMenu: 'recpt-notes',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Receipt Notes' },
+        ],
+        receiptNoteRows,
+        receiptNotesTotal: meta.total,
+        page:    meta.page,
+        perPage: meta.per_page,
+        receiptStatus,
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /receipt-notes/:id/pdf — stream the api's rendered PDF straight
+ * through (same pattern as /delivery-notes/:id/pdf → api.fetchBinary). */
+router.get('/receipt-notes/:id/pdf', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await api.fetchBinary(req, `/receipt-notes/${id}/pdf`);
+    if (r.status !== 200 || !r.buffer) {
+        setFlash(req, 'error', 'Could not generate the receipt note PDF.');
+        return req.session.save(() => res.redirect('/receipt-notes'));
+    }
+    res.setHeader('Content-Type', r.contentType || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="receipt-note-${id}.pdf"`);
+    return res.end(r.buffer);
+  } catch (err) { next(err); }
+});
+
+/* POST /receipt-notes/:id/convert — turns the receipt note into a Purchase
+ * Invoice; on success send the user straight into the freshly-created
+ * invoice, same destination/logic as /delivery-notes/:id/convert. */
+router.post('/receipt-notes/:id/convert', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/receipt-notes/${req.params.id}/convert`, {});
+    if (apiOk(result)) {
+        const body = result.body || {};
+        const invoiceId = body.data && body.data.invoice_id;
+        let invoiceNo = invoiceId;
+        if (invoiceId) {
+            const inv = await api.get(req, `/purchase-invoices/${invoiceId}`).catch(() => null);
+            if (inv && apiOk(inv) && inv.body.data && inv.body.data.invoice_no) invoiceNo = inv.body.data.invoice_no;
+        }
+        setFlash(req, 'success', invoiceId ? `Converted to invoice ${invoiceNo}.` : (body.message || 'Converted to invoice.'));
+        const dest = invoiceId
+            ? `/purchase-invoices?approval=all&search=${encodeURIComponent(invoiceNo)}`
+            : '/receipt-notes';
+        return req.session.save(() => res.redirect(dest));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not convert this receipt note.'));
+    return req.session.save(() => res.redirect('/receipt-notes'));
+  } catch (err) { next(err); }
+});
+
+/* POST /receipt-notes/:id/delete — soft delete, matches /delivery-notes/:id/delete. */
+router.post('/receipt-notes/:id/delete', async (req, res, next) => {
+  try {
+    const result = await api.del(req, `/receipt-notes/${req.params.id}`);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Receipt note deleted.')
+                      : apiError(result, 'Could not delete the receipt note.'));
+    return req.session.save(() => res.redirect('/receipt-notes'));
+  } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {
