@@ -40,3 +40,20 @@ test('the GST registration types match the agreed list exactly', () => {
         'Non-Resident Taxpayer', 'Regular',
     ]);
 });
+
+// A customer's `state` is only checked against the GST state allow-list when
+// country is India (the GST codes drive the CGST/SGST-vs-IGST split and are
+// meaningless elsewhere) — see api/Validators/customer.js. Any other country
+// must accept free-text state, or saving a non-Indian customer fails outright.
+test('customer validator restricts state to the GST list only for India', () => {
+    const { createCustomerSchema } = require('../Validators/customer');
+
+    const india = createCustomerSchema.validate({ name: 'A', country: 'India', state: 'Gujarat' });
+    assert.strictEqual(india.error, undefined, 'India + a real GST state should pass');
+
+    const indiaBad = createCustomerSchema.validate({ name: 'A', country: 'India', state: 'California' });
+    assert.ok(indiaBad.error, 'India + a non-GST state should be rejected');
+
+    const other = createCustomerSchema.validate({ name: 'A', country: 'United States', state: 'California' });
+    assert.strictEqual(other.error, undefined, 'a non-India country should accept free-text state');
+});

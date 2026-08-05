@@ -35,6 +35,17 @@ const STATUSES = ['Active', 'Inactive', 'Blocked'];
 const STATE_NAMES = GST_STATES.map((s) => s.name);
 const BALANCE_TYPES = ['Cr', 'Dr'];
 
+// `state` is only restricted to the GST_STATES allow-list when the customer's
+// country is India — those codes drive the CGST/SGST-vs-IGST split and are
+// meaningless for any other country, whose states aren't in gstStates.js at
+// all. Everywhere else `state` is free text. `country` defaults to '' (i.e.
+// not India) so an omitted country does NOT fall back into the GST allow-list.
+const stateField = Joi.string().trim().max(100).allow('', null)
+    .when('country', {
+        is: Joi.string().trim().valid('India'),
+        then: Joi.valid(...STATE_NAMES),
+    });
+
 // Reusable optional positive-integer FK (nullable so a client can detach it).
 const fkId = Joi.number().integer().positive().allow(null);
 
@@ -76,7 +87,7 @@ const createCustomerSchema = Joi.object({
     ledger_group:          optText(191),
     opening_balance_type:  Joi.string().valid(...BALANCE_TYPES).default('Cr'),
     country:                optText(64),
-    state:                   Joi.string().trim().max(100).valid(...STATE_NAMES).allow('', null),
+    state:                   stateField,
     city:                    optText(120),
     pincode:                optText(12),
     gst_registration_type:  Joi.string().trim().max(40).valid(...GST_REGISTRATION_TYPES).allow('', null),
@@ -118,7 +129,7 @@ const updateCustomerSchema = Joi.object({
     ledger_group:          optText(191),
     opening_balance_type:  Joi.string().valid(...BALANCE_TYPES),
     country:                optText(64),
-    state:                   Joi.string().trim().max(100).valid(...STATE_NAMES).allow('', null),
+    state:                   stateField,
     city:                    optText(120),
     pincode:                optText(12),
     gst_registration_type:  Joi.string().trim().max(40).valid(...GST_REGISTRATION_TYPES).allow('', null),
