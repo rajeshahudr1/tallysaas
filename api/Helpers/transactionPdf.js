@@ -448,6 +448,77 @@ function receiptNotePdfHtml(o, ctx = {}) {
     return { html: wrap(ctx, title, inner), landscape: false };
 }
 
+/**
+ * Build a Credit Note / Debit Note PDF HTML. note = ReturnNoteController.get's
+ * data object (a row from the shared `invoices` table); `kind` is 'credit' |
+ * 'debit'. Same layout as invoicePdfHtml but titled "CREDIT NOTE"/"DEBIT
+ * NOTE" and cites the original bill (if any) via "Against Bill".
+ */
+function returnNotePdfHtml(note, ctx = {}, kind = 'credit') {
+    const isCredit = kind === 'credit';
+    const title = isCredit ? 'CREDIT NOTE' : 'DEBIT NOTE';
+    const party = note.customer || note.supplier || null;
+    const partyLabel = isCredit ? 'Bill To' : 'From';
+    const partyName = party ? (party.name || '') : '';
+    const partyGstin = party ? (party.gstin || party.gst_no || '') : '';
+
+    const src = (Array.isArray(note.tally_items) && note.tally_items.length) ? note.tally_items
+        : (Array.isArray(note.items) ? note.items : []);
+    const items = src.map(normItem);
+
+    const rowsHtml = items.length
+        ? items.map((it, i) => `<tr>
+            <td class="c">${i + 1}</td>
+            <td>${esc(it.name)}</td>
+            <td>${esc(it.hsn)}</td>
+            <td class="num">${esc(it.qty)}</td>
+            <td>${esc(it.unit)}</td>
+            <td class="num">${inr(it.rate)}</td>
+            <td class="num">${it.disc !== '' && it.disc != null ? esc(it.disc) + '%' : ''}</td>
+            <td class="num">${inr(it.amount)}</td>
+          </tr>`).join('')
+        : `<tr><td colspan="8" class="empty">No line items.</td></tr>`;
+
+    const totalRow = (label, val, strong) =>
+        `<tr${strong ? ' class="grand"' : ''}><td>${esc(label)}</td><td class="num">${inr(val)}</td></tr>`;
+
+    const num = (v) => Number(v || 0);
+    let totals = '';
+    totals += totalRow('Taxable', note.taxable);
+    if (num(note.cgst))      totals += totalRow('CGST', note.cgst);
+    if (num(note.sgst))      totals += totalRow('SGST', note.sgst);
+    if (num(note.igst))      totals += totalRow('IGST', note.igst);
+    if (num(note.discount))  totals += totalRow('Discount', note.discount);
+    if (num(note.round_off)) totals += totalRow('Round Off', note.round_off);
+    totals += totalRow('Total', note.total, true);
+
+    const inner = `
+      <div class="meta-grid">
+        <div class="party">
+          <div class="lbl">${esc(partyLabel)}</div>
+          <div class="pname">${esc(partyName) || '—'}</div>
+          ${partyGstin ? `<div class="pgst">GSTIN: ${esc(partyGstin)}</div>` : ''}
+        </div>
+        <div class="inv-meta">
+          <div><span>Note No</span><b>${esc(note.invoice_no || note.tally_voucher_no || '')}</b></div>
+          <div><span>Date</span><b>${fmtDate(note.invoice_date)}</b></div>
+          ${note.against_invoice_id ? `<div><span>Against Bill</span><b>#${esc(note.against_invoice_id)}</b></div>` : ''}
+          ${note.supplier_bill_no ? `<div><span>Bill No</span><b>${esc(note.supplier_bill_no)}</b></div>` : ''}
+        </div>
+      </div>
+      <table class="rpt">
+        <thead><tr>
+          <th class="c">#</th><th>Item</th><th>HSN</th><th class="num">Qty</th><th>Unit</th>
+          <th class="num">Rate</th><th class="num">Disc</th><th class="num">Amount</th>
+        </tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+      <div class="totals-wrap"><table class="totals">${totals}</table></div>
+      ${note.notes ? `<div class="notes"><b>Notes:</b> ${esc(note.notes)}</div>` : ''}`;
+
+    return { html: wrap(ctx, title, inner), landscape: false };
+}
+
 function wrap(ctx, title, inner) {
     return `<!doctype html><html><head><meta charset="utf-8"><style>
       * { box-sizing: border-box; }
@@ -488,4 +559,4 @@ function wrap(ctx, title, inner) {
     </body></html>`;
 }
 
-module.exports = { invoicePdfHtml, quotationPdfHtml, salesOrderPdfHtml, purchaseOrderPdfHtml, deliveryNotePdfHtml, receiptNotePdfHtml };
+module.exports = { invoicePdfHtml, quotationPdfHtml, salesOrderPdfHtml, purchaseOrderPdfHtml, deliveryNotePdfHtml, receiptNotePdfHtml, returnNotePdfHtml };

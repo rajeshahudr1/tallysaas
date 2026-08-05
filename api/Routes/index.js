@@ -111,6 +111,10 @@ const {
     listReceiptNoteSchema,
 } = require('../Validators/receiptNote');
 const {
+    createReturnNoteSchema,
+    listReturnNoteSchema,
+} = require('../Validators/returnNote');
+const {
     createPaymentSchema,
     createReceiptSchema,
     listPaymentSchema,
@@ -162,6 +166,7 @@ const SalesOrderController    = require('../Controllers/Tenant/SalesOrderControl
 const PurchaseOrderController = require('../Controllers/Tenant/PurchaseOrderController');
 const DeliveryNoteController  = require('../Controllers/Tenant/DeliveryNoteController');
 const ReceiptNoteController   = require('../Controllers/Tenant/ReceiptNoteController');
+const ReturnNoteController    = require('../Controllers/Tenant/ReturnNoteController');
 const PaymentController       = require('../Controllers/Tenant/PaymentController');
 const LicenseController       = require('../Controllers/SuperAdmin/LicenseController');
 const CompanyController       = require('../Controllers/SuperAdmin/CompanyController');
@@ -944,6 +949,40 @@ router.post('/delivery-notes/:id/convert', authenticate, resolveTenant, resolveC
     can('delivery-notes', 'edit'), DeliveryNoteController.convert);
 router.delete('/delivery-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('delivery-notes', 'delete'), DeliveryNoteController.destroy);
+
+// Credit Note / Debit Note — ReturnNoteController runs on the SHARED
+// `invoices` table (see that controller's header comment), parameterised on
+// `kind` ('credit' | 'debit') via a tiny middleware that just stamps
+// req.returnNoteKind before the handler runs. Two parallel route sets, same
+// chain shape as delivery-notes above; RBAC is per-kind ('credit-notes' /
+// 'debit-notes') so a role can be granted one without the other.
+const setReturnNoteKind = (kind) => (req, res, next) => { req.returnNoteKind = kind; next(); };
+
+router.get('/credit-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('credit-notes', 'view'), setReturnNoteKind('credit'), validate(listReturnNoteSchema, 'query'), ReturnNoteController.list);
+router.get('/credit-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('credit-notes', 'view'), setReturnNoteKind('credit'), ReturnNoteController.get);
+router.get('/credit-notes/:id/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('credit-notes', 'view'), setReturnNoteKind('credit'), ReturnNoteController.pdf);
+router.post('/credit-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('credit-notes', 'create'), setReturnNoteKind('credit'), validate(createReturnNoteSchema), ReturnNoteController.create);
+router.put('/credit-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('credit-notes', 'edit'), setReturnNoteKind('credit'), validate(createReturnNoteSchema), ReturnNoteController.updateDraft);
+router.delete('/credit-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('credit-notes', 'delete'), setReturnNoteKind('credit'), ReturnNoteController.destroy);
+
+router.get('/debit-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('debit-notes', 'view'), setReturnNoteKind('debit'), validate(listReturnNoteSchema, 'query'), ReturnNoteController.list);
+router.get('/debit-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('debit-notes', 'view'), setReturnNoteKind('debit'), ReturnNoteController.get);
+router.get('/debit-notes/:id/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('debit-notes', 'view'), setReturnNoteKind('debit'), ReturnNoteController.pdf);
+router.post('/debit-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('debit-notes', 'create'), setReturnNoteKind('debit'), validate(createReturnNoteSchema), ReturnNoteController.create);
+router.put('/debit-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('debit-notes', 'edit'), setReturnNoteKind('debit'), validate(createReturnNoteSchema), ReturnNoteController.updateDraft);
+router.delete('/debit-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('debit-notes', 'delete'), setReturnNoteKind('debit'), ReturnNoteController.destroy);
 
 router.get('/receipt-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('receipt-notes', 'view'), validate(listReceiptNoteSchema, 'query'), ReceiptNoteController.list);
