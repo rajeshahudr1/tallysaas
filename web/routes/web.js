@@ -2680,6 +2680,101 @@ router.post('/quotations/:id/delete', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Sales Orders (list) ────────────────────────
+ * GET /sales-orders — same shape as /quotations. `order_status` is the
+ * sales-order-specific delivery-lifecycle filter (pending/partially_
+ * delivered/delivered/cancelled) — SalesOrderController.list reads that
+ * exact param name (NOT `status`, which is reserved for the Tally-sync
+ * lifecycle). Forwarded through apiList()'s basePath query string, same
+ * trick the quotation list uses for `quote_status`. */
+router.get('/sales-orders', async (req, res, next) => {
+  try {
+    const orderStatus = String(req.query.order_status || '').trim();
+
+    let basePath = '/sales-orders';
+    const qsParts = [];
+    if (orderStatus) qsParts.push('order_status=' + encodeURIComponent(orderStatus));
+    if (qsParts.length) basePath += '?' + qsParts.join('&');
+
+    const { rows, meta } = await apiList(req, basePath);
+    const salesOrderRows = rows.map((r) => ({
+        id: r.id,
+        customer: r.customer || '',
+        date: fmtDate(r.order_date),
+        order_no: r.order_no,
+        due_on: fmtDate(r.due_on),
+        amount: r.total,
+        status: r.order_status || 'pending',
+    }));
+
+    res.render('sales-orders/list', {
+        title: 'Sales Orders',
+        activeMenu: 'sales-orders',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Sales Orders' },
+        ],
+        salesOrderRows,
+        salesOrdersTotal: meta.total,
+        page:    meta.page,
+        perPage: meta.per_page,
+        orderStatus,
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /sales-orders/:id/pdf — stream the api's rendered PDF straight through
+ * (same pattern as /quotations/:id/pdf → api.fetchBinary). */
+router.get('/sales-orders/:id/pdf', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await api.fetchBinary(req, `/sales-orders/${id}/pdf`);
+    if (r.status !== 200 || !r.buffer) {
+        setFlash(req, 'error', 'Could not generate the sales order PDF.');
+        return req.session.save(() => res.redirect('/sales-orders'));
+    }
+    res.setHeader('Content-Type', r.contentType || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="sales-order-${id}.pdf"`);
+    return res.end(r.buffer);
+  } catch (err) { next(err); }
+});
+
+/* POST /sales-orders/:id/convert — turns the sales order into a Sales
+ * Invoice; on success send the user straight into the freshly-created
+ * invoice, same destination/logic as /quotations/:id/convert. */
+router.post('/sales-orders/:id/convert', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/sales-orders/${req.params.id}/convert`, {});
+    if (apiOk(result)) {
+        const body = result.body || {};
+        const invoiceId = body.data && body.data.invoice_id;
+        let invoiceNo = invoiceId;
+        if (invoiceId) {
+            const inv = await api.get(req, `/sales-invoices/${invoiceId}`).catch(() => null);
+            if (inv && apiOk(inv) && inv.body.data && inv.body.data.invoice_no) invoiceNo = inv.body.data.invoice_no;
+        }
+        setFlash(req, 'success', invoiceId ? `Converted to invoice ${invoiceNo}.` : (body.message || 'Converted to invoice.'));
+        const dest = invoiceId
+            ? `/sales-invoices?approval=all&search=${encodeURIComponent(invoiceNo)}`
+            : '/sales-orders';
+        return req.session.save(() => res.redirect(dest));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not convert this sales order.'));
+    return req.session.save(() => res.redirect('/sales-orders'));
+  } catch (err) { next(err); }
+});
+
+/* POST /sales-orders/:id/delete — soft delete, matches /quotations/:id/delete. */
+router.post('/sales-orders/:id/delete', async (req, res, next) => {
+  try {
+    const result = await api.del(req, `/sales-orders/${req.params.id}`);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Sales order deleted.')
+                      : apiError(result, 'Could not delete the sales order.'));
+    return req.session.save(() => res.redirect('/sales-orders'));
+  } catch (err) { next(err); }
+});
+
 /* Parse the hidden items_json from a QUOTATION form into the api's item
  * shape. Quotation items carry two fields invoices don't (`godown`,
  * `tax_inclusive`) — parseInvoiceItems() drops them, so this is its own

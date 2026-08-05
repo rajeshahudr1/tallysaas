@@ -89,3 +89,12 @@ test('Quotation and My Quotations are live, not "Soon"', () => {
     assert.strictEqual(byKey['my-quotations'].soon, undefined, 'My Quotations still marked soon');
     assert.strictEqual(byKey['my-quotations'].href, '/quotations?mine=1');
 });
+
+test('Sales Order is live in both menus, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['new-sales-order'].soon, undefined, 'Create Vouchers → Sales Order still soon');
+    assert.strictEqual(byKey['new-sales-order'].href, '/sales-orders/create');
+    assert.strictEqual(byKey['sales-orders'].soon, undefined, 'Sales → Sales Order still soon');
+    assert.strictEqual(byKey['sales-orders'].href, '/sales-orders');
+});
