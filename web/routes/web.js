@@ -7818,4 +7818,147 @@ async function handleReturnNoteDelete(req, res, next, kind) {
 router.post('/credit-notes/:id/delete', (req, res, next) => handleReturnNoteDelete(req, res, next, 'credit'));
 router.post('/debit-notes/:id/delete',  (req, res, next) => handleReturnNoteDelete(req, res, next, 'debit'));
 
+/* Parse the hidden items_json from a CREDIT/DEBIT NOTE form into the api's
+ * item shape — same shape/fields as parseDeliveryNoteItems (godown/
+ * tax_inclusive carried through). Kept as its own function in case the
+ * shape diverges later. */
+function parseReturnNoteItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id:    it.product_id ? Number(it.product_id) : undefined,
+        description:   it.description || undefined,
+        hsn:           it.hsn || undefined,
+        quantity:      Number(it.quantity) || 0,
+        unit:          it.unit || undefined,
+        rate:          Number(it.rate) || 0,
+        discount_pct:  Number(it.discount_pct) || 0,
+        gst_rate:      Number(it.gst_rate) || 0,
+        godown:        it.godown || undefined,
+        tax_inclusive: !!it.tax_inclusive,
+    })).filter((it) => it.quantity > 0);
+}
+
+/* ── TRANSACTIONS · Create Credit Note / Debit Note (GET .../create) ──────
+ * Credit Note's party comes from /customers + sales ledgers + open sales
+ * invoices (Against Bill); Debit Note's party comes from /suppliers +
+ * purchase ledgers + open purchase invoices — one handler, kind picks the
+ * sources, so the two paths cannot silently drift apart. */
+async function handleReturnNoteCreateForm(req, res, next, kind) {
+  try {
+    const cfg = RETURN_NOTE_CFG[kind];
+    const isCredit = kind === 'credit';
+    const [partyOptions, returnNoteProducts, ledgerOptions, ledgerGroupOptions, billsResult] = await Promise.all([
+        isCredit ? fetchCustomerInvoiceOptions(req) : fetchOptions(req, '/suppliers'),
+        fetchInvoiceProducts(req, isCredit ? 'sales_price' : 'purchase_price'),
+        isCredit ? fetchSalesLedgerOptions(req) : fetchPurchaseLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
+        api.get(req, `${cfg.billApiPath}?per_page=100`).catch(() => null),
+    ]);
+    const billRows = (billsResult && billsResult.body && billsResult.body.data && Array.isArray(billsResult.body.data.data))
+        ? billsResult.body.data.data : [];
+    const billOptions = billRows.map((b) => ({
+        id: b.id, invoice_no: b.invoice_no,
+        party: (isCredit ? b.customer : b.supplier) || '',
+    }));
+
+    res.render('return-notes/create', {
+        title: `Create ${cfg.label}`,
+        kind,
+        activeMenu: cfg.activeMenu,
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: cfg.label + 's', href: cfg.apiPath },
+            { label: `Create ${cfg.label}` },
+        ],
+
+        partyOptions, returnNoteProducts, ledgerOptions, billOptions,
+        ledgerGroupOptions, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+
+        pageScript: '<script src="/js/return-note.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+}
+router.get('/credit-notes/create', (req, res, next) => handleReturnNoteCreateForm(req, res, next, 'credit'));
+router.get('/debit-notes/create',  (req, res, next) => handleReturnNoteCreateForm(req, res, next, 'debit'));
+
+/* GET /credit-notes/bill/:id and /debit-notes/bill/:id — forwards the api's
+ * GET /sales-invoices/:id or /purchase-invoices/:id so /js/return-note.js's
+ * "Against Bill" prefill can fetch a single bill's full detail (party +
+ * items) without the browser ever talking to the api directly. Same
+ * forwarding trick as /delivery-notes/order/:id. AJAX/JSON only. */
+async function handleReturnNoteBillDetail(req, res, kind) {
+    try {
+        const cfg = RETURN_NOTE_CFG[kind];
+        const result = await api.get(req, `${cfg.billApiPath}/${encodeURIComponent(req.params.id)}`);
+        if (apiOk(result) && result.body && result.body.data) {
+            return res.json({ ok: true, data: result.body.data });
+        }
+        return res.status(404).json({ ok: false, error: apiError(result, 'Bill not found.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not reach the server.' });
+    }
+}
+router.get('/credit-notes/bill/:id', (req, res) => handleReturnNoteBillDetail(req, res, 'credit'));
+router.get('/debit-notes/bill/:id',  (req, res) => handleReturnNoteBillDetail(req, res, 'debit'));
+
+/* ── POST /credit-notes/create/quick-customer — "Create New Customer" row
+ * pinned atop the Party combobox on the Credit Note form only (its party IS
+ * a customer). Debit Note's form never renders this modal/row, so this
+ * route simply never gets hit for 'debit'. Same shape as
+ * POST /delivery-notes/create/quick-customer. AJAX/JSON only. */
+router.post('/credit-notes/create/quick-customer', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const payload = { name: (b.name || '').trim() };
+        if (!payload.name) {
+            return res.status(422).json({ ok: false, error: 'Customer name is required.' });
+        }
+        const result = await api.post(req, '/customers', payload);
+        if (apiOk(result) && result.body && result.body.data) {
+            const row = result.body.data;
+            return res.json({ ok: true, data: { id: row.id, name: row.name } });
+        }
+        return res.status(422).json({ ok: false, error: apiError(result, 'Could not create customer.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not create customer.' });
+    }
+});
+
+/* ── POST /credit-notes and POST /debit-notes — create a note via the api.
+ * Header fields submit normally; line items ride the hidden items_json
+ * (serialised by /js/return-note.js). The api computes all totals inside a
+ * db transaction — see ReturnNoteController.create. */
+async function handleReturnNoteCreate(req, res, next, kind) {
+    try {
+        const cfg = RETURN_NOTE_CFG[kind];
+        const isCredit = kind === 'credit';
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            customer_id:        isCredit ? num(b.customer_id) : undefined,
+            supplier_id:        isCredit ? undefined : num(b.supplier_id),
+            against_invoice_id: num(b.against_invoice_id),
+            note_no:            b.note_no || undefined,
+            invoice_date:       b.invoice_date || undefined,
+            ledger_name:        b.ledger_name || undefined,
+            supplier_bill_no:   b.supplier_bill_no || undefined,
+            notes:              b.notes || undefined,
+            items:              parseReturnNoteItems(b.items_json),
+        };
+        const result = await api.post(req, cfg.apiPath, payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `${cfg.label} ${(result.body.data && result.body.data.invoice_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect(cfg.apiPath));
+        }
+        setFlash(req, 'error', apiError(result, `Could not create ${cfg.label.toLowerCase()}.`));
+        return req.session.save(() => res.redirect(`${cfg.apiPath}/create`));
+    } catch (err) { next(err); }
+}
+router.post('/credit-notes', (req, res, next) => handleReturnNoteCreate(req, res, next, 'credit'));
+router.post('/debit-notes',  (req, res, next) => handleReturnNoteCreate(req, res, next, 'debit'));
+
 module.exports = router;
