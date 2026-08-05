@@ -98,3 +98,12 @@ test('Sales Order is live in both menus, not "Soon"', () => {
     assert.strictEqual(byKey['sales-orders'].soon, undefined, 'Sales → Sales Order still soon');
     assert.strictEqual(byKey['sales-orders'].href, '/sales-orders');
 });
+
+test('Purchase Order is live in both menus, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['new-po'].soon, undefined, 'Create Vouchers → Purchase Order still soon');
+    assert.strictEqual(byKey['new-po'].href, '/purchase-orders/create');
+    assert.strictEqual(byKey['purch-orders'].soon, undefined, 'Purchase → Purchase Order still soon');
+    assert.strictEqual(byKey['purch-orders'].href, '/purchase-orders');
+});

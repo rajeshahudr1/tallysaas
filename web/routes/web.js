@@ -3017,6 +3017,101 @@ router.post('/sales-orders', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Purchase Orders (list) ────────────────────────
+ * GET /purchase-orders — same shape as /sales-orders. `order_status` is the
+ * purchase-order-specific delivery-lifecycle filter (pending/partially_
+ * delivered/delivered/cancelled) — PurchaseOrderController.list reads that
+ * exact param name (NOT `status`, which is reserved for the Tally-sync
+ * lifecycle). Forwarded through apiList()'s basePath query string, same
+ * trick the sales order list uses for `order_status`. */
+router.get('/purchase-orders', async (req, res, next) => {
+  try {
+    const orderStatus = String(req.query.order_status || '').trim();
+
+    let basePath = '/purchase-orders';
+    const qsParts = [];
+    if (orderStatus) qsParts.push('order_status=' + encodeURIComponent(orderStatus));
+    if (qsParts.length) basePath += '?' + qsParts.join('&');
+
+    const { rows, meta } = await apiList(req, basePath);
+    const purchaseOrderRows = rows.map((r) => ({
+        id: r.id,
+        supplier: r.supplier || '',
+        date: fmtDate(r.order_date),
+        order_no: r.order_no,
+        due_on: fmtDate(r.due_on),
+        amount: r.total,
+        status: r.order_status || 'pending',
+    }));
+
+    res.render('purchase-orders/list', {
+        title: 'Purchase Orders',
+        activeMenu: 'purch-orders',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Purchase Orders' },
+        ],
+        purchaseOrderRows,
+        purchaseOrdersTotal: meta.total,
+        page:    meta.page,
+        perPage: meta.per_page,
+        orderStatus,
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /purchase-orders/:id/pdf — stream the api's rendered PDF straight
+ * through (same pattern as /sales-orders/:id/pdf → api.fetchBinary). */
+router.get('/purchase-orders/:id/pdf', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await api.fetchBinary(req, `/purchase-orders/${id}/pdf`);
+    if (r.status !== 200 || !r.buffer) {
+        setFlash(req, 'error', 'Could not generate the purchase order PDF.');
+        return req.session.save(() => res.redirect('/purchase-orders'));
+    }
+    res.setHeader('Content-Type', r.contentType || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="purchase-order-${id}.pdf"`);
+    return res.end(r.buffer);
+  } catch (err) { next(err); }
+});
+
+/* POST /purchase-orders/:id/convert — turns the purchase order into a
+ * Purchase Invoice; on success send the user straight into the freshly-
+ * created invoice, same destination/logic as /sales-orders/:id/convert. */
+router.post('/purchase-orders/:id/convert', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/purchase-orders/${req.params.id}/convert`, {});
+    if (apiOk(result)) {
+        const body = result.body || {};
+        const invoiceId = body.data && body.data.invoice_id;
+        let invoiceNo = invoiceId;
+        if (invoiceId) {
+            const inv = await api.get(req, `/purchase-invoices/${invoiceId}`).catch(() => null);
+            if (inv && apiOk(inv) && inv.body.data && inv.body.data.invoice_no) invoiceNo = inv.body.data.invoice_no;
+        }
+        setFlash(req, 'success', invoiceId ? `Converted to invoice ${invoiceNo}.` : (body.message || 'Converted to invoice.'));
+        const dest = invoiceId
+            ? `/purchase-invoices?approval=all&search=${encodeURIComponent(invoiceNo)}`
+            : '/purchase-orders';
+        return req.session.save(() => res.redirect(dest));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not convert this purchase order.'));
+    return req.session.save(() => res.redirect('/purchase-orders'));
+  } catch (err) { next(err); }
+});
+
+/* POST /purchase-orders/:id/delete — soft delete, matches /sales-orders/:id/delete. */
+router.post('/purchase-orders/:id/delete', async (req, res, next) => {
+  try {
+    const result = await api.del(req, `/purchase-orders/${req.params.id}`);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Purchase order deleted.')
+                      : apiError(result, 'Could not delete the purchase order.'));
+    return req.session.save(() => res.redirect('/purchase-orders'));
+  } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {
