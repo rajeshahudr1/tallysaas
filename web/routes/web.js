@@ -2620,8 +2620,26 @@ router.post('/quotations/:id/convert', async (req, res, next) => {
     if (apiOk(result)) {
         const body = result.body || {};
         const invoiceId = body.data && body.data.invoice_id;
-        setFlash(req, 'success', body.message || 'Converted to invoice.');
-        return req.session.save(() => res.redirect(invoiceId ? `/sales-invoices/${invoiceId}/edit` : '/quotations'));
+        // /sales-invoices/:id/edit only serves DRAFT invoices — a freshly
+        // converted invoice is NOT a draft, so that redirect 302s straight
+        // back to the list with no clue which invoice was just created.
+        // /sales-invoices/:id/print DOES render any invoice regardless of
+        // status, but it's a layout:false print sheet that never shows the
+        // flash banner (the flash-consuming middleware in index.js clears
+        // the session flash on that very request, so the message would be
+        // silently lost). The list view uses the shared layout that DOES
+        // render flashes, so land there filtered/anchored to the new
+        // invoice's number — identifiable AND the flash is actually seen.
+        let invoiceNo = invoiceId;
+        if (invoiceId) {
+            const inv = await api.get(req, `/sales-invoices/${invoiceId}`).catch(() => null);
+            if (inv && apiOk(inv) && inv.body.data && inv.body.data.invoice_no) invoiceNo = inv.body.data.invoice_no;
+        }
+        setFlash(req, 'success', invoiceId ? `Converted to invoice ${invoiceNo}.` : (body.message || 'Converted to invoice.'));
+        const dest = invoiceId
+            ? `/sales-invoices?approval=all&search=${encodeURIComponent(invoiceNo)}`
+            : '/quotations';
+        return req.session.save(() => res.redirect(dest));
     }
     setFlash(req, 'error', apiError(result, 'Could not convert this quotation.'));
     return req.session.save(() => res.redirect('/quotations'));
