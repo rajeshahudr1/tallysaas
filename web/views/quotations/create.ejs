@@ -1,0 +1,266 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/quotations/create.ejs — TRANSACTIONS · Create Quotation Voucher.
+ * Route: GET /quotations/create  ·  activeMenu: 'quotations'.
+ *
+ * Layout mirrors LiveKeeping's "Create Quotation Voucher" voucher screen
+ * (full-width header bar, Party/Ledger/No row, Date row, an items grid,
+ * two collapsible strips, a right-hand totals panel) — but every colour
+ * comes from OUR theme variables/components, nothing hardcoded.
+ *
+ * The DOM ids/classes below are a fixed contract — Task 5's /js/quotation.js
+ * binds to them verbatim (row cloning, totals, submit serialisation). This
+ * page only ships the markup; the form does not compute/submit until that
+ * script lands.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   customerOptions / locationOptions / salesPersonOptions — header selects
+ *   invoiceProducts [{id,name,hsn,unit,rate,gst,stock}]    — line-item picker
+ *   nextQuotationNo string                                  — read-only no.
+ * ─────────────────────────────────────────────────────────── */
+
+var _custs    = (typeof customerOptions !== 'undefined' && customerOptions) ? customerOptions : [];
+var _locs     = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
+var _sps      = (typeof salesPersonOptions !== 'undefined' && salesPersonOptions) ? salesPersonOptions : [];
+var _products = (typeof invoiceProducts !== 'undefined' && invoiceProducts) ? invoiceProducts : [];
+var _qNo      = (typeof nextQuotationNo !== 'undefined' && nextQuotationNo) ? nextQuotationNo : '';
+
+function _esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* Party (customer) <option>s — value = id. */
+function _customerOpts(list) {
+    var html = '<option value="" selected disabled hidden>Select party</option>';
+    (list || []).forEach(function (o) {
+        html += '<option value="' + o.id + '">' + _esc(o.name) + '</option>';
+    });
+    return html;
+}
+
+/* Products as a JS array for the searchable line-item picker (Task 5). */
+var _productsJson = JSON.stringify(_products.map(function (p) {
+    return { id: p.id, name: p.name, hsn: p.hsn || '', unit: p.unit || '', rate: p.rate || 0, gst: p.gst || 0, stock: (p.stock != null ? p.stock : 0) };
+}));
+
+var _today = new Date().toISOString().slice(0, 10);
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Create Quotation',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Quotations', href: '/quotations' },
+        { label: 'Create Quotation' },
+    ],
+    actions: [
+        { label: 'Back', icon: 'fa-arrow-left', href: '/quotations' },
+    ],
+}) %>
+
+<form id="quotation-form" method="post" action="/quotations" autocomplete="off" novalidate>
+
+    <!-- Line items are serialised to JSON here by /js/quotation.js on submit. -->
+    <input type="hidden" name="items_json" id="items_json">
+
+    <div class="card mb-3 q-voucher">
+        <div class="voucher-head">Create Quotation Voucher</div>
+
+        <div class="inv-body">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="q-party">Party Name<span class="req">*</span></label>
+                    <select class="form-select" id="q-party" name="customer_id" required>
+                        <%- _customerOpts(_custs) %>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="q-ledger">Ledger Type</label>
+                    <input type="text" class="form-control" id="q-ledger" name="ledger_name"
+                           list="q-ledger-list" placeholder="Search ledger…" autocomplete="off">
+                    <datalist id="q-ledger-list">
+                        <option value="Sundry Debtors">
+                        <option value="Sundry Creditors">
+                    </datalist>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="q-no">Quotation No</label>
+                    <div class="q-no-wrap">
+                        <input type="text" class="form-control" id="q-no" name="quotation_no"
+                               value="<%= _qNo %>" readonly>
+                        <button type="button" class="q-no-edit" id="q-no-edit" title="Edit quotation no" aria-label="Edit quotation no">
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label" for="q-date">Date<span class="req">*</span></label>
+                    <input type="date" class="form-control" id="q-date" name="quotation_date" value="<%= _today %>" required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="q-valid-till">Valid Till</label>
+                    <input type="date" class="form-control" id="q-valid-till" name="valid_till">
+                </div>
+            </div>
+        </div>
+
+        <!-- ════ Items table ════ -->
+        <div class="li-table-wrap">
+            <table class="q-table">
+                <thead>
+                    <tr>
+                        <th>Items</th>
+                        <th class="num">Qty</th>
+                        <th class="num">Rate</th>
+                        <th>Units</th>
+                        <th class="num">Disc %</th>
+                        <th>HSN Code</th>
+                        <th>Godown</th>
+                        <th>Description</th>
+                        <th class="num">Amount</th>
+                        <th class="center">Tax Incl.</th>
+                        <th class="center">
+                            <button type="button" class="q-add-btn" id="q-add-row" title="Add row" aria-label="Add row">
+                                <i class="fa-solid fa-plus"></i>
+                            </button>
+                        </th>
+                    </tr>
+                </thead>
+                <!-- Rows are injected by /js/quotation.js from the template below. -->
+                <tbody id="q-body"></tbody>
+            </table>
+        </div>
+
+        <!-- ════ Collapsible strips ════ -->
+        <div class="q-collapse">
+            <button type="button" class="q-collapse-head" data-bs-toggle="collapse" data-bs-target="#q-narration" aria-expanded="false">
+                <span>Narration</span>
+                <i class="fa-solid fa-chevron-down"></i>
+            </button>
+            <div class="collapse" id="q-narration">
+                <div class="q-collapse-body">
+                    <textarea class="form-control" id="q-notes" name="notes" rows="3"
+                              maxlength="2000" placeholder="Narration for this quotation…"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="q-collapse">
+            <button type="button" class="q-collapse-head" data-bs-toggle="collapse" data-bs-target="#q-advanced" aria-expanded="false">
+                <span>Advanced Settings</span>
+                <i class="fa-solid fa-chevron-down"></i>
+            </button>
+            <div class="collapse" id="q-advanced">
+                <div class="q-collapse-body">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label class="form-label" for="q-location">Location</label>
+                            <select class="form-select" id="q-location" name="location_id">
+                                <option value="" selected>Select location</option>
+                                <% _locs.forEach(function (o) { %>
+                                    <option value="<%= o.id %>"><%= _esc(o.name) %></option>
+                                <% }); %>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-sp">Sales Person</label>
+                            <select class="form-select" id="q-sp" name="sales_person_id">
+                                <option value="" selected>Select sales person</option>
+                                <% _sps.forEach(function (o) { %>
+                                    <option value="<%= o.id %>"><%= _esc(o.name) %></option>
+                                <% }); %>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ════ Footer — right-hand totals panel + Create Voucher ════ -->
+        <div class="inv-foot q-foot">
+            <div></div>
+
+            <div class="q-totals">
+                <div class="q-total-row">
+                    <span class="lbl">Sub Total</span><span class="val" id="q-subtotal">₹0.00</span>
+                </div>
+                <div class="q-total-row">
+                    <span class="lbl">Taxes</span><span class="val" id="q-taxes">₹0.00</span>
+                </div>
+                <div class="q-total-row grand">
+                    <span class="lbl">Grand Total</span><span class="val" id="q-grand">₹0.00</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-card-footer" style="border-top:0; background:#fff;">
+            <a class="btn btn-light" href="/quotations">Cancel</a>
+            <button type="submit" class="btn btn-primary" id="q-submit">
+                <i class="fa-solid fa-cloud-arrow-up me-1"></i>Create Voucher
+            </button>
+        </div>
+    </div>
+
+</form>
+
+<!-- ── Line-item row template (cloned by /js/quotation.js) ─────────── -->
+<template id="q-row-tpl">
+    <tr class="q-row">
+        <td class="li-prod-cell">
+            <input type="text" class="li-product-search q-item-search" placeholder="Search item…" autocomplete="off">
+            <input type="hidden" class="q-item">
+            <div class="li-prod-menu" hidden></div>
+        </td>
+        <td><input type="number" class="q-qty li-num" min="0" step="1" value="1"></td>
+        <td><input type="number" class="q-rate li-num" min="0" step="0.01" value="0"></td>
+        <td><input type="text" class="q-unit" readonly placeholder="—"></td>
+        <td><input type="number" class="q-disc li-num" min="0" max="100" step="0.01" value="0"></td>
+        <td><input type="text" class="q-hsn" readonly placeholder="—"></td>
+        <td><input type="text" class="q-godown" placeholder="Godown"></td>
+        <td><input type="text" class="q-desc" placeholder="Description"></td>
+        <td><span class="q-amount li-cell-calc">₹0.00</span></td>
+        <td class="center"><input type="checkbox" class="q-taxincl" title="Tax inclusive"></td>
+        <td class="center">
+            <button type="button" class="q-del" title="Remove row" aria-label="Remove row">
+                <i class="fa-regular fa-trash-can"></i>
+            </button>
+        </td>
+    </tr>
+</template>
+
+<%# Products for the searchable line-item picker (Task 5). %>
+<script>
+    window.QUOTATION_PRODUCTS = <%- _productsJson %>;
+</script>
+
+<style>
+    /* Searchable item picker for quotation rows (same widget as the invoice
+       line-item picker) — kept local to this page like sales-invoices/create.ejs
+       does, rather than growing theme.css beyond the three requested rule-sets. */
+    .li-prod-cell { position: relative; min-width: 200px; }
+    .li-product-search {
+        width: 100%; padding: 6px 8px; border: 1px solid var(--border, #d1d5db);
+        border-radius: 6px; font-size: 13px; background: #fff;
+    }
+    .li-product-search:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37,99,235,.15); }
+    /* position: FIXED (not absolute) so the menu escapes the table's
+       overflow-x:auto clip (which also clips overflow-y). Task 5's JS sets
+       top/left/width from the search input's viewport rect. */
+    .li-prod-menu {
+        position: fixed; z-index: 1080;
+        max-height: 240px; overflow-y: auto; background: #fff;
+        border: 1px solid var(--border, #d1d5db); border-radius: 6px;
+        box-shadow: 0 8px 24px rgba(0,0,0,.12);
+    }
+    .li-prod-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .li-prod-item:hover, .li-prod-item.is-active { background: #eef2ff; }
+    .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
+</style>

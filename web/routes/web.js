@@ -23,6 +23,7 @@ const api      = require('../Helpers/apiClient');
 const { requireAuth } = require('../Middlewares/sessionGuard');
 const AuthController   = require('../Controllers/AuthController');
 const { friendlyReason, RESTART_HELP } = require('../Helpers/syncReason');
+const { buildRanges, resolveRange, DEFAULT_RANGE } = require('../lib/date-ranges');
 
 // Multipart receiver for the Agent-Updates upload (the exe is held in memory,
 // then streamed on to the api). 200MB cap mirrors the api's own limit; a single
@@ -49,6 +50,76 @@ router.get('/forgot-password',  AuthController.showForgot);
 router.post('/forgot-password', AuthController.forgot);
 router.post('/reset-password',  AuthController.reset);
 router.get('/logout', AuthController.logout);
+
+/* ── Connected computers ────────────────────────────────────────
+ * Which machines can reach these books, and how to cut one off. The page a
+ * customer opens after a back-office PC goes missing, so listing is read-only
+ * and the one destructive action is a single explicit button.
+ */
+router.get('/tally-sync/devices', async (req, res, next) => {
+    try {
+        const r = await api.get(req, '/devices');
+        const d = (r.body && r.body.data) || {};
+        const devices = (d.devices || []).map((x) => ({
+            ...x,
+            // Formatted here rather than in the template so the view stays
+            // presentation-only and every screen shows dates the same way.
+            last_seen_fmt: x.last_seen_at ? fmtDateTime(x.last_seen_at) : '',
+            activated_fmt: x.activated_at ? fmtDateTime(x.activated_at) : '',
+            revoked_fmt:   x.revoked_at   ? fmtDateTime(x.revoked_at)   : '',
+        }));
+        res.render('tally-sync/devices', {
+            title: 'Connected computers',
+            activeMenu: 'sync-dash',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Tally Sync', href: '/tally-sync' },
+                { label: 'Computers' },
+            ],
+            devices,
+            active_count: d.active_count || 0,
+            online_count: d.online_count || 0,
+        });
+    } catch (err) { next(err); }
+});
+
+/* Disconnect one computer. POST because it changes state — a GET would let a
+ * stray link or a prefetch cut a customer's sync. */
+router.post('/tally-sync/devices/:id/revoke', async (req, res) => {
+    try {
+        const r = await api.post(req, `/devices/${encodeURIComponent(req.params.id)}/revoke`, {});
+        const body = r.body || {};
+        // The API's own message is passed through: it knows whether the device
+        // was disconnected now or already was.
+        return res.status(body.status === 200 ? 200 : 400).json(body);
+    } catch (err) {
+        return res.status(500).json({ msg: 'Could not disconnect that computer.' });
+    }
+});
+
+/* ── The desktop agent's window ─────────────────────────────────
+ * The Windows app is a shell around a WebView pointed here, so the agent's
+ * entire interface lives in this repo and changes on deploy — no rebuilt exe,
+ * no download for the customer.
+ *
+ * PUBLIC BY NECESSITY, and safe to be: the page holds no data of its own. It
+ * signs in against the API like any client, and everything about the machine
+ * comes from a loopback bridge that only the shell that started it can reach
+ * (per-run token, in the URL fragment). Opened in an ordinary browser tab it
+ * simply reports that it is not connected to the app.
+ *
+ * layout:false — this is an application window, not a page inside the web app,
+ * so it must not inherit the site chrome.
+ */
+router.get('/agent-app', (req, res) => {
+    res.render('agent-app/index', {
+        layout: false,
+        // The agent signs in against the API directly, so the page needs to
+        // know where that is. Same env var the server-side apiClient reads, so
+        // the two can never point at different backends.
+        apiBase: (process.env.API_URL || 'http://localhost:4500/api/v1').replace(/\/$/, ''),
+    });
+});
 
 /* Everything below this line requires a logged-in session. */
 
@@ -291,7 +362,9 @@ async function apiList(req, basePath) {
     // Forward filter dropdown params so the api can actually filter the list.
     for (const k of ['location', 'sales_person', 'customer_group', 'supplier_group', 'gst',
         'category', 'gst_rate', 'hsn', 'parent', 'state', 'financial_year', 'created_from', 'created_to',
-        'date_from', 'date_to']) {
+        'date_from', 'date_to',
+        // Dashboard tile drill-downs (kpi-panel → filtered list).
+        'group', 'inactive', 'missing', 'overdue']) {
         if (req.query[k]) qs.set(k, String(req.query[k]));
     }
 
@@ -653,12 +726,95 @@ router.get('/', async (req, res, next) => {
                 recentInvoices: [], recentSync: [],
             });
         }
-        // No date filter — the dashboard is ALL-TIME so the numbers are stable and
-        // identical on web + app (the app dropped its date picker too).
-        const { body } = await api.get(req, '/dashboard/summary');
+        return res.render('dashboard/index', {
+            title: 'Dashboard',
+            activeMenu: 'dashboard',
+            breadcrumb: [{ label: 'Dashboard' }],
+            ...(await buildDashboardModel(req, res)),
+
+            // Chart.js init for THIS page only. Passed as a real render local
+            // (NOT assigned inside the template) so it reaches the layout's
+            // `pageScript` slot, which sits AFTER the Chart.js CDN tag in
+            // _layout.ejs — guaranteeing Chart is defined before this runs.
+            pageScript: '<script src="/js/dashboard.js" defer></script>',
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── Dashboard panel fragments (GET /dashboard/section) ──────────
+ * Every dashboard control (the range <select>, the Day Book day pills)
+ * re-renders ONLY its own panel over fetch — the browser URL never
+ * changes and the other panels are never re-queried on the client.
+ * `section` picks which fragment to return; the fragments are the same
+ * partials the full page composes itself from, so there is exactly one
+ * copy of each panel's markup.
+ *
+ * Responds 400 for an unknown section rather than silently returning the
+ * whole page, so a typo surfaces instead of bloating every swap. */
+const DASHBOARD_SECTIONS = {
+    summary:      'dashboard/_summary',
+    salesreceipt: 'dashboard/_sales-receipt',
+    receivables:  'dashboard/_receivables',
+    top10:        'dashboard/_top10',
+    daybook:      'dashboard/_daybook',
+};
+
+router.get('/dashboard/section', async (req, res, next) => {
+    try {
+        const view = DASHBOARD_SECTIONS[String(req.query.section || '').toLowerCase()];
+        if (!view) return res.status(400).send('Unknown dashboard section.');
+
+        // Same role gating GET / applies before it renders the KPI dashboard.
+        // Without this a super-admin (who has no tenant database bound) would
+        // reach /dashboard/summary and the API would 500 on the first
+        // tenant-table query. These roles never see these panels anyway.
+        const barred = res.locals.isSuperAdmin || res.locals.isSalesman || res.locals.isCustomerUser
+            || !(res.locals.isCompanyAdmin
+                 || typeof res.locals.canModule !== 'function'
+                 || res.locals.canModule('dashboard'));
+        if (barred) return res.status(204).end();
+
+        // Ask the API for THIS panel's aggregates only — a fragment that
+        // recomputed all of them (ageing, leaderboards, anti-joins) took
+        // seconds for numbers it then threw away.
+        const section = String(req.query.section || '').toLowerCase();
+        const model = await buildDashboardModel(req, res, section);
+        return res.render(view, { ...model, layout: false });
+    } catch (err) { next(err); }
+});
+
+/**
+ * Build every dashboard panel's view model from ONE /dashboard/summary call.
+ * Shared by the full page render and the fragment endpoint so both always
+ * agree on formatting, permissions and drill-down links.
+ */
+async function buildDashboardModel(req, res, section) {
+        // Summary panel date range (?range=this_year etc). resolveRange falls
+        // back to this_year for a missing or hand-edited value, so `range` is
+        // always a real preset with from/to dates. The ledger-derived balances
+        // are point-in-time and ignore it; the money metrics below honour it.
+        const now    = new Date();
+        const ranges = buildRanges(now);
+        const range  = resolveRange(String(req.query.range || DEFAULT_RANGE), now);
+        // ?daybook=YYYY-MM-DD picks the Day Book panel's day; anything else is
+        // dropped here so a hand-edited value never reaches the API.
+        const dayParam = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.daybook || ''))
+            ? `&daybook=${req.query.daybook}` : '';
+        // ?parts= narrows the API's work to the panel being rendered. The full
+        // page passes no section, so it still gets every aggregate in one call.
+        const PART_OF_SECTION = {
+            summary: 'summary', salesreceipt: 'salesreceipt',
+            receivables: 'receivables', top10: 'top10', daybook: 'daybook',
+        };
+        const part = PART_OF_SECTION[String(section || '')];
+        const partParam = part ? `&parts=${part}` : '';
+        const { body } = await api.get(req,
+            `/dashboard/summary?from=${range.from}&to=${range.to}${dayParam}${partParam}`);
         const data = (body && body.data) || {};
 
         const counts = data.counts || {};
+        const balances  = data.balances  || {};
+        const attention = data.attention || {};
         const sc = data.sales_chart || {};
         const syc = data.sync_chart || {};
         const recInv = Array.isArray(data.recent_invoices) ? data.recent_invoices : [];
@@ -670,37 +826,197 @@ router.get('/', async (req, res, next) => {
         const grp = (v) => num(v).toLocaleString('en-IN');
         const inr = (v) => '₹' + grp(v);
 
-        // counts → the 8 stat cards. label/icon/tone copied verbatim from
-        // mock.dashboardStats so the cards look identical (labels also drive
-        // the view's per-card sparkline/trend lookup, so they MUST match).
-        // Each card carries the module it belongs to; below we keep only the
-        // cards this user may see (admins see all; 'Pending Tally Sync' is
-        // admin-only). A sales-only user thus sees only the sales cards, etc.
+        // Tiles are gated per module exactly as the old stat cards were: a tile
+        // whose target module the user cannot view is dropped, and a panel left
+        // with no tile is omitted entirely rather than rendering an empty box.
         const _canMod = (m) => (typeof res.locals.canModule === 'function') ? res.locals.canModule(m) : true;
-        const _admin  = res.locals.isCompanyAdmin || res.locals.isSuperAdmin;
-        const stats = [
-            { label: 'Total Companies',    value: grp(counts.companies),        icon: 'fa-building',          tone: 'blue',   perm: 'companies' },
-            { label: 'Total Customers',    value: grp(counts.customers),        icon: 'fa-user-group',        tone: 'purple', perm: 'customers' },
-            { label: 'Total Products',     value: grp(counts.products),         icon: 'fa-box',               tone: 'teal',   perm: 'products' },
-            { label: "Today's Sales",      value: inr(counts.today_sales),      icon: 'fa-indian-rupee-sign', tone: 'green',  perm: 'sales-invoices' },
-            { label: 'Pending Tally Sync', value: grp(counts.pending_sync),     icon: 'fa-rotate',            tone: 'amber',  adminOnly: true },
-            { label: 'Stock Value',        value: inr(counts.stock_value),      icon: 'fa-warehouse',         tone: 'indigo', perm: 'inventory' },
-            { label: 'Invoice Amount',     value: inr(counts.invoice_amount),   icon: 'fa-file-invoice',      tone: 'blue',   perm: 'sales-invoices' },
-            { label: 'Payment Received',   value: inr(counts.payment_received), icon: 'fa-money-bill-wave',   tone: 'green',  perm: 'payments' },
-        ].filter((c) => c.adminOnly ? _admin : (c.perm ? _canMod(c.perm) : true));
 
-        // Super-admin only: prepend a platform-level "Total Licenses" card.
-        // Count comes from the licenses list meta.total (accurate beyond the
-        // 100 the header switcher fetches); fall back to that list's length.
-        if (res.locals.isSuperAdmin) {
-            let licenseCount = Array.isArray(res.locals.licenses) ? res.locals.licenses.length : 0;
-            try {
-                const lr = await api.get(req, '/super-admin/licenses?per_page=1');
-                const meta = lr && lr.body && lr.body.data && lr.body.data.meta;
-                if (meta && Number.isFinite(Number(meta.total))) licenseCount = Number(meta.total);
-            } catch (_) { /* keep the fallback count */ }
-            stats.unshift({ label: 'Total Licenses', value: grp(licenseCount), icon: 'fa-key', tone: 'indigo' });
-        }
+        // ── Summary panel ─────────────────────────────────────────────
+        // The date-range <select> navigates to /?range=<value>, so the panel
+        // needs no client-side fetch. Rendered as raw HTML into the partial's
+        // `control` slot.
+        const rangeOptions = ranges.map((r) =>
+            `<option value="${r.value}"${r.value === range.value ? ' selected' : ''}>`
+            + `${r.label}</option>`).join('');
+        // No onchange handler and no form: dashboard.js listens for changes on
+        // [data-dash-range] and re-fetches ONLY the panel the select sits in
+        // (each panel keeps its own period), leaving the browser URL untouched.
+        // `no-search` opts out of app.js's searchable-select enhancement: it
+        // kicks in above 8 options, and its filter box truncated these nine
+        // long labels. A plain native select shows each period in full.
+        const rangeControl =
+            '<select class="kpi-panel-select no-search" aria-label="Date range" data-dash-range>'
+            + rangeOptions + '</select>';
+
+        // Ledger balances are signed (debit-positive). Print the magnitude with
+        // its Dr/Cr marker, the way Tally and the Cash & Bank screens do — a
+        // bare "₹-49,82,654" reads like a bug rather than an overdraft.
+        const inrDc = (v) => {
+            const n = Number(v || 0);
+            if (n === 0) return inr(0);
+            return `${inr(Math.abs(n))} ${n > 0 ? 'Dr' : 'Cr'}`;
+        };
+        const summaryTiles = [
+            { label: 'Cash',             value: inrDc(balances.cash),    href: '/cash' },
+            { label: 'Bank',             value: inrDc(balances.bank),    href: '/bank' },
+            { label: 'Inventory Amount', value: inr(counts.stock_value), href: '/products', perm: 'inventory' },
+            { label: 'Payables',         value: inrDc(balances.payables), href: '/payables', perm: 'suppliers' },
+        ].filter((t) => (t.perm ? _canMod(t.perm) : true));
+
+        // ── Need Attention panel ──────────────────────────────────────
+        const missingMobile = num(attention.missing_mobile);
+        const missingEmail  = num(attention.missing_email);
+        const attentionTiles = [
+            {
+                label: 'Inactive Customers',
+                value: grp(attention.inactive_customers),
+                href:  '/customers?inactive=90',
+                perm:  'customers',
+            },
+            {
+                label: 'Inactive Stocks',
+                value: grp(attention.inactive_stocks),
+                href:  '/products?inactive=90',
+                perm:  'products',
+            },
+            {
+                label:  'Payment Reminders',
+                locked: true,
+                sub:    `<strong>${grp(missingMobile)}</strong> Mobile Missing &nbsp; `
+                      + `<strong>${grp(missingEmail)}</strong> Email Missing`,
+                href:   '/customers?missing=contact',
+                perm:   'customers',
+            },
+            {
+                label: 'Overdue Invoices',
+                value: grp(attention.overdue_count),
+                sub:   inr(attention.overdue_amount),
+                href:  '/sales-invoices?overdue=1',
+                perm:  'sales-invoices',
+            },
+        ].filter((t) => (t.perm ? _canMod(t.perm) : true));
+
+        const summaryPanel = summaryTiles.length
+            ? { title: 'Summary', tone: 'default', control: rangeControl, tiles: summaryTiles }
+            : null;
+        const attentionPanel = attentionTiles.length
+            ? { title: 'Need Attention', tone: 'danger', control: '', tiles: attentionTiles }
+            : null;
+
+        // ── Row 2: Sales & Receipt + Receivables ──────────────────────
+        // Formatted here so the view stays presentational. A null change_pct
+        // (no previous month to compare against) yields no delta caption at
+        // all, rather than an invented "100% down".
+        const sr = data.sales_receipt || {};
+        const delta = (v) => {
+            if (v == null || !Number.isFinite(Number(v))) return null;
+            const n = Number(v);
+            return { down: n < 0, text: `${Math.abs(n).toFixed(0)} %` };
+        };
+        const salesReceipt = {
+            total_sales:        inr(sr.total_sales),
+            total_receipt:      inr(sr.total_receipt),
+            sales_this_month:   inr(sr.sales_this_month),
+            receipt_this_month: inr(sr.receipt_this_month),
+            sales_delta:        delta(sr.sales_change_pct),
+            receipt_delta:      delta(sr.receipt_change_pct),
+        };
+
+        // Ageing band colours, oldest-last — the doughnut and the legend read
+        // the same list so a swatch always matches its arc.
+        const RECV_COLORS = ['#6EE7B7', '#F87171', '#FB923C', '#FCD34D', '#A5B4FC', '#60A5FA'];
+        const rv = data.receivables || {};
+        const rvBuckets = Array.isArray(rv.buckets) ? rv.buckets : [];
+        const receivables = {
+            total:         inr(rv.total),
+            overdue:       inr(rv.overdue),
+            projection_15: inr(rv.projection_15),
+            projection_60: inr(rv.projection_60),
+            buckets: rvBuckets.map((b, i) => ({
+                label:  b.label,
+                amount: inr(b.amount),
+                color:  RECV_COLORS[i] || '#9CA3AF',
+            })),
+        };
+
+        // Chart payload for /js/dashboard.js — raw numbers, not display strings.
+        const salesReceiptChart = {
+            labels:  Array.isArray(sr.labels)  ? sr.labels  : [],
+            sales:   Array.isArray(sr.sales)   ? sr.sales   : [],
+            receipt: Array.isArray(sr.receipt) ? sr.receipt : [],
+        };
+        const receivablesChart = {
+            labels: rvBuckets.map((b) => b.label),
+            data:   rvBuckets.map((b) => Number(b.amount || 0)),
+            colors: rvBuckets.map((_, i) => RECV_COLORS[i] || '#9CA3AF'),
+        };
+
+        // ── Row 3: Top 10 + Day Book ──────────────────────────────────
+        const t10 = data.top10 || {};
+        // Party rows carry the Dr/Cr marker inline (₹43,19,793 Dr), item rows
+        // carry a separate quantity column on the two "by quantity" tabs.
+        // Every row drills into its master list, searched by name — the same
+        // convention the Day Book voucher links use.
+        const nameHref = (base, name) => (name ? `${base}?search=${encodeURIComponent(name)}` : null);
+        const partyRows = (list, base) => (Array.isArray(list) ? list : [])
+            .map((r) => ({ name: r.name, value: `${inr(r.value)} ${r.dc}`, href: nameHref(base, r.name) }));
+        const itemRows = (list, withQty) => (Array.isArray(list) ? list : [])
+            .map((r) => ({
+                name: r.name, value: inr(r.value),
+                qty: withQty ? grp(r.qty) : null,
+                href: nameHref('/products', r.name),
+            }));
+
+        const top10Tabs = [
+            { key: 'customers',  label: 'Customers',                rows: partyRows(t10.customers, '/customers') },
+            { key: 'suppliers',  label: 'Suppliers',                rows: partyRows(t10.suppliers, '/suppliers') },
+            { key: 'sold_qty',   label: 'Items Sold By Quantity',   rows: itemRows(t10.items_sold_qty, true) },
+            { key: 'sold_val',   label: 'Items Sold By Value',      rows: itemRows(t10.items_sold_value, false) },
+            { key: 'bought_qty', label: 'Items Purchased By Quantity', rows: itemRows(t10.items_purchased_qty, true) },
+            { key: 'bought_val', label: 'Items Purchased By Value',    rows: itemRows(t10.items_purchased_value, false) },
+        ];
+
+        // Day Book. The Today / Yesterday / date-picker control posts back as
+        // ?daybook=YYYY-MM-DD; the API echoes the date it actually used, so the
+        // active pill is derived from the response rather than the request.
+        const isoDay = (d) => {
+            const p = (n) => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+        };
+        const _today     = isoDay(now);
+        const _yesterday = isoDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+        const bookDate   = data.day_book_date || _today;
+
+        // Each voucher links to its module's list, pre-filtered by voucher
+        // number — the only drill-down every voucher kind actually has.
+        const VOUCHER_PATH = {
+            'sales-invoice':    '/sales-invoices',
+            'purchase-invoice': '/purchase-invoices',
+            payment:            '/payments',
+            journal:            '/journals',
+        };
+        // dd/mm/yyyy for the Custom Date pill — the calendar popup shows the
+        // same format in its footer, so the two never disagree.
+        const dayLabel = (iso) => {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+            return m ? `${m[3]}/${m[2]}/${m[1]}` : '';
+        };
+        const dayBook = {
+            date:       bookDate,
+            date_label: dayLabel(bookDate),
+            today:     _today,
+            yesterday: _yesterday,
+            active:    bookDate === _today ? 'today' : (bookDate === _yesterday ? 'yesterday' : 'custom'),
+            rows: (Array.isArray(data.day_book) ? data.day_book : []).map((r) => ({
+                voucher:     r.voucher_no,
+                particulars: r.particulars,
+                type:        r.type,
+                amount:      inr(r.amount),
+                href: r.voucher_no
+                    ? `${VOUCHER_PATH[r.kind] || '/sales-invoices'}?search=${encodeURIComponent(r.voucher_no)}`
+                    : null,
+            })),
+        };
 
         // Chart payloads — pass through as {labels,data}, defaulting to empty
         // arrays so /js/dashboard.js + the JSON island never see undefined.
@@ -719,9 +1035,14 @@ router.get('/', async (req, res, next) => {
         const recentInvoices = recInv.map((r) => ({
             invoice:  r.invoice_no || '',
             customer: r.customer || '',
-            amount:   num(r.total),
+            amount:   inr(r.total),
             status:   txStatusLabel(r.status),
             date:     fmtDate(r.invoice_date),
+            // Same drill-down convention the Day Book rows use: the module's
+            // list, pre-filtered by voucher number.
+            href: r.invoice_no
+                ? `/sales-invoices?search=${encodeURIComponent(r.invoice_no)}`
+                : null,
         }));
 
         // recent_sync → the compact activity list. Title-case the status so
@@ -732,33 +1053,50 @@ router.get('/', async (req, res, next) => {
             const s = String(v || '');
             return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
         };
-        const recentSync = recSync.map((r) => ({
-            module: r.module || '',
-            record: [r.record_type, r.record_id].filter(Boolean).join(' ') || r.record_id || r.record_type || '',
-            status: titleCase(r.status),
-            time:   fmtDate(r.created_at),
-        }));
+        // Sync-log module slug → the list page that record lives on, so each
+        // activity row is a drill-down rather than dead text.
+        const SYNC_MODULE_PATH = {
+            customers: '/customers',
+            suppliers: '/suppliers',
+            products:  '/products',
+            categories: '/categories',
+            invoices:  '/sales-invoices',
+            sales_invoices: '/sales-invoices',
+            purchase_invoices: '/purchase-invoices',
+            payments:  '/payments',
+            journals:  '/journals',
+            ledgers:   '/ledgers',
+        };
+        const recentSync = recSync.map((r) => {
+            const mod = String(r.module || '').toLowerCase();
+            return {
+                module: r.module || '',
+                record: [r.record_type, r.record_id].filter(Boolean).join(' ') || r.record_id || r.record_type || '',
+                status: titleCase(r.status),
+                time:   fmtDate(r.created_at),
+                href:   SYNC_MODULE_PATH[mod] || null,
+            };
+        });
 
-        res.render('dashboard/index', {
-            title: 'Dashboard',
-            activeMenu: 'dashboard',
-            breadcrumb: [{ label: 'Dashboard' }],
-
-            // Page data (now API-driven).
-            stats,
+        return {
+            // Page data (API-driven).
+            summaryPanel,
+            attentionPanel,
+            salesReceipt,
+            receivables,
+            salesReceiptChart,
+            receivablesChart,
+            top10Tabs,
+            dayBook,
+            // stats stays for the customer-portal (statsOnly) branch, which
+            // still renders the classic stat cards. Empty on the main dashboard.
+            stats: [],
             salesChart,
             syncChart,
             recentInvoices,
             recentSync,
-
-            // Chart.js init for THIS page only. Passed as a real render local
-            // (NOT assigned inside the template) so it reaches the layout's
-            // `pageScript` slot, which sits AFTER the Chart.js CDN tag in
-            // _layout.ejs — guaranteeing Chart is defined before this runs.
-            pageScript: '<script src="/js/dashboard.js" defer></script>',
-        });
-    } catch (err) { next(err); }
-});
+        };
+}
 
 /* ── MASTERS · Companies listing (GET /companies) — REAL API ──── */
 router.get('/companies', async (req, res, next) => {
@@ -1837,6 +2175,173 @@ router.get('/products', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── CASH & BANK ─────────────────────────────────────────────────
+ * /cash and /bank are the same screen over two buckets: a total header,
+ * a financial-year range picker, and a Name | Balance table whose rows
+ * open that ledger's statement. Balances are period-derived by the API
+ * (replayed from the synced double entry), so the range really works.
+ * ─────────────────────────────────────────────────────────────── */
+const LEDGER_BUCKETS = {
+    cash:        { title: 'Cash', menu: 'cash' },
+    bank:        { title: 'Bank', menu: 'bank-ledgers' },
+    payables:    { title: 'Payables', menu: 'suppliers' },
+    receivables: { title: 'Receivables', menu: 'customers' },
+};
+
+// A super-admin has no tenant database bound, so every tally_* query would
+// 500. They are a platform operator — their landing screen is Licenses.
+function ledgerScreenBarred(res) {
+    return !!res.locals.isSuperAdmin;
+}
+
+async function renderLedgerBucket(req, res, next, bucket) {
+    try {
+        if (ledgerScreenBarred(res)) return res.redirect('/licenses');
+        const meta = LEDGER_BUCKETS[bucket];
+        const now   = new Date();
+        const range = resolveRange(String(req.query.range || DEFAULT_RANGE), now);
+
+        const { rows, meta: listMeta } = await apiList(
+            req, `/tally/ledgers?group=${bucket}&from=${range.from}&to=${range.to}`);
+
+        const grp = (v) => Number(v || 0).toLocaleString('en-IN',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        res.render('ledgers/bucket', {
+            title: meta.title,
+            activeMenu: meta.menu,
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: meta.title }],
+            bucket,
+            ranges: buildRanges(now),
+            range,
+            totalAmount: '₹' + grp(listMeta.total_amount),
+            totalDc: listMeta.total_dc || '',
+            rows: rows.map((r) => ({
+                name:    r.name,
+                parent:  r.parent,
+                balance: '₹' + grp(r.balance),
+                dc:      r.dc,
+                href:    `/ledgers/${encodeURIComponent(r.name)}?range=${range.value}`,
+            })),
+            meta: listMeta,
+        });
+    } catch (err) { next(err); }
+}
+
+router.get('/cash',        (req, res, next) => renderLedgerBucket(req, res, next, 'cash'));
+router.get('/bank',        (req, res, next) => renderLedgerBucket(req, res, next, 'bank'));
+router.get('/payables',    (req, res, next) => renderLedgerBucket(req, res, next, 'payables'));
+router.get('/receivables', (req, res, next) => renderLedgerBucket(req, res, next, 'receivables'));
+
+/* ── Ledger statement (GET /ledgers/:name) ──────────────────────
+ * One ledger's voucher-wise movement for a period, with the opening /
+ * closing pair Tally prints. Reached from /cash, /bank and the dashboard
+ * Summary tiles. */
+router.get('/ledgers/:name', async (req, res, next) => {
+    try {
+        if (ledgerScreenBarred(res)) return res.redirect('/licenses');
+        const name  = String(req.params.name || '');
+        const now   = new Date();
+        const range = resolveRange(String(req.query.range || DEFAULT_RANGE), now);
+        const vType = String(req.query.voucher_type || '');
+        const page  = Math.max(1, parseInt(req.query.page, 10) || 1);
+
+        const qs = new URLSearchParams({
+            from: range.from, to: range.to, page: String(page), per_page: '20',
+        });
+        if (vType) qs.set('voucher_type', vType);
+
+        const { body } = await api.get(req,
+            `/tally/ledgers/${encodeURIComponent(name)}/statement?${qs.toString()}`);
+        const data = (body && body.data) || {};
+        if (!data.ledger) {
+            setFlash(req, 'error', 'That ledger was not found.');
+            return res.redirect('/cash');
+        }
+
+        const grp = (v) => Number(v || 0).toLocaleString('en-IN',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const bal = data.balance || {};
+
+        res.render('ledgers/statement', {
+            title: data.ledger.name,
+            activeMenu: 'cash',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: data.ledger.name }],
+            ledger: data.ledger,
+            ranges: buildRanges(now),
+            range,
+            voucherTypes: Array.isArray(data.voucher_types) ? data.voucher_types : [],
+            voucherType: vType,
+            opening: '₹' + grp(bal.opening_amount), openingDc: bal.opening_dc || '',
+            closing: '₹' + grp(bal.closing_amount), closingDc: bal.closing_dc || '',
+            rows: (Array.isArray(data.data) ? data.data : []).map((r) => ({
+                voucher: r.voucher_no,
+                type:    r.voucher_type,
+                date:    fmtDate(r.voucher_date),
+                amount:  '₹' + grp(r.amount),
+                dc:      r.dc,
+                href:    r.voucher_guid ? `/vouchers/${encodeURIComponent(r.voucher_guid)}` : null,
+            })),
+            meta: (data.meta || { total: 0, page: 1, per_page: 20 }),
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── Voucher detail (GET /vouchers/:guid) ───────────────────────
+ * A Tally-origin voucher: its complete double entry plus any item
+ * movement. Read-only — these rows are mirrored FROM Tally, so an Edit
+ * action here would imply changes flow back, which they do not. When the
+ * same voucher also exists as a cloud invoice we send the user to that
+ * editable view instead. */
+router.get('/vouchers/:guid', async (req, res, next) => {
+    try {
+        if (ledgerScreenBarred(res)) return res.redirect('/licenses');
+        const guid = String(req.params.guid || '');
+
+        const { body } = await api.get(req, `/tally/vouchers/${encodeURIComponent(guid)}`);
+        const data = (body && body.data) || {};
+        if (!data.voucher) {
+            setFlash(req, 'error', 'That voucher was not found.');
+            return res.redirect('/cash');
+        }
+
+        // Cloud-origin voucher → the real, editable invoice screen.
+        if (data.invoice && data.invoice.id) {
+            const base = data.invoice.type === 'purchase' ? '/purchase-invoices' : '/sales-invoices';
+            return res.redirect(`${base}/${data.invoice.id}/edit`);
+        }
+
+        const grp = (v) => Number(v || 0).toLocaleString('en-IN',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const qty = (v) => Number(v || 0).toLocaleString('en-IN',
+            { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+        const v = data.voucher;
+
+        res.render('ledgers/voucher', {
+            title: v.voucher_no || 'Voucher',
+            activeMenu: 'cash',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: v.voucher_no || 'Voucher' }],
+            voucher: {
+                no:    v.voucher_no,
+                type:  v.voucher_type,
+                date:  fmtDate(v.voucher_date),
+                party: v.party,
+                totalDebit:  '₹' + grp(v.total_debit),
+                totalCredit: '₹' + grp(v.total_credit),
+            },
+            entries: (data.entries || []).map((e) => ({
+                ledger: e.ledger,
+                amount: '₹' + grp(e.amount),
+                dc:     e.dc,
+            })),
+            items: (data.items || []).map((it) => ({
+                sr: it.sr, name: it.name, godown: it.godown,
+                qty: qty(it.qty), rate: '₹' + grp(it.rate), amount: '₹' + grp(it.amount),
+            })),
+        });
+    } catch (err) { next(err); }
+});
+
 /* ── MASTERS · Add Product (GET /products/add) ──────────────── */
 router.get('/products/add', async (req, res, next) => {
     try {
@@ -2134,6 +2639,86 @@ router.post('/quotations/:id/delete', async (req, res, next) => {
                       : apiError(result, 'Could not delete the quotation.'));
     return req.session.save(() => res.redirect('/quotations'));
   } catch (err) { next(err); }
+});
+
+/* Parse the hidden items_json from a QUOTATION form into the api's item
+ * shape. Quotation items carry two fields invoices don't (`godown`,
+ * `tax_inclusive`) — parseInvoiceItems() drops them, so this is its own
+ * small parser rather than a change to that shared helper. */
+function parseQuotationItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id:    it.product_id ? Number(it.product_id) : undefined,
+        description:   it.description || undefined,
+        hsn:           it.hsn || undefined,
+        quantity:      Number(it.quantity) || 0,
+        unit:          it.unit || undefined,
+        rate:          Number(it.rate) || 0,
+        discount_pct:  Number(it.discount_pct) || 0,
+        gst_rate:      Number(it.gst_rate) || 0,
+        godown:        it.godown || undefined,
+        tax_inclusive: !!it.tax_inclusive,
+    })).filter((it) => it.quantity > 0);
+}
+
+/* ── TRANSACTIONS · Create Quotation (GET /quotations/create) — same option
+ * sources as the invoice create screen (fetchCustomerInvoiceOptions gives
+ * customer + their location; products carry the line-item defaults). */
+router.get('/quotations/create', async (req, res, next) => {
+  try {
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts] = await Promise.all([
+        fetchCustomerInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchOptions(req, '/sales-persons'),
+        fetchInvoiceProducts(req, 'sales_price'),
+    ]);
+    res.render('quotations/create', {
+        title: 'Create Quotation',
+        activeMenu: 'quotations',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Quotations', href: '/quotations' },
+            { label: 'Create Quotation' },
+        ],
+
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts,
+        nextQuotationNo: 'Auto-generated on save',
+
+        pageScript: '<script src="/js/quotation.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* ── POST /quotations — create a quotation via the api. Header fields submit
+ * normally; line items ride the hidden items_json (serialised by
+ * /js/quotation.js). The api computes all totals inside a db transaction. */
+router.post('/quotations', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            customer_id:     num(b.customer_id),
+            location_id:     num(b.location_id),
+            sales_person_id: num(b.sales_person_id),
+            quotation_no:    b.quotation_no || undefined,
+            quotation_date:  b.quotation_date || undefined,
+            valid_till:      b.valid_till || undefined,
+            ledger_name:     b.ledger_name || undefined,
+            notes:           b.notes || undefined,
+            items:           parseQuotationItems(b.items_json),
+        };
+        const result = await api.post(req, '/quotations', payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `Quotation ${(result.body.data && result.body.data.quotation_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect('/quotations'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create quotation.'));
+        return req.session.save(() => res.redirect('/quotations/create'));
+    } catch (err) { next(err); }
 });
 
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
@@ -4053,6 +4638,55 @@ router.get('/reminders', async (req, res, next) => {
         });
     } catch (err) { next(err); }
 });
+/* ── Set Reminder (per-party schedule) ───────────────────────────
+ * GET returns the schedule + a live message preview for one party; POST
+ * saves it. Channels are Email / WhatsApp only — the product has no SMS
+ * gateway, so there is no credits notion to show. */
+router.get('/reminders/:id/schedule', async (req, res, next) => {
+    try {
+        const r = await api.get(req, `/account/reminders/${Number(req.params.id)}/schedule`);
+        const d = (r.body && r.body.data) || {};
+        if (!d.customer) {
+            setFlash(req, 'error', 'That customer was not found.');
+            return res.redirect('/reminders');
+        }
+        res.render('reminders/schedule', {
+            title: `Set Reminder · ${d.customer.name}`,
+            activeMenu: 'reminders',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Payment Reminders', href: '/reminders' },
+                { label: d.customer.name },
+            ],
+            customer: d.customer,
+            schedule: d.schedule,
+            options: d.options || { frequencies: [], channels: [] },
+            allowed: d.allowed || { email: false, whatsapp: false },
+            outstanding: d.outstanding || 0,
+            preview: d.preview || '',
+        });
+    } catch (err) { next(err); }
+});
+
+router.post('/reminders/:id/schedule', async (req, res, next) => {
+    try {
+        const b = req.body || {};
+        const payload = {
+            // An unchecked checkbox posts nothing at all, so absence = off.
+            enabled:      b.enabled === 'on' || b.enabled === 'true',
+            channel:      b.channel,
+            frequency:    b.frequency,
+            send_hour:    b.send_hour,
+            weekday:      b.weekday,
+            day_of_month: b.day_of_month,
+        };
+        const result = await api.put(req, `/account/reminders/${Number(req.params.id)}/schedule`, payload);
+        if (apiOk(result)) setFlash(req, 'success', 'Reminder schedule saved.');
+        else setFlash(req, 'error', apiError(result, 'Could not save the schedule.'));
+        return req.session.save(() => res.redirect(`/reminders/${Number(req.params.id)}/schedule`));
+    } catch (err) { next(err); }
+});
+
 router.post('/reminders/:id/send', async (req, res, next) => {
     try {
         const channel = (req.body && req.body.channel) || 'email';

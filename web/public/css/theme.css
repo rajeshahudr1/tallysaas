@@ -1657,3 +1657,93 @@ a.action-btn { text-decoration: none; }
     margin: 0;
     cursor: pointer;
 }
+
+/* ════════════════════════════════════════════════════════════════
+ * Quotation — Create Voucher (LiveKeeping-style layout, our theme colours)
+ * ════════════════════════════════════════════════════════════════ */
+
+/* Full-width header bar — our primary/accent gradient, not LiveKeeping's green. */
+.voucher-head {
+    padding: 14px 20px;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    color: #fff;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: .2px;
+    border-radius: var(--radius) var(--radius) 0 0;
+}
+
+/* Items grid — same visual language as .li-table, its own class because the
+ * column set (Godown / Tax Incl.) differs from the invoice grid. */
+.q-table { width: 100%; min-width: 980px; border-collapse: collapse; }
+.q-table thead th {
+    background: #F9FAFB; color: var(--text-muted);
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.q-table tbody td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.q-table .num { text-align: right; }
+.q-table .center { text-align: center; }
+.q-table input, .q-table select {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 9px; font-size: 13px; background: #fff; color: var(--text);
+}
+.q-table input:focus, .q-table select:focus {
+    outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+}
+.q-table input[readonly] { background: #F9FAFB; color: var(--text-muted); }
+.q-table input[type="checkbox"] { width: auto; }
+.q-table td:nth-child(1) { min-width: 200px; }
+.q-table td:nth-child(7),
+.q-table td:nth-child(8) { min-width: 140px; }
+.q-del {
+    border: 1px solid var(--border); background: #fff; color: var(--danger);
+    width: 32px; height: 32px; border-radius: 8px; display: inline-grid; place-items: center;
+}
+.q-del:hover { background: var(--danger-bg); border-color: var(--danger); }
+.q-add-btn {
+    border: 1px dashed var(--primary); color: var(--primary); background: rgba(37,99,235,.04);
+    width: 30px; height: 30px; border-radius: 8px; display: inline-grid; place-items: center;
+}
+.q-add-btn:hover { background: rgba(37,99,235,.1); }
+
+/* Quotation No — readonly text + a pencil button that unlocks it for editing. */
+.q-no-wrap { display: flex; align-items: center; gap: 8px; }
+.q-no-wrap .form-control { flex: 1 1 auto; }
+.q-no-edit {
+    flex: 0 0 auto; border: 1px solid var(--border); background: #fff; color: var(--text-muted);
+    width: 36px; height: 36px; border-radius: 8px; display: inline-grid; place-items: center;
+}
+.q-no-edit:hover { color: var(--primary); border-color: var(--primary); }
+
+/* Narration / Advanced Settings — collapsible strips with a trailing chevron. */
+.q-collapse { border-top: 1px solid var(--border); }
+.q-collapse-head {
+    width: 100%; display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 20px; background: transparent; border: 0; text-align: left;
+    font-size: 13px; font-weight: 600; color: var(--text);
+}
+.q-collapse-head i { color: var(--text-muted); transition: transform .2s; }
+.q-collapse-head[aria-expanded="true"] i { transform: rotate(180deg); }
+.q-collapse-body { padding: 4px 20px 18px; }
+
+/* Right-hand totals panel — reuses the invoice totals visual language. */
+.q-foot { display: grid; grid-template-columns: 1fr 360px; gap: 24px; padding: 20px; }
+.q-totals { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.q-total-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 11px 16px; font-size: 14px; border-bottom: 1px solid var(--border);
+}
+.q-total-row .lbl { color: var(--text-muted); }
+.q-total-row .val { font-weight: 600; color: var(--text); }
+.q-total-row.grand {
+    background: linear-gradient(135deg, rgba(37,99,235,.06), rgba(109,40,217,.06));
+    border-bottom: 0;
+}
+.q-total-row.grand .lbl { color: var(--text); font-weight: 700; font-size: 15px; }
+.q-total-row.grand .val { color: var(--primary); font-weight: 800; font-size: 18px; }
+
+@media (max-width: 991.98px) {
+    .q-foot { grid-template-columns: 1fr; }
+}
