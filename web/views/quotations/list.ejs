@@ -1,0 +1,179 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/quotations/list.ejs — TRANSACTIONS · Quotations.
+ * Route: GET /quotations (?mine=1 → "My Quotations", My Entries menu).
+ * activeMenu: 'quotations' | 'my-quotations'.
+ *
+ * quote_status badge: open → info (blue), accepted → success (green),
+ * rejected → danger (red), expired → muted (grey). Reuses the existing
+ * pill-status--* classes from partials/table.ejs — no new CSS.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   quotationRows   [ rows ]  — table body
+ *   quotationsTotal number   — pagination total
+ *   page, perPage   numbers
+ *   mine            bool     — "My Quotations" entry point
+ *   quoteStatus     string   — currently-applied quote_status filter
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof quotationRows !== 'undefined' && quotationRows) ? quotationRows : [];
+var _total   = (typeof quotationsTotal !== 'undefined') ? quotationsTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+var _mine    = (typeof mine !== 'undefined') ? !!mine : false;
+var _pageTitle = _mine ? 'My Quotations' : 'Quotations';
+
+/* ── FilterCard config ──────────────────────────────────────── */
+var filterFields = [
+    { type: 'text',   name: 'search',       label: 'Search',       placeholder: 'Quotation no / customer...', colClass: 'filter-col-fifth' },
+    { type: 'select', name: 'quote_status', label: 'Status',       options: [
+        { value: '',          label: 'All Status' },
+        { value: 'open',      label: 'Open' },
+        { value: 'accepted',  label: 'Accepted' },
+        { value: 'rejected',  label: 'Rejected' },
+        { value: 'expired',   label: 'Expired' },
+    ], colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_from',    label: 'Date From',                                                colClass: 'filter-col-fifth' },
+    { type: 'date',   name: 'date_to',      label: 'Date To',                                                  colClass: 'filter-col-fifth' },
+];
+
+function _statusPillClass(s) {
+    s = String(s || '').toLowerCase();
+    if (s === 'accepted') return 'pill-status--success';
+    if (s === 'rejected') return 'pill-status--danger';
+    if (s === 'expired')  return 'pill-status--muted';
+    return 'pill-status--info'; // open
+}
+function _inr(v) {
+    var n = Number(v || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+%>
+
+<%- include('../partials/page-head', {
+    title: _pageTitle, infoKey: 'quotations',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _pageTitle },
+    ],
+    actions: [
+        { label: 'Create Quotation', icon: 'fa-plus', gradient: true, href: '/quotations/create' },
+    ],
+}) %>
+
+<form id="quotation-filters-form" autocomplete="off" method="get" action="/quotations">
+    <% if (_mine) { %>
+    <input type="hidden" name="mine" value="1">
+    <% } %>
+    <%- include('../partials/filter-card', {
+        filterId: 'quotation-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: true,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10" selected>10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+    </div>
+
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="quotations-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th>Name</th>
+                    <th>Date</th>
+                    <th>Quotation</th>
+                    <th>Valid Till</th>
+                    <th class="text-end">Amount</th>
+                    <th>Status</th>
+                    <th class="text-end data-table-actions-head">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="8">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            No records found.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _rows.forEach(function (r, i) { %>
+                    <% var _convertible = !(r.status === 'accepted' || r.status === 'rejected'); %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td><%= r.customer %></td>
+                        <td><%= r.date %></td>
+                        <td><%= r.quotation_no %></td>
+                        <td><%= r.valid_till %></td>
+                        <td class="text-end"><span class="data-table-money"><%= _inr(r.amount) %></span></td>
+                        <td><span class="pill-status <%= _statusPillClass(r.status) %>"><%= r.status %></span></td>
+                        <td class="text-end data-table-actions">
+                            <div class="dropdown d-inline-block">
+                                <button class="action-btn action-btn--menu" type="button"
+                                        data-bs-toggle="dropdown" aria-expanded="false" title="Actions" aria-label="Actions">
+                                    <i class="fa-solid fa-ellipsis-vertical"></i>
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="/quotations/<%= r.id %>/edit">
+                                        <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
+                                    <li><a class="dropdown-item" href="/quotations/<%= r.id %>/pdf" target="_blank">
+                                        <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
+                                    <% if (_convertible) { %>
+                                        <li>
+                                            <form method="post" action="/quotations/<%= r.id %>/convert" style="margin:0">
+                                                <button class="dropdown-item" type="submit">
+                                                    <i class="fa-solid fa-right-left me-2 text-muted"></i>Convert to Invoice</button>
+                                            </form>
+                                        </li>
+                                    <% } %>
+                                    <li><hr class="dropdown-divider"></li>
+                                    <li>
+                                        <button class="dropdown-item text-danger" type="button"
+                                                data-row-delete data-delete-url="/quotations/<%= r.id %>" data-delete-label="<%= r.quotation_no %>">
+                                            <i class="fa-regular fa-trash-can me-2"></i>Delete</button>
+                                    </li>
+                                </ul>
+                            </div>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

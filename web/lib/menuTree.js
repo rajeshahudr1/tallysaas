@@ -17,7 +17,7 @@ const MENU_TREE = [
         { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/', module: 'dashboard' },
     ]},
     { label: 'Create Vouchers', icon: 'fa-plus', items: [
-        { key: 'new-quotation',   label: 'Quotation',        icon: 'fa-file-lines',        href: '#', soon: true, module: 'quotations' },
+        { key: 'new-quotation',   label: 'Quotation',        icon: 'fa-file-lines',        href: '/quotations/create', module: 'quotations' },
         { key: 'new-sales-inv',   label: 'Sales Invoice',    icon: 'fa-file-invoice',      href: '/sales-invoices/create',    module: 'sales-invoices' },
         { key: 'new-receipt',     label: 'Receipt',          icon: 'fa-receipt',           href: '/receipts/add',             module: 'receipts' },
         { key: 'new-payment',     label: 'Payment',          icon: 'fa-money-bill-wave',   href: '/payments/add',             module: 'payments' },
@@ -79,7 +79,7 @@ const MENU_TREE = [
     ]},
     { label: 'My Entries', icon: 'fa-square-check', items: [
         { key: 'my-vouchers',   label: 'My Vouchers',    icon: 'fa-file-lines',        href: '#', soon: true, module: 'field-sales' },
-        { key: 'my-quotations', label: 'My Quotations',  icon: 'fa-file-signature',    href: '#', soon: true, module: 'quotations' },
+        { key: 'my-quotations', label: 'My Quotations',  icon: 'fa-file-signature',    href: '/quotations?mine=1', module: 'quotations' },
         { key: 'my-eway',       label: 'My eWay Bills',  icon: 'fa-truck-fast',        href: '#', soon: true, module: 'field-sales' },
         { key: 'my-einvoices',  label: 'My eInvoices',   icon: 'fa-file-circle-check', href: '#', soon: true, module: 'field-sales' },
         { key: 'my-parties',    label: 'My Parties',     icon: 'fa-address-book',      href: '#', soon: true, module: 'field-sales' },

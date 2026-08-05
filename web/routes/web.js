@@ -2042,6 +2042,100 @@ router.get('/sales-invoices', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Quotations (list) ─────────────────────────
+ * GET /quotations — same shape as the sales-invoice list route.
+ * `?mine=1` is the "My Quotations" entry (My Entries menu) — forwarded to the
+ * api via the basePath query string (apiList() does not special-case it),
+ * same trick the Approvals screen uses for `?approval=pending`.
+ * `quote_status` is the quotation-specific deal-status filter (open/accepted/
+ * rejected/expired) — QuotationController.list reads that exact param name. */
+router.get('/quotations', async (req, res, next) => {
+  try {
+    const mineRaw = String(req.query.mine || '');
+    const mine = mineRaw === '1' || mineRaw.toLowerCase() === 'true';
+    const quoteStatus = String(req.query.quote_status || '').trim();
+
+    let basePath = '/quotations';
+    const qsParts = [];
+    if (mine) qsParts.push('mine=1');
+    if (quoteStatus) qsParts.push('quote_status=' + encodeURIComponent(quoteStatus));
+    if (qsParts.length) basePath += '?' + qsParts.join('&');
+
+    const { rows, meta } = await apiList(req, basePath);
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const quotationRows = rows.map((r) => ({
+        id: r.id,
+        customer: r.customer || '',
+        date: fmtDate(r.quotation_date),
+        quotation_no: r.quotation_no,
+        valid_till: fmtDate(r.valid_till),
+        amount: r.total,
+        status: r.quote_status || 'open',
+        _lockActions: r.quote_status === 'accepted' || r.quote_status === 'rejected',
+    }));
+
+    res.render('quotations/list', {
+        title: mine ? 'My Quotations' : 'Quotations',
+        activeMenu: mine ? 'my-quotations' : 'quotations',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: mine ? 'My Quotations' : 'Quotations' },
+        ],
+        quotationRows,
+        quotationsTotal: meta.total,
+        page:    meta.page,
+        perPage: meta.per_page,
+        mine,
+        quoteStatus,
+        today: todayIso,
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /quotations/:id/pdf — stream the api's rendered PDF straight through
+ * (same pattern as /einvoices/:id/download → api.fetchBinary). */
+router.get('/quotations/:id/pdf', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const r = await api.fetchBinary(req, `/quotations/${id}/pdf`);
+    if (r.status !== 200 || !r.buffer) {
+        setFlash(req, 'error', 'Could not generate the quotation PDF.');
+        return req.session.save(() => res.redirect('/quotations'));
+    }
+    res.setHeader('Content-Type', r.contentType || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="quotation-${id}.pdf"`);
+    return res.end(r.buffer);
+  } catch (err) { next(err); }
+});
+
+/* POST /quotations/:id/convert — turns the quotation into a Sales Invoice;
+ * on success send the user straight into the freshly-created invoice. */
+router.post('/quotations/:id/convert', async (req, res, next) => {
+  try {
+    const result = await api.post(req, `/quotations/${req.params.id}/convert`, {});
+    if (apiOk(result)) {
+        const body = result.body || {};
+        const invoiceId = body.data && body.data.invoice_id;
+        setFlash(req, 'success', body.message || 'Converted to invoice.');
+        return req.session.save(() => res.redirect(invoiceId ? `/sales-invoices/${invoiceId}/edit` : '/quotations'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not convert this quotation.'));
+    return req.session.save(() => res.redirect('/quotations'));
+  } catch (err) { next(err); }
+});
+
+/* POST /quotations/:id/delete — soft delete, matches the sales-invoice /
+ * expenses delete-route style used by partials/table.ejs's row-delete confirm. */
+router.post('/quotations/:id/delete', async (req, res, next) => {
+  try {
+    const result = await api.del(req, `/quotations/${req.params.id}`);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Quotation deleted.')
+                      : apiError(result, 'Could not delete the quotation.'));
+    return req.session.save(() => res.redirect('/quotations'));
+  } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {

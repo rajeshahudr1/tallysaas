@@ -74,3 +74,12 @@ test('groupModules drops groups that have no modules from the API', () => {
     const groups = groupModules([{ key: 'customers', label: 'Customers' }]);
     assert.deepStrictEqual(groups.map((g) => g.label), ['Parties']);
 });
+
+test('Quotation and My Quotations are live, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['new-quotation'].soon, undefined, 'Quotation still marked soon');
+    assert.strictEqual(byKey['new-quotation'].href, '/quotations/create');
+    assert.strictEqual(byKey['my-quotations'].soon, undefined, 'My Quotations still marked soon');
+    assert.strictEqual(byKey['my-quotations'].href, '/quotations?mine=1');
+});
