@@ -32,6 +32,7 @@ const PATH_TO_MODULE = {
     'accountant-access': 'accountant',
     roles: 'roles',
     'field-tracking': 'field-sales',
+    contra: 'contra',
 };
 
 /** Resolve a URL path (or bare segment) to its module slug, or null if unknown. */

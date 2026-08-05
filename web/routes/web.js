@@ -420,6 +420,17 @@ async function fetchCustomerInvoiceOptions(req) {
     }));
 }
 
+/* Cash/bank ledgers for the Contra form's From (Cr) / To (Dr) comboboxes — a
+ * Contra is a cash⇄bank transfer, so both fields must only offer these. */
+async function fetchCashBankLedgerOptions(req) {
+    const [cash, bank] = await Promise.all([
+        api.get(req, '/tally/ledgers?group=cash&per_page=100'),
+        api.get(req, '/tally/ledgers?group=bank&per_page=100'),
+    ]);
+    const rowsOf = (r) => (r.body && r.body.data && Array.isArray(r.body.data.data)) ? r.body.data.data : [];
+    return [...rowsOf(cash), ...rowsOf(bank)].map((r) => ({ id: r.id, name: r.name, parent: r.parent || '' }));
+}
+
 /* Sales ledgers (Tally group "Sales Accounts") for the Quotation form's
  * "Ledger Type" combobox — see GET /tally/ledgers/sales-options. */
 async function fetchSalesLedgerOptions(req) {
@@ -6921,7 +6932,9 @@ router.get('/journals', async (req, res, next) => {
                     'July', 'August', 'September', 'October', 'November', 'December'];
         const monthLabel = `${MN[mm]} ${yy}`;
 
-        const { rows, meta } = await apiList(req, '/journals');
+        // vch_type=Journal — so Journals never shows a Contra's rows (they now
+        // live on their own /contra screen over the same table).
+        const { rows, meta } = await apiList(req, '/journals?vch_type=Journal');
         const journalRows = rows.map((r) => ({
             id: r.id, voucher_no: r.voucher_no, vch_type: r.vch_type || 'Journal', date: fmtDate(r.journal_date),
             dr_ledger: r.dr_ledger, cr_ledger: r.cr_ledger, narration: r.narration || '',
@@ -6966,6 +6979,53 @@ router.post('/journals', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Contra (a cash⇄bank transfer — its own screen over the
+ * same `journals` table/API, filtered to vch_type=Contra) ──────────── */
+router.get('/contra', async (req, res, next) => {
+    try {
+        const { rows, meta } = await apiList(req, '/contra');
+        const contraRows = rows.map((r) => ({
+            id: r.id, voucher_no: r.voucher_no, date: fmtDate(r.journal_date),
+            dr_ledger: r.dr_ledger, cr_ledger: r.cr_ledger, narration: r.narration || '',
+            amount: r.amount, status: txStatusLabel(r.status),
+        }));
+        res.render('contra/list', {
+            title: 'Contra', activeMenu: 'contra',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Contra' }],
+            contraRows, contraTotal: meta.total, grandTotal: meta.grand_total || 0,
+            page: meta.page, perPage: meta.per_page,
+        });
+    } catch (err) { next(err); }
+});
+router.get('/contra/create', async (req, res, next) => {
+    try {
+        const ledgers = await fetchCashBankLedgerOptions(req);
+        res.render('contra/form', {
+            title: 'Create Contra Voucher', activeMenu: 'contra',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Contra', href: '/contra' }, { label: 'Create' }],
+            ledgers,
+        });
+    } catch (err) { next(err); }
+});
+router.post('/contra', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const payload = {
+            vch_type: 'Contra',
+            journal_date: b.journal_date || undefined, dr_ledger: b.dr_ledger || undefined,
+            cr_ledger: b.cr_ledger || undefined, amount: _num(b.amount), narration: b.narration || undefined,
+        };
+        const result = await api.post(req, '/contra', payload);
+        if (apiOk(result)) {
+            const no = result.body.data && result.body.data.voucher_no;
+            setFlash(req, 'success', `Contra ${no || ''} created — will sync to Tally.`);
+            return req.session.save(() => res.redirect('/contra'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create the contra voucher.'));
+        return req.session.save(() => res.redirect('/contra/create'));
+    } catch (err) { next(err); }
+});
+
 /* POST /licenses/:id/delete — proxy to api DELETE (soft-delete). The confirm
  * modal in _layout.ejs POSTs here. On a refusal (still has companies/users) the
  * api's 422 message is flashed back. Returns to the list either way.
@@ -6990,6 +7050,7 @@ router.post('/licenses/:id/delete', requireSuperAdmin, async (req, res, next) =>
 const DELETABLE = new Set([
     'customers', 'suppliers', 'products', 'categories', 'locations', 'sales-persons',
     'customer-groups', 'sales-invoices', 'purchase-invoices', 'payments', 'receipts', 'journals',
+    'contra',
 ]);
 router.post('/:resource/:id/delete', async (req, res, next) => {
     try {

@@ -126,6 +126,13 @@ test('Receipt Note is live in both menus, not "Soon"', () => {
     assert.strictEqual(byKey['recpt-notes'].href, '/receipt-notes');
 });
 
+test('Contra is live in the menu, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['new-contra'].soon, undefined, 'Create Vouchers → Contra still soon');
+    assert.strictEqual(byKey['new-contra'].href, '/contra/create');
+});
+
 test('Credit Note and Debit Note are live in both menus, not "Soon"', () => {
     const byKey = {};
     for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;

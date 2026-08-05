@@ -1,0 +1,88 @@
+<%
+/* views/contra/list.ejs — TRANSACTIONS · Contra (cash⇄bank transfer vouchers).
+ * Route: GET /contra. Same underlying `journals` table/API as Journals,
+ * filtered server-side to vch_type=Contra (see /contra in api/Routes/index.js) —
+ * this screen and Journals never show each other's rows.
+ *
+ * "From (Cr)" / "To (Dr)" spell out the direction plainly: money leaves the
+ * cr_ledger and lands in the dr_ledger. */
+var _rows    = (typeof contraRows !== 'undefined' && contraRows) ? contraRows : [];
+var _total   = (typeof contraTotal !== 'undefined') ? contraTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+
+var tableColumns = [
+    { key: 'date',       label: 'Date',        sortable: true,  type: 'date' },
+    { key: 'voucher_no', label: 'Voucher No.', sortable: true,  type: 'text' },
+    { key: 'cr_ledger',  label: 'From (Cr)',   sortable: true,  type: 'text' },
+    { key: 'dr_ledger',  label: 'To (Dr)',     sortable: true,  type: 'text' },
+    { key: 'amount',     label: 'Amount',      sortable: true,  type: 'currency' },
+    { key: 'status',     label: 'Status',      sortable: false, type: 'status' },
+];
+
+var filterFields = [
+    { type: 'text', name: 'search',    label: 'Search',    placeholder: 'Voucher no / ledger...', colClass: 'filter-col-fifth' },
+    { type: 'date', name: 'date_from', label: 'Date From',                                          colClass: 'filter-col-fifth' },
+    { type: 'date', name: 'date_to',   label: 'Date To',                                            colClass: 'filter-col-fifth' },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Contra', infoKey: 'contra',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Contra' }],
+    actions: [
+        { label: 'Create Contra', icon: 'fa-plus', gradient: true, href: '/contra/create' },
+    ],
+}) %>
+
+<form id="contra-filters-form" autocomplete="off" method="get" action="/contra">
+    <%- include('../partials/filter-card', {
+        filterId: 'contra-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: true,
+    }) %>
+</form>
+
+<%# ── Total amount on top ── %>
+<% var _gt  = (typeof grandTotal !== 'undefined') ? Number(grandTotal) : 0;
+   var _cnt = (typeof contraTotal !== 'undefined') ? contraTotal : 0;
+   function _inrG(v){ return Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); } %>
+<div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 18px;min-width:170px">
+        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
+        <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _cnt %></div>
+    </div>
+    <div style="background:linear-gradient(135deg,#0891b2,#155e75);color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
+        <div style="font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.4px">Total (Contra)</div>
+        <div style="font-size:20px;font-weight:700;margin-top:2px">₹ <%= _inrG(_gt) %></div>
+    </div>
+</div>
+
+<div class="card">
+    <%- include('../partials/table', {
+        tableId: 'contra-table',
+        basePath: '/contra',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'delete'],
+    }) %>
+    <%- include('../partials/pagination', { page: _page, perPage: _perPage, total: _total }) %>
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

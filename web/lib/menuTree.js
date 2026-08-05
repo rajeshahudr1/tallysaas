@@ -24,7 +24,7 @@ const MENU_TREE = [
         { key: 'new-sales-order', label: 'Sales Order',      icon: 'fa-cart-shopping',     href: '/sales-orders/create', module: 'sales-orders' },
         { key: 'new-purchase',    label: 'Purchase Invoice', icon: 'fa-file-import',       href: '/purchase-invoices/create', module: 'purchase-invoices' },
         { key: 'new-journal',     label: 'Journal',          icon: 'fa-book',              href: '/journals',                 module: 'journals' },
-        { key: 'new-contra',      label: 'Contra',           icon: 'fa-right-left',        href: '#', soon: true, module: 'contra' },
+        { key: 'new-contra',      label: 'Contra',           icon: 'fa-right-left',        href: '/contra/create', module: 'contra' },
         { key: 'new-po',          label: 'Purchase Order',   icon: 'fa-cart-flatbed',      href: '/purchase-orders/create', module: 'purchase-orders' },
         { key: 'new-credit-note', label: 'Credit Note',      icon: 'fa-file-circle-minus', href: '/credit-notes/create', module: 'credit-notes' },
         { key: 'new-debit-note',  label: 'Debit Note',       icon: 'fa-file-circle-plus',  href: '/debit-notes/create', module: 'debit-notes' },
@@ -60,6 +60,7 @@ const MENU_TREE = [
         { key: 'bank-ledgers', label: 'Bank',                icon: 'fa-building-columns', href: '/bank',                module: 'cash-bank' },
         { key: 'bank',         label: 'Bank Reconciliation', icon: 'fa-scale-balanced',   href: '/bank-reconciliation', module: 'bank-reconciliation' },
         { key: 'journals',     label: 'Journals',            icon: 'fa-book',             href: '/journals',            module: 'journals' },
+        { key: 'contra',       label: 'Contra',              icon: 'fa-right-left',       href: '/contra',              module: 'contra' },
     ]},
     { label: null, items: [
         { key: 'collect-payments', label: 'Collect Payments', icon: 'fa-credit-card', href: '#', soon: true, module: 'collect-payments' },
