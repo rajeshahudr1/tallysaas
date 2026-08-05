@@ -152,6 +152,7 @@ const EInvoiceGspController    = require('../Controllers/SuperAdmin/EInvoiceGspC
 const GpsSettingsController    = require('../Controllers/SuperAdmin/GpsSettingsController');
 const AgentCommandController  = require('../Controllers/Tenant/AgentCommandController');
 const DashboardController     = require('../Controllers/Tenant/DashboardController');
+const TallyLedgerController   = require('../Controllers/Tenant/TallyLedgerController');
 const FieldController         = require('../Controllers/Tenant/FieldController');
 const InventoryController     = require('../Controllers/Tenant/InventoryController');
 const UserController          = require('../Controllers/Tenant/UserController');
@@ -1046,6 +1047,15 @@ router.get(
     '/dashboard/summary',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('dashboard', 'view'),
     DashboardController.summary,
+);
+
+// Sales ledgers (Tally group "Sales Accounts") for the Quotation form's
+// "Ledger Type" combobox. Gated on the quotations module, not dashboard —
+// this is used from the quotation create screen, not a dashboard drill-down.
+router.get(
+    '/tally/ledgers/sales-options',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('quotations', 'view'),
+    TallyLedgerController.salesLedgerOptions,
 );
 
 // SFA — the logged-in salesman's field dashboard (assigned locations + their

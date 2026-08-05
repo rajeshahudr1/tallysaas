@@ -23,6 +23,7 @@ var _custs    = (typeof customerOptions !== 'undefined' && customerOptions) ? cu
 var _locs     = (typeof locationOptions !== 'undefined' && locationOptions) ? locationOptions : [];
 var _sps      = (typeof salesPersonOptions !== 'undefined' && salesPersonOptions) ? salesPersonOptions : [];
 var _products = (typeof invoiceProducts !== 'undefined' && invoiceProducts) ? invoiceProducts : [];
+var _ledgers  = (typeof salesLedgerOptions !== 'undefined' && salesLedgerOptions) ? salesLedgerOptions : [];
 var _qNo      = (typeof nextQuotationNo !== 'undefined' && nextQuotationNo) ? nextQuotationNo : '';
 
 function _esc(s) {
@@ -31,34 +32,17 @@ function _esc(s) {
         .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/* Party (customer) <option>s — value = id. */
-function _customerOpts(list) {
-    var html = '<option value="" selected disabled hidden>Select party</option>';
-    (list || []).forEach(function (o) {
-        html += '<option value="' + o.id + '">' + _esc(o.name) + '</option>';
-    });
-    return html;
-}
-
 /* Products as a JS array for the searchable line-item picker (Task 5). */
 var _productsJson = JSON.stringify(_products.map(function (p) {
     return { id: p.id, name: p.name, hsn: p.hsn || '', unit: p.unit || '', rate: p.rate || 0, gst: p.gst || 0, stock: (p.stock != null ? p.stock : 0) };
 }));
 
+/* Party + sales-ledger options for the header comboboxes (auto-advance flow). */
+var _partiesJson = JSON.stringify(_custs.map(function (c) { return { id: c.id, name: c.name }; }));
+var _ledgersJson = JSON.stringify(_ledgers.map(function (l) { return { id: l.id, name: l.name, parent: l.parent || '' }; }));
+
 var _today = new Date().toISOString().slice(0, 10);
 %>
-
-<%- include('../partials/page-head', {
-    title: 'Create Quotation',
-    breadcrumb: [
-        { label: 'Dashboard', href: '/' },
-        { label: 'Quotations', href: '/quotations' },
-        { label: 'Create Quotation' },
-    ],
-    actions: [
-        { label: 'Back', icon: 'fa-arrow-left', href: '/quotations' },
-    ],
-}) %>
 
 <form id="quotation-form" method="post" action="/quotations" autocomplete="off" novalidate>
 
@@ -66,25 +50,34 @@ var _today = new Date().toISOString().slice(0, 10);
     <input type="hidden" name="items_json" id="items_json">
 
     <div class="card mb-3 q-voucher">
-        <div class="voucher-head">Create Quotation Voucher</div>
+
+        <div class="voucher-head">
+            <a class="q-back" href="/quotations" title="Back to quotations" aria-label="Back to quotations">
+                <i class="fa-solid fa-arrow-left"></i>
+            </a>
+            <span>Create Quotation Voucher</span>
+        </div>
 
         <div class="inv-body">
             <div class="form-grid">
                 <div class="form-group">
                     <label class="form-label" for="q-party">Party Name<span class="req">*</span></label>
-                    <select class="form-select" id="q-party" name="customer_id" required>
-                        <%- _customerOpts(_custs) %>
-                    </select>
+                    <div class="li-prod-cell">
+                        <input type="text" class="form-control li-product-search" id="q-party"
+                               placeholder="Search party…" autocomplete="off" required>
+                        <input type="hidden" name="customer_id" id="q-party-id">
+                        <div class="li-prod-menu" id="q-party-menu" hidden></div>
+                    </div>
                 </div>
 
                 <div class="form-group">
                     <label class="form-label" for="q-ledger">Ledger Type</label>
-                    <input type="text" class="form-control" id="q-ledger" name="ledger_name"
-                           list="q-ledger-list" placeholder="Search ledger…" autocomplete="off">
-                    <datalist id="q-ledger-list">
-                        <option value="Sundry Debtors">
-                        <option value="Sundry Creditors">
-                    </datalist>
+                    <div class="li-prod-cell">
+                        <input type="text" class="form-control li-product-search" id="q-ledger" name="ledger_name"
+                               placeholder="<%= _ledgers.length ? 'Search ledger…' : 'No ledgers synced yet' %>"
+                               autocomplete="off" disabled>
+                        <div class="li-prod-menu" id="q-ledger-menu" hidden></div>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -102,7 +95,7 @@ var _today = new Date().toISOString().slice(0, 10);
             <div class="form-grid">
                 <div class="form-group">
                     <label class="form-label" for="q-date">Date<span class="req">*</span></label>
-                    <input type="date" class="form-control" id="q-date" name="quotation_date" value="<%= _today %>" required>
+                    <input type="date" class="form-control" id="q-date" name="quotation_date" value="<%= _today %>" required disabled>
                 </div>
 
                 <div class="form-group">
@@ -128,7 +121,7 @@ var _today = new Date().toISOString().slice(0, 10);
                         <th class="num">Amount</th>
                         <th class="center">Tax Incl.</th>
                         <th class="center">
-                            <button type="button" class="q-add-btn" id="q-add-row" title="Add row" aria-label="Add row">
+                            <button type="button" class="q-add-btn" id="q-add-row" title="Add row" aria-label="Add row" disabled>
                                 <i class="fa-solid fa-plus"></i>
                             </button>
                         </th>
@@ -215,12 +208,12 @@ var _today = new Date().toISOString().slice(0, 10);
 <template id="q-row-tpl">
     <tr class="q-row">
         <td class="li-prod-cell">
-            <input type="text" class="li-product-search q-item-search" placeholder="Search item…" autocomplete="off">
+            <input type="text" class="li-product-search q-item-search" placeholder="Search item…" autocomplete="off" disabled>
             <input type="hidden" class="q-item">
             <div class="li-prod-menu" hidden></div>
         </td>
-        <td><input type="number" class="q-qty li-num" min="0" step="1" value="1"></td>
-        <td><input type="number" class="q-rate li-num" min="0" step="0.01" value="0"></td>
+        <td><input type="number" class="q-qty li-num" min="0" step="1" value="1" disabled></td>
+        <td><input type="number" class="q-rate li-num" min="0" step="0.01" value="0" disabled></td>
         <td><input type="text" class="q-unit" readonly placeholder="—"></td>
         <td><input type="number" class="q-disc li-num" min="0" max="100" step="0.01" value="0"></td>
         <td><input type="text" class="q-hsn" readonly placeholder="—"></td>
@@ -236,9 +229,11 @@ var _today = new Date().toISOString().slice(0, 10);
     </tr>
 </template>
 
-<%# Products for the searchable line-item picker (Task 5). %>
+<%# Products / parties / sales-ledgers for the searchable comboboxes. %>
 <script>
     window.QUOTATION_PRODUCTS = <%- _productsJson %>;
+    window.QUOTATION_PARTIES  = <%- _partiesJson %>;
+    window.QUOTATION_LEDGERS  = <%- _ledgersJson %>;
 </script>
 
 <style>
@@ -251,6 +246,7 @@ var _today = new Date().toISOString().slice(0, 10);
         border-radius: 6px; font-size: 13px; background: #fff;
     }
     .li-product-search:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37,99,235,.15); }
+    .li-product-search:disabled, input:disabled, button:disabled { background: #f3f4f6; color: #9ca3af; cursor: not-allowed; }
     /* position: FIXED (not absolute) so the menu escapes the table's
        overflow-x:auto clip (which also clips overflow-y). Task 5's JS sets
        top/left/width from the search input's viewport rect. */
@@ -263,4 +259,14 @@ var _today = new Date().toISOString().slice(0, 10);
     .li-prod-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .li-prod-item:hover, .li-prod-item.is-active { background: #eef2ff; }
     .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
+    .li-prod-item .li-prod-sub { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; }
+
+    /* Single header bar (Defect 1 fix) — replaces the stacked page-head +
+       voucher-head pair; a compact Back arrow instead of a second title. */
+    .q-back {
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 26px; height: 26px; border-radius: 6px; margin-right: 10px;
+        color: #fff; background: rgba(255,255,255,.15); vertical-align: middle;
+    }
+    .q-back:hover { background: rgba(255,255,255,.28); color: #fff; }
 </style>

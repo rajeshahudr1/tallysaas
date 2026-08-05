@@ -398,6 +398,14 @@ async function fetchCustomerInvoiceOptions(req) {
     }));
 }
 
+/* Sales ledgers (Tally group "Sales Accounts") for the Quotation form's
+ * "Ledger Type" combobox — see GET /tally/ledgers/sales-options. */
+async function fetchSalesLedgerOptions(req) {
+    const { body } = await api.get(req, '/tally/ledgers/sales-options');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    return rows.map((r) => ({ id: r.id, name: r.name }));
+}
+
 /* Assignable roles as {id,name,slug} for the Sales-Person login-role select —
  * keeps `slug` (unlike fetchOptions) so the view can default-highlight the
  * system "sales-person" role. */
@@ -2685,11 +2693,12 @@ function parseQuotationItems(raw) {
  * customer + their location; products carry the line-item defaults). */
 router.get('/quotations/create', async (req, res, next) => {
   try {
-    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts] = await Promise.all([
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions] = await Promise.all([
         fetchCustomerInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchOptions(req, '/sales-persons'),
         fetchInvoiceProducts(req, 'sales_price'),
+        fetchSalesLedgerOptions(req),
     ]);
     res.render('quotations/create', {
         title: 'Create Quotation',
@@ -2700,7 +2709,7 @@ router.get('/quotations/create', async (req, res, next) => {
             { label: 'Create Quotation' },
         ],
 
-        customerOptions, locationOptions, salesPersonOptions, invoiceProducts,
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
         nextQuotationNo: 'Auto-generated on save',
 
         pageScript: '<script src="/js/quotation.js" defer></script>',

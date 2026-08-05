@@ -63,6 +63,9 @@ window.QuotationCalc = { lineAmount, formTotals };
         var PROD_BY_ID = {};
         PRODUCTS.forEach(function (p) { PROD_BY_ID[String(p.id)] = p; });
 
+        var PARTIES = Array.isArray(window.QUOTATION_PARTIES) ? window.QUOTATION_PARTIES : [];
+        var LEDGERS = Array.isArray(window.QUOTATION_LEDGERS) ? window.QUOTATION_LEDGERS : [];
+
         function inr(n) {
             return '₹' + (Number(n) || 0).toLocaleString('en-IN', {
                 minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -123,6 +126,8 @@ window.QuotationCalc = { lineAmount, formTotals };
             row.querySelector('.q-hsn').value  = p ? (p.hsn || '')  : '';
             row.querySelector('.q-unit').value = p ? (p.unit || '') : '';
             if (p && p.rate != null) row.querySelector('.q-rate').value = p.rate;
+            // Item chosen → this row's Qty step unlocks (auto-advance gating).
+            if (p) row.querySelector('.q-qty').disabled = false;
             var qty = row.querySelector('.q-qty');
             if (qty) {
                 if (p && p.stock != null) {
@@ -233,17 +238,26 @@ window.QuotationCalc = { lineAmount, formTotals };
             // next row's item picker (or a brand-new row if this was last).
             // Only Enter is intercepted — Tab/Shift+Tab keep native behaviour.
             row.querySelector('.q-qty').addEventListener('keydown', function (e) {
-                if (e.key === 'Enter') { e.preventDefault(); openField(row.querySelector('.q-rate')); }
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    var rate = row.querySelector('.q-rate');
+                    rate.disabled = false; // Qty done → Rate step unlocks
+                    openField(rate);
+                }
             });
             row.querySelector('.q-rate').addEventListener('keydown', function (e) {
                 if (e.key !== 'Enter') return;
                 e.preventDefault();
                 if (isLastRow(row)) {
                     var newRow = addRow();
+                    newRow.querySelector('.q-item-search').disabled = false;
                     openField(newRow.querySelector('.q-item-search'));
                 } else {
                     var next = row.nextElementSibling;
-                    if (next) openField(next.querySelector('.q-item-search'));
+                    if (next) {
+                        next.querySelector('.q-item-search').disabled = false;
+                        openField(next.querySelector('.q-item-search'));
+                    }
                 }
             });
 
@@ -268,6 +282,7 @@ window.QuotationCalc = { lineAmount, formTotals };
 
         if (addBtn) addBtn.addEventListener('click', function () {
             var newRow = addRow();
+            newRow.querySelector('.q-item-search').disabled = false;
             openField(newRow.querySelector('.q-item-search'));
         });
 
@@ -301,37 +316,156 @@ window.QuotationCalc = { lineAmount, formTotals };
         // ══════════════════════════════════════════════════════════════
         // Auto-advance flow — Tally जैसा keyboard-first क्रम: एक field पूरा
         // होते ही अगला अपने आप खुलता है, ताकि पूरा voucher बिना माउस छुए
-        // बन जाए।
+        // बन जाए। Party और Ledger Type custom searchable comboboxes हैं
+        // (native <select> पर showPicker() भरोसेमंद नहीं है) — नीचे
+        // makeCombobox() दोनों के लिए एक ही generic widget देता है, ठीक
+        // उसी li-prod-* markup/CSS का इस्तेमाल करके जो item picker पहले से
+        // इस्तेमाल करता है।
         // ══════════════════════════════════════════════════════════════
-        var FLOW = ['#q-party', '#q-ledger', '#q-date', '#q-valid-till'];
 
         function openField(el) {
-            if (!el) return;
+            if (!el || el.disabled) return;
             el.focus();
             if (el.tagName === 'SELECT' && typeof el.showPicker === 'function') { try { el.showPicker(); } catch (_) {} }
             if (el.select) el.select();       // text field → पुराना मान चुना हुआ, सीधे टाइप करो
         }
 
-        FLOW.forEach(function (sel, i) {
-            var el = document.querySelector(sel);
-            if (!el) return;
-            el.addEventListener('change', function () {
-                var nextSel = FLOW[i + 1];
-                if (nextSel) {
-                    openField(document.querySelector(nextSel));
+        // Generic searchable combobox: input + hidden(optional) + menu div,
+        // matching the li-prod-* widget already shipped for the item picker.
+        // opts: { input, hidden, menu, list, getLabel, getValue, onChoose }
+        function makeCombobox(opts) {
+            var active = -1, items = [];
+
+            function place() {
+                var r = opts.input.getBoundingClientRect();
+                opts.menu.style.left  = r.left + 'px';
+                opts.menu.style.top   = (r.bottom + 2) + 'px';
+                opts.menu.style.width = r.width + 'px';
+            }
+            function render(list) {
+                opts.menu.innerHTML = '';
+                items = list;
+                active = -1;
+                if (!list.length) {
+                    opts.menu.innerHTML = '<div class="li-prod-empty">No matches</div>';
                 } else {
-                    // last header field → first row's item picker
-                    var firstRow = tbody.querySelector('.q-row');
-                    if (firstRow) openField(firstRow.querySelector('.q-item-search'));
+                    list.forEach(function (it, i) {
+                        var d = document.createElement('div');
+                        d.className = 'li-prod-item';
+                        d.setAttribute('data-i', i);
+                        var sub = opts.getSubLabel ? opts.getSubLabel(it) : '';
+                        if (sub) {
+                            d.textContent = '';
+                            var main = document.createElement('span');
+                            main.textContent = opts.getLabel(it);
+                            var subEl = document.createElement('span');
+                            subEl.className = 'li-prod-sub';
+                            subEl.textContent = sub;
+                            d.appendChild(main);
+                            d.appendChild(subEl);
+                        } else {
+                            d.textContent = opts.getLabel(it);
+                        }
+                        d.addEventListener('mousedown', function (e) { e.preventDefault(); choose(i); });
+                        opts.menu.appendChild(d);
+                    });
                 }
+                opts.menu.hidden = false;
+                place();
+            }
+            function filter() {
+                var q = opts.input.value.trim().toLowerCase();
+                var list = !q ? opts.list.slice(0, 50)
+                    : opts.list.filter(function (it) { return opts.getLabel(it).toLowerCase().indexOf(q) > -1; }).slice(0, 50);
+                render(list);
+            }
+            function close() { opts.menu.hidden = true; }
+            function choose(i) {
+                var it = items[i];
+                if (!it) return;
+                opts.input.value = opts.getLabel(it);
+                if (opts.hidden) opts.hidden.value = opts.getValue(it);
+                close();
+                if (opts.onChoose) opts.onChoose(it);
+            }
+            function highlight() {
+                opts.menu.querySelectorAll('.li-prod-item').forEach(function (el, i) {
+                    el.classList.toggle('is-active', i === active);
+                });
+                var el = opts.menu.querySelector('.is-active');
+                if (el) el.scrollIntoView({ block: 'nearest' });
+            }
+
+            window.addEventListener('scroll', function () { if (!opts.menu.hidden) place(); }, true);
+            window.addEventListener('resize', function () { if (!opts.menu.hidden) place(); });
+
+            opts.input.addEventListener('input', function () { if (opts.hidden) opts.hidden.value = ''; filter(); });
+            opts.input.addEventListener('focus', function () { if (!opts.input.disabled) filter(); });
+            opts.input.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') { close(); return; } // close, keep focus — no blur()
+                if (opts.menu.hidden) return;
+                if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); highlight(); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); highlight(); }
+                else if (e.key === 'Enter') { if (active > -1) { e.preventDefault(); choose(active); } }
             });
-            el.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape') { e.stopPropagation(); } // close any native picker, keep focus
-            });
+            opts.input.addEventListener('blur', function () { setTimeout(close, 150); });
+
+            return { open: function () { openField(opts.input); filter(); } };
+        }
+
+        var dateEl = document.getElementById('q-date');
+        var ledgerEl = document.getElementById('q-ledger');
+
+        // Ledger Type step unlocks after Party is picked — unless the tenant
+        // has zero synced sales ledgers, in which case it stays honestly
+        // disabled forever and Date unlocks right away instead.
+        function unlockLedgerOrDate() {
+            if (LEDGERS.length && ledgerBox) {
+                ledgerEl.disabled = false;
+                ledgerBox.open();
+            } else {
+                unlockDate();
+            }
+        }
+        function unlockDate() {
+            if (!dateEl) return;
+            dateEl.disabled = false;
+            openField(dateEl);
+        }
+        function unlockFirstItem() {
+            if (addBtn) addBtn.disabled = false;
+            var firstRow = tbody.querySelector('.q-row');
+            if (!firstRow) return;
+            var search = firstRow.querySelector('.q-item-search');
+            search.disabled = false;
+            openField(search);
+        }
+
+        var partyBox = makeCombobox({
+            input:  document.getElementById('q-party'),
+            hidden: document.getElementById('q-party-id'),
+            menu:   document.getElementById('q-party-menu'),
+            list:   PARTIES,
+            getLabel: function (p) { return p.name; },
+            getValue: function (p) { return p.id; },
+            onChoose: unlockLedgerOrDate,
         });
 
-        // Seed the table with a single empty row, then open Party.
+        var ledgerBox = LEDGERS.length ? makeCombobox({
+            input:  ledgerEl,
+            hidden: null,
+            menu:   document.getElementById('q-ledger-menu'),
+            list:   LEDGERS,
+            getLabel: function (l) { return l.name; },
+            getSubLabel: function (l) { return l.parent; },
+            getValue: function (l) { return l.name; },
+            onChoose: unlockDate,
+        }) : null;
+
+        if (dateEl) dateEl.addEventListener('change', unlockFirstItem);
+
+        // Seed the table with a single (locked) empty row, then open Party.
         addRow();
-        openField(document.querySelector('#q-party'));
+        partyBox.open();
     }
 })();
