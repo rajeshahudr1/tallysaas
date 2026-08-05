@@ -405,4 +405,27 @@ async function ledgerGroupOptions(req, res) {
     }
 }
 
-module.exports = { list, statement, voucher, salesLedgerOptions, ledgerGroupOptions };
+/**
+ * GET /tally/ledgers/purchase-options — the company's PURCHASE ledgers (Tally
+ * group "Purchase Accounts") as lightweight {id,name} options for the
+ * Purchase Order form's "Ledger Type" combobox. Same shape/pattern as
+ * salesLedgerOptions above, just the other group name — not one of the
+ * bucketed list() path's reserved buckets either, so this reads
+ * tally_ledgers.parent directly too.
+ */
+async function purchaseLedgerOptions(req, res) {
+    try {
+        const companyId = req.companyId;
+        const rows = await db('tally_ledgers')
+            .where('company_id', companyId).whereNull('deleted_at')
+            .whereRaw('lower(parent) = ?', ['purchase accounts'])
+            .orderBy('name', 'asc')
+            .select('id', 'name', 'parent');
+        return R.successResponse(res, { data: rows });
+    } catch (err) {
+        console.error('tallyLedgers.purchaseLedgerOptions error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+module.exports = { list, statement, voucher, salesLedgerOptions, ledgerGroupOptions, purchaseLedgerOptions };

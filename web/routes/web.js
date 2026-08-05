@@ -397,6 +397,14 @@ async function fetchLedgerGroupOptions(req) {
     return rows.map((r) => r.name).filter(Boolean);
 }
 
+/* Purchase ledgers (Tally group "Purchase Accounts") for the Purchase Order
+ * form's "Ledger Type" combobox — see GET /tally/ledgers/purchase-options. */
+async function fetchPurchaseLedgerOptions(req) {
+    const { body } = await api.get(req, '/tally/ledgers/purchase-options');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    return rows.map((r) => ({ id: r.id, name: r.name, parent: r.parent || '' }));
+}
+
 /* Customer options for the invoice form — id + name PLUS the customer's own
  * location (id + label) so the Customer <select> can AUTO-fill the Location
  * field on selection. /customers is assignment-scoped, so a salesman gets only
@@ -3110,6 +3118,87 @@ router.post('/purchase-orders/:id/delete', async (req, res, next) => {
                       : apiError(result, 'Could not delete the purchase order.'));
     return req.session.save(() => res.redirect('/purchase-orders'));
   } catch (err) { next(err); }
+});
+
+/* Parse the hidden items_json from a PURCHASE ORDER form into the api's item
+ * shape — same shape/fields as parseSalesOrderItems (godown/tax_inclusive
+ * carried through) since purchase_order_items has the same columns as
+ * sales_order_items; kept as its own function (not shared) in case the two
+ * diverge later. */
+function parsePurchaseOrderItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id:    it.product_id ? Number(it.product_id) : undefined,
+        description:   it.description || undefined,
+        hsn:           it.hsn || undefined,
+        quantity:      Number(it.quantity) || 0,
+        unit:          it.unit || undefined,
+        rate:          Number(it.rate) || 0,
+        discount_pct:  Number(it.discount_pct) || 0,
+        gst_rate:      Number(it.gst_rate) || 0,
+        godown:        it.godown || undefined,
+        tax_inclusive: !!it.tax_inclusive,
+    })).filter((it) => it.quantity > 0);
+}
+
+/* ── TRANSACTIONS · Create Purchase Order (GET /purchase-orders/create) —
+ * same option sources as the sales order create screen, but the party comes
+ * from /suppliers (not customers) and the ledger list is PURCHASE ledgers. */
+router.get('/purchase-orders/create', async (req, res, next) => {
+  try {
+    const [supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions] = await Promise.all([
+        fetchOptions(req, '/suppliers'),
+        fetchOptions(req, '/locations'),
+        fetchInvoiceProducts(req, 'purchase_price'),
+        fetchPurchaseLedgerOptions(req),
+    ]);
+    res.render('purchase-orders/create', {
+        title: 'Create Purchase Order',
+        activeMenu: 'purch-orders',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Purchase Orders', href: '/purchase-orders' },
+            { label: 'Create Purchase Order' },
+        ],
+
+        supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions,
+        nextPurchaseOrderNo: 'Auto-generated on save',
+
+        pageScript: '<script src="/js/purchase-order.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* ── POST /purchase-orders — create a purchase order via the api. Header
+ * fields submit normally; line items ride the hidden items_json (serialised
+ * by /js/purchase-order.js). The api computes all totals inside a db
+ * transaction. */
+router.post('/purchase-orders', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            supplier_id:     num(b.supplier_id),
+            location_id:     num(b.location_id),
+            order_no:        b.order_no || undefined,
+            order_date:      b.order_date || undefined,
+            due_on:          b.due_on || undefined,
+            ledger_name:     b.ledger_name || undefined,
+            notes:           b.notes || undefined,
+            items:           parsePurchaseOrderItems(b.items_json),
+        };
+        const result = await api.post(req, '/purchase-orders', payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `Purchase order ${(result.body.data && result.body.data.order_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect('/purchase-orders'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create purchase order.'));
+        return req.session.save(() => res.redirect('/purchase-orders/create'));
+    } catch (err) { next(err); }
 });
 
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */

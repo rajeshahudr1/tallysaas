@@ -1099,6 +1099,16 @@ router.get(
     TallyLedgerController.salesLedgerOptions,
 );
 
+// Purchase ledgers (Tally group "Purchase Accounts") for the Purchase Order
+// form's "Ledger Type" combobox. Gated on the purchase-orders module, not
+// dashboard — this is used from the purchase order create screen, not a
+// dashboard drill-down.
+router.get(
+    '/tally/ledgers/purchase-options',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-orders', 'view'),
+    TallyLedgerController.purchaseLedgerOptions,
+);
+
 // Party-eligible Tally groups (Sundry Debtors / Sundry Creditors ancestry) for
 // the customer form's "Ledger Group" dropdown.
 router.get(
