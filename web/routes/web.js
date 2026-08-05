@@ -3539,6 +3539,119 @@ router.post('/receipt-notes/:id/delete', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/* Parse the hidden items_json from a RECEIPT NOTE form into the api's item
+ * shape — same shape/fields as parseDeliveryNoteItems (godown/tax_inclusive
+ * carried through) since receipt_note_items has the same columns as
+ * delivery_note_items; kept as its own function (not shared) in case the two
+ * diverge later. */
+function parseReceiptNoteItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id:    it.product_id ? Number(it.product_id) : undefined,
+        description:   it.description || undefined,
+        hsn:           it.hsn || undefined,
+        quantity:      Number(it.quantity) || 0,
+        unit:          it.unit || undefined,
+        rate:          Number(it.rate) || 0,
+        discount_pct:  Number(it.discount_pct) || 0,
+        gst_rate:      Number(it.gst_rate) || 0,
+        godown:        it.godown || undefined,
+        tax_inclusive: !!it.tax_inclusive,
+    })).filter((it) => it.quantity > 0);
+}
+
+/* ── TRANSACTIONS · Create Receipt Note (GET /receipt-notes/create) —
+ * same option sources as the purchase order create screen (suppliers,
+ * purchase ledgers — reused from fetchPurchaseLedgerOptions, not a new
+ * endpoint), plus the OPEN purchase orders list for the "Against Purchase
+ * Order" prefill combobox ("open" = live and not yet converted/cancelled —
+ * the api's own list already scopes to this company/location; we
+ * additionally drop anything already delivered/cancelled here so the picker
+ * never offers a dead reference). */
+router.get('/receipt-notes/create', async (req, res, next) => {
+  try {
+    const [supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions, openOrders] = await Promise.all([
+        fetchOptions(req, '/suppliers'),
+        fetchOptions(req, '/locations'),
+        fetchInvoiceProducts(req, 'purchase_price'),
+        fetchPurchaseLedgerOptions(req),
+        api.get(req, '/purchase-orders?per_page=100').catch(() => null),
+    ]);
+    const orderRows = (openOrders && openOrders.body && openOrders.body.data && Array.isArray(openOrders.body.data.data))
+        ? openOrders.body.data.data : [];
+    const purchaseOrderOptions = orderRows
+        .filter((o) => o.order_status !== 'cancelled' && !o.converted_invoice_id)
+        .map((o) => ({ id: o.id, order_no: o.order_no, supplier: o.supplier || '' }));
+
+    res.render('receipt-notes/create', {
+        title: 'Create Receipt Note',
+        activeMenu: 'recpt-notes',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Receipt Notes', href: '/receipt-notes' },
+            { label: 'Create Receipt Note' },
+        ],
+
+        supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions,
+        purchaseOrderOptions,
+        nextReceiptNoteNo: 'Auto-generated on save',
+
+        pageScript: '<script src="/js/receipt-note.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /receipt-notes/order/:id — forwards the api's GET /purchase-orders/:id
+ * so /js/receipt-note.js's "Against Purchase Order" prefill can fetch a
+ * single order's full detail (supplier + items) without the browser ever
+ * talking to the api directly. AJAX/JSON only. */
+router.get('/receipt-notes/order/:id', async (req, res) => {
+    try {
+        const result = await api.get(req, `/purchase-orders/${encodeURIComponent(req.params.id)}`);
+        if (apiOk(result) && result.body && result.body.data) {
+            return res.json({ ok: true, data: result.body.data });
+        }
+        return res.status(404).json({ ok: false, error: apiError(result, 'Purchase order not found.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not reach the server.' });
+    }
+});
+
+/* ── POST /receipt-notes — create a receipt note via the api. Header
+ * fields submit normally; line items ride the hidden items_json (serialised
+ * by /js/receipt-note.js). The api computes all totals inside a db
+ * transaction. `godown`/`tax_inclusive` ride inside each item (like
+ * delivery notes/purchase orders) — they must NOT be dropped from
+ * parseReceiptNoteItems. */
+router.post('/receipt-notes', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            supplier_id:        num(b.supplier_id),
+            location_id:        num(b.location_id),
+            purchase_order_id:  num(b.purchase_order_id),
+            note_no:            b.note_no || undefined,
+            note_date:          b.note_date || undefined,
+            received_date:      b.received_date || undefined,
+            ledger_name:        b.ledger_name || undefined,
+            notes:              b.notes || undefined,
+            items:              parseReceiptNoteItems(b.items_json),
+        };
+        const result = await api.post(req, '/receipt-notes', payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `Receipt note ${(result.body.data && result.body.data.note_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect('/receipt-notes'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create receipt note.'));
+        return req.session.save(() => res.redirect('/receipt-notes/create'));
+    } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {
