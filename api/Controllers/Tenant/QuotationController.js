@@ -122,14 +122,16 @@ function computeItemRows(items) {
     });
 }
 
-// Clamp/normalise pagination from the (Joi-validated) query.
+// Clamp/normalise pagination from the (Joi-validated) query. Param names
+// (`page`/`per_page`) match InvoiceController.parsePagination — the shared
+// web `apiList()` helper (web/routes/web.js) only forwards/reads THOSE names.
 function parsePagination(query) {
-    let page  = parseInt(query.page, 10);
-    let limit = parseInt(query.limit, 10);
-    if (!Number.isInteger(page)  || page  < 1) page  = 1;
-    if (!Number.isInteger(limit) || limit < 1) limit = DEFAULT_LIMIT;
-    if (limit > MAX_LIMIT) limit = MAX_LIMIT;
-    return { page, limit };
+    let page    = parseInt(query.page, 10);
+    let perPage = parseInt(query.per_page, 10);
+    if (!Number.isInteger(page)    || page    < 1) page    = 1;
+    if (!Number.isInteger(perPage) || perPage < 1) perPage = DEFAULT_LIMIT;
+    if (perPage > MAX_LIMIT) perPage = MAX_LIMIT;
+    return { page, perPage };
 }
 
 // valid_till बीत चुका और अभी तक open है → उसे expired दिखाओ। db में नहीं लिखते;
@@ -144,11 +146,17 @@ function withDerivedStatus(row, todayIso) {
 
 async function list(req, res) {
     try {
-        const { page, limit } = parsePagination(req.query);
-        const search = (req.query.q || '').trim();
+        const { page, perPage } = parsePagination(req.query);
+        const search   = (req.query.search || '').trim();
+        // `quote_status` is the QUOTATION-SPECIFIC deal-lifecycle filter
+        // (open/accepted/rejected/expired) — it targets `quotations.quote_status`.
+        // It is intentionally NOT named `status`: `status` is reserved app-wide
+        // for the Tally-sync lifecycle (see InvoiceController / listInvoiceSchema
+        // `status`), which `quotations.status` also tracks independently of the
+        // deal outcome. Using `status` here would silently collide with that.
         const quoteStatus = (req.query.quote_status || '').trim();
-        const dateFrom = req.query.from;
-        const dateTo   = req.query.to;
+        const dateFrom = req.query.date_from;
+        const dateTo   = req.query.date_to;
         const mineRaw  = req.query.mine;
         const mine = mineRaw === '1' || mineRaw === 1 || mineRaw === true || mineRaw === 'true';
 
@@ -179,8 +187,8 @@ async function list(req, res) {
         const total = Number(totalRow ? totalRow.c : 0);
 
         let rows = await qb
-            .offset((page - 1) * limit)
-            .limit(limit)
+            .offset((page - 1) * perPage)
+            .limit(perPage)
             .orderBy('quotations.id', 'desc')
             .select(...LIST_COLUMNS);
 
@@ -189,7 +197,13 @@ async function list(req, res) {
         // ?quote_status=expired is a DERIVED filter — apply it after deriving.
         if (quoteStatus === 'expired') rows = rows.filter((r) => r.quote_status === 'expired');
 
-        return R.successResponse(res, { rows, total, page, limit });
+        // Shape matches InvoiceController.listByType's payload: `data` is the
+        // plain rows array, `meta` carries pagination — this is what the shared
+        // web `apiList()` helper (web/routes/web.js) expects from every list
+        // endpoint. Quotations have no register "grand total" concept, so meta
+        // omits `grand_total` (invoice-only).
+        const payload = { data: rows, meta: { total, page, per_page: perPage } };
+        return R.successResponse(res, payload);
     } catch (err) {
         console.error('quotations.list error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);

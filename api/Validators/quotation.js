@@ -86,14 +86,20 @@ const createQuotationSchema = Joi.object({
 
 /**
  * GET /api/v1/quotations (query string)
- * Pagination + the filters the list handler reads.
+ * Pagination + the filters the list handler reads. Param names match
+ * listInvoiceSchema (page/per_page/search/date_from/date_to) — the shared web
+ * `apiList()` helper only understands those. `quote_status` is the
+ * quotation-only deal-lifecycle filter (open/accepted/rejected/expired); it is
+ * deliberately NOT named `status` — that name is reserved app-wide for the
+ * Tally-sync lifecycle (see listInvoiceSchema's `status`, and
+ * `quotations.status` which tracks the same thing independently of the deal).
  */
 const listQuotationSchema = Joi.object({
     page:         Joi.number().integer().min(1).default(1),
-    limit:        Joi.number().integer().min(1).max(100).default(10),
-    q:            Joi.string().trim().max(191).allow('', null),
-    from:         Joi.date().iso().allow('', null),
-    to:           Joi.date().iso().allow('', null),
+    per_page:     Joi.number().integer().min(1).max(100).default(10),
+    search:       Joi.string().trim().max(191).allow('', null),
+    date_from:    Joi.date().iso().allow('', null),
+    date_to:      Joi.date().iso().allow('', null),
     quote_status: Joi.string().valid('open', 'accepted', 'rejected', 'expired', 'all').allow(''),
     mine:         Joi.alternatives().try(Joi.valid('1', 1, true, false), Joi.boolean()).allow('', null),
 });
