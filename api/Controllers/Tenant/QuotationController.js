@@ -456,12 +456,33 @@ async function pdf(req, res) {
 
 /* POST /quotations/:id/convert — quotation से Sales Invoice बनाता है।
  * एक ही transaction में: invoice + invoice_items बनाओ, quotation को accepted
- * करो। पहले से converted quotation पर 409 — दोबारा invoice नहीं बनेगा। */
+ * करो। पहले से converted quotation पर 409 — दोबारा invoice नहीं बनेगा।
+ *
+ * Concurrency: the "is it already converted?" check and the write that claims
+ * the quotation both happen INSIDE the same transaction, as a conditional
+ * UPDATE (`WHERE id=? AND company_id=? AND converted_invoice_id IS NULL`)
+ * that runs AFTER the invoice + invoice_items are inserted but BEFORE the
+ * transaction commits. If that update affects 0 rows, another request won
+ * the race — we throw to roll the whole transaction back (undoing the
+ * invoice/invoice_items insert too, so the loser creates NO invoice at all)
+ * and report 409. */
+const ALREADY_CONVERTED = Symbol('quotation-already-converted');
+
 async function convert(req, res) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
     try {
-        const q = await db('quotations').where({ id, company_id: req.companyId }).whereNull('deleted_at').first();
+        // Same scoping rules as get(): location + salesman (+ customer-portal)
+        // restriction, so a user who cannot even view this quotation cannot
+        // convert it either.
+        const qq = baseQuery()
+            .where('quotations.company_id', req.companyId)
+            .whereNull('quotations.deleted_at')
+            .where('quotations.id', id);
+        if (req.locationId != null) qq.where('quotations.location_id', req.locationId);
+        if (req.isSalesman) qq.where('quotations.created_by', req.user.sub);
+        if (req.isCustomerUser) qq.where('quotations.customer_id', req.customerId);
+        const q = await qq.select('quotations.*').first();
         if (!q) return R.errorResponse(res, NOT_FOUND_MSG, 404);
         if (q.converted_invoice_id) return R.errorResponse(res, 'This quotation is already converted', 409);
 
@@ -470,7 +491,9 @@ async function convert(req, res) {
             .orderBy('id', 'asc')
             .select('*');
 
-        const invoiceRow = await db.transaction(async (trx) => {
+        let invoiceRow;
+        try {
+            invoiceRow = await db.transaction(async (trx) => {
             const cntRow = await trx('invoices')
                 .where('company_id', req.companyId)
                 .where('type', 'sales')
@@ -522,14 +545,31 @@ async function convert(req, res) {
             if (itemRows.length) await trx('invoice_items').insert(itemRows);
 
             const now = new Date();
-            await trx('quotations').where({ id, company_id: req.companyId }).update({
-                quote_status:         'accepted',
-                converted_invoice_id: insertedInvoice.id,
-                updated_at:           now,
-            });
+            // Atomic claim: only succeeds if no other request already
+            // converted this quotation. 0 rows affected => a concurrent
+            // request won the race; throw to roll back this entire
+            // transaction (including the invoice/invoice_items just
+            // inserted above) so this request creates NO invoice.
+            const claimed = await trx('quotations')
+                .where({ id, company_id: req.companyId })
+                .whereNull('converted_invoice_id')
+                .update({
+                    quote_status:         'accepted',
+                    converted_invoice_id: insertedInvoice.id,
+                    updated_at:           now,
+                });
+            if (!claimed) {
+                throw ALREADY_CONVERTED;
+            }
 
             return insertedInvoice;
-        });
+            });
+        } catch (err) {
+            if (err === ALREADY_CONVERTED) {
+                return R.errorResponse(res, 'This quotation is already converted', 409);
+            }
+            throw err;
+        }
 
         await recordHistory(db, {
             company_id:  req.companyId,
