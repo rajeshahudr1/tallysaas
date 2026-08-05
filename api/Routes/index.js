@@ -95,6 +95,10 @@ const {
     listQuotationSchema,
 } = require('../Validators/quotation');
 const {
+    createSalesOrderSchema,
+    listSalesOrderSchema,
+} = require('../Validators/salesOrder');
+const {
     createPaymentSchema,
     createReceiptSchema,
     listPaymentSchema,
@@ -142,6 +146,7 @@ const ProductController       = require('../Controllers/Tenant/ProductController
 const CustomerGroupController = require('../Controllers/Tenant/CustomerGroupController');
 const InvoiceController       = require('../Controllers/Tenant/InvoiceController');
 const QuotationController     = require('../Controllers/Tenant/QuotationController');
+const SalesOrderController    = require('../Controllers/Tenant/SalesOrderController');
 const PaymentController       = require('../Controllers/Tenant/PaymentController');
 const LicenseController       = require('../Controllers/SuperAdmin/LicenseController');
 const CompanyController       = require('../Controllers/SuperAdmin/CompanyController');
@@ -894,6 +899,21 @@ router.post('/quotations/:id/convert', authenticate, resolveTenant, resolveCompa
     can('quotations', 'edit'), QuotationController.convert);
 router.delete('/quotations/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('quotations', 'delete'), QuotationController.destroy);
+
+router.get('/sales-orders', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('sales-orders', 'view'), validate(listSalesOrderSchema, 'query'), SalesOrderController.list);
+router.get('/sales-orders/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('sales-orders', 'view'), SalesOrderController.get);
+router.get('/sales-orders/:id/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('sales-orders', 'view'), SalesOrderController.pdf);
+router.post('/sales-orders', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('sales-orders', 'create'), validate(createSalesOrderSchema), SalesOrderController.create);
+router.put('/sales-orders/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('sales-orders', 'edit'), validate(createSalesOrderSchema), SalesOrderController.updateDraft);
+router.post('/sales-orders/:id/convert', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('sales-orders', 'edit'), SalesOrderController.convert);
+router.delete('/sales-orders/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('sales-orders', 'delete'), SalesOrderController.destroy);
 
 // ───────────────────────────────────────────────────────────────────
 // Purchase Invoices (same bespoke controller, type='purchase')
