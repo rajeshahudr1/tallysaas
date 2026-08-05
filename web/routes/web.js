@@ -3296,6 +3296,156 @@ router.post('/delivery-notes/:id/delete', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/* Parse the hidden items_json from a DELIVERY NOTE form into the api's item
+ * shape — same shape/fields as parseSalesOrderItems (godown/tax_inclusive
+ * carried through) since delivery_note_items has the same columns as
+ * sales_order_items; kept as its own function (not shared) in case the two
+ * diverge later. */
+function parseDeliveryNoteItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id:    it.product_id ? Number(it.product_id) : undefined,
+        description:   it.description || undefined,
+        hsn:           it.hsn || undefined,
+        quantity:      Number(it.quantity) || 0,
+        unit:          it.unit || undefined,
+        rate:          Number(it.rate) || 0,
+        discount_pct:  Number(it.discount_pct) || 0,
+        gst_rate:      Number(it.gst_rate) || 0,
+        godown:        it.godown || undefined,
+        tax_inclusive: !!it.tax_inclusive,
+    })).filter((it) => it.quantity > 0);
+}
+
+/* ── TRANSACTIONS · Create Delivery Note (GET /delivery-notes/create) —
+ * same option sources as the sales order create screen, plus the OPEN sales
+ * orders list for the "Against Sales Order" prefill combobox ("open" =
+ * live and not yet converted/cancelled — the api's own list already scopes
+ * to this company/location/salesman; we additionally drop anything already
+ * delivered/cancelled here so the picker never offers a dead reference). */
+router.get('/delivery-notes/create', async (req, res, next) => {
+  try {
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, openOrders] = await Promise.all([
+        fetchCustomerInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchOptions(req, '/sales-persons'),
+        fetchInvoiceProducts(req, 'sales_price'),
+        fetchSalesLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
+        api.get(req, '/sales-orders?per_page=100').catch(() => null),
+    ]);
+    const orderRows = (openOrders && openOrders.body && openOrders.body.data && Array.isArray(openOrders.body.data.data))
+        ? openOrders.body.data.data : [];
+    const salesOrderOptions = orderRows
+        .filter((o) => o.order_status !== 'cancelled' && o.order_status !== 'delivered')
+        .map((o) => ({ id: o.id, order_no: o.order_no, customer: o.customer || '' }));
+
+    res.render('delivery-notes/create', {
+        title: 'Create Delivery Note',
+        activeMenu: 'dely-notes',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Delivery Notes', href: '/delivery-notes' },
+            { label: 'Create Delivery Note' },
+        ],
+
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
+        ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        salesOrderOptions,
+        nextDeliveryNoteNo: 'Auto-generated on save',
+
+        pageScript: '<script src="/js/delivery-note.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /delivery-notes/order/:id — forwards the api's GET /sales-orders/:id
+ * so /js/delivery-note.js's "Against Sales Order" prefill can fetch a
+ * single order's full detail (customer + items) without the browser ever
+ * talking to the api directly. AJAX/JSON only. */
+router.get('/delivery-notes/order/:id', async (req, res) => {
+    try {
+        const result = await api.get(req, `/sales-orders/${encodeURIComponent(req.params.id)}`);
+        if (apiOk(result) && result.body && result.body.data) {
+            return res.json({ ok: true, data: result.body.data });
+        }
+        return res.status(404).json({ ok: false, error: apiError(result, 'Sales order not found.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not reach the server.' });
+    }
+});
+
+/* ── POST /delivery-notes/create/quick-customer — "Create New Customer" row
+ * pinned atop the Party combobox, same shape as
+ * POST /sales-orders/create/quick-customer. AJAX/JSON only. */
+router.post('/delivery-notes/create/quick-customer', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const payload = {
+            name:        (b.name || '').trim(),
+            mobile:      b.mobile || undefined,
+            email:       b.email || undefined,
+            gst_number:  b.gst_number || undefined,
+            billing_address: b.billing_address || undefined,
+            ledger_group:          b.ledger_group || undefined,
+            opening_balance:       (b.opening_balance === '' || b.opening_balance == null) ? undefined : Number(b.opening_balance),
+            opening_balance_type:  b.opening_balance_type || undefined,
+            country:               b.country || undefined,
+            state:                 b.state || undefined,
+            city:                  b.city || undefined,
+            pincode:               b.pincode || undefined,
+            gst_registration_type: b.gst_registration_type || undefined,
+            notes:                 b.notes || undefined,
+        };
+        if (!payload.name) {
+            return res.status(422).json({ ok: false, error: 'Customer name is required.' });
+        }
+        const result = await api.post(req, '/customers', payload);
+        if (apiOk(result) && result.body && result.body.data) {
+            const row = result.body.data;
+            return res.json({ ok: true, data: { id: row.id, name: row.name } });
+        }
+        return res.status(422).json({ ok: false, error: apiError(result, 'Could not create customer.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not create customer.' });
+    }
+});
+
+/* ── POST /delivery-notes — create a delivery note via the api. Header
+ * fields submit normally; line items ride the hidden items_json (serialised
+ * by /js/delivery-note.js). The api computes all totals inside a db
+ * transaction. `godown`/`tax_inclusive` ride inside each item (like sales
+ * orders/quotations) — they must NOT be dropped from parseDeliveryNoteItems. */
+router.post('/delivery-notes', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            customer_id:     num(b.customer_id),
+            location_id:     num(b.location_id),
+            sales_person_id: num(b.sales_person_id),
+            sales_order_id:  num(b.sales_order_id),
+            note_no:         b.note_no || undefined,
+            note_date:       b.note_date || undefined,
+            dispatch_date:   b.dispatch_date || undefined,
+            ledger_name:     b.ledger_name || undefined,
+            notes:           b.notes || undefined,
+            items:           parseDeliveryNoteItems(b.items_json),
+        };
+        const result = await api.post(req, '/delivery-notes', payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `Delivery note ${(result.body.data && result.body.data.note_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect('/delivery-notes'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create delivery note.'));
+        return req.session.save(() => res.redirect('/delivery-notes/create'));
+    } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Create Sales Invoice (GET /sales-invoices/create) */
 router.get('/sales-invoices/create', async (req, res, next) => {
   try {
