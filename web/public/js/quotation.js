@@ -546,7 +546,7 @@ window.QuotationCalc = { lineAmount, formTotals };
             var name = (document.getElementById('q-nc-name').value || '').trim();
             if (ncErr) ncErr.hidden = true;
             if (!name) {
-                if (ncErr) { ncErr.textContent = 'Party name is required.'; ncErr.hidden = false; }
+                if (ncErr) { ncErr.textContent = 'Customer name is required.'; ncErr.hidden = false; }
                 return;
             }
             function fieldVal(id) { var el = document.getElementById(id); return el ? (el.value || '') : ''; }

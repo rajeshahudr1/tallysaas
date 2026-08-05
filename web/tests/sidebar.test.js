@@ -39,7 +39,7 @@ test('groups appear in the LiveKeeping order', () => {
     const html = renderSidebar();
     const order = [...html.matchAll(/class="sidebar-section-text">([^<]+)</g)].map(m => m[1]);
     assert.deepStrictEqual(order, [
-        'Create Vouchers', 'Sales', 'Purchase', 'Cash &amp; Bank', 'Parties',
+        'Create Vouchers', 'Sales', 'Purchase', 'Cash &amp; Bank', 'Customers',
         'Items', 'Reports', 'My Entries', 'Field Sales', 'Portals',
         'Tally Sync', 'Configurations',
     ]);

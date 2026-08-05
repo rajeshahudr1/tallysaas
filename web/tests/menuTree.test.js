@@ -63,7 +63,7 @@ test('groupModules puts API modules under their menu group, unknown ones in Othe
     const groups = groupModules(api);
     const byLabel = Object.fromEntries(groups.map((g) => [g.label, g.modules.map((m) => m.key)]));
     assert.deepStrictEqual(byLabel['Cash & Bank'], ['cash-bank']);
-    assert.deepStrictEqual(byLabel['Parties'], ['customers']);
+    assert.deepStrictEqual(byLabel['Customers'], ['customers']);
     assert.deepStrictEqual(byLabel['Other'], ['mystery-module']);
     // कोई module चुपचाप गायब न हो
     const total = groups.reduce((n, g) => n + g.modules.length, 0);
@@ -72,7 +72,13 @@ test('groupModules puts API modules under their menu group, unknown ones in Othe
 
 test('groupModules drops groups that have no modules from the API', () => {
     const groups = groupModules([{ key: 'customers', label: 'Customers' }]);
-    assert.deepStrictEqual(groups.map((g) => g.label), ['Parties']);
+    assert.deepStrictEqual(groups.map((g) => g.label), ['Customers']);
+});
+
+test('the party group is called Customers, not Parties', () => {
+    const labels = MENU_TREE.map((g) => g.label).filter(Boolean);
+    assert.ok(labels.includes('Customers'), 'Customers group missing');
+    assert.ok(!labels.includes('Parties'), 'the old "Parties" label is still there');
 });
 
 test('Quotation and My Quotations are live, not "Soon"', () => {

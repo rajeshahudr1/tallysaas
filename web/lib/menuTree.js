@@ -64,7 +64,7 @@ const MENU_TREE = [
     { label: null, items: [
         { key: 'collect-payments', label: 'Collect Payments', icon: 'fa-credit-card', href: '#', soon: true, module: 'collect-payments' },
     ]},
-    { label: 'Parties', icon: 'fa-address-book', items: [
+    { label: 'Customers', icon: 'fa-address-book', items: [
         { key: 'customers', label: 'Customers', icon: 'fa-user-group',  href: '/customers', module: 'customers' },
         { key: 'suppliers', label: 'Suppliers', icon: 'fa-truck-field', href: '/suppliers', module: 'suppliers' },
     ]},

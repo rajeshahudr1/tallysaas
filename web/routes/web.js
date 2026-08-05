@@ -4412,7 +4412,7 @@ async function renderOutstanding(req, res, next, type) {
             title: isRec ? 'Outstanding Receivables' : 'Outstanding Payables', activeMenu: 'reports',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Reports', href: '/reports' }, { label: isRec ? 'Receivables' : 'Payables' }],
             summary: [
-                { label: 'Parties', value: String(sm.count || 0), icon: 'fa-user-group', tone: 'blue' },
+                { label: isRec ? 'Customers' : 'Suppliers', value: String(sm.count || 0), icon: 'fa-user-group', tone: 'blue' },
                 { label: isRec ? 'Total Receivable' : 'Total Payable', value: '₹' + Number(sm.total_outstanding || 0).toLocaleString('en-IN'), icon: 'fa-coins', tone: isRec ? 'green' : 'amber' },
             ],
             columns: [
