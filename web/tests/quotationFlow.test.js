@@ -34,3 +34,19 @@ test('formTotals adds every line up', () => {
     assert.strictEqual(t.taxes, 32.4);
     assert.strictEqual(t.grand, 262.4);
 });
+
+test('buildVoucherNo joins prefix, number and suffix as typed', () => {
+    const { buildVoucherNo } = loadCalc();
+    assert.strictEqual(buildVoucherNo({ prefix: 'df', number: '3', suffix: 'fd' }), 'df3fd');
+});
+
+test('buildVoucherNo trims the parts and skips the empty ones', () => {
+    const { buildVoucherNo } = loadCalc();
+    assert.strictEqual(buildVoucherNo({ prefix: ' QT/ ', number: '007', suffix: '' }), 'QT/007');
+    assert.strictEqual(buildVoucherNo({ prefix: '', number: '12', suffix: '' }), '12');
+});
+
+test('buildVoucherNo returns an empty string when nothing was typed', () => {
+    const { buildVoucherNo } = loadCalc();
+    assert.strictEqual(buildVoucherNo({ prefix: '', number: '', suffix: '' }), '');
+});

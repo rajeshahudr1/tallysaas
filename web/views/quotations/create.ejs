@@ -92,10 +92,45 @@ var _today = new Date().toISOString().slice(0, 10);
                     <label class="form-label" for="q-no">Quotation No</label>
                     <div class="q-no-wrap">
                         <input type="text" class="form-control" id="q-no" name="quotation_no"
-                               value="<%= _qNo %>" readonly>
+                               value="" placeholder="<%= _esc(_qNo || 'Auto-generated on save') %>" readonly>
                         <button type="button" class="q-no-edit" id="q-no-edit" title="Edit quotation no" aria-label="Edit quotation no">
                             <i class="fa-solid fa-pen"></i>
                         </button>
+
+                        <!-- ── Default/Custom quotation-no popup (Task 3) — LiveKeeping's
+                             panel under the pencil icon, our theme. Goes through the same
+                             registerPopup()/closeAllPopups() gate as every other dropdown
+                             on this page (outside click / Esc close it too). -->
+                        <div class="q-no-popup" id="q-no-popup" hidden>
+                            <div class="q-no-popup-radios">
+                                <label class="q-no-radio">
+                                    <input type="radio" name="q-no-mode" id="q-no-mode-default" value="default" checked>
+                                    <span>Default</span>
+                                </label>
+                                <label class="q-no-radio">
+                                    <input type="radio" name="q-no-mode" id="q-no-mode-custom" value="custom">
+                                    <span>Custom</span>
+                                </label>
+                            </div>
+                            <div class="q-no-popup-fields" id="q-no-popup-fields" hidden>
+                                <div class="q-no-field">
+                                    <label for="q-no-prefix">Prefix</label>
+                                    <input type="text" class="form-control" id="q-no-prefix" maxlength="20" autocomplete="off">
+                                </div>
+                                <div class="q-no-field">
+                                    <label for="q-no-number">Voucher no</label>
+                                    <input type="text" class="form-control" id="q-no-number" maxlength="20" autocomplete="off">
+                                </div>
+                                <div class="q-no-field">
+                                    <label for="q-no-suffix">Suffix</label>
+                                    <input type="text" class="form-control" id="q-no-suffix" maxlength="20" autocomplete="off">
+                                </div>
+                            </div>
+                            <div class="q-no-popup-actions">
+                                <button type="button" class="btn btn-light btn-sm" id="q-no-cancel">Cancel</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="q-no-save">Save</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

@@ -1733,13 +1733,31 @@ a.action-btn { text-decoration: none; }
 .q-add-btn:hover { background: rgba(37,99,235,.1); }
 
 /* Quotation No — readonly text + a pencil button that unlocks it for editing. */
-.q-no-wrap { display: flex; align-items: center; gap: 8px; }
+.q-no-wrap { display: flex; align-items: center; gap: 8px; position: relative; }
 .q-no-wrap .form-control { flex: 1 1 auto; }
 .q-no-edit {
     flex: 0 0 auto; border: 1px solid var(--border); background: #fff; color: var(--text-muted);
     width: 36px; height: 36px; border-radius: 8px; display: inline-grid; place-items: center;
 }
 .q-no-edit:hover { color: var(--primary); border-color: var(--primary); }
+
+/* Quotation No popup (Task 3) — Default/Custom panel anchored under the
+   pencil icon, LiveKeeping's layout in our theme colours/tokens. */
+.q-no-popup {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 1080;
+    width: 340px; max-width: calc(100vw - 32px);
+    background: #fff; border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.14);
+    padding: 14px;
+}
+.q-no-popup-radios { display: flex; gap: 18px; margin-bottom: 10px; }
+.q-no-radio { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
+.q-no-radio input { accent-color: var(--primary); }
+.q-no-popup-fields { display: flex; gap: 8px; margin-bottom: 12px; }
+.q-no-field { flex: 1 1 0; min-width: 0; }
+.q-no-field label { display: block; font-size: 11px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+.q-no-field .form-control { width: 100%; }
+.q-no-popup-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* Narration / Advanced Settings — collapsible strips with a trailing chevron. */
 .q-collapse { border-top: 1px solid var(--border); }

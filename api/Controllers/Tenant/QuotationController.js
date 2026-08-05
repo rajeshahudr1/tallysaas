@@ -313,6 +313,13 @@ async function create(req, res) {
 
         return R.successResponse(res, created, 'Quotation created.');
     } catch (err) {
+        // A custom quotation_no colliding with another LIVE quotation for this
+        // company trips quotations_company_no_live_uq (partial unique index —
+        // see 20260805120000_quotations_indexes_and_partial_unique.js). Surface
+        // that as a readable 422 instead of the generic 500 fallback.
+        if (err && err.code === '23505' && /quotations_company_no_live_uq/.test(err.constraint || err.message || '')) {
+            return R.errorResponse(res, `Quotation No "${(req.body.quotation_no || '').trim()}" is already in use. Please choose a different number.`, 422);
+        }
         console.error('quotations.create error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);
     }

@@ -47,7 +47,18 @@ function formTotals(lines) {
     return { subtotal: r2(subtotal), taxes: r2(taxes), grand: r2(grand) };
 }
 
-window.QuotationCalc = { lineAmount, formTotals };
+// Custom Quotation No popup (LiveKeeping's Default/Custom panel, our theme) —
+// joins Prefix/Voucher no/Suffix exactly as typed, trimmed, skipping empty
+// parts. Pure function so it's unit-testable without a DOM.
+function buildVoucherNo(parts) {
+    var p = parts || {};
+    return [p.prefix, p.number, p.suffix]
+        .map(function (v) { return (v == null ? '' : String(v)).trim(); })
+        .filter(function (v) { return v !== ''; })
+        .join('');
+}
+
+window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
 
 (function () {
     document.addEventListener('DOMContentLoaded', init);
@@ -587,6 +598,62 @@ window.QuotationCalc = { lineAmount, formTotals };
 
             return { open: function () { openField(opts.input); filter(); }, addAndSelect: addAndSelect };
         }
+
+        // ── Quotation No — Default/Custom popup (Task 3) ──
+        // Pencil opens a small panel (registered through the shared
+        // registerPopup()/closeAllPopups() gate above): Default leaves the
+        // #q-no field empty ("Auto-generated on save" placeholder — the
+        // server's own series fills it in, untouched by this feature) while
+        // Custom composes buildVoucherNo({prefix, number, suffix}) into it.
+        (function wireQuotationNoPopup() {
+            var editBtn   = document.getElementById('q-no-edit');
+            var popup     = document.getElementById('q-no-popup');
+            var noInput   = document.getElementById('q-no');
+            var modeDefault = document.getElementById('q-no-mode-default');
+            var modeCustom  = document.getElementById('q-no-mode-custom');
+            var fieldsWrap  = document.getElementById('q-no-popup-fields');
+            var prefixEl = document.getElementById('q-no-prefix');
+            var numberEl = document.getElementById('q-no-number');
+            var suffixEl = document.getElementById('q-no-suffix');
+            var cancelBtn = document.getElementById('q-no-cancel');
+            var saveBtn   = document.getElementById('q-no-save');
+            if (!editBtn || !popup || !noInput) return;
+
+            function syncFieldsVisibility() {
+                fieldsWrap.hidden = !modeCustom.checked;
+            }
+            modeDefault.addEventListener('change', syncFieldsVisibility);
+            modeCustom.addEventListener('change', syncFieldsVisibility);
+
+            function closePopup() {
+                popup.hidden = true;
+                forgetPopup(closePopup);
+            }
+            function openPopup() {
+                // Re-open reflects the field's current mode: a value already
+                // in #q-no means Custom was saved before — restore its parts
+                // roughly by leaving mode as-is (prefix/number/suffix inputs
+                // keep whatever the user last typed in this session).
+                registerPopup([editBtn, popup], closePopup);
+                popup.hidden = false;
+                syncFieldsVisibility();
+                (modeCustom.checked ? prefixEl : editBtn).focus();
+            }
+
+            editBtn.addEventListener('click', function () {
+                if (popup.hidden) openPopup(); else closePopup();
+            });
+            if (cancelBtn) cancelBtn.addEventListener('click', closePopup);
+            if (saveBtn) saveBtn.addEventListener('click', function () {
+                if (modeCustom.checked) {
+                    var built = buildVoucherNo({ prefix: prefixEl.value, number: numberEl.value, suffix: suffixEl.value });
+                    noInput.value = built;
+                } else {
+                    noInput.value = '';
+                }
+                closePopup();
+            });
+        })();
 
         var dateEl = document.getElementById('q-date');
         var ledgerEl = document.getElementById('q-ledger');
