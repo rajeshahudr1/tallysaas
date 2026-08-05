@@ -107,6 +107,10 @@ const {
     listDeliveryNoteSchema,
 } = require('../Validators/deliveryNote');
 const {
+    createReceiptNoteSchema,
+    listReceiptNoteSchema,
+} = require('../Validators/receiptNote');
+const {
     createPaymentSchema,
     createReceiptSchema,
     listPaymentSchema,
@@ -157,6 +161,7 @@ const QuotationController     = require('../Controllers/Tenant/QuotationControll
 const SalesOrderController    = require('../Controllers/Tenant/SalesOrderController');
 const PurchaseOrderController = require('../Controllers/Tenant/PurchaseOrderController');
 const DeliveryNoteController  = require('../Controllers/Tenant/DeliveryNoteController');
+const ReceiptNoteController   = require('../Controllers/Tenant/ReceiptNoteController');
 const PaymentController       = require('../Controllers/Tenant/PaymentController');
 const LicenseController       = require('../Controllers/SuperAdmin/LicenseController');
 const CompanyController       = require('../Controllers/SuperAdmin/CompanyController');
@@ -939,6 +944,21 @@ router.post('/delivery-notes/:id/convert', authenticate, resolveTenant, resolveC
     can('delivery-notes', 'edit'), DeliveryNoteController.convert);
 router.delete('/delivery-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('delivery-notes', 'delete'), DeliveryNoteController.destroy);
+
+router.get('/receipt-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('receipt-notes', 'view'), validate(listReceiptNoteSchema, 'query'), ReceiptNoteController.list);
+router.get('/receipt-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('receipt-notes', 'view'), ReceiptNoteController.get);
+router.get('/receipt-notes/:id/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('receipt-notes', 'view'), ReceiptNoteController.pdf);
+router.post('/receipt-notes', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('receipt-notes', 'create'), validate(createReceiptNoteSchema), ReceiptNoteController.create);
+router.put('/receipt-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('receipt-notes', 'edit'), validate(createReceiptNoteSchema), ReceiptNoteController.updateDraft);
+router.post('/receipt-notes/:id/convert', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('receipt-notes', 'edit'), ReceiptNoteController.convert);
+router.delete('/receipt-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('receipt-notes', 'delete'), ReceiptNoteController.destroy);
 
 router.get('/purchase-orders', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('purchase-orders', 'view'), validate(listPurchaseOrderSchema, 'query'), PurchaseOrderController.list);
