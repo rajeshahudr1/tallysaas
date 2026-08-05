@@ -745,6 +745,30 @@ a { text-decoration: none; }
     box-shadow: 0 0 0 3px rgba(37,99,235,.12);
 }
 
+.form-grid--3col { grid-template-columns: repeat(3, 1fr); }
+.form-grid-span-3 { grid-column: span 3; }
+
+/* Add Customer modal (quotations/create.ejs) — wide, two titled sections,
+   three columns each, instead of the old cramped single-column stack. */
+#q-new-customer-modal .modal-dialog { max-width: 900px; }
+.q-nc-section {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px 4px;
+    margin: 0 0 20px;
+}
+.q-nc-section:last-of-type { margin-bottom: 0; }
+.q-nc-section-title {
+    width: auto;
+    padding: 0 8px;
+    margin: 0 0 14px -4px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--primary);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
 /* input with prefix (+91 flag) / suffix (₹) */
 .input-affix { display: flex; align-items: stretch; }
 .input-affix .affix {

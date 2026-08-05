@@ -66,6 +66,45 @@ window.QuotationCalc = { lineAmount, formTotals };
         var PARTIES = Array.isArray(window.QUOTATION_PARTIES) ? window.QUOTATION_PARTIES : [];
         var LEDGERS = Array.isArray(window.QUOTATION_LEDGERS) ? window.QUOTATION_LEDGERS : [];
 
+        // ── One popup/dropdown open at a time ──
+        // Every custom menu (product picker, party/ledger combobox) and every
+        // native <select> registers a close-callback here before it opens.
+        // Opening any of them closes everything else first, so a menu never
+        // lingers on top after a different one has already opened. Outside
+        // click and Esc close whatever is currently open.
+        var openPopups = []; // [{ els: Node[], close: fn }]
+        function closeAllPopups() {
+            var list = openPopups;
+            openPopups = [];
+            list.forEach(function (p) { p.close(); });
+        }
+        // Call right before a popup opens: closes every other registered
+        // popup first, then tracks this one so a later open (or an outside
+        // click/Esc) can close it in turn.
+        function registerPopup(els, closeFn) {
+            closeAllPopups();
+            openPopups = [{ els: els, close: closeFn }];
+        }
+        function forgetPopup(closeFn) {
+            openPopups = openPopups.filter(function (p) { return p.close !== closeFn; });
+        }
+        document.addEventListener('mousedown', function (e) {
+            openPopups.slice().forEach(function (p) {
+                var inside = p.els.some(function (el) { return el && el.contains(e.target); });
+                if (!inside) p.close();
+            });
+        }, true);
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') closeAllPopups();
+        });
+        // Native <select> elements (Country/State/City) open their own OS
+        // popup — we cannot control that popup directly, but opening one
+        // must still close any custom li-prod-* menu left open elsewhere.
+        function closeOthersOnNativeOpen(el) {
+            el.addEventListener('mousedown', function () { closeAllPopups(); });
+            el.addEventListener('focus', function () { closeAllPopups(); });
+        }
+
         function inr(n) {
             return '₹' + (Number(n) || 0).toLocaleString('en-IN', {
                 minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -186,7 +225,12 @@ window.QuotationCalc = { lineAmount, formTotals };
                     });
                 }
                 menu.hidden = false;
+                registerPopup([search, menu], closePicker);
                 place();
+            }
+            function closePicker() {
+                menu.hidden = true;
+                forgetPopup(closePicker);
             }
             window.addEventListener('scroll', function () { if (!menu.hidden) place(); }, true);
             window.addEventListener('resize', function () { if (!menu.hidden) place(); });
@@ -200,7 +244,7 @@ window.QuotationCalc = { lineAmount, formTotals };
                 var p = items[i];
                 if (!p) return;
                 applyProduct(row, p);
-                menu.hidden = true;
+                closePicker();
                 // auto-advance: item picked → jump to this row's Qty
                 openField(row.querySelector('.q-qty'));
             }
@@ -215,13 +259,13 @@ window.QuotationCalc = { lineAmount, formTotals };
             search.addEventListener('input', function () { hidden.value = ''; filter(); });
             search.addEventListener('focus', function () { if (search.value.trim() === '') filter(); });
             search.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape') { menu.hidden = true; return; } // close, keep focus — no blur()
+                if (e.key === 'Escape') { closePicker(); return; } // close, keep focus — no blur()
                 if (menu.hidden) return;
                 if (e.key === 'ArrowDown') { e.preventDefault(); active = Math.min(active + 1, items.length - 1); highlight(); }
                 else if (e.key === 'ArrowUp') { e.preventDefault(); active = Math.max(active - 1, 0); highlight(); }
                 else if (e.key === 'Enter') { if (active > -1) { e.preventDefault(); choose(active); } }
             });
-            search.addEventListener('blur', function () { setTimeout(function () { menu.hidden = true; }, 150); });
+            search.addEventListener('blur', function () { setTimeout(closePicker, 150); });
         }
 
         function wireRow(row) {
@@ -330,6 +374,85 @@ window.QuotationCalc = { lineAmount, formTotals };
             if (el.select) el.select();       // text field → पुराना मान चुना हुआ, सीधे टाइप करो
         }
 
+        // Country → State → City cascade shared by the Add Customer modal.
+        // countryEl/stateEl/cityEl are native <select>s; option value is the
+        // NAME (what gets submitted — customers.country/state/city are plain
+        // text columns), option.dataset.id is the numeric id used to fetch
+        // the next level. `initial` (optional) lets a caller pre-select saved
+        // names on edit even if a fetch hasn't populated the list yet — see
+        // customers/form.ejs's equivalent inline cascade for the edit case.
+        function fetchGeo(url) {
+            return fetch(url).then(function (r) { return r.json(); })
+                .then(function (j) { return (j && Array.isArray(j.data)) ? j.data : []; })
+                .catch(function () { return []; });
+        }
+        function fillSelect(el, items, placeholder, selectedName) {
+            var html = '<option value="">' + placeholder + '</option>';
+            var found = false;
+            items.forEach(function (it) {
+                var sel = selectedName && String(it.name) === String(selectedName);
+                if (sel) found = true;
+                html += '<option value="' + it.name.replace(/"/g, '&quot;') + '" data-id="' + it.id + '"' + (sel ? ' selected' : '') + '>' + it.name + '</option>';
+            });
+            // Saved value not in the fetched list (stale/edited data) — keep it
+            // visible and selected instead of silently discarding it.
+            if (selectedName && !found) {
+                html += '<option value="' + String(selectedName).replace(/"/g, '&quot;') + '" selected data-custom="1">' + selectedName + '</option>';
+            }
+            el.innerHTML = html;
+        }
+        function makeGeoCascade(opts) {
+            var countryEl = opts.countryEl, stateEl = opts.stateEl, cityEl = opts.cityEl;
+            if (!countryEl || !stateEl || !cityEl) return { reset: function () {}, setSaved: function () {} };
+
+            function loadCountries(selectedName) {
+                return fetchGeo('/geo/countries').then(function (list) {
+                    fillSelect(countryEl, list, 'Select country', selectedName || 'India');
+                    return list;
+                });
+            }
+            function loadStates(countryId, selectedName) {
+                stateEl.disabled = true;
+                if (!countryId) { fillSelect(stateEl, [], 'Select country first', selectedName); return Promise.resolve([]); }
+                return fetchGeo('/geo/states?country_id=' + encodeURIComponent(countryId)).then(function (list) {
+                    fillSelect(stateEl, list, 'Select state', selectedName);
+                    stateEl.disabled = false;
+                    return list;
+                });
+            }
+            function loadCities(stateId, selectedName) {
+                cityEl.disabled = true;
+                if (!stateId) { fillSelect(cityEl, [], 'Select state first', selectedName); return Promise.resolve([]); }
+                return fetchGeo('/geo/cities?state_id=' + encodeURIComponent(stateId)).then(function (list) {
+                    fillSelect(cityEl, list, 'Select city', selectedName);
+                    cityEl.disabled = false;
+                    return list;
+                });
+            }
+            function selectedId(el) {
+                var opt = el.options[el.selectedIndex];
+                return opt ? opt.getAttribute('data-id') : null;
+            }
+
+            countryEl.addEventListener('change', function () { loadStates(selectedId(countryEl)); fillSelect(cityEl, [], 'Select state first'); });
+            stateEl.addEventListener('change', function () { loadCities(selectedId(stateEl)); });
+
+            // reset(saved): (re)populate for a fresh "Add Customer" open, or
+            // pre-select saved names (edit mode) — the state/city fetches only
+            // fire once we know the country/state's numeric id.
+            function reset(saved) {
+                saved = saved || {};
+                loadCountries(saved.country).then(function () {
+                    var cid = selectedId(countryEl);
+                    return loadStates(cid, saved.state);
+                }).then(function () {
+                    var sid = selectedId(stateEl);
+                    return loadCities(sid, saved.city);
+                });
+            }
+            return { reset: reset };
+        }
+
         // Generic searchable combobox: input + hidden(optional) + menu div,
         // matching the li-prod-* widget already shipped for the item picker.
         // opts: { input, hidden, menu, list, getLabel, getValue, getSubLabel,
@@ -390,6 +513,7 @@ window.QuotationCalc = { lineAmount, formTotals };
                     });
                 }
                 opts.menu.hidden = false;
+                registerPopup([opts.input, opts.menu], close);
                 place();
             }
             function filter() {
@@ -399,7 +523,7 @@ window.QuotationCalc = { lineAmount, formTotals };
                 if (opts.createLabel) list = [CREATE_MARK].concat(list);
                 render(list);
             }
-            function close() { opts.menu.hidden = true; }
+            function close() { opts.menu.hidden = true; forgetPopup(close); }
             function updateClear() {
                 if (!opts.clearBtn) return;
                 opts.clearBtn.hidden = !(opts.hidden && opts.hidden.value);
@@ -516,6 +640,20 @@ window.QuotationCalc = { lineAmount, formTotals };
         // real customers API), insert+select the new party in-memory, and
         // continue the normal auto-advance flow — nothing already typed on
         // the voucher is touched.
+        // ── Country / State / City cascade (Add Customer modal) ──
+        // Country choice fills State (disabled until then); State choice
+        // fills City (disabled until then). India is preselected. Values are
+        // stored/submitted as plain names (the customers table has no geo id
+        // columns), so each <option value> is the name and the id only lives
+        // on the option for the next fetch in the chain.
+        var geoCascade = makeGeoCascade({
+            countryEl: document.getElementById('q-nc-country'),
+            stateEl:   document.getElementById('q-nc-state'),
+            cityEl:    document.getElementById('q-nc-city'),
+        });
+        [document.getElementById('q-nc-country'), document.getElementById('q-nc-state'), document.getElementById('q-nc-city')]
+            .forEach(function (el) { if (el) closeOthersOnNativeOpen(el); });
+
         var ncModalEl = document.getElementById('q-new-customer-modal');
         var ncModal = (ncModalEl && window.bootstrap && window.bootstrap.Modal)
             ? new window.bootstrap.Modal(ncModalEl) : null;
@@ -528,13 +666,12 @@ window.QuotationCalc = { lineAmount, formTotals };
             var nameEl = document.getElementById('q-nc-name');
             if (nameEl) nameEl.value = document.getElementById('q-party').value.trim();
             ['q-nc-mobile', 'q-nc-email', 'q-nc-gst', 'q-nc-address',
-             'q-nc-ledger-group', 'q-nc-opening-balance', 'q-nc-pincode'].forEach(function (id) {
+             'q-nc-ledger-group', 'q-nc-opening-balance', 'q-nc-pincode', 'q-nc-narration'].forEach(function (id) {
                 var el = document.getElementById(id); if (el) el.value = '';
             });
             var obType = document.getElementById('q-nc-opening-balance-type'); if (obType) obType.value = 'Cr';
-            var country = document.getElementById('q-nc-country'); if (country) country.value = 'India';
-            var stateEl = document.getElementById('q-nc-state'); if (stateEl) stateEl.value = '';
             var regType = document.getElementById('q-nc-gst-reg-type'); if (regType) regType.value = '';
+            geoCascade.reset();
             ncModal.show();
             ncModalEl.addEventListener('shown.bs.modal', function focusOnce() {
                 ncModalEl.removeEventListener('shown.bs.modal', focusOnce);
@@ -561,8 +698,10 @@ window.QuotationCalc = { lineAmount, formTotals };
                 opening_balance_type: fieldVal('q-nc-opening-balance-type'),
                 country: fieldVal('q-nc-country'),
                 state: fieldVal('q-nc-state'),
+                city: fieldVal('q-nc-city'),
                 pincode: fieldVal('q-nc-pincode'),
                 gst_registration_type: fieldVal('q-nc-gst-reg-type'),
+                notes: fieldVal('q-nc-narration'),
             };
             ncSave.disabled = true;
             // Form-urlencoded, not JSON — the web app only mounts

@@ -2754,8 +2754,10 @@ router.post('/quotations/create/quick-customer', async (req, res) => {
             opening_balance_type:  b.opening_balance_type || undefined,
             country:               b.country || undefined,
             state:                 b.state || undefined,
+            city:                  b.city || undefined,
             pincode:               b.pincode || undefined,
             gst_registration_type: b.gst_registration_type || undefined,
+            notes:                 b.notes || undefined,
         };
         if (!payload.name) {
             return res.status(422).json({ ok: false, error: 'Customer name is required.' });
@@ -5517,6 +5519,31 @@ router.get('/customers', async (req, res, next) => {
     }
 });
 
+/* ── Country/State/City cascade (GET /geo/*) — thin proxies to the api's
+ * read-only geo lookups, used by the browser-side cascade in customer
+ * form.ejs and the quotation "Add Customer" modal. */
+router.get('/geo/countries', async (req, res) => {
+    try {
+        const r = await api.get(req, '/geo/countries');
+        const d = (r.body && r.body.data && r.body.data.data) || [];
+        res.json({ data: Array.isArray(d) ? d : [] });
+    } catch (_) { res.json({ data: [] }); }
+});
+router.get('/geo/states', async (req, res) => {
+    try {
+        const r = await api.get(req, `/geo/states?country_id=${encodeURIComponent(req.query.country_id || '')}`);
+        const d = (r.body && r.body.data && r.body.data.data) || [];
+        res.json({ data: Array.isArray(d) ? d : [] });
+    } catch (_) { res.json({ data: [] }); }
+});
+router.get('/geo/cities', async (req, res) => {
+    try {
+        const r = await api.get(req, `/geo/cities?state_id=${encodeURIComponent(req.query.state_id || '')}`);
+        const d = (r.body && r.body.data && r.body.data.data) || [];
+        res.json({ data: Array.isArray(d) ? d : [] });
+    } catch (_) { res.json({ data: [] }); }
+});
+
 /* ── PAGE 2 — Add Customer (GET /customers/add) ─────────────────
  * FK dropdowns (Location / Sales Person / Customer Group) are fetched
  * from the api as { id, name } so the form submits real foreign keys. */
@@ -5573,6 +5600,7 @@ router.post('/customers', async (req, res, next) => {
             opening_balance_type:  b.opening_balance_type || undefined,
             country:               b.country || undefined,
             state:                 b.state || undefined,
+            city:                  b.city || undefined,
             pincode:               b.pincode || undefined,
             gst_registration_type: b.gst_registration_type || undefined,
         };
@@ -5647,7 +5675,7 @@ router.post('/customers/:id', async (req, res, next) => {
             is_tally_ledger: asBool(b.is_tally_ledger), notes: b.notes || undefined, internal_remarks: b.internal_remarks || undefined,
             custom_fields: assembleCustomFields(b),
             ledger_group: b.ledger_group || undefined, opening_balance_type: b.opening_balance_type || undefined,
-            country: b.country || undefined, state: b.state || undefined, pincode: b.pincode || undefined,
+            country: b.country || undefined, state: b.state || undefined, city: b.city || undefined, pincode: b.pincode || undefined,
             gst_registration_type: b.gst_registration_type || undefined,
         };
         const result = await api.put(req, `/customers/${id}`, payload);

@@ -26,6 +26,16 @@ const INDIA_COUNTRY_ID = 101;
 
 const CITY_FILES = ['cities0.json', 'cities1.json', 'cities2.json', 'cities3.json', 'cities4.json'];
 
+// The source "states" dataset for India includes junk rows that are not
+// actually states (no GST code exists for them) and one row that is just an
+// old spelling of a real state. Filtered/renamed here, once, at load time —
+// not in the controller — so every consumer (API responses, any future
+// server-side use of geo.js) sees the corrected list without having to know
+// about this data quirk. City lookups are keyed by state_id, so renaming
+// Pondicherry -> Puducherry keeps the same id and its cities keep resolving.
+const INDIA_JUNK_STATE_NAMES = new Set(['Kenmore', 'Narora', 'Natwar', 'Paschim Medinipur', 'Vaishali']);
+const INDIA_STATE_RENAMES = new Map([['Pondicherry', 'Puducherry']]);
+
 let _countries = null;
 let _statesByCountry = null;
 let _citiesByState = null;
@@ -54,10 +64,14 @@ function loadStates() {
     const byCountry = new Map();
     for (const s of raw.states || []) {
         const countryId = Number(s.country_id);
+        if (countryId === INDIA_COUNTRY_ID && INDIA_JUNK_STATE_NAMES.has(s.name)) continue;
+        const name = countryId === INDIA_COUNTRY_ID && INDIA_STATE_RENAMES.has(s.name)
+            ? INDIA_STATE_RENAMES.get(s.name)
+            : s.name;
         const entry = {
             id: Number(s.state_id),
-            name: s.name,
-            gst_code: countryId === INDIA_COUNTRY_ID ? gstCodeFor(s.name) : null,
+            name,
+            gst_code: countryId === INDIA_COUNTRY_ID ? gstCodeFor(name) : null,
         };
         if (!byCountry.has(countryId)) byCountry.set(countryId, []);
         byCountry.get(countryId).push(entry);

@@ -26,7 +26,6 @@ var _products = (typeof invoiceProducts !== 'undefined' && invoiceProducts) ? in
 var _ledgers  = (typeof salesLedgerOptions !== 'undefined' && salesLedgerOptions) ? salesLedgerOptions : [];
 var _qNo      = (typeof nextQuotationNo !== 'undefined' && nextQuotationNo) ? nextQuotationNo : '';
 var _ncLedgerGroups = (typeof ledgerGroupOptions !== 'undefined' && ledgerGroupOptions) ? ledgerGroupOptions : [];
-var _ncStates       = (typeof gstStates !== 'undefined' && gstStates) ? gstStates : [];
 var _ncGstRegTypes  = (typeof gstRegistrationTypes !== 'undefined' && gstRegistrationTypes) ? gstRegistrationTypes : [];
 
 function _esc(s) {
@@ -243,7 +242,7 @@ var _today = new Date().toISOString().slice(0, 10);
      real customers API: name (required) + the obviously-useful optionals. No
      Tally-ledger-only fields — our customer model doesn't have them. -->
 <div class="modal fade" id="q-new-customer-modal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-dialog-centered modal-xl">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">Add Customer</h5>
@@ -251,34 +250,18 @@ var _today = new Date().toISOString().slice(0, 10);
             </div>
             <div class="modal-body">
                 <div class="q-nc-error alert alert-danger py-2 px-3" id="q-nc-error" hidden></div>
-                <div class="form-group mb-3">
-                    <label class="form-label" for="q-nc-name">Customer Name<span class="req">*</span></label>
-                    <input type="text" class="form-control" id="q-nc-name" maxlength="191" required>
-                </div>
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label class="form-label" for="q-nc-mobile">Mobile</label>
-                        <input type="text" class="form-control" id="q-nc-mobile" maxlength="30">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="q-nc-email">Email</label>
-                        <input type="email" class="form-control" id="q-nc-email" maxlength="191">
-                    </div>
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="q-nc-gst">GST Number</label>
-                    <input type="text" class="form-control" id="q-nc-gst" maxlength="30">
-                </div>
-                <div class="form-group">
-                    <label class="form-label" for="q-nc-address">Billing Address</label>
-                    <textarea class="form-control" id="q-nc-address" rows="2" maxlength="2000"></textarea>
-                </div>
 
-                <button type="button" class="btn btn-link p-0 mb-2" data-bs-toggle="collapse" data-bs-target="#q-nc-more" aria-expanded="false">
-                    <i class="fa-solid fa-chevron-down me-1"></i>More details
-                </button>
-                <div class="collapse" id="q-nc-more">
-                    <div class="form-grid">
+                <fieldset class="q-nc-section">
+                    <legend class="q-nc-section-title">Basic Details</legend>
+                    <div class="form-grid form-grid--3col">
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-gst">GST Number</label>
+                            <input type="text" class="form-control text-uppercase" id="q-nc-gst" maxlength="30">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-name">Ledger Name<span class="req">*</span></label>
+                            <input type="text" class="form-control" id="q-nc-name" maxlength="191" required>
+                        </div>
                         <div class="form-group">
                             <label class="form-label" for="q-nc-ledger-group">Ledger Group</label>
                             <% if (_ncLedgerGroups.length) { %>
@@ -291,6 +274,14 @@ var _today = new Date().toISOString().slice(0, 10);
                             <% } %>
                         </div>
                         <div class="form-group">
+                            <label class="form-label" for="q-nc-mobile">Mobile</label>
+                            <input type="text" class="form-control" id="q-nc-mobile" maxlength="30">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-email">Email</label>
+                            <input type="email" class="form-control" id="q-nc-email" maxlength="191">
+                        </div>
+                        <div class="form-group">
                             <label class="form-label" for="q-nc-opening-balance">Opening Balance</label>
                             <div class="input-group">
                                 <span class="input-group-text">₹</span>
@@ -301,19 +292,34 @@ var _today = new Date().toISOString().slice(0, 10);
                                 </select>
                             </div>
                         </div>
+                    </div>
+                </fieldset>
+
+                <fieldset class="q-nc-section">
+                    <legend class="q-nc-section-title">Other Details</legend>
+                    <div class="form-grid form-grid--3col">
                         <div class="form-group">
                             <label class="form-label" for="q-nc-country">Country</label>
-                            <input type="text" class="form-control" id="q-nc-country" value="India" maxlength="64">
+                            <select class="form-select" id="q-nc-country" name="country"></select>
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="q-nc-state">State</label>
-                            <select class="form-select" id="q-nc-state">
-                                <option value="" selected>Select state</option>
-                                <% _ncStates.forEach(function (s) { %><option value="<%= s.name %>"><%= s.name %></option><% }); %>
+                            <select class="form-select" id="q-nc-state" name="state" disabled>
+                                <option value="" selected>Select country first</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label class="form-label" for="q-nc-pincode">Pincode</label>
+                            <label class="form-label" for="q-nc-city">City</label>
+                            <select class="form-select" id="q-nc-city" name="city" disabled>
+                                <option value="" selected>Select state first</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-address">Postal Address</label>
+                            <textarea class="form-control" id="q-nc-address" rows="2" maxlength="2000"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="q-nc-pincode">Postal Code</label>
                             <input type="text" class="form-control" id="q-nc-pincode" maxlength="12">
                         </div>
                         <div class="form-group">
@@ -323,8 +329,12 @@ var _today = new Date().toISOString().slice(0, 10);
                                 <% _ncGstRegTypes.forEach(function (t) { %><option value="<%= t %>"><%= t %></option><% }); %>
                             </select>
                         </div>
+                        <div class="form-group form-grid-span-3">
+                            <label class="form-label" for="q-nc-narration">Narration</label>
+                            <textarea class="form-control" id="q-nc-narration" rows="2" maxlength="2000"></textarea>
+                        </div>
                     </div>
-                </div>
+                </fieldset>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>

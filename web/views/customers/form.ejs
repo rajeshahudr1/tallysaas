@@ -19,7 +19,6 @@ var _locations      = (typeof locationOptions !== 'undefined' && locationOptions
 var _salesPersons   = (typeof salesPersonOptions !== 'undefined' && salesPersonOptions) ? salesPersonOptions : [];
 var _customerGroups = (typeof customerGroupOptions !== 'undefined' && customerGroupOptions) ? customerGroupOptions : [];
 var _ledgerGroups   = (typeof ledgerGroupOptions !== 'undefined' && ledgerGroupOptions) ? ledgerGroupOptions : [];
-var _gstStates      = (typeof gstStates !== 'undefined' && gstStates) ? gstStates : [];
 var _gstRegTypes    = (typeof gstRegistrationTypes !== 'undefined' && gstRegistrationTypes) ? gstRegistrationTypes : [];
 
 var _rec    = (typeof record !== 'undefined' && record) ? record : null;
@@ -198,16 +197,18 @@ var headActions =
             <div class="form-grid">
                 <div class="form-group">
                     <label class="form-label" for="cust-country">Country</label>
-                    <input type="text" class="form-control" id="cust-country" name="country"
-                           value="<%= _isEdit ? _v('country') : (_v('country') || 'India') %>" placeholder="India" maxlength="64">
+                    <select class="form-select" id="cust-country" name="country" data-saved="<%= _v('country') || 'India' %>"></select>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="cust-state">State</label>
-                    <select class="form-select" id="cust-state" name="state">
-                        <option value="" <%= !_v('state') ? 'selected' : '' %>>Select state</option>
-                        <% _gstStates.forEach(function (s) { %>
-                        <option value="<%= s.name %>" <%= String(_v('state')) === s.name ? 'selected' : '' %>><%= s.name %></option>
-                        <% }); %>
+                    <select class="form-select" id="cust-state" name="state" data-saved="<%= _v('state') %>" disabled>
+                        <option value="" selected>Select country first</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cust-city">City</label>
+                    <select class="form-select" id="cust-city" name="city" data-saved="<%= _v('city') %>" disabled>
+                        <option value="" selected>Select state first</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -298,3 +299,88 @@ var headActions =
     </div>
 
 </form>
+
+<script>
+/* ── Country / State / City cascade (Address tab) ──────────────────
+ * Country choice fills State (disabled until a country is picked); State
+ * choice fills City (disabled until a state is picked). India is preselected
+ * on Add. On Edit, the saved country/state/city (data-saved on each select)
+ * is restored — if the saved value is not in the fetched list (renamed/junk
+ * source data, or a value that predates this cascade) it is kept as an extra
+ * selected option instead of being silently dropped, so the user's data is
+ * never wiped just by opening the form.
+ */
+(function () {
+    var countryEl = document.getElementById('cust-country');
+    var stateEl   = document.getElementById('cust-state');
+    var cityEl    = document.getElementById('cust-city');
+    if (!countryEl || !stateEl || !cityEl) return;
+
+    function fetchGeo(url) {
+        return fetch(url).then(function (r) { return r.json(); })
+            .then(function (j) { return (j && Array.isArray(j.data)) ? j.data : []; })
+            .catch(function () { return []; });
+    }
+    function fillSelect(el, items, placeholder, selectedName) {
+        var html = '<option value="">' + placeholder + '</option>';
+        var found = false;
+        items.forEach(function (it) {
+            var sel = selectedName && String(it.name) === String(selectedName);
+            if (sel) found = true;
+            html += '<option value="' + it.name.replace(/"/g, '&quot;') + '" data-id="' + it.id + '"' + (sel ? ' selected' : '') + '>' + it.name + '</option>';
+        });
+        if (selectedName && !found) {
+            html += '<option value="' + String(selectedName).replace(/"/g, '&quot;') + '" selected data-custom="1">' + selectedName + '</option>';
+        }
+        el.innerHTML = html;
+    }
+    function selectedId(el) {
+        var opt = el.options[el.selectedIndex];
+        return opt ? opt.getAttribute('data-id') : null;
+    }
+    // selectedName carries the saved value through ONLY on the initial,
+    // programmatic cascade (edit-mode prefill). A manual change by the user
+    // always passes '' — picking a new country must not keep resurrecting
+    // the old saved state/city.
+    function loadStates(countryId, selectedName) {
+        stateEl.disabled = true;
+        if (!countryId) { fillSelect(stateEl, [], 'Select country first', selectedName); return Promise.resolve([]); }
+        return fetchGeo('/geo/states?country_id=' + encodeURIComponent(countryId)).then(function (list) {
+            fillSelect(stateEl, list, 'Select state', selectedName);
+            stateEl.disabled = false;
+            return list;
+        });
+    }
+    function loadCities(stateId, selectedName) {
+        cityEl.disabled = true;
+        if (!stateId) { fillSelect(cityEl, [], 'Select state first', selectedName); return Promise.resolve([]); }
+        return fetchGeo('/geo/cities?state_id=' + encodeURIComponent(stateId)).then(function (list) {
+            fillSelect(cityEl, list, 'Select city', selectedName);
+            cityEl.disabled = false;
+            return list;
+        });
+    }
+
+    var savedCountry = countryEl.getAttribute('data-saved') || 'India';
+    var savedState = stateEl.getAttribute('data-saved') || '';
+    var savedCity = cityEl.getAttribute('data-saved') || '';
+
+    // Initial load (Add: just India; Edit: carries the saved state/city all
+    // the way down the chain).
+    fetchGeo('/geo/countries').then(function (list) {
+        fillSelect(countryEl, list, 'Select country', savedCountry);
+        return loadStates(selectedId(countryEl), savedState);
+    }).then(function () {
+        return loadCities(selectedId(stateEl), savedCity);
+    });
+
+    // User-driven changes: no saved value to carry through.
+    countryEl.addEventListener('change', function () {
+        loadStates(selectedId(countryEl), '');
+        fillSelect(cityEl, [], 'Select state first');
+    });
+    stateEl.addEventListener('change', function () {
+        loadCities(selectedId(stateEl), '');
+    });
+})();
+</script>
