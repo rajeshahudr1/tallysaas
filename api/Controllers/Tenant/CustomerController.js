@@ -25,6 +25,7 @@
 
 const crud = require('../../Helpers/crudController');
 const db   = require('../../config/db').db;
+const { cutoffFromDays } = require('../../Helpers/inactiveCutoff');
 
 // Columns returned by list/get. `customers.*` gives every base column; the three
 // aliased joins add human-readable labels for the FK targets.
@@ -85,6 +86,12 @@ function buildInsert(body) {
         billing_address:   body.billing_address,
         shipping_address:  body.shipping_address,
         is_tally_ledger:   body.is_tally_ledger,
+        ledger_group:            body.ledger_group,
+        opening_balance_type:    body.opening_balance_type,
+        country:                 body.country,
+        state:                   body.state,
+        pincode:                 body.pincode,
+        gst_registration_type:   body.gst_registration_type,
         notes:             body.notes,
         internal_remarks:  body.internal_remarks,
         custom_fields:     (body.custom_fields && typeof body.custom_fields === 'object')
@@ -98,6 +105,7 @@ const UPDATABLE = [
     'location_id', 'sales_person_id', 'customer_group_id',
     'opening_balance', 'credit_limit', 'status',
     'billing_address', 'shipping_address', 'is_tally_ledger',
+    'ledger_group', 'opening_balance_type', 'country', 'state', 'pincode', 'gst_registration_type',
     'notes', 'internal_remarks', 'custom_fields',
 ];
 
@@ -188,6 +196,28 @@ const controller = crud.build({
         sales_person:   (qb, v) => qb.where('sales_persons.name', v),
         customer_group: (qb, v) => qb.where('customer_groups.name', v),
         gst:            (qb, v) => qb.where('customers.gst_number', 'ilike', `%${v}%`),
+        // ?inactive=90 — customers with NO sales invoice in the last N days.
+        // Drives the dashboard's "Inactive Customers" tile.
+        inactive: (qb, v) => {
+            const cutoff = cutoffFromDays(v);
+            if (!cutoff) return qb;
+            return qb.whereNotExists(function () {
+                this.select(db.raw('1')).from('invoices')
+                    .whereRaw('invoices.customer_id = customers.id')
+                    .whereNull('invoices.deleted_at')
+                    .where('invoices.type', 'sales')
+                    .where('invoices.invoice_date', '>=', cutoff);
+            });
+        },
+        // ?missing=mobile|email|contact — customers lacking contact details.
+        // 'contact' means EITHER is missing (the dashboard tile's meaning).
+        missing: (qb, v) => {
+            const blank = (col) => `coalesce(trim(customers.${col}), '') = ''`;
+            if (v === 'mobile')  return qb.whereRaw(blank('mobile'));
+            if (v === 'email')   return qb.whereRaw(blank('email'));
+            if (v === 'contact') return qb.whereRaw(`(${blank('mobile')} OR ${blank('email')})`);
+            return qb;
+        },
     },
     baseQuery,
     buildInsert,

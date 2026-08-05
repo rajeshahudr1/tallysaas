@@ -1058,6 +1058,14 @@ router.get(
     TallyLedgerController.salesLedgerOptions,
 );
 
+// Party-eligible Tally groups (Sundry Debtors / Sundry Creditors ancestry) for
+// the customer form's "Ledger Group" dropdown.
+router.get(
+    '/tally/ledger-groups',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
+    TallyLedgerController.ledgerGroupOptions,
+);
+
 // SFA — the logged-in salesman's field dashboard (assigned locations + their
 // customer/invoice tallies + approval-status counts). resolveLocation sets
 // req.isSalesman/req.salesPersonId that the controller scopes on.

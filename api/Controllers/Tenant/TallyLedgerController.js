@@ -23,6 +23,7 @@
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
 const { BUCKETS, resolveBuckets, accountingBalance } = require('../../Helpers/ledgerGroups');
+const PARTY_BUCKETS = ['payables', 'receivables'];
 const { periodBalance, drCr, isoDay } = require('../../Helpers/ledgerBalance');
 const { liveVoucherEntries, liveInventoryEntries } = require('../../Helpers/tallyScope');
 
@@ -378,4 +379,30 @@ async function salesLedgerOptions(req, res) {
     }
 }
 
-module.exports = { list, statement, voucher, salesLedgerOptions };
+/**
+ * GET /tally/ledger-groups — party-eligible Tally groups (the Sundry Debtors /
+ * Sundry Creditors ancestry) as {id,name,parent} options for the customer
+ * form's "Ledger Group" dropdown. Reuses ledgerGroups.js's parent-chain walk
+ * (resolveBuckets) — the same classification the Cash & Bank screens use —
+ * rather than inventing a second definition of "party group". No group sync
+ * yet → empty data, not a 500.
+ */
+async function ledgerGroupOptions(req, res) {
+    try {
+        const companyId = req.companyId;
+        const groups = await db('tally_groups').where('company_id', companyId)
+            .whereNull('deleted_at')
+            .select('id', 'name', 'parent', 'primary_group');
+        const bucketOf = resolveBuckets(groups);
+        const data = groups
+            .filter((g) => PARTY_BUCKETS.includes(bucketOf.get(g.name)))
+            .map((g) => ({ id: g.id, name: g.name, parent: g.parent || '' }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+        return R.successResponse(res, { data });
+    } catch (err) {
+        console.error('tallyLedgers.ledgerGroupOptions error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+module.exports = { list, statement, voucher, salesLedgerOptions, ledgerGroupOptions };

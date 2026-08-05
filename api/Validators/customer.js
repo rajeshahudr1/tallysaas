@@ -25,9 +25,15 @@
  */
 
 const Joi = require('joi');
+const { GST_STATES, GST_REGISTRATION_TYPES } = require('../config/gstStates');
 
 // Allowed lifecycle states — matches the customers.status default ('Active').
 const STATUSES = ['Active', 'Inactive', 'Blocked'];
+
+// Allow-lists for the Tally party fields — keeps garbage out of state /
+// gst_registration_type rather than accepting free text.
+const STATE_NAMES = GST_STATES.map((s) => s.name);
+const BALANCE_TYPES = ['Cr', 'Dr'];
 
 // Reusable optional positive-integer FK (nullable so a client can detach it).
 const fkId = Joi.number().integer().positive().allow(null);
@@ -67,6 +73,13 @@ const createCustomerSchema = Joi.object({
 
     is_tally_ledger:  Joi.boolean().default(true),
 
+    ledger_group:          optText(191),
+    opening_balance_type:  Joi.string().valid(...BALANCE_TYPES).default('Cr'),
+    country:                optText(64),
+    state:                   Joi.string().trim().max(100).valid(...STATE_NAMES).allow('', null),
+    pincode:                optText(12),
+    gst_registration_type:  Joi.string().trim().max(40).valid(...GST_REGISTRATION_TYPES).allow('', null),
+
     notes:            optText(2000),
     internal_remarks: optText(2000),
     custom_fields:    Joi.object().unknown(true).allow(null),
@@ -100,6 +113,13 @@ const updateCustomerSchema = Joi.object({
     shipping_address: optText(2000),
 
     is_tally_ledger:  Joi.boolean(),
+
+    ledger_group:          optText(191),
+    opening_balance_type:  Joi.string().valid(...BALANCE_TYPES),
+    country:                optText(64),
+    state:                   Joi.string().trim().max(100).valid(...STATE_NAMES).allow('', null),
+    pincode:                optText(12),
+    gst_registration_type:  Joi.string().trim().max(40).valid(...GST_REGISTRATION_TYPES).allow('', null),
 
     notes:            optText(2000),
     internal_remarks: optText(2000),
