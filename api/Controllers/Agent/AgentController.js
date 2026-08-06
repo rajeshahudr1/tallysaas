@@ -800,6 +800,14 @@ async function pending(req, res) {
             location: 'locations', category: 'categories',
             sales_invoice: 'sales-invoices', purchase_invoice: 'purchase-invoices',
             payment: 'payments', receipt: 'receipts', journal: 'journals',
+            // New voucher types (not yet sent by /pending — toggles exist from
+            // day one so the operator's choice is already in effect when a
+            // later phase starts sending them).
+            quotation: 'quotations', sales_order: 'sales-orders',
+            purchase_order: 'purchase-orders', delivery_note: 'delivery-notes',
+            receipt_note: 'receipt-notes', credit_note: 'credit-notes',
+            debit_note: 'debit-notes', contra: 'contra',
+            stock_journal: 'stock-journal', physical_stock: 'physical-stock',
         };
         const keep = (r) => SM.isEnabled(pushSel, REC2MOD[r && r.record_type] || '');
         const allVouchers = [...invoiceVouchers, ...payVouchers, ...journalVouchers].filter(keep);
@@ -837,6 +845,7 @@ async function result(req, res) {
         const allowed = new Set(syncing.map((c) => Number(c.id)));
 
         let processed = 0;
+        let unknown = 0;
         for (const r of results) {
             const cid = Number(r.company_id);
             if (!allowed.has(cid)) continue;          // never touch another license's data
@@ -907,6 +916,11 @@ async function result(req, res) {
                         .whereNull('deleted_at').update(pushed);
                 }
             } else {
+                // An unrecognised record_type must not vanish silently — that
+                // would leave rows stuck in /pending forever with nothing to
+                // show why. Count it, log it, and move on to the next result.
+                console.error(`AgentController.result: unknown record_type '${r.record_type}' (record_id=${r.record_id}, company_id=${cid})`);
+                unknown += 1;
                 continue;
             }
 
@@ -920,7 +934,7 @@ async function result(req, res) {
             processed += 1;
         }
 
-        return R.successResponse(res, { processed }, 'Results recorded.');
+        return R.successResponse(res, { processed, unknown_record_types: unknown }, 'Results recorded.');
     } catch (err) {
         console.error('AgentController.result error:', err);
         return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);

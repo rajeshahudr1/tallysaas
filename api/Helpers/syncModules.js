@@ -26,6 +26,16 @@ const SYNC_MODULES = [
     { key: 'payments',          label: 'Payments' },
     { key: 'receipts',          label: 'Receipts' },
     { key: 'journals',          label: 'Journals' },
+    { key: 'quotations',        label: 'Quotations' },
+    { key: 'sales-orders',      label: 'Sales Orders' },
+    { key: 'purchase-orders',   label: 'Purchase Orders' },
+    { key: 'delivery-notes',    label: 'Delivery Notes' },
+    { key: 'receipt-notes',     label: 'Receipt Notes' },
+    { key: 'credit-notes',      label: 'Credit Notes' },
+    { key: 'debit-notes',       label: 'Debit Notes' },
+    { key: 'contra',            label: 'Contra' },
+    { key: 'stock-journal',     label: 'Stock Journal' },
+    { key: 'physical-stock',    label: 'Physical Stock' },
 ];
 const ALL_KEYS = SYNC_MODULES.map((m) => m.key);
 
