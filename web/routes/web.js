@@ -122,6 +122,39 @@ router.get('/agent-app', (req, res) => {
     });
 });
 
+/* ── Public pay page — GET /pay/:token ────────────────────────
+ * The link a customer opens from a Collect Payments request. NO auth: the
+ * token itself is the credential (see api/Controllers/Public/PayController).
+ * MUST stay above `router.use(requireAuth)` below, or a customer with no
+ * account gets bounced to /login instead of seeing their bill. `layout:
+ * false` — this is a standalone page, not part of the app shell (no
+ * sidebar, no header, nothing but the bill and a Pay button). Proxies
+ * straight to the api's public GET /pay/:token, which already limits the
+ * response to exactly what a payer needs to see.
+ */
+router.get('/pay/:token', async (req, res) => {
+    const token = String(req.params.token || '').trim();
+    const result = await api.get(req, `/pay/${encodeURIComponent(token)}`);
+    if (!apiOk(result)) {
+        return res.status(result && result.body && result.body.status === 429 ? 429 : 404)
+            .render('pay/index', {
+                layout: false,
+                title: 'Payment link',
+                notFound: true,
+                message: apiError(result, 'Payment link not found.'),
+                pay: null,
+            });
+    }
+    const pay = (result.body && result.body.data) || null;
+    return res.render('pay/index', {
+        layout: false,
+        title: 'Payment link',
+        notFound: false,
+        message: '',
+        pay,
+    });
+});
+
 /* Everything below this line requires a logged-in session. */
 
 /* ── My Profile — available to EVERY role. Shows identity (name/email/role/
@@ -8405,5 +8438,98 @@ async function handleReturnNoteCreate(req, res, next, kind) {
 }
 router.post('/credit-notes', (req, res, next) => handleReturnNoteCreate(req, res, next, 'credit'));
 router.post('/debit-notes',  (req, res, next) => handleReturnNoteCreate(req, res, next, 'debit'));
+
+/* ── Collect Payments ─────────────────────────────────────────
+ * One screen: settings (is it on, which UPI VPA, payee name — with the
+ * platform-never-holds-the-money line spelled out) above a list of payment
+ * requests. Money only ever moves in this app when a human clicks "Mark as
+ * received" — see routes/web.js POST /collect-payments/:id/mark-paid below
+ * and CollectPaymentController.markPaid, which creates the receipt in the
+ * SAME transaction as the atomic claim. Every other action here (settings,
+ * create, cancel, and the public /pay/:token page) never touches the books.
+ */
+router.get('/collect-payments', async (req, res, next) => {
+    try {
+        const status = (req.query.status || '').trim();
+        const [settingsRes, listRes, invoicesRes] = await Promise.all([
+            api.get(req, '/collect-payments/settings'),
+            api.get(req, `/collect-payments?per_page=50${status ? `&status=${encodeURIComponent(status)}` : ''}`),
+            api.get(req, '/sales-invoices?per_page=100'),
+        ]);
+
+        const settingsBody = (settingsRes.body && settingsRes.body.data) || {};
+        const settings = settingsBody.settings || { enabled: false, upi_vpa: '', payee_name: '' };
+        const gateway  = settingsBody.gateway  || { available: false, reason: 'not_configured' };
+
+        const listBody = (listRes.body && listRes.body.data) || {};
+        const requests = (listBody.data || []).map((r) => ({
+            ...r,
+            created_fmt: fmtDate(r.created_at),
+            pay_url: `${req.protocol}://${req.get('host')}/pay/${r.token}`,
+        }));
+
+        const invoices = ((invoicesRes.body && invoicesRes.body.data && invoicesRes.body.data.data) || []);
+
+        res.render('collect-payments/index', {
+            title: 'Collect Payments',
+            activeMenu: 'collect-payments',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Collect Payments' }],
+            settings,
+            gateway,
+            requests,
+            invoices,
+            statusFilter: status,
+        });
+    } catch (err) { next(err); }
+});
+
+router.post('/collect-payments/settings', async (req, res, next) => {
+    try {
+        const b = req.body || {};
+        const result = await api.put(req, '/collect-payments/settings', {
+            enabled:    asBool(b.enabled),
+            upi_vpa:    b.upi_vpa,
+            payee_name: b.payee_name,
+        });
+        setFlash(req, apiOk(result) ? 'success' : 'error',
+            apiOk(result) ? 'Settings saved.' : apiError(result, 'Could not save settings.'));
+        return req.session.save(() => res.redirect('/collect-payments'));
+    } catch (err) { next(err); }
+});
+
+router.post('/collect-payments', async (req, res, next) => {
+    try {
+        const b = req.body || {};
+        const result = await api.post(req, '/collect-payments', {
+            invoice_id: Number(b.invoice_id),
+            note:       b.note || undefined,
+        });
+        setFlash(req, apiOk(result) ? 'success' : 'error',
+            apiOk(result) ? 'Payment request created.' : apiError(result, 'Could not create the payment request.'));
+        return req.session.save(() => res.redirect('/collect-payments'));
+    } catch (err) { next(err); }
+});
+
+/* Mark as received — the ONLY action in this whole feature that changes the
+ * books: it also creates a receipt (same transaction, server side). The
+ * confirm text on the button (collect-payments/index.ejs) says so before the
+ * click lands. */
+router.post('/collect-payments/:id/mark-paid', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/collect-payments/${encodeURIComponent(req.params.id)}/mark-paid`, {});
+        setFlash(req, apiOk(result) ? 'success' : 'error',
+            apiOk(result) ? 'Marked as received — a receipt was created.' : apiError(result, 'Could not mark this request as received.'));
+        return req.session.save(() => res.redirect('/collect-payments'));
+    } catch (err) { next(err); }
+});
+
+router.post('/collect-payments/:id/cancel', async (req, res, next) => {
+    try {
+        const result = await api.post(req, `/collect-payments/${encodeURIComponent(req.params.id)}/cancel`, {});
+        setFlash(req, apiOk(result) ? 'success' : 'error',
+            apiOk(result) ? 'Payment request cancelled.' : apiError(result, 'Could not cancel this request.'));
+        return req.session.save(() => res.redirect('/collect-payments'));
+    } catch (err) { next(err); }
+});
 
 module.exports = router;

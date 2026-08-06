@@ -1,0 +1,124 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/pay/index.ejs — GET /pay/:token. PUBLIC, no login, no sidebar.
+ * Rendered with `layout: false` (routes/web.js) — this file is the whole
+ * <html> document.
+ *
+ * Expected locals (routes/web.js GET /pay/:token, proxying api's
+ * PayController.show):
+ *   notFound  boolean
+ *   message   string   — shown when notFound (bad token / rate-limited)
+ *   pay       { company_name, invoice_no, amount, status, upi_uri } | null
+ *
+ * No QR code here: `qrcode` is only a dependency of api/, not web/, and
+ * adding a new dependency to web/ (or reaching into api/'s Controllers,
+ * which is Task 1's file, not this task's) wasn't clean — so this page
+ * renders the upi:// link and the VPA/amount clearly instead of a broken
+ * image. See the Task 2 report for the full reasoning.
+ * ─────────────────────────────────────────────────────────── */
+var _notFound = (typeof notFound !== 'undefined') ? notFound : false;
+var _message  = (typeof message  !== 'undefined') ? message  : '';
+var _pay      = (typeof pay      !== 'undefined') ? pay      : null;
+
+function _inr(v) {
+    var n = Number(v || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+var _isPaid = _pay && _pay.status === 'paid';
+%><!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pay<% if (_pay && _pay.company_name) { %> · <%= _pay.company_name %><% } %></title>
+<style>
+  :root { --brand:#2563EB; --ink:#111827; --muted:#6B7280; --paper:#F3F4F6; --ok:#16A34A; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
+    font: 15px/1.5 "Segoe UI", system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 420px; background: #fff; border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(0,0,0,.08); padding: 28px 24px; text-align: center;
+  }
+  .company { font-size: 14px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .invoice { font-size: 14px; color: var(--muted); margin-bottom: 18px; }
+  .amount { font-size: 40px; font-weight: 700; letter-spacing: -0.02em; margin: 8px 0 20px; }
+  .btn-pay {
+    display: block; width: 100%; padding: 14px; border-radius: 12px; border: none;
+    background: var(--brand); color: #fff; font-size: 16px; font-weight: 600;
+    text-decoration: none; margin-bottom: 14px;
+  }
+  .btn-pay:active { opacity: .85; }
+  .vpa-row {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-size: 13px; color: var(--muted); background: var(--paper); border-radius: 8px; padding: 8px 12px;
+  }
+  .vpa-row code { color: var(--ink); font-weight: 600; }
+  .vpa-row button {
+    border: none; background: none; color: var(--brand); font-size: 13px; font-weight: 600; cursor: pointer; padding: 0;
+  }
+  .paid-badge {
+    display: inline-flex; align-items: center; gap: 8px; color: var(--ok); font-weight: 700; font-size: 18px; margin: 12px 0;
+  }
+  .not-found { color: var(--muted); }
+  .not-found i { font-size: 32px; color: #D1D5DB; margin-bottom: 12px; display: block; }
+  .footer-note { font-size: 12px; color: var(--muted); margin-top: 18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <% if (_notFound) { %>
+      <div class="not-found">
+        <i class="fa-solid fa-circle-exclamation"></i>
+        <p><%= _message || 'This payment link could not be found.' %></p>
+      </div>
+    <% } else { %>
+      <div class="company"><%= _pay.company_name || '' %></div>
+      <div class="invoice">Invoice <%= _pay.invoice_no || '' %></div>
+      <div class="amount"><%= _inr(_pay.amount) %></div>
+
+      <% if (_isPaid) { %>
+        <div class="paid-badge">✓ Already paid</div>
+        <p class="not-found">This bill has already been settled. No further payment is needed.</p>
+      <% } else if (_pay.status === 'cancelled') { %>
+        <div class="not-found">
+          <p>This payment request has been cancelled.</p>
+        </div>
+      <% } else if (_pay.upi_uri) { %>
+        <a class="btn-pay" href="<%= _pay.upi_uri %>">Pay with UPI</a>
+        <div class="vpa-row">
+          <span>UPI:</span> <code id="pay-vpa"><%= (_pay.upi_uri.match(/pa=([^&]+)/) || [])[1] ? decodeURIComponent((_pay.upi_uri.match(/pa=([^&]+)/) || [])[1]) : '' %></code>
+          <button type="button" id="pay-copy-vpa">Copy</button>
+        </div>
+        <p class="footer-note">Open this page on your phone and tap "Pay with UPI" to launch your UPI app, or copy the UPI ID above to pay from another app.</p>
+      <% } else { %>
+        <div class="not-found">
+          <p>This company hasn't finished setting up UPI payments yet. Please contact them directly.</p>
+        </div>
+      <% } %>
+    <% } %>
+  </div>
+
+<script>
+(function () {
+  var btn = document.getElementById('pay-copy-vpa');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var vpa = document.getElementById('pay-vpa').textContent;
+    var done = function () { btn.textContent = 'Copied'; setTimeout(function () { btn.textContent = 'Copy'; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(vpa).then(done).catch(function () {});
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = vpa; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (_) {}
+      document.body.removeChild(ta);
+    }
+  });
+})();
+</script>
+</body>
+</html>

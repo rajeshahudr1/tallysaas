@@ -63,7 +63,7 @@ const MENU_TREE = [
         { key: 'contra',       label: 'Contra',              icon: 'fa-right-left',       href: '/contra',              module: 'contra' },
     ]},
     { label: null, items: [
-        { key: 'collect-payments', label: 'Collect Payments', icon: 'fa-credit-card', href: '#', soon: true, module: 'collect-payments' },
+        { key: 'collect-payments', label: 'Collect Payments', icon: 'fa-credit-card', href: '/collect-payments', module: 'collect-payments' },
     ]},
     { label: 'Customers', icon: 'fa-address-book', items: [
         { key: 'customers', label: 'Customers', icon: 'fa-user-group',  href: '/customers', module: 'customers' },

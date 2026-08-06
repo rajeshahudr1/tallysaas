@@ -181,3 +181,16 @@ test('Data Backup is live in the menu, not "Soon"', () => {
     assert.strictEqual(byKey['data-backup'].soon, undefined, 'Data Backup still soon');
     assert.strictEqual(byKey['data-backup'].href, '/data-backup');
 });
+
+test('Collect Payments is live in the menu, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['collect-payments'].soon, undefined, 'Collect Payments still soon');
+    assert.strictEqual(byKey['collect-payments'].href, '/collect-payments');
+});
+
+test('no menu item is left marked "Soon"', () => {
+    const soon = [];
+    for (const g of MENU_TREE) for (const it of g.items) if (it.soon) soon.push(it.key);
+    assert.deepStrictEqual(soon, [], `still marked soon: ${soon.join(', ')}`);
+});

@@ -27,11 +27,22 @@ function renderSidebar(locals) {
 module.exports = { renderSidebar };
 
 test('a `soon` item renders as a dead span with a Soon pill, not a link', () => {
-    const html = renderSidebar();
+    // No real menu item is left `soon: true` (Collect Payments was the last
+    // one) — but the disabled-item rendering path in sidebar.ejs must stay
+    // alive for future modules, so this exercises it with a fixture group
+    // instead of a real item.
+    const fixtureTree = JSON.parse(JSON.stringify(MENU_TREE));
+    fixtureTree.push({ label: null, items: [
+        { key: 'fixture-soon', label: 'Fixture Soon Item', icon: 'fa-flask', href: '#', soon: true, module: 'fixture-soon' },
+    ]});
+    const html = renderSidebar({ menuTree: fixtureTree });
     assert.match(html, /<span class="sidebar-link is-disabled"[^>]*aria-disabled="true"/);
     assert.match(html, /<span class="sidebar-soon">Soon<\/span>/);
-    // Collect Payments is still `soon: true` — and it must NOT be clickable.
-    assert.doesNotMatch(html, /<a class="sidebar-link[^"]*"[^>]*>\s*<i[^>]*><\/i>\s*<span class="sidebar-link-text">Collect Payments</);
+    assert.doesNotMatch(html, /<a class="sidebar-link[^"]*"[^>]*>\s*<i[^>]*><\/i>\s*<span class="sidebar-link-text">Fixture Soon Item</);
+
+    // And the real menu — with no `soon` items left — renders none of this.
+    const realHtml = renderSidebar();
+    assert.doesNotMatch(realHtml, /sidebar-soon/);
 });
 
 test('groups appear in the LiveKeeping order', () => {

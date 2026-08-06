@@ -1,0 +1,232 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/collect-payments/index.ejs — GET /collect-payments.
+ *
+ * Two blocks:
+ *   1. Settings — on/off, UPI VPA, payee name. Spells out plainly that the
+ *      money lands straight in the company's own UPI account (this platform
+ *      never holds it) — see the note under the switch.
+ *   2. Requests — Customer · Invoice · Amount · Status · Link (copy) ·
+ *      Action. "Mark as received" is the ONLY action anywhere in this
+ *      feature that changes the books (it creates a receipt server-side, in
+ *      the same transaction as the atomic claim) — so its confirm text says
+ *      that in plain words before the click lands.
+ *
+ * Expected locals (routes/web.js GET /collect-payments):
+ *   settings   { enabled, upi_vpa, payee_name }
+ *   gateway    { available, reason }
+ *   requests   [ { id, token, pay_url, status, amount, invoice_no, customer, created_fmt, note } ]
+ *   invoices   [ { id, invoice_no, customer, total } ]  — for the "New request" picker
+ *   statusFilter string
+ * ─────────────────────────────────────────────────────────── */
+var _settings = (typeof settings !== 'undefined' && settings) ? settings : { enabled: false, upi_vpa: '', payee_name: '' };
+var _gateway  = (typeof gateway  !== 'undefined' && gateway)  ? gateway  : { available: false, reason: 'not_configured' };
+var _requests = (typeof requests !== 'undefined' && requests) ? requests : [];
+var _invoices = (typeof invoices !== 'undefined' && invoices) ? invoices : [];
+var _statusFilter = (typeof statusFilter !== 'undefined') ? statusFilter : '';
+var _vpaMissing = !_settings.upi_vpa;
+
+function _inr(v) {
+    var n = Number(v || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function _statusPillClass(s) {
+    s = String(s || '').toLowerCase();
+    if (s === 'paid')      return 'pill-status--success';
+    if (s === 'cancelled') return 'pill-status--muted';
+    return 'pill-status--info'; // pending
+}
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Collect Payments',
+    infoKey: 'collect-payments',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Collect Payments' },
+    ],
+}) %>
+
+<!-- ── Settings ─────────────────────────────────────────────── -->
+<div class="card form-card mb-4">
+    <div class="form-card-body">
+        <h6 class="mb-3">Settings</h6>
+        <form method="post" action="/collect-payments/settings" autocomplete="off">
+            <div class="form-check form-switch mb-3">
+                <input class="form-check-input" type="checkbox" role="switch" id="cp-enabled" name="enabled" value="on" <%= _settings.enabled ? 'checked' : '' %>>
+                <label class="form-check-label" for="cp-enabled">Collect Payments is <%= _settings.enabled ? 'on' : 'off' %></label>
+            </div>
+
+            <div class="form-grid mb-2">
+                <div class="form-group">
+                    <label class="form-label" for="cp-vpa">Your UPI ID (VPA)</label>
+                    <input type="text" class="form-control" id="cp-vpa" name="upi_vpa" placeholder="yourbusiness@okhdfcbank"
+                           value="<%= _settings.upi_vpa || '' %>">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="cp-payee">Name shown to the payer</label>
+                    <input type="text" class="form-control" id="cp-payee" name="payee_name" placeholder="Your Company Name"
+                           value="<%= _settings.payee_name || '' %>">
+                </div>
+            </div>
+
+            <div class="form-hint mb-3">
+                <i class="fa-solid fa-circle-info me-1 text-primary"></i>
+                Payments go <strong>straight into this UPI account</strong> — Tally Cloud Sync never holds or routes the money.
+                A request only becomes "Paid" when someone here clicks <strong>Mark as received</strong>.
+            </div>
+
+            <button type="submit" class="btn btn-primary">Save Settings</button>
+        </form>
+    </div>
+</div>
+
+<!-- ── Requests ─────────────────────────────────────────────── -->
+<div class="card">
+    <div class="table-toolbar d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="d-flex gap-2 align-items-center">
+            <form method="get" action="/collect-payments" class="d-flex gap-2 align-items-center m-0">
+                <select class="form-select form-select-sm" name="status" onchange="this.form.submit()">
+                    <option value="" <%= !_statusFilter ? 'selected' : '' %>>All Status</option>
+                    <option value="pending"   <%= _statusFilter === 'pending'   ? 'selected' : '' %>>Pending</option>
+                    <option value="paid"      <%= _statusFilter === 'paid'      ? 'selected' : '' %>>Paid</option>
+                    <option value="cancelled" <%= _statusFilter === 'cancelled' ? 'selected' : '' %>>Cancelled</option>
+                </select>
+            </form>
+        </div>
+        <div>
+            <% if (_vpaMissing) { %>
+                <button type="button" class="btn btn-gradient" disabled title="Add your UPI ID above before creating a request">
+                    <i class="fa-solid fa-plus me-1"></i>New Request
+                </button>
+                <span class="form-hint text-danger ms-2">Add your UPI ID above first — a request can't be created without it.</span>
+            <% } else if (!_invoices.length) { %>
+                <button type="button" class="btn btn-gradient" disabled title="No outstanding invoices to request payment for">
+                    <i class="fa-solid fa-plus me-1"></i>New Request
+                </button>
+                <span class="form-hint text-muted ms-2">No invoices available to request payment for.</span>
+            <% } else { %>
+                <button type="button" class="btn btn-gradient" data-bs-toggle="modal" data-bs-target="#cpNewRequestModal">
+                    <i class="fa-solid fa-plus me-1"></i>New Request
+                </button>
+            <% } %>
+        </div>
+    </div>
+
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="collect-payments-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th>Customer</th>
+                    <th>Invoice</th>
+                    <th class="text-end">Amount</th>
+                    <th>Status</th>
+                    <th>Link</th>
+                    <th class="text-end data-table-actions-head">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_requests.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="7">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            No payment requests yet.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _requests.forEach(function (r, i) { %>
+                    <tr>
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td><%= r.customer || '—' %></td>
+                        <td><%= r.invoice_no || '—' %></td>
+                        <td class="text-end"><span class="data-table-money"><%= _inr(r.amount) %></span></td>
+                        <td><span class="pill-status <%= _statusPillClass(r.status) %>"><%= r.status %></span></td>
+                        <td>
+                            <% if (r.status !== 'cancelled') { %>
+                            <button type="button" class="btn btn-sm btn-light" data-cp-copy="<%= r.pay_url %>" title="Copy link">
+                                <i class="fa-regular fa-copy"></i> Copy
+                            </button>
+                            <% } else { %>
+                                <span class="text-muted">—</span>
+                            <% } %>
+                        </td>
+                        <td class="text-end data-table-actions">
+                            <% if (r.status === 'pending') { %>
+                                <form method="post" action="/collect-payments/<%= r.id %>/mark-paid" style="display:inline-block; margin:0"
+                                      data-confirm="Mark this <%= _inr(r.amount) %> request as received? This will create a receipt in your books — it cannot be undone."
+                                      data-confirm-title="Mark as received?" data-confirm-ok="Mark as received">
+                                    <button type="submit" class="btn btn-sm btn-success">
+                                        <i class="fa-solid fa-check me-1"></i>Mark as received
+                                    </button>
+                                </form>
+                                <form method="post" action="/collect-payments/<%= r.id %>/cancel" style="display:inline-block; margin:0"
+                                      data-confirm="Cancel this payment request?" data-confirm-variant="danger" data-confirm-ok="Cancel Request">
+                                    <button type="submit" class="btn btn-sm btn-light text-danger">
+                                        <i class="fa-solid fa-ban me-1"></i>Cancel
+                                    </button>
+                                </form>
+                            <% } else { %>
+                                <span class="text-muted">—</span>
+                            <% } %>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ── New Request modal ───────────────────────────────────────── -->
+<div class="modal fade" id="cpNewRequestModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <form class="modal-content" method="post" action="/collect-payments">
+            <div class="modal-header">
+                <h5 class="modal-title">New Payment Request</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group mb-3">
+                    <label class="form-label" for="cp-invoice">Outstanding Bill</label>
+                    <select class="form-select" id="cp-invoice" name="invoice_id" required>
+                        <option value="">Select an invoice…</option>
+                        <% _invoices.forEach(function (inv) { %>
+                            <option value="<%= inv.id %>"><%= inv.invoice_no %> — <%= inv.customer || '' %> — <%= _inr(inv.total) %></option>
+                        <% }); %>
+                    </select>
+                </div>
+                <div class="form-group mb-0">
+                    <label class="form-label" for="cp-note">Note (optional)</label>
+                    <input type="text" class="form-control" id="cp-note" name="note" placeholder="e.g. Please pay by Friday">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create Request</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+(function () {
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-cp-copy]');
+        if (!btn) return;
+        var url = btn.getAttribute('data-cp-copy');
+        var done = function () {
+            var orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-check"></i> Copied';
+            setTimeout(function () { btn.innerHTML = orig; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(url).then(done).catch(function () {});
+        } else {
+            var ta = document.createElement('textarea');
+            ta.value = url; document.body.appendChild(ta); ta.select();
+            try { document.execCommand('copy'); done(); } catch (_) {}
+            document.body.removeChild(ta);
+        }
+    });
+})();
+</script>
