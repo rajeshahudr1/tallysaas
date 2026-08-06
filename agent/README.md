@@ -2,14 +2,42 @@
 
 A small Python agent that runs on the customer's Windows PC next to **Tally
 Prime**. It activates against the cloud with a machine-bound license key,
-heartbeats on an interval, and (in a later phase) syncs data between the cloud
-API and the local Tally Prime company over XML (`http://localhost:9000`).
+heartbeats on an interval, and syncs data between the cloud API and the local
+Tally Prime company over XML (`http://localhost:9000`) — including pushing
+fourteen voucher types created in the web app into Tally (see
+`../api/README.md` → "Voucher modules & Tally push").
 
 - **Python:** 3.10+
-- **Talks to:** the cloud API (`/agent/activate`, `/agent/heartbeat`) and the
-  local Tally Prime XML port (`9000`).
+- **Talks to:** the cloud API (`/agent/activate`, `/agent/heartbeat`, sync
+  push/pull endpoints) and the local Tally Prime XML port (`9000`).
 - **Resilient:** every external call is wrapped — the sync loop logs failures
   and retries on the next cycle, it never crashes.
+
+## Two builds
+
+`build_exe.py` produces two different executables from the same sync engine
+(`sync_agent.py`'s `run_sync_loop`, never duplicated):
+
+- **Console agent** (`sync_agent.py` → `TallyCloudSyncAgent.exe`) — the
+  headless CLI described below. No window, driven entirely by flags/config.
+- **Windowed agent** (`gui_agent.py` → `TallyCloudSync.exe`, `--windowed`) —
+  a self-installing desktop app with a Setup wizard (first run) and a
+  Dashboard (status, Start/Stop, Sync-now, logs, uninstall). Its UI is a
+  server-served page (`web/views/agent-app/`) hosted in a window by
+  `shell.py`; the page talks to this machine through a small **loopback-only,
+  bearer-token-protected HTTP bridge** (`local_bridge.py` / `bridge_handlers.py`)
+  so the UI can change without shipping a new exe. `win_service.py` lets the
+  same exe install itself as a Windows service so sync keeps running with no
+  user logged in. `ui_dashboard.py` / `ui_signin.py` / `ui_splash.py` /
+  `ui_theme.py` are the tkinter chrome pieces used before/around that
+  webview shell. `codesign.py` handles Authenticode signing/verification of
+  the built exe (self-update integrity + fewer SmartScreen warnings).
+
+Other modules: `tally_schema.py` (Tally XML field/report schema knowledge
+shared across pushers/pullers), `envelope_store.py` (local persistence for
+sync envelopes), `backup_runner.py` (the Data Backup feature's agent side —
+copies Tally's data folder to a chosen destination), `tally_control.py`
+(starting/finding the local Tally executable).
 
 ---
 
