@@ -1,4 +1,4 @@
-"""Logging setup for the Tally Cloud Sync Agent.
+"""Logging setup for the Teloora Agent.
 
 Provides :func:`get_logger`, which returns a logger writing to a DAILY-rotating
 file in ``logs/`` and to the console. A NEW file is started every day: the live

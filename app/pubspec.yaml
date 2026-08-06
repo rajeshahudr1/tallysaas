@@ -1,5 +1,9 @@
 name: tallysaas_app
-description: Tally Cloud Sync — TallySaaS companion mobile app
+# NOTE: `name:` above is the Dart PACKAGE NAME (and, via applicationId in
+# android/app/build.gradle, the Android package identity) — deliberately NOT
+# rebranded; changing it would make an update look like a different app to
+# already-installed devices (Play Store identity, app data, permissions).
+description: Teloora — Connected Accounting companion mobile app
 publish_to: 'none'
 version: 1.0.0+1
 

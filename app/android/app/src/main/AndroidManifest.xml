@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- Network: the app talks to the Tally Cloud Sync api over HTTP. INTERNET is
+    <!-- Network: the app talks to the Teloora api over HTTP. INTERNET is
          needed in the main manifest for release builds; usesCleartextTraffic lets
          the app reach a plain-HTTP LAN/dev api (Android 9+ blocks cleartext by default). -->
     <uses-permission android:name="android.permission.INTERNET"/>
@@ -11,7 +11,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <application
-        android:label="Tally Cloud Sync"
+        android:label="Teloora"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">

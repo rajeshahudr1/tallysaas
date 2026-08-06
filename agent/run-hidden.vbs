@@ -1,5 +1,5 @@
 ' ─────────────────────────────────────────────────────────────
-' run-hidden.vbs — launch the Tally Cloud Sync agent with NO console
+' run-hidden.vbs — launch the Teloora agent with NO console
 ' window, in the current user's session, then exit. The agent keeps
 ' running in the background until it is stopped. Must sit next to
 ' TallyCloudSyncAgent.exe (or one folder above a dist\ subfolder).

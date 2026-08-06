@@ -1,4 +1,4 @@
-# Tally Cloud Sync Agent — Python dependencies
+# Teloora Agent — Python dependencies
 # Python 3.10+ required.
 # configparser, uuid, hashlib, socket, platform and xml are all stdlib.
 

@@ -1,4 +1,4 @@
-"""Entry point for the Tally Cloud Sync Agent.
+"""Entry point for the Teloora Agent.
 
 Runs on the customer's Windows PC alongside Tally Prime. It activates the
 machine against the cloud (license key, machine-bound), heartbeats on an
@@ -21,6 +21,7 @@ CLI
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -30,9 +31,10 @@ import time
 from typing import Any, Optional
 
 from config import Config, machine_fingerprint
-from constants import BRAND_NAME_AGENT
+from constants import BRAND_NAME_AGENT, PUBLISHER_CN, PUBLISHER_THUMBPRINT
 from logger import get_logger
 from api_client import ApiClient, ActivationError, AgentError
+import tally_connector
 from tally_connector import TallyConnector, TallyUnavailable
 import tally_control
 import backup_runner
@@ -86,8 +88,10 @@ class _Args:
     """Parsed command-line options."""
 
     def __init__(self) -> None:
+        # --signin forces a fresh sign-in even when a token exists (used to
+        # move a machine to a different account). --activate is kept as an alias
+        # so existing shortcuts and scheduled tasks do not break.
         self.activate: bool = False
-        self.activate_key: Optional[str] = None
         self.once: bool = False
         self.status: bool = False
 
@@ -102,11 +106,12 @@ def _parse_args(argv: list[str]) -> _Args:
     i = 0
     while i < len(argv):
         token = argv[i]
-        if token in ("--activate", "-a"):
+        if token in ("--signin", "--activate", "-a"):
             args.activate = True
-            # An optional value may follow (the license key).
+            # A value used to follow here (the licence key). Licence keys are
+            # gone, so anything trailing is skipped rather than misread as a
+            # flag - an old "--activate KEY" shortcut still starts cleanly.
             if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
-                args.activate_key = argv[i + 1].strip()
                 i += 1
         elif token == "--once":
             args.once = True
@@ -156,23 +161,6 @@ def _load_config(log_name: str = "agent"):
     return cfg, logger
 
 
-def _resolve_license_key(args: _Args, cfg: Config, logger) -> str:
-    """Work out which license key to activate with.
-
-    Priority: ``--activate <key>`` argument, then ``cfg.license_key`` from
-    config.ini, then an interactive prompt as a last resort.
-    """
-    if args.activate_key:
-        return args.activate_key
-    if cfg.license_key:
-        return cfg.license_key
-    logger.info("No license key in config; prompting operator.")
-    try:
-        return input("Enter license key: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        return ""
-
-
 def _persist_token(cfg: Config, logger, data: dict) -> None:
     """Validate the activate response, persist the token, log the summary.
 
@@ -213,78 +201,133 @@ def _activation_success_line(data: dict) -> str:
     )
 
 
-def _activate(cfg: Config, logger, api: ApiClient, license_key: str) -> None:
-    """Activate against the cloud and persist the returned agent token.
+def _activate(cfg: Config, logger, api: ApiClient) -> None:
+    """The NON-INTERACTIVE activation path - which no longer exists.
 
-    This is the NON-INTERACTIVE path (key supplied via --activate / config.ini,
-    or stdin is not a tty). On :class:`ActivationError` the cloud's user-facing
-    message is printed and the process exits non-zero - there is nothing useful
-    to loop on without an operator at the keyboard.
+    Sign-in now requires a code emailed to the account owner, so there is
+    nothing a headless run can supply up front: no key, no environment
+    variable, no config entry. Rather than fail with a confusing auth error
+    several steps later, say so here and point at the two paths that do work.
+
+    (Once signed in, the token is machine-bound and long-lived, so an unattended
+    service still runs for months without anyone touching it. This affects only
+    the FIRST sign-in on a machine.)
     """
-    if not license_key:
-        msg = "No license key provided. Set license_key in config.ini or use --activate KEY."
-        logger.error(msg)
-        print(msg, file=sys.stderr)
-        raise SystemExit(_EXIT_ACTIVATION)
-
-    try:
-        data = api.activate(license_key, cfg.machine_id, cfg.agent_version)
-    except ActivationError as exc:
-        # The message is the cloud's user-facing reason (bad key / bound /
-        # suspended / expired / unreachable).
-        logger.error("Activation failed: %s", exc)
-        print(f"Activation failed: {exc}", file=sys.stderr)
-        raise SystemExit(_EXIT_ACTIVATION) from exc
-
-    _persist_token(cfg, logger, data)
+    msg = (
+        "This computer is not signed in yet, and sign-in needs a code emailed "
+        "to you.\n"
+        "  Run TallyCloudSync.exe and sign in there, or run this agent from a "
+        "terminal to be prompted."
+    )
+    logger.error("Non-interactive start with no token: sign-in required.")
+    print(msg, file=sys.stderr)
+    raise SystemExit(_EXIT_ACTIVATION)
 
 
 def _activate_interactive(cfg: Config, logger, api: ApiClient) -> None:
-    """Interactive activation with a VALIDATE-then-RETRY loop (stdout-driven).
+    """Console sign-in: email + password, then the 6-digit code.
 
-    Prompts for the license key, validates it against the cloud, and on a bad /
-    bound / suspended / expired / unreachable key SHOWS the cloud's reason and
-    asks again - up to :data:`_MAX_ACTIVATION_ATTEMPTS`. The operator can abort
-    with an empty line / Ctrl+C / EOF. Only reached when stdin IS a tty and no
-    key was supplied another way, so it never hangs a scheduled task.
+    Mirrors the GUI wizard so both paths hit the same two endpoints. As there,
+    NOTHING is validated locally - whatever is typed goes to the server and the
+    server's message is printed verbatim, so wording and rules stay in one place.
+
+    The password is read with getpass so it is not echoed and does not land in
+    the operator's shell history or a screen recording.
     """
+    import getpass
+
     echo("")
-    echo("STEP 1/4 - License activation")
+    echo("STEP 1/4 - Sign in")
+
+    machine_name = _machine_name()
     for attempt in range(1, _MAX_ACTIVATION_ATTEMPTS + 1):
         try:
-            key = input("  Enter your license key: ").strip()
+            email = input("  Email: ").strip()
+            password = getpass.getpass("  Password: ")
         except (EOFError, KeyboardInterrupt):
             echo("")
-            echo("  [x] Activation cancelled. Exiting.")
-            logger.info("Interactive activation aborted by operator.")
+            echo("  [x] Sign-in cancelled. Exiting.")
+            logger.info("Interactive sign-in aborted by operator.")
             raise SystemExit(_EXIT_ACTIVATION)
 
-        if not key:
-            echo("  [x] No key entered. Exiting.")
-            logger.info("Interactive activation aborted (empty key).")
+        if not email and not password:
+            echo("  [x] Nothing entered. Exiting.")
             raise SystemExit(_EXIT_ACTIVATION)
 
-        echo("  [..] Validating with the cloud...")
+        echo("  [..] Signing in...")
         try:
-            data = api.activate(key, cfg.machine_id, cfg.agent_version)
+            challenge = api.login(email, password, cfg.machine_id,
+                                  machine_name=machine_name,
+                                  agent_version=cfg.agent_version)
         except ActivationError as exc:
-            # Cloud's user-facing reason (bad key / bound / suspended / expired
-            # / unreachable). Show it and re-prompt.
-            logger.warning("Activation attempt %d failed: %s", attempt, exc)
-            echo(f"  [x] {exc} Please try again.")
+            logger.warning("Sign-in attempt %d failed: %s", attempt, exc)
+            echo(f"  [x] {exc}")
             continue
 
-        _persist_token(cfg, logger, data)
-        echo(_activation_success_line(data))
-        return
+        echo(f"  [ok] We emailed a 6-digit code to {challenge.get('email_masked', 'your address')}.")
+        if _verify_code_interactive(cfg, logger, api, challenge, machine_name):
+            return
+        # Code loop gave up; fall through and let the operator re-enter the
+        # password, since the challenge is now dead.
 
     msg = (
-        f"Activation failed after {_MAX_ACTIVATION_ATTEMPTS} attempts. "
-        "Check the license key and your internet connection, then run again."
+        f"Sign-in failed after {_MAX_ACTIVATION_ATTEMPTS} attempts. "
+        "Check your email and password and your internet connection, then run again."
     )
     logger.error(msg)
     echo(f"  [x] {msg}")
     raise SystemExit(_EXIT_ACTIVATION)
+
+
+def _verify_code_interactive(cfg: Config, logger, api: ApiClient,
+                             challenge: dict, machine_name: str) -> bool:
+    """Prompt for the emailed code until it verifies or the challenge dies.
+
+    Returns True once the token is stored. Returns False when the challenge is
+    spent, so the caller can restart from the password - a dead challenge cannot
+    be rescued by typing more codes at it.
+    """
+    challenge_id = challenge.get("challenge_id") or ""
+    for _ in range(_MAX_ACTIVATION_ATTEMPTS):
+        try:
+            code = input("  6-digit code (or 'r' to resend): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            echo("")
+            echo("  [x] Sign-in cancelled. Exiting.")
+            raise SystemExit(_EXIT_ACTIVATION)
+
+        if code.lower() == "r":
+            try:
+                api.resend_otp(challenge_id)
+                echo("  [ok] A new code is on its way.")
+            except ActivationError as exc:
+                echo(f"  [x] {exc}")
+            continue
+
+        try:
+            data = api.verify_otp(challenge_id, code, cfg.machine_id,
+                                  machine_name=machine_name,
+                                  agent_version=cfg.agent_version)
+        except ActivationError as exc:
+            echo(f"  [x] {exc}")
+            # "Start again" means the challenge is gone; more codes cannot help.
+            if "start again" in str(exc).lower():
+                return False
+            continue
+
+        _persist_token(cfg, logger, data)
+        echo(_activation_success_line(data))
+        return True
+    return False
+
+
+def _machine_name() -> str:
+    """A name a person can recognise in a device list ("DESKTOP-A1B2")."""
+    import socket
+    try:
+        return socket.gethostname()[:191]
+    except Exception:            # noqa: BLE001 - a nameless device is fine
+        return ""
 
 
 def _log_activation_summary(logger, data: dict) -> None:
@@ -330,34 +373,26 @@ def _stdin_is_tty() -> bool:
 
 
 def _ensure_activated(args: _Args, cfg: Config, logger, api: ApiClient) -> None:
-    """Activate if there is no saved token, or if ``--activate`` was passed.
+    """Sign in if there is no saved token, or if ``--signin`` was passed.
 
-    Picks the activation style:
+    There is only one style now. Licence keys are gone, so nothing can be
+    supplied ahead of time: sign-in always needs a password AND a code emailed
+    to the account, which means a person. With a terminal attached we prompt;
+    without one we fail fast with a message that says what to do, instead of
+    blocking a scheduled task on input() forever.
 
-    * A key supplied another way (``--activate KEY`` / ``cfg.license_key``), or a
-      non-tty stdin (headless / scheduled), uses the NON-INTERACTIVE try-once-
-      then-exit path (``_activate``) - so a scheduled task never hangs.
-    * Otherwise (a real terminal with no key on hand) uses the INTERACTIVE
-      prompt + validate + retry loop (``_activate_interactive``).
+    This is the FIRST run on a machine only. The token that comes back is
+    machine-bound and effectively non-expiring, so the service then runs
+    unattended for months.
     """
     if cfg.get_token() and not args.activate:
-        logger.debug("Existing agent token found; skipping activation.")
+        logger.debug("Existing agent token found; skipping sign-in.")
         return
 
-    # A key supplied non-interactively keeps the original behaviour.
-    if args.activate_key or cfg.license_key:
-        license_key = _resolve_license_key(args, cfg, logger)
-        _activate(cfg, logger, api, license_key)
-        return
-
-    # No key on hand. If there's an operator at the keyboard, prompt + retry;
-    # otherwise fall back to the non-interactive (try-once) path so a headless
-    # run fails fast with a clear message instead of blocking on input().
     if _stdin_is_tty():
         _activate_interactive(cfg, logger, api)
     else:
-        _activate(cfg, logger, api, "")
-
+        _activate(cfg, logger, api)
 
 # --------------------------------------------------------------------------- #
 # One sync cycle
@@ -917,9 +952,13 @@ def _push_master(tally: TallyConnector, item: dict, kind: str,
     ok, info = _interpret_tally(resp)
     res = {"record_type": item["record_type"], "record_id": item["id"],
            "company_id": item["company_id"], "status": "synced" if ok else "failed"}
-    if ok:
-        res["tally_guid"] = "synced"
-    else:
+    # NOTE: no tally_guid here. A Tally master-import response carries only
+    # created/altered counts, never the new master's GUID, so there is nothing
+    # truthful to send. The cloud stamps tally_synced_at from status alone and
+    # picks up the real GUID on the next PULL. (We used to send the literal
+    # string "synced", which poisoned the column now that it is a unique
+    # identity key.)
+    if not ok:
         res["message"] = info
     return res
 
@@ -939,9 +978,9 @@ def _push_godown_or_group(tally: TallyConnector, item: dict, kind: str,
     ok, info = _interpret_tally(resp)
     res = {"record_type": item["record_type"], "record_id": item["id"],
            "company_id": item["company_id"], "status": "synced" if ok else "failed"}
-    if ok:
-        res["tally_guid"] = "tally"
-    else:
+    # See _push_ledger_or_item: no placeholder guid — the cloud stamps
+    # tally_synced_at from status and learns the real GUID on the next pull.
+    if not ok:
         res["message"] = info
     return res
 
@@ -1145,9 +1184,10 @@ def _create_companies_in_tally(token, logger, api: ApiClient, tally: TallyConnec
 
         res = {"record_type": "company", "record_id": cid,
                "company_id": cid, "status": "synced" if ok else "failed"}
-        if ok:
-            res["tally_guid"] = "tally"
-        else:
+        # No placeholder guid — see _push_ledger_or_item. The cloud stamps
+        # tally_synced_at, and the company's real GUID arrives with the next
+        # pull's company_master payload.
+        if not ok:
             res["message"] = info
         results.append(res)
         if VERBOSE:
@@ -1435,12 +1475,37 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
         _report_progress(_pi - 1, len(names), "Tally -> Cloud")
         if VERBOSE:
             echo(f"  [..] '{cname}': reading ledgers / stock / vouchers from Tally...")
+        # INCREMENTAL masters: ask Tally only for masters changed since the
+        # watermark the cloud last confirmed. Previously every cycle re-read the
+        # entire master book and the cloud threw away the unchanged ones — the
+        # write was cheap, the Tally read never was.
+        mwm = _load_master_watermark(cfg, cname)
+        if VERBOSE and mwm:
+            echo(f"  '{cname}': masters changed since AlterID {mwm} only.")
         try:
-            ledgers = tally.ledger_list(company=cname)
-            stock = tally.stock_summary(company=cname)
-            godowns = tally.godown_list(company=cname)
-            groups = tally.group_list(company=cname)
+            ledgers = tally.ledger_list(company=cname, after_alterid=mwm)
+            stock = tally.stock_summary(company=cname, after_alterid=mwm)
+            godowns = tally.godown_list(company=cname, after_alterid=mwm)
+            groups = tally.group_list(company=cname, after_alterid=mwm)
+            # The company master is ONE small record and carries the F11 flags the
+            # master fetch below is gated on — always read it in full.
             cmaster = tally.company_full_info(company=cname)
+            # Registry-driven masters (units, stock groups/categories, cost
+            # centres, currencies, voucher types, budgets, GST/TDS/TCS, payroll).
+            # Passing the company's F11 flags lets fetch_all_masters skip
+            # collections it does not use — a company without payroll has no
+            # Employee collection, so asking is a wasted round trip per cycle.
+            # Best-effort: a Tally build that lacks a collection must not cost us
+            # the ledgers/stock/vouchers that DID read fine.
+            try:
+                masters = tally.fetch_all_masters(
+                    company=cname, features=(cmaster or {}).get("features"),
+                    after_alterid=mwm)
+            except TallyUnavailable:
+                raise
+            except Exception as _mexc:
+                logger.warning("Pull[%s]: master collections read failed: %s", cname, _mexc)
+                masters = {}
             # Tally's EXACT Balance Sheet / P&L / Trial Balance — pulled verbatim
             # so the cloud mirrors every figure (no reconstruction drift). Best-
             # effort: never let a report miss block the masters/voucher import.
@@ -1449,6 +1514,56 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             except Exception as _rexc:
                 logger.warning("Pull[%s]: financial reports read failed: %s", cname, _rexc)
                 freports = {}
+            # The SAME reports per financial year, so the cloud can show last
+            # year beside this one. The undated pull above stays the "current"
+            # snapshot the existing screens read; these are stored alongside it
+            # under their FY label, never merged into it.
+            # How many years: the company's OWN books span by default, so a book
+            # that starts in 2016 syncs all of it instead of the last two years.
+            try:
+                _ryears = _report_years_for(cfg, cmaster, logger)
+                logger.debug("Pull[%s]: pulling %d financial year(s) of reports "
+                             "(books_from=%s).", cname, _ryears,
+                             (cmaster or {}).get("books_from") if isinstance(cmaster, dict) else "?")
+                freports_by_year = tally.financial_reports_by_year(
+                    company=cname, years=_ryears)
+            except TallyUnavailable:
+                raise
+            except Exception as _ryexc:
+                logger.warning("Pull[%s]: per-year reports read failed: %s", cname, _ryexc)
+                freports_by_year = {}
+            # Reports the SERVER published that this build has no parser for.
+            # This is what lets a new Tally report ship without a new exe: the
+            # envelope comes down signed, the agent asks Tally, and the raw XML
+            # goes up for the cloud to parse. Best-effort like every other report.
+            try:
+                extra_reports = tally.extra_reports(company=cname)
+                if extra_reports:
+                    logger.info("Pull[%s]: %d published report(s): %s", cname,
+                                len(extra_reports), ", ".join(sorted(extra_reports)))
+            except TallyUnavailable:
+                raise
+            except Exception as _pexc:
+                logger.warning("Pull[%s]: published reports read failed: %s", cname, _pexc)
+                extra_reports = {}
+            # Tally's OWN bill-wise outstanding — the independent check on the
+            # cloud's derived ageing. It is a PER-LEDGER report, so we first ask
+            # which ledgers are parties (walking the group tree); a company with
+            # no debtors/creditors simply yields nothing rather than erroring.
+            # Best-effort like every other report.
+            try:
+                parties = tally.party_ledger_names(company=cname)
+                outstandings = (tally.outstandings(company=cname, ledgers=parties)
+                                if parties else {})
+                if outstandings.get("failed"):
+                    logger.warning("Pull[%s]: outstanding unreadable for %d ledger(s): %s",
+                                   cname, len(outstandings["failed"]),
+                                   ", ".join(outstandings["failed"][:5]))
+            except TallyUnavailable:
+                raise
+            except Exception as _oexc:
+                logger.warning("Pull[%s]: outstandings read failed: %s", cname, _oexc)
+                outstandings = {}
             # Vouchers are NOT read here (Tally's Day Book is single-day). They are
             # pulled below via _pull_vouchers - a chunked, AlterID-incremental
             # Voucher COLLECTION backfill (first run = all history over a few
@@ -1483,7 +1598,11 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
         try:
             counts = api.import_from_tally(token, ledgers, stock, vouchers, godowns,
                                            groups=groups, company_master=cmaster,
-                                           company_name=cname, financial_reports=freports)
+                                           company_name=cname, financial_reports=freports,
+                                           masters=masters,
+                                           financial_reports_by_year=freports_by_year,
+                                           outstandings=outstandings,
+                                           extra_reports=extra_reports)
             new = sum(counts.get(k, 0) for k in ("customers_new", "suppliers_new", "products_new"))
             linked = sum(counts.get(k, 0) for k in ("customers_linked", "suppliers_linked", "products_linked"))
             updated = counts.get("masters_updated", 0)
@@ -1491,10 +1610,37 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             jnew = counts.get("journals_new", 0)
             lnew = counts.get("locations_new", 0)
             created = bool(counts.get("company_created"))
+            # Advance the local master cursor to the CLOUD's confirmed watermark
+            # (see _save_master_watermark: taking the cloud's number is what
+            # makes a cloud-side reset re-fetch everything automatically).
+            _save_master_watermark(cfg, cname, counts.get("master_alter_id") or 0)
             logger.info("Pull[%s]: company %s - %d masters-new, %d linked, %d updated, "
                         "%d vouchers, %d journals, %d locations",
                         cname, "CREATED in cloud" if created else "updated",
                         new, linked, updated, vnew, jnew, lnew)
+            # ONE line, FOUND vs STORED, per module. The line above says what the
+            # cloud accepted; it cannot say what Tally offered — so "0 stock
+            # items" reads identically whether the company has none, the F11
+            # inventory flag is off, or the read failed and was swallowed.
+            # Printing both sides makes the difference obvious at a glance, which
+            # is the whole question anyone opening the log is trying to answer.
+            try:
+                _stk_found = (len(stock.get("rows") or []) if isinstance(stock, dict)
+                              else len(stock or []))
+                _mst_found = sum(len(v or []) for v in (masters or {}).values())
+                logger.info(
+                    "SYNC[%s] | ledgers %d->%d new | stock %d->%d new | groups %d "
+                    "| masters %d->%d upd | reports %d+%d | outstanding %d bills",
+                    cname,
+                    len(ledgers or []), counts.get("customers_new", 0) + counts.get("suppliers_new", 0),
+                    _stk_found, counts.get("products_new", 0),
+                    len(groups or []),
+                    _mst_found, updated,
+                    len([k for k, v in (freports or {}).items() if v]),
+                    len(freports_by_year or {}),
+                    len((outstandings or {}).get("rows") or []))
+            except Exception:                               # noqa: BLE001
+                pass    # a summary line must never break the sync it summarises
             # DEBUG: the cloud's per-type breakdown of what it accepted/skipped,
             # so a "Tally had data but the cloud stored nothing" case is obvious
             # (e.g. duplicates skipped, a mapping rejected). Toggle: log_level=DEBUG.
@@ -1532,11 +1678,215 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
         # ── Vouchers: chunked, AlterID-INCREMENTAL backfill (separate from the
         #    masters import above). Best-effort - never aborts the pull. ──
         try:
-            vsent = _pull_vouchers(cfg, logger, api, tally, token, cname)
+            # Per-TYPE, diff-driven pull. Covers all 24 Tally voucher types
+            # (orders, delivery/receipt notes, stock journals, job work, payroll)
+            # that a single generic Voucher collection does not reliably return,
+            # and self-heals gaps a forward-only watermark can never revisit.
+            vsent = _pull_vouchers_by_type(cfg, logger, api, tally, token, cname)
             if vsent and VERBOSE:
                 echo(f"  [OK] '{cname}': {vsent} voucher(s) pushed to cloud this cycle.")
+        except TallyUnavailable:
+            raise
         except Exception as exc:
-            logger.warning("Voucher backfill[%s] failed: %s", cname, exc)
+            logger.warning("Voucher pull[%s] failed: %s", cname, exc)
+
+        # ── DELETE detection. Periodic, not every cycle: it re-reads every
+        #    master id, which is cheap but not free. Best-effort. ──
+        try:
+            _reconcile_pass(cfg, logger, api, tally, token, cname)
+        except Exception as exc:
+            logger.warning("Reconcile[%s] failed: %s", cname, exc)
+
+
+# ── Delete detection (reconcile) ─────────────────────────────────────────────
+# Run every Nth pull cycle per company, not every cycle: a reconcile re-reads
+# EVERY master id for the company. That is a small response (identity fields
+# only) but still a full scan, and deletes are rare — hourly-ish is plenty.
+RECONCILE_EVERY = 12
+# Cycle counter per company name. Process-local by design: a restart simply
+# reconciles on its first cycle, which is the safe direction to err in.
+_reconcile_counter: dict[str, int] = {}
+
+
+def _reconcile_pass(cfg, logger, api: ApiClient, tally: TallyConnector,
+                    token: str, cname: str) -> None:
+    """Tell the cloud which masters STILL EXIST in Tally, so it can delete the rest.
+
+    Tally's XML API has no deletion feed: a deleted ledger just stops appearing
+    in its collection. Without this pass a master deleted in Tally lived in the
+    cloud forever, so the two could never actually match.
+
+    For each master kind we read the complete live identity list and POST it to
+    /agent/reconcile, which soft-deletes any Tally-sourced row whose identity is
+    absent. Every step is guarded:
+
+      • a read that raises is SKIPPED (never sent) — a failed read must not be
+        mistaken for "Tally has nothing", which would delete the whole book;
+      • an empty list is skipped for the same reason (the cloud also refuses it);
+      • one kind failing does not stop the others.
+    """
+    if not token:
+        return
+    every = max(1, int(getattr(cfg, "reconcile_every", None) or RECONCILE_EVERY))
+    n = _reconcile_counter.get(cname, 0)
+    _reconcile_counter[cname] = n + 1
+    if n % every != 0:
+        return
+
+    # Several kinds share one Tally collection (stock_item and stock_item_full
+    # both read StockItem, into different cloud tables). Read each collection
+    # ONCE per pass and reuse it — a reconcile is a full id scan, so paying for
+    # it twice is the one avoidable cost here.
+    by_collection: dict[str, list] = {}
+
+    for kind, coll_type in TallyConnector.RECONCILE_TYPES.items():
+        if coll_type not in by_collection:
+            try:
+                by_collection[coll_type] = tally.master_ids(kind, company=cname)
+            except Exception as exc:
+                logger.warning("Reconcile[%s/%s]: Tally read failed - skipping: %s",
+                               cname, kind, exc)
+                by_collection[coll_type] = None      # remembered as failed
+        rows = by_collection[coll_type]
+        if rows is None:
+            continue
+        if not rows:
+            logger.warning("Reconcile[%s/%s]: Tally returned 0 masters - skipping "
+                           "(treated as a failed read, not an empty company).", cname, kind)
+            continue
+        master_ids = [r["master_id"] for r in rows if r.get("master_id")]
+        guids = [r["guid"] for r in rows if r.get("guid")]
+        if not master_ids and not guids:
+            logger.warning("Reconcile[%s/%s]: %d masters but NO identity fields - "
+                           "skipping (this Tally build exposes neither GUID nor "
+                           "MASTERID for this collection).", cname, kind, len(rows))
+            continue
+        try:
+            out = api.reconcile(token, kind, master_ids, guids, company_name=cname)
+        except Exception as exc:
+            logger.warning("Reconcile[%s/%s]: cloud rejected: %s", cname, kind, exc)
+            continue
+        removed = out.get("deleted") or {}
+        total = sum(int(v or 0) for v in removed.values())
+        logger.info("Reconcile[%s/%s]: %d live in Tally, %d cloud row(s) marked deleted.",
+                    cname, kind, len(rows), total)
+        if total and VERBOSE:
+            echo(f"  [-] '{cname}': {total} {kind}(s) deleted in Tally -> removed from cloud.")
+
+
+# ── Voucher pull by TYPE, driven by an id diff ───────────────────────────────
+# Vouchers are fetched one voucher TYPE at a time. A single unfiltered Voucher
+# collection does not reliably return the order and inventory-only documents
+# (Sales Order, Delivery Note, Stock Journal, Job Work, Material In/Out), so a
+# generic pull can look healthy while missing whole categories — which is
+# exactly what a company's books looked like before this: 8 types present out of
+# the 24 Tally defines.
+#
+# Within a type we DIFF rather than walk a watermark. A watermark only moves
+# forward, so any window skipped once (Tally stalls, the agent is killed
+# mid-cycle, the cursor is bumped past a gap) is never revisited and nothing
+# reports it. Comparing the live id list against the cloud's finds those holes
+# however old they are — and finds deletions in the same pass.
+VOUCHER_FETCH_BATCH = 200      # vouchers fetched per by-GUID request (filter is
+                               # one OR term per guid — long formulae are slow
+                               # and upset Tally)
+VOUCHER_DIFF_MAX_IDS = 20000   # must match the cloud's cap; a bigger sweep is
+                               # paged instead of truncated
+VOUCHER_TYPES_PER_CYCLE = 0    # 0 = every type each cycle. The id sweep is
+                               # identity-only and cheap; raise this to a small
+                               # number only if a very large book needs pacing.
+
+
+def _pull_vouchers_by_type(cfg, logger, api: ApiClient, tally: TallyConnector,
+                           token: str, cname: str) -> int:
+    """Tally -> Cloud voucher sync, per voucher type, driven by an id diff.
+
+    For each voucher type defined in the company:
+      1. read the live ``{guid, alterid}`` list from Tally (identity only);
+      2. ask the cloud which of those it is missing or holds a stale AlterID for;
+      3. fetch exactly those vouchers in full and import them;
+      4. when the whole type was swept, let the cloud soft-delete the vouchers
+         it holds that Tally no longer lists.
+
+    Best-effort per type: one type failing must not cost the company the rest.
+    Returns the number of vouchers imported.
+    """
+    if not token:
+        return 0
+
+    try:
+        vtypes = tally.voucher_type_names(company=cname)
+    except TallyUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Voucher pull[%s]: could not list voucher types: %s", cname, exc)
+        return 0
+
+    total = 0
+    for vt in vtypes:
+        try:
+            ids = tally.voucher_ids(company=cname, vtype=vt)
+        except TallyUnavailable:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Voucher pull[%s/%s]: id sweep failed: %s", cname, vt, exc)
+            continue
+        if not ids:
+            continue          # this company raises none of this type — normal
+
+        # Page the diff when a type is huge. Only the FINAL page may carry
+        # complete=True, or the cloud would delete everything not in page one.
+        pages = [ids[i:i + VOUCHER_DIFF_MAX_IDS]
+                 for i in range(0, len(ids), VOUCHER_DIFF_MAX_IDS)]
+        missing: list[str] = []
+        swept_all = True
+        for pi, page in enumerate(pages):
+            try:
+                out = api.voucher_diff(
+                    token, vt,
+                    [{"guid": r["guid"], "alterid": r["alterid"]} for r in page],
+                    # A paged sweep can only be complete on its last page, and
+                    # only if every earlier page succeeded.
+                    complete=(pi == len(pages) - 1 and swept_all and len(pages) == 1),
+                    company_name=cname,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Voucher pull[%s/%s]: diff page %d rejected: %s",
+                               cname, vt, pi + 1, exc)
+                swept_all = False
+                continue
+            missing.extend(out.get("missing") or [])
+            if out.get("deleted"):
+                logger.info("Voucher pull[%s/%s]: %s deleted in Tally -> removed from cloud.",
+                            cname, vt, out["deleted"])
+
+        if not missing:
+            continue
+
+        logger.info("Voucher pull[%s/%s]: %d live, %d to fetch.",
+                    cname, vt, len(ids), len(missing))
+        if VERBOSE:
+            echo(f"  [..] '{cname}' {vt}: {len(missing)} voucher(s) to fetch.")
+
+        for i in range(0, len(missing), VOUCHER_FETCH_BATCH):
+            batch = missing[i:i + VOUCHER_FETCH_BATCH]
+            try:
+                vouchers = tally.vouchers_by_guid(batch, company=cname)
+            except TallyUnavailable:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Voucher pull[%s/%s]: fetch failed: %s", cname, vt, exc)
+                break        # retry this type next cycle; the diff is stateless
+            if not vouchers:
+                continue
+            try:
+                api.import_from_tally(token, [], [], vouchers, [], company_name=cname)
+                total += len(vouchers)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Voucher pull[%s/%s]: import failed: %s", cname, vt, exc)
+                break
+
+    return total
 
 
 VOUCHER_STATE_FILENAME = ".voucher_sync.json"
@@ -1545,7 +1895,23 @@ VOUCHER_CHUNK = 2000         # DEFAULT AlterID window per Tally fetch (config.in
                              # a big window pulls thousands of full double-entry
                              # vouchers in one COLLECTION → Tally "memory access
                              # violation" crash. 2000 keeps each response safe.
-VOUCHER_BATCH = 2000         # vouchers per cloud /agent/import POST
+VOUCHER_BATCH = 2000         # MAX vouchers per cloud /agent/import POST (a ceiling,
+                             # not the usual batch size — see VOUCHER_BATCH_BYTES).
+# Vouchers are batched by BYTES as well as by count, because count alone does not
+# bound the request. A cash receipt is a few hundred bytes; a sales invoice with
+# 60 stock lines, batch/godown allocations, bill references and GST details is
+# tens of KB. 2000 of the first is a small POST, 2000 of the second is not — and
+# the cloud rejects the body at 50 MB, so the whole AlterID window fails, retries
+# next cycle, fails again, and that company's backfill never advances. Nothing
+# logs "too big"; it just stops making progress.
+#
+# 8 MB leaves generous room under the 50 MB server limit for JSON overhead and
+# any proxy in between, and still sends thousands of ordinary vouchers per POST.
+VOUCHER_BATCH_BYTES = 8 * 1024 * 1024
+# A single voucher larger than this is sent alone rather than skipped: it will
+# probably still be accepted, and dropping a real voucher to protect a batch is
+# the wrong trade. It is logged, because it is worth knowing about.
+VOUCHER_HUGE_BYTES = 4 * 1024 * 1024
 VOUCHER_MAX_FETCHES = 30     # DEFAULT AlterID windows per cycle (cfg overrides);
                              # more, smaller windows keep the same backfill pace.
 # If the backfill scans this far and finds NO voucher at all (max_seen == 0), the
@@ -1554,6 +1920,43 @@ VOUCHER_MAX_FETCHES = 30     # DEFAULT AlterID windows per cycle (cfg overrides)
 # instead of climbing empty high windows forever.
 VOUCHER_RESCAN_CEILING = 300000
 _voucher_rescan_done = set()     # companies already re-scanned this session (no loop)
+
+
+def _size_batches(items: list, max_count: int, max_bytes: int,
+                  huge_bytes: int = 0, logger=None) -> "list[list]":
+    """Split ``items`` into POST-sized batches by BOTH count and encoded bytes.
+
+    Yields the same items in the same order — this only decides where the cuts
+    go. An item bigger than ``max_bytes`` on its own becomes its own batch
+    rather than being dropped: a voucher we refuse to send is a voucher the
+    cloud never has, which is worse than a large request that probably succeeds.
+
+    Measuring costs one json.dumps per item. That is cheap next to the HTTP
+    round trip it is protecting, and it is the only way to know the size of a
+    voucher whose weight lives in its allocation lists.
+    """
+    batches: list[list] = []
+    current: list = []
+    current_bytes = 0
+    for item in items:
+        try:
+            n = len(json.dumps(item, default=str).encode("utf-8"))
+        except Exception:                                 # noqa: BLE001
+            n = 4096                                      # unmeasurable: assume typical
+        if huge_bytes and n > huge_bytes and logger:
+            logger.warning("Voucher %s is %.1f MB on its own — sending it alone.",
+                           (item or {}).get("guid", "?") if isinstance(item, dict) else "?",
+                           n / 1024 / 1024)
+        # Start a new batch when this item would push us over either limit —
+        # unless the batch is empty, in which case the item goes alone.
+        if current and (len(current) >= max_count or current_bytes + n > max_bytes):
+            batches.append(current)
+            current, current_bytes = [], 0
+        current.append(item)
+        current_bytes += n
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _voucher_state_path(cfg: Config) -> str:
@@ -1582,6 +1985,49 @@ def _save_voucher_state(cfg: Config, company: str, st: dict) -> None:
             allst = {}
         allst[company] = {"through": int(st.get("through", 0) or 0),
                           "max_seen": int(st.get("max_seen", 0) or 0)}
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(allst, fh)
+    except Exception:
+        pass
+
+
+# Master watermark lives in the SAME state file under a reserved key, so a
+# manual "Sync from Tally" (which deletes the file) clears both cursors at once.
+# A company can never be named "__masters__" in Tally, so there is no collision.
+_MASTER_STATE_KEY = "__masters__"
+
+
+def _load_master_watermark(cfg: Config, company: str) -> int:
+    """Highest master AlterID the CLOUD has confirmed for this company.
+
+    Used as the `$AlterID >` filter on every master collection, so each cycle
+    reads only what changed instead of the whole master book. Never raises;
+    0 (= fetch everything) is always the safe answer.
+    """
+    try:
+        with open(_voucher_state_path(cfg), "r", encoding="utf-8") as fh:
+            allst = json.load(fh) or {}
+        return int((allst.get(_MASTER_STATE_KEY) or {}).get(company, 0) or 0)
+    except Exception:
+        return 0
+
+
+def _save_master_watermark(cfg: Config, company: str, alterid: int) -> None:
+    """Record the watermark the CLOUD reported (not one we computed).
+
+    Taking the cloud's number makes this self-healing: if the cloud's state is
+    reset (a wiped tenant, a manual re-sync), it reports 0 and the next cycle
+    automatically re-fetches every master. An agent-side counter would instead
+    keep filtering them out and the cloud would stay permanently empty.
+    """
+    try:
+        path = _voucher_state_path(cfg)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                allst = json.load(fh) or {}
+        except Exception:
+            allst = {}
+        allst.setdefault(_MASTER_STATE_KEY, {})[company] = int(alterid or 0)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(allst, fh)
     except Exception:
@@ -1636,15 +2082,21 @@ def _pull_vouchers(cfg, logger, api, tally, token, cname) -> int:
             break
         if vs:
             ok = True
-            for i in range(0, len(vs), VOUCHER_BATCH):
-                batch = vs[i:i + VOUCHER_BATCH]
+            # By bytes as well as count: 2000 line-heavy invoices is a body the
+            # cloud rejects outright, and a rejected window never advances.
+            batches = _size_batches(vs, VOUCHER_BATCH, VOUCHER_BATCH_BYTES,
+                                    VOUCHER_HUGE_BYTES, logger)
+            for bno, batch in enumerate(batches, 1):
                 try:
                     c = api.import_from_tally(token, [], [], batch, [], company_name=cname)
                     sent += len(batch)
-                    logger.debug("Voucher pull[%s] %d-%d: batch %d sent (cloud new=%s)",
-                                 cname, lo, hi, len(batch), (c or {}).get("vouchers_new"))
+                    logger.debug("Voucher pull[%s] %d-%d: batch %d/%d, %d vouchers "
+                                 "sent (cloud new=%s)", cname, lo, hi, bno,
+                                 len(batches), len(batch), (c or {}).get("vouchers_new"))
                 except Exception as exc:
-                    logger.warning("Voucher import[%s] %d-%d failed: %s", cname, lo, hi, exc)
+                    logger.warning("Voucher import[%s] %d-%d failed on batch %d/%d "
+                                   "(%d vouchers): %s", cname, lo, hi, bno,
+                                   len(batches), len(batch), exc)
                     ok = False
                     break
             if not ok:
@@ -1856,6 +2308,9 @@ def _start_tally(cfg: Config, logger) -> bool:
 # --------------------------------------------------------------------------- #
 # The agent name on disk (matches build_exe.APP_NAME). The Startup VBS that
 # launches it hidden (install-autostart.ps1) uses the same base name.
+# IDENTITY — deliberately NOT rebranded: these are on-disk filenames an
+# existing install already has; renaming them would break self-update and
+# autostart for machines already in the field.
 _EXE_BASENAME = "TallyCloudSyncAgent.exe"
 _NEW_EXE_BASENAME = "TallyCloudSyncAgent.new.exe"
 _UPDATER_BAT = "_agent_update.bat"
@@ -1874,6 +2329,83 @@ def _version_tuple(v: str) -> tuple:
         m = re.match(r"\d+", chunk)
         parts.append(int(m.group(0)) if m else 0)
     return tuple(parts) if parts else (0,)
+
+
+def _sync_is_enabled(cfg: Config) -> bool:
+    """Is syncing switched on, according to config.ini RIGHT NOW?
+
+    Deliberately re-reads the file. The Dashboard and the Windows service are
+    different processes, so the ``cfg`` object this loop holds cannot see a
+    Start/Stop pressed in the GUI — only the file changes. Re-reading is a few
+    hundred bytes once per cycle.
+
+    Any read problem answers True: a config we cannot parse must not leave a
+    customer silently un-synced.
+    """
+    try:
+        path = getattr(cfg, "path", None) or getattr(cfg, "_path", None)
+        if not path:
+            return bool(getattr(cfg, "sync_enabled", True))
+        fresh = Config.load(path)
+        return bool(getattr(fresh, "sync_enabled", True))
+    except Exception:                                       # noqa: BLE001
+        return True
+
+
+def _report_years_for(cfg, cmaster, logger=None) -> int:
+    """How many financial years of reports to pull for THIS company.
+
+    ``cfg.report_years`` is a manual pin; 0 (the default) means "as many as the
+    company actually has books for", derived from its own BOOKSFROM /
+    STARTINGFROM date.
+
+    WHY THIS IS NOT A CONSTANT: it used to be 2, so the cloud held this year and
+    last for every customer regardless of how much history Tally had. A book
+    that began in 2016 synced 2 of its 10 years, and the missing eight looked
+    identical to eight empty ones — no screen, log line or reconciliation could
+    tell the difference. Deriving it means the default is "everything", and the
+    only companies that pull two years are the ones that only have two.
+
+    Defensive on every input: a missing company master, an unparseable or absurd
+    BOOKSFROM (Tally will hand back 1900 dates), or a future date all fall back
+    to a sane span rather than either 0 years (silently syncing nothing) or a
+    thousand round trips.
+    """
+    pinned = int(getattr(cfg, "report_years", 0) or 0)
+    if pinned > 0:
+        return pinned
+
+    from config import _DEFAULT_REPORT_YEARS, _MAX_REPORT_YEARS   # noqa: PLC0415
+    fallback = _DEFAULT_REPORT_YEARS if _DEFAULT_REPORT_YEARS > 0 else 2
+
+    books_from = ""
+    if isinstance(cmaster, dict):
+        books_from = str(cmaster.get("books_from") or "").strip()
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", books_from)
+    if not m:
+        if logger and books_from:
+            logger.debug("Report years: unparseable books_from %r; using %d.",
+                         books_from, fallback)
+        return fallback
+
+    start_year, start_month = int(m.group(1)), int(m.group(2))
+    # Indian FY runs Apr-Mar: books opened in Jan 2016 belong to FY 2015-16.
+    books_fy = start_year if start_month >= 4 else start_year - 1
+
+    today = datetime.date.today()
+    current_fy = today.year if today.month >= 4 else today.year - 1
+
+    years = current_fy - books_fy + 1
+    if years < 1:
+        # BOOKSFROM in the future — a company created ahead of its year, or a
+        # junk date. One year (the current one) is the only honest answer.
+        return 1
+    if years > _MAX_REPORT_YEARS:
+        if logger:
+            logger.warning("Report years: books_from %s implies %d years; "
+                           "capping at %d.", books_from, years, _MAX_REPORT_YEARS)
+        return _MAX_REPORT_YEARS
+    return years
 
 
 def _is_newer(latest: str, installed: str) -> bool:
@@ -2101,6 +2633,46 @@ def maybe_self_update(cfg: Config, logger, api: ApiClient,
     except OSError:
         return
 
+    # ── AUTHENTICODE GATE ────────────────────────────────────────────────
+    # The SHA-256 checked during download came from the SAME server that served
+    # the file, so it proves the transfer was intact — not that the file is
+    # ours. A server with a foothold would happily publish a matching hash for a
+    # hostile binary, and the agent would install it with SYSTEM privileges.
+    #
+    # The signature is the check the server cannot forge: the signing key lives
+    # on a token/HSM the server has never held. We require BOTH a valid chain
+    # AND our publisher CN — "validly signed" alone only proves the attacker
+    # bought a certificate.
+    #
+    # Skipped only when this build is itself unsigned (a dev/self-hosted build):
+    # enforcing it there would brick self-update for anyone running an unsigned
+    # agent, while enforcing it for signed agents is exactly where it matters.
+    try:
+        import codesign
+        # "Is this build signed at all?" — thumbprint when we pin one (a
+        # self-signed release), chain validation otherwise. An unsigned dev
+        # build skips the gate entirely, which is the only way to keep
+        # self-update working for anyone running one.
+        _signed = bool(codesign.signer_thumbprint(exe_path)) if PUBLISHER_THUMBPRINT             else codesign.verify(exe_path)
+        if (PUBLISHER_CN or PUBLISHER_THUMBPRINT) and _signed:
+            if not codesign.verify_publisher(new_exe, PUBLISHER_CN,
+                                             PUBLISHER_THUMBPRINT):
+                signer = codesign.signer_subject(new_exe) or "(unsigned)"
+                logger.error(
+                    "Self-update REFUSED: downloaded exe is not signed by %r "
+                    "(signer: %s). Keeping the current version.",
+                    PUBLISHER_CN, signer)
+                echo("[update] Update rejected: signature check failed.")
+                api._remove_quietly(new_exe)
+                return
+            logger.info("Self-update: publisher signature verified.")
+        else:
+            logger.info("Self-update: this build is unsigned; "
+                        "skipping the publisher check.")
+    except ImportError:
+        logger.warning("Self-update: codesign unavailable; "
+                       "proceeding on the hash check alone.")
+
     logger.info("Self-update: applying v%s via detached updater.", latest)
     echo(f"[update] Installing v{latest} (the agent will restart)...")
     if not _spawn_updater_bat(exe_dir, logger, exe_path=exe_path):
@@ -2163,6 +2735,17 @@ def sync_now_path(cfg: Config) -> str:
 def status_path(cfg: Config) -> str:
     """Absolute path of the ``.status.json`` status file for this install."""
     return os.path.join(_agent_dir(cfg), STATUS_FILENAME)
+
+
+def skip_store_path(cfg: Config) -> str:
+    """Where the "requests that crash TallyPrime" list is remembered.
+
+    Beside the config, so it belongs to THIS install and survives restarts and
+    updates. See tally_connector._POISON for why remembering matters: without
+    it every fresh process re-discovers the fatal request by crashing Tally
+    with it once more.
+    """
+    return os.path.join(_agent_dir(cfg), ".tally_skip.json")
 
 
 def _consume_sync_now(cfg: Config, logger) -> bool:
@@ -2369,9 +2952,16 @@ def run_sync_loop(cfg: Config, logger, api: ApiClient,
         cfg.sync_interval,
         cfg.machine_id[:12],
     )
+    # Load what earlier runs learned about requests that kill Tally, before the
+    # first cycle can ask for any of them.
+    try:
+        tally_connector.use_skip_store(skip_store_path(cfg))
+    except Exception:                                       # noqa: BLE001
+        pass
     _emit(event="started", ts=time.time())
     failed_retries = 0
     cycle = 0
+    paused_logged = False   # so "idling" is said once, not every 10 seconds.
     # True only when the loop exits because stop_event was set (a deliberate
     # stop). On that clean path we send a best-effort GRACEFUL go-offline so the
     # cloud flips to Disconnected at once. A crash / KeyboardInterrupt leaves
@@ -2393,6 +2983,28 @@ def run_sync_loop(cfg: Config, logger, api: ApiClient,
             if stop_event is not None and stop_event.is_set():
                 stopped_gracefully = True
                 break
+            # PAUSED BY THE OPERATOR? Re-read from disk each iteration rather
+            # than trusting the cfg we were handed: the service is a SEPARATE
+            # process from the Dashboard, so pressing Start/Stop there changes
+            # the file, not this object. Reading it here is what lets Start
+            # resume a running service instead of requiring a restart — and what
+            # makes a boot into a stopped agent stay stopped, since the service
+            # is registered auto-start and would otherwise just come back.
+            if not _sync_is_enabled(cfg):
+                if not paused_logged:
+                    logger.info("Sync is STOPPED by the operator — idling. "
+                                "Press Start in the Dashboard to resume.")
+                    paused_logged = True
+                _emit(event="paused", ts=time.time())
+                if stop_event is not None:
+                    stop_event.wait(min(10.0, max(1.0, cfg.sync_interval)))
+                else:
+                    time.sleep(min(10.0, max(1.0, cfg.sync_interval)))
+                continue
+            if paused_logged:
+                logger.info("Sync RESUMED by the operator.")
+                paused_logged = False
+
             # A "Sync Now" trigger consumed at the top of an iteration just means
             # we run this cycle now (clear it so it is a one-shot).
             _consume_sync_now(cfg, logger)
@@ -2510,8 +3122,7 @@ def _print_status(cfg: Config, logger) -> int:
     print(f"  machine_id     : {cfg.machine_id}")
     print(f"  fingerprint    : {fingerprint}")
     print(f"  id_matches     : {'yes' if cfg.machine_id == fingerprint else 'no (machine changed?)'}")
-    print(f"  license_key    : {'set' if cfg.license_key else 'not set'}")
-    print(f"  agent_token    : {'present (activated)' if token else 'absent (not activated)'}")
+    print(f"  agent_token    : {'present (signed in)' if token else 'absent (not signed in)'}")
 
     # Tally availability - wrapped, must never crash a status print.
     tally_state = "unknown"

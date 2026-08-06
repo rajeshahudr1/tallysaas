@@ -1,10 +1,10 @@
-"""Configuration handling for the Tally Cloud Sync Agent.
+"""Configuration handling for the Teloora Agent.
 
 Reads and writes ``config.ini`` (via :mod:`configparser`). The ``[agent]``
-section holds operator-supplied settings (license_key, sync_interval,
-log_level, agent_version). The ``[state]`` section holds runtime state the
-agent persists itself: the ``agent_token`` returned by activation and the
-machine id it activated with.
+section holds operator-supplied settings (sync_interval, log_level,
+agent_version). The ``[state]`` section holds runtime state the agent persists
+itself: the ``agent_token`` returned by sign-in and the machine id it signed in
+with.
 
 A stable per-machine fingerprint is derived from the MAC address
 (:func:`uuid.getnode`), hostname and platform, hashed with SHA-256 so the same
@@ -15,8 +15,8 @@ Two hardening rules (Phase 1):
 * The server URL is BAKED into the exe (``constants.API_BASE_URL``); it is the
   default for :attr:`Config.api_url` and is NEVER read from or written to
   config.ini. Any ``api_url`` left in an old config.ini is ignored.
-* The license key and agent token are stored ENCRYPTED in config.ini under
-  obfuscated keys (``cred_k`` / ``cred_t``), using a MACHINE-BOUND cipher
+* The agent token is stored ENCRYPTED in config.ini under an obfuscated key
+  (``cred_t``), using a MACHINE-BOUND cipher
   (see :func:`_enc` / :func:`_dec`). Copying config.ini to another PC yields
   undecryptable credentials. Old plaintext values are still read (and migrated
   to encrypted form on the next save). This is obfuscation, not unbreakable
@@ -31,6 +31,7 @@ import hashlib
 import hmac
 import os
 import platform
+import re
 import socket
 import uuid
 
@@ -42,8 +43,9 @@ _AGENT_SECTION = "agent"
 _STATE_SECTION = "state"
 _TALLY_SECTION = "tally"
 
-# Obfuscated key names for the ENCRYPTED credentials in config.ini.
-# license_key -> [agent] cred_k ; agent_token -> [state] cred_t.
+# Obfuscated key name for the ENCRYPTED token: agent_token -> [state] cred_t.
+# _CRED_KEY_NAME is the RETIRED licence-key slot, kept only so save() can delete
+# it from configs written by an older build.
 _CRED_KEY_NAME = "cred_k"
 _CRED_TOKEN_NAME = "cred_t"
 
@@ -51,8 +53,28 @@ _CRED_TOKEN_NAME = "cred_t"
 # api_url is baked + hidden (see constants.API_BASE_URL); never in config.ini.
 _DEFAULT_API_URL = API_BASE_URL
 _DEFAULT_SYNC_INTERVAL = 60
+# The floor the ENGINE enforces, matching the one the Settings page refuses to
+# save below. It lives here as well because config.ini is a text file on the
+# customer's disk: without a clamp at load time, hand-editing it to 1 would let
+# the agent ask TallyPrime for everything once a second, which is how a desktop
+# app the customer is also using ends up wedged behind an error dialog.
+_MIN_SYNC_INTERVAL = 30
+
+
+def _version_tuple(v: str) -> tuple:
+    """Parse "1.2.10" into (1, 2, 10) so versions compare as numbers.
+
+    Mirrors sync_agent._version_tuple; duplicated rather than imported because
+    config is the bottom of the import graph and must not depend on the engine.
+    Junk compares low instead of raising.
+    """
+    parts = []
+    for chunk in str(v or "").strip().split("."):
+        m = re.match(r"\d+", chunk)
+        parts.append(int(m.group(0)) if m else 0)
+    return tuple(parts) if parts else (0,)
 _DEFAULT_LOG_LEVEL = "INFO"
-_DEFAULT_AGENT_VERSION = "1.0.0"
+_DEFAULT_AGENT_VERSION = "1.0.3"
 # Auto-update (Requirement 2). auto_update: master on/off for self-update (the
 # CLOUD per-license toggle overrides this when the version endpoint provides it).
 # update_check_cycles: check for a new exe once at startup, then every N loop
@@ -76,6 +98,27 @@ _DEFAULT_TALLY_EXE = ""
 # (bounds a cycle). Both tunable in config.ini [agent] for very large books.
 _DEFAULT_VOUCHER_CHUNK = 2000
 _DEFAULT_VOUCHER_MAX_FETCHES = 30
+# reconcile_every = run DELETE detection once every N pull cycles per company.
+# Tally has no deletion feed, so the only way to notice a deleted master is to
+# re-read every master id and diff. Cheap (identity fields only) but not free,
+# and deletes are rare — hence periodic rather than every cycle. 0/negative
+# disables the periodic gate and reconciles on every cycle.
+_DEFAULT_RECONCILE_EVERY = 12
+# report_years = how many financial years of Balance Sheet / P&L / Trial Balance
+# / registers to pull.
+#
+# 0 (the default) means EVERY year the company has books for: the agent reads
+# the company's own BOOKSFROM/STARTINGFROM date and pulls from that year to the
+# current one. This used to default to 2, which quietly capped the cloud at
+# "this year and last" — a customer with ten years in Tally got two, and no
+# screen said the other eight were missing rather than empty.
+#
+# A positive number still pins it to the last N years, for a book so long that
+# the extra round trips are not worth it. It is a cost knob; leaving it at 0 is
+# the correct setting, and _MAX_REPORT_YEARS only bounds a nonsense BOOKSFROM
+# (Tally happily reports 1900 dates) rather than the customer's real history.
+_DEFAULT_REPORT_YEARS = 0
+_MAX_REPORT_YEARS = 30
 
 
 class ConfigError(Exception):
@@ -232,8 +275,6 @@ class Config:
     Attributes:
         api_url: Base URL of the cloud API. BAKED + HIDDEN: always the value of
             ``constants.API_BASE_URL`` - never read from / written to config.ini.
-        license_key: Secret license key used to activate the agent. Stored
-            ENCRYPTED (machine-bound) in config.ini; plaintext in memory.
         sync_interval: Seconds between sync passes (int, default 60).
         log_level: Logging level name, e.g. ``"INFO"``.
         agent_version: Reported agent version string.
@@ -246,7 +287,6 @@ class Config:
 
         # Public, typed settings (populated by load()).
         self.api_url: str = _DEFAULT_API_URL
-        self.license_key: str = ""
         self.sync_interval: int = _DEFAULT_SYNC_INTERVAL
         self.log_level: str = _DEFAULT_LOG_LEVEL
         self.agent_version: str = _DEFAULT_AGENT_VERSION
@@ -259,6 +299,11 @@ class Config:
         # Voucher pull safety (the [agent] section; see defaults above).
         self.voucher_chunk: int = _DEFAULT_VOUCHER_CHUNK
         self.voucher_max_fetches: int = _DEFAULT_VOUCHER_MAX_FETCHES
+        self.reconcile_every: int = _DEFAULT_RECONCILE_EVERY
+        self.report_years: int = _DEFAULT_REPORT_YEARS
+        # False only after the operator pressed Stop; see load() for why this is
+        # persisted rather than kept in memory.
+        self.sync_enabled: bool = True
 
         # Tally connectivity + auto-start (the [tally] section).
         self.tally_url: str = _DEFAULT_TALLY_URL
@@ -289,22 +334,53 @@ class Config:
         saved_machine = state.get("machine_id", "").strip()
         cfg.machine_id = saved_machine or machine_fingerprint()
 
+        # Did the operator STOP syncing on purpose?
+        #
+        # The service is registered auto-start, so without this it comes back on
+        # every boot — someone who deliberately stopped the agent on Friday finds
+        # it syncing again on Monday, and the Stop button reads as "pause until
+        # I reboot". The flag makes Stop mean stop: the loop honours it at every
+        # cycle, so a boot into a stopped agent stays stopped, and pressing Start
+        # resumes WITHOUT needing the service restarted.
+        #
+        # Missing/garbled -> enabled. A config we cannot read must not leave a
+        # customer silently un-synced; the visible failure (it synced when you
+        # did not want it to) is far cheaper than the invisible one.
+        try:
+            cfg.sync_enabled = state.getboolean("sync_enabled", True)
+        except Exception:                                   # noqa: BLE001
+            cfg.sync_enabled = True
+
         agent = cfg._parser[_AGENT_SECTION]
         # api_url is BAKED + HIDDEN: always the constant, never from config.ini.
         # Any stale api_url left in an old config.ini is deliberately ignored.
         cfg.api_url = _DEFAULT_API_URL
 
-        # license_key: prefer the ENCRYPTED cred_k; fall back to a legacy
-        # plaintext license_key (migrated to encrypted on the next save).
-        cfg.license_key = cfg._read_credential(
-            agent, _CRED_KEY_NAME, "license_key")
+        # Licence keys are gone: sign-in is email + password + an emailed
+        # code (see api_client.login/verify_otp). Any cred_k / license_key left
+        # in an older config.ini is stale and is deleted on the next save.
 
         cfg.log_level = (
             agent.get("log_level", _DEFAULT_LOG_LEVEL).strip() or _DEFAULT_LOG_LEVEL
         )
+        # THE RUNNING EXE IS THE TRUTH ABOUT ITS OWN VERSION.
+        #
+        # config.ini records the version that was current when the install was
+        # first written, and an in-place update replaces the exe WITHOUT
+        # rewriting it. So a machine updated from 1.0.0 to 1.0.1 kept reporting
+        # 1.0.0 — to the Dashboard, to the cloud heartbeat, and to the check
+        # that decides whether a downloaded build is newer. The update looked
+        # like it had not happened, and the next one compared against a number
+        # that had been wrong for a release.
+        #
+        # So: take the stored value, but never a value OLDER than the exe that
+        # is reading it. Downgrades are still honoured (a deliberately older
+        # exe reports itself), which is why this is a max and not an override.
+        stored = (agent.get("agent_version", "").strip() or _DEFAULT_AGENT_VERSION)
         cfg.agent_version = (
-            agent.get("agent_version", _DEFAULT_AGENT_VERSION).strip()
-            or _DEFAULT_AGENT_VERSION
+            _DEFAULT_AGENT_VERSION
+            if _version_tuple(_DEFAULT_AGENT_VERSION) > _version_tuple(stored)
+            else stored
         )
 
         # sync_interval must always end up an int; bad values fall back.
@@ -314,6 +390,8 @@ class Config:
             cfg.sync_interval = _DEFAULT_SYNC_INTERVAL
         if cfg.sync_interval <= 0:
             cfg.sync_interval = _DEFAULT_SYNC_INTERVAL
+        elif cfg.sync_interval < _MIN_SYNC_INTERVAL:
+            cfg.sync_interval = _MIN_SYNC_INTERVAL
 
         # Auto-update settings (booleans + the check cadence). All tolerant of a
         # bad value (fall back to the default) so a typo never stops the agent.
@@ -346,6 +424,27 @@ class Config:
             cfg.voucher_max_fetches = _DEFAULT_VOUCHER_MAX_FETCHES
         if cfg.voucher_max_fetches <= 0:
             cfg.voucher_max_fetches = _DEFAULT_VOUCHER_MAX_FETCHES
+
+        # Delete detection cadence (see _DEFAULT_RECONCILE_EVERY).
+        try:
+            cfg.reconcile_every = agent.getint("reconcile_every", _DEFAULT_RECONCILE_EVERY)
+        except ValueError:
+            cfg.reconcile_every = _DEFAULT_RECONCILE_EVERY
+        if cfg.reconcile_every <= 0:
+            cfg.reconcile_every = 1
+
+        # How many financial years of reports to pull (see _DEFAULT_REPORT_YEARS).
+        try:
+            cfg.report_years = agent.getint("report_years", _DEFAULT_REPORT_YEARS)
+        except ValueError:
+            cfg.report_years = _DEFAULT_REPORT_YEARS
+        # 0 = "every year the books cover" and is resolved at pull time from the
+        # company's BOOKSFROM (see sync_agent._report_years_for). Only a positive
+        # override is clamped; a negative value is a typo for 0, not for -3.
+        if cfg.report_years < 0:
+            cfg.report_years = 0
+        elif cfg.report_years > 0:
+            cfg.report_years = min(cfg.report_years, _MAX_REPORT_YEARS)
 
         # Tally section — connectivity + auto-start.
         tally = cfg._parser[_TALLY_SECTION]
@@ -413,6 +512,24 @@ class Config:
             del state["agent_token"]
         self.save()
 
+    def clear_token(self) -> None:
+        """Forget the agent token so this machine is signed out.
+
+        Removes BOTH the encrypted credential and any legacy plaintext key. A
+        half-cleared state is worse than either: the agent would look signed out
+        while still holding something it could authenticate with.
+
+        Writes to disk immediately, because the caller's next step is usually to
+        stop the service or show the sign-in screen — leaving the token in a
+        file that a crash could re-read would silently undo the sign-out.
+        """
+        self._ensure_sections()
+        state = self._parser[_STATE_SECTION]
+        for key in (_CRED_TOKEN_NAME, "agent_token"):
+            if key in state:
+                del state[key]
+        self.save()
+
     def save(self) -> None:
         """Write the current in-memory settings back to ``config.ini``.
 
@@ -428,17 +545,20 @@ class Config:
         # Make sure the machine id (the cipher key material) is on disk so the
         # creds we write below can be decrypted on the next load.
         self._parser[_STATE_SECTION]["machine_id"] = mid
+        # Persisted so a deliberate Stop survives a reboot (see load()).
+        self._parser[_STATE_SECTION]["sync_enabled"] = \
+            "true" if self.sync_enabled else "false"
 
         agent = self._parser[_AGENT_SECTION]
         # api_url is BAKED + HIDDEN - never written to config.ini. Strip any stale
         # value an older build (or a hand edit) may have left behind.
         if "api_url" in agent:
             del agent["api_url"]
-        # license_key is written ENCRYPTED under the obfuscated cred_k key; the
-        # plaintext key never touches disk. Remove any legacy plaintext entry.
-        agent[_CRED_KEY_NAME] = _enc(self.license_key or "", mid)
-        if "license_key" in agent:
-            del agent["license_key"]
+        # Sweep out both spellings of the retired licence key so an upgraded
+        # install stops carrying a credential nothing can use.
+        for _stale in (_CRED_KEY_NAME, "license_key"):
+            if _stale in agent:
+                del agent[_stale]
         agent["sync_interval"] = str(self.sync_interval)
         agent["log_level"] = self.log_level
         agent["agent_version"] = self.agent_version

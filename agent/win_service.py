@@ -1,4 +1,4 @@
-"""Windows Service wrapper for the Tally Cloud Sync Agent (Phase 2).
+"""Windows Service wrapper for the Teloora Agent (Phase 2).
 
 This module turns the SAME one-file exe into a professional background Windows
 service - the equivalent of TallyPrime's "Tally Scheduler" service - so the
@@ -54,7 +54,7 @@ def get_version() -> str:
 
 
 def _versioned_display_name(version: "str | None" = None) -> str:
-    """``"Tally Cloud Sync <version>"`` (or the bare name when no version)."""
+    """``"<BRAND_NAME> <version>"`` (or the bare name when no version)."""
     v = (version if version is not None else get_version()).strip()
     return (SERVICE_DISPLAY_NAME + " " + v) if v else SERVICE_DISPLAY_NAME
 
@@ -261,7 +261,7 @@ def install_service(exe_path: "str | None" = None) -> int:
     exe_name, exe_args = _service_binary(exe_path)
     print("Service binPath:", exe_name, exe_args)
     # Stamp the build version into the display name + description so services.msc
-    # shows "Tally Cloud Sync <version>" (falls back to the bare name if unknown).
+    # shows "<BRAND_NAME> <version>" (falls back to the bare name if unknown).
     display_name = _versioned_display_name()
     description = _versioned_description()
     try:

@@ -1,5 +1,5 @@
 # ─────────────────────────────────────────────────────────────
-# install-autostart.ps1 — make the Tally Cloud Sync agent start
+# install-autostart.ps1 — make the Teloora agent start
 # AUTOMATICALLY (hidden, in the background) at every Windows logon.
 # No admin rights needed.
 #

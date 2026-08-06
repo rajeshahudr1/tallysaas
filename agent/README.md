@@ -1,4 +1,4 @@
-# Tally Cloud Sync Agent
+# Teloora Agent
 
 A small Python agent that runs on the customer's Windows PC next to **Tally
 Prime**. It activates against the cloud with a machine-bound license key,
