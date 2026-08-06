@@ -1,0 +1,77 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/stock-journals/list.ejs — TRANSACTIONS · Stock Journal.
+ * Route: GET /stock-journals.  activeMenu: 'stock-journals'.
+ *
+ * A GOODS voucher (no ledger/GST/money) — Items/Total Qty are enriched by
+ * routes/web.js from each journal's line items (StockJournalController.list
+ * only returns the header row).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   stockJournalRows [{id,date,voucher_no,items,qty,narration}]
+ *   stockJournalsTotal, page, perPage
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof stockJournalRows !== 'undefined' && stockJournalRows) ? stockJournalRows : [];
+var _total   = (typeof stockJournalsTotal !== 'undefined') ? stockJournalsTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+
+var tableColumns = [
+    { key: 'date',       label: 'Date',       sortable: true,  type: 'date' },
+    { key: 'voucher_no', label: 'Voucher No', sortable: true,  type: 'text' },
+    { key: 'items',      label: 'Items',      sortable: false, type: 'text', align: 'center' },
+    { key: 'qty',        label: 'Total Qty',  sortable: false, type: 'text', align: 'end' },
+    { key: 'narration',  label: 'Narration',  sortable: false, type: 'text' },
+];
+
+var filterFields = [
+    { type: 'date', name: 'date_from', label: 'Date From', colClass: 'filter-col-fifth' },
+    { type: 'date', name: 'date_to',   label: 'Date To',   colClass: 'filter-col-fifth' },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Stock Journal', infoKey: 'stock-journals',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Stock Journal' }],
+    actions: [
+        { label: 'Create Stock Journal', icon: 'fa-plus', gradient: true, href: '/stock-journals/create' },
+    ],
+}) %>
+
+<form id="stock-journal-filters-form" autocomplete="off" method="get" action="/stock-journals">
+    <%- include('../partials/filter-card', {
+        filterId: 'stock-journal-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: true,
+    }) %>
+</form>
+
+<div class="card">
+    <%- include('../partials/table', {
+        tableId: 'stock-journals-table',
+        basePath: '/stock-journals',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view', 'delete'],
+    }) %>
+    <%- include('../partials/pagination', { page: _page, perPage: _perPage, total: _total }) %>
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

@@ -145,3 +145,12 @@ test('Credit Note and Debit Note are live in both menus, not "Soon"', () => {
     assert.strictEqual(byKey['debit-notes'].soon, undefined);
     assert.strictEqual(byKey['debit-notes'].href, '/debit-notes');
 });
+
+test('Stock Journal and Physical Stock are live, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['new-stock-jrnl'].soon, undefined);
+    assert.strictEqual(byKey['new-stock-jrnl'].href, '/stock-journals/create');
+    assert.strictEqual(byKey['new-phys-stock'].soon, undefined);
+    assert.strictEqual(byKey['new-phys-stock'].href, '/physical-stock/create');
+});

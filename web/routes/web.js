@@ -3457,6 +3457,214 @@ router.post('/delivery-notes', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ── TRANSACTIONS · Stock Journal & Physical Stock ────────────────────────
+ * Both are GOODS vouchers (no ledger / GST / money totals) that move stock —
+ * see api/Controllers/Tenant/StockJournalController.js and
+ * PhysicalStockController.js. Own copy of the delivery-notes route shape
+ * (list/create/store, + delete for Stock Journal only — Physical Stock keeps
+ * every count as history, same reasoning as the api controller). */
+
+/* Parse the hidden items_json from a STOCK JOURNAL form: {product_id,
+ * direction:'source'|'destination', godown, quantity}. Balance is re-checked
+ * client-side (stock-voucher.js) AND server-side (StockJournalController.isBalanced)
+ * — both must agree, this is just the transport shape. */
+function parseStockJournalItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id: it.product_id ? Number(it.product_id) : undefined,
+        direction:  it.direction === 'destination' ? 'destination' : 'source',
+        godown:     it.godown || undefined,
+        quantity:   Number(it.quantity) || 0,
+    })).filter((it) => it.product_id && it.quantity > 0);
+}
+
+/* Parse the hidden items_json from a PHYSICAL STOCK form: {product_id,
+ * counted_qty, godown}. Negative counts are floored server-side too
+ * (PhysicalStockController.normaliseCounts) — this is just the transport shape. */
+function parsePhysicalStockItems(raw) {
+    let arr = [];
+    try { arr = JSON.parse(raw || '[]'); } catch { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    return arr.map((it) => ({
+        product_id:  it.product_id ? Number(it.product_id) : undefined,
+        counted_qty: Math.max(0, Number(it.counted_qty) || 0),
+        godown:      it.godown || undefined,
+    })).filter((it) => it.product_id);
+}
+
+/* GET /stock-journals — list. Total Qty/Item-count columns aren't on the
+ * header row the controller's list() returns (only stock_journal_items has
+ * them), so each page's rows are enriched with one GET /stock-journals/:id
+ * apiece — page size is capped at 100 by the api, so this stays small. */
+router.get('/stock-journals', async (req, res, next) => {
+  try {
+    const dateFrom = req.query.date_from, dateTo = req.query.date_to;
+    let basePath = '/stock-journals';
+    const qsParts = [];
+    if (dateFrom) qsParts.push('date_from=' + encodeURIComponent(dateFrom));
+    if (dateTo)   qsParts.push('date_to=' + encodeURIComponent(dateTo));
+    if (qsParts.length) basePath += '?' + qsParts.join('&');
+
+    const { rows, meta } = await apiList(req, basePath);
+    const stockJournalRows = await Promise.all(rows.map(async (r) => {
+        let items = 0, qty = 0;
+        try {
+            const d = await api.get(req, `/stock-journals/${r.id}`);
+            const its = (apiOk(d) && d.body && d.body.data && Array.isArray(d.body.data.items)) ? d.body.data.items : [];
+            items = its.length;
+            qty = its.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+        } catch (_) { /* leave 0/0 — list still renders */ }
+        return {
+            id: r.id,
+            date: fmtDate(r.journal_date),
+            voucher_no: r.voucher_no,
+            items,
+            qty,
+            narration: r.narration || '',
+        };
+    }));
+
+    res.render('stock-journals/list', {
+        title: 'Stock Journal',
+        activeMenu: 'stock-journals',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Stock Journal' }],
+        stockJournalRows,
+        stockJournalsTotal: meta.total,
+        page: meta.page,
+        perPage: meta.per_page,
+    });
+  } catch (err) { next(err); }
+});
+
+/* POST /stock-journals/:id/delete — soft delete + reverse the stock effect
+ * (StockJournalController.destroy). */
+router.post('/stock-journals/:id/delete', async (req, res, next) => {
+  try {
+    const result = await api.del(req, `/stock-journals/${req.params.id}`);
+    setFlash(req, apiOk(result) ? 'success' : 'error',
+        apiOk(result) ? ((result.body && result.body.message) || 'Stock journal deleted.')
+                      : apiError(result, 'Could not delete the stock journal.'));
+    return req.session.save(() => res.redirect('/stock-journals'));
+  } catch (err) { next(err); }
+});
+
+/* GET /stock-journals/create. */
+router.get('/stock-journals/create', async (req, res, next) => {
+  try {
+    const stockProducts = await fetchInvoiceProducts(req, 'sales_price');
+    res.render('stock-journals/create', {
+        title: 'Create Stock Journal',
+        activeMenu: 'new-stock-jrnl',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Stock Journal', href: '/stock-journals' },
+            { label: 'Create Stock Journal' },
+        ],
+        stockProducts,
+        pageScript: '<script src="/js/stock-voucher.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* POST /stock-journals — items ride the hidden items_json (serialised by
+ * /js/stock-voucher.js). The api re-checks the balance rule and 422s if it
+ * fails; nothing is applied when that happens (whole-transaction). */
+router.post('/stock-journals', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const payload = {
+            voucher_no:   b.voucher_no || undefined,
+            journal_date: b.journal_date || undefined,
+            narration:    b.narration || undefined,
+            items:        parseStockJournalItems(b.items_json),
+        };
+        const result = await api.post(req, '/stock-journals', payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `Stock journal ${(result.body.data && result.body.data.voucher_no) || ''} created.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect('/stock-journals'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not create stock journal.'));
+        return req.session.save(() => res.redirect('/stock-journals/create'));
+    } catch (err) { next(err); }
+});
+
+/* GET /physical-stock — list. list() already groups by voucher_no
+ * (PhysicalStockController.list), so no per-row enrichment is needed. */
+router.get('/physical-stock', async (req, res, next) => {
+  try {
+    const dateFrom = req.query.date_from, dateTo = req.query.date_to;
+    let basePath = '/physical-stock';
+    const qsParts = [];
+    if (dateFrom) qsParts.push('date_from=' + encodeURIComponent(dateFrom));
+    if (dateTo)   qsParts.push('date_to=' + encodeURIComponent(dateTo));
+    if (qsParts.length) basePath += '?' + qsParts.join('&');
+
+    const { rows, meta } = await apiList(req, basePath);
+    const physicalStockRows = rows.map((r) => ({
+        voucher_no: r.voucher_no,
+        date: fmtDate(r.count_date),
+        items: r.items,
+        created_by: r.created_by || '',
+    }));
+
+    res.render('physical-stock/list', {
+        title: 'Physical Stock',
+        activeMenu: 'physical-stock',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Physical Stock' }],
+        physicalStockRows,
+        physicalStockTotal: meta.total,
+        page: meta.page,
+        perPage: meta.per_page,
+    });
+  } catch (err) { next(err); }
+});
+
+/* GET /physical-stock/create. */
+router.get('/physical-stock/create', async (req, res, next) => {
+  try {
+    const stockProducts = await fetchInvoiceProducts(req, 'sales_price');
+    res.render('physical-stock/create', {
+        title: 'Create Physical Stock',
+        activeMenu: 'new-phys-stock',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Physical Stock', href: '/physical-stock' },
+            { label: 'Create Physical Stock' },
+        ],
+        stockProducts,
+        pageScript: '<script src="/js/stock-voucher.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* POST /physical-stock — items ride the hidden items_json. No delete route:
+ * a physical count is evidence of what was counted on that date; a
+ * correction is a NEW sheet (PhysicalStockController has no destroy()). */
+router.post('/physical-stock', async (req, res, next) => {
+    try {
+        const b = req.body;
+        const payload = {
+            voucher_no: b.voucher_no || undefined,
+            count_date: b.count_date || undefined,
+            notes:      b.notes || undefined,
+            items:      parsePhysicalStockItems(b.items_json),
+        };
+        const result = await api.post(req, '/physical-stock', payload);
+        if (apiOk(result)) {
+            const msg = (result.body && result.body.message)
+                || `Physical stock ${(result.body.data && result.body.data.voucher_no) || ''} recorded.`;
+            setFlash(req, 'success', msg);
+            return req.session.save(() => res.redirect('/physical-stock'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not record physical stock.'));
+        return req.session.save(() => res.redirect('/physical-stock/create'));
+    } catch (err) { next(err); }
+});
+
 /* ── TRANSACTIONS · Receipt Notes (list) ────────────────────────
  * GET /receipt-notes — same shape as /delivery-notes. `receipt_status` is
  * the receipt-note-specific lifecycle filter (pending/invoiced/cancelled)

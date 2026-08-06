@@ -33,6 +33,8 @@ const PATH_TO_MODULE = {
     roles: 'roles',
     'field-tracking': 'field-sales',
     contra: 'contra',
+    'stock-journals': 'stock-journal',
+    'physical-stock': 'physical-stock',
 };
 
 /** Resolve a URL path (or bare segment) to its module slug, or null if unknown. */

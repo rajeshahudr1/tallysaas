@@ -1,0 +1,77 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/physical-stock/list.ejs — TRANSACTIONS · Physical Stock.
+ * Route: GET /physical-stock.  activeMenu: 'physical-stock'.
+ *
+ * One row = one voucher_no sheet (PhysicalStockController.list groups
+ * stock_adjustments by voucher_no — there is no header table of its own).
+ * NO delete action — a physical count is evidence of what was counted on
+ * that date; a correction is a new sheet, not an edit.
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   physicalStockRows [{voucher_no,date,items,created_by}]
+ *   physicalStockTotal, page, perPage
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof physicalStockRows !== 'undefined' && physicalStockRows) ? physicalStockRows : [];
+var _total   = (typeof physicalStockTotal !== 'undefined') ? physicalStockTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 10;
+
+var tableColumns = [
+    { key: 'date',       label: 'Date',          sortable: false, type: 'date' },
+    { key: 'voucher_no', label: 'Voucher No',    sortable: false, type: 'text' },
+    { key: 'items',      label: 'Items Counted', sortable: false, type: 'text', align: 'center' },
+    { key: 'created_by', label: 'Created By',    sortable: false, type: 'text' },
+];
+
+var filterFields = [
+    { type: 'date', name: 'date_from', label: 'Date From', colClass: 'filter-col-fifth' },
+    { type: 'date', name: 'date_to',   label: 'Date To',   colClass: 'filter-col-fifth' },
+];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Physical Stock', infoKey: 'physical-stock',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Physical Stock' }],
+    actions: [
+        { label: 'Create Physical Stock', icon: 'fa-plus', gradient: true, href: '/physical-stock/create' },
+    ],
+}) %>
+
+<form id="physical-stock-filters-form" autocomplete="off" method="get" action="/physical-stock">
+    <%- include('../partials/filter-card', {
+        filterId: 'physical-stock-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: true,
+    }) %>
+</form>
+
+<div class="card">
+    <%- include('../partials/table', {
+        tableId: 'physical-stock-table',
+        basePath: '/physical-stock',
+        columns: tableColumns,
+        rows: _rows,
+        selectable: true,
+        showIndex: true,
+        actions: ['view'],
+    }) %>
+    <%- include('../partials/pagination', { page: _page, perPage: _perPage, total: _total }) %>
+</div>
+
+<style>
+    @media (min-width: 992px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
+    }
+    @media (min-width: 768px) and (max-width: 991.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 33.3333%; }
+    }
+    @media (min-width: 576px) and (max-width: 767.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 50%; }
+    }
+    @media (max-width: 575.98px) {
+        .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 100%; }
+    }
+</style>

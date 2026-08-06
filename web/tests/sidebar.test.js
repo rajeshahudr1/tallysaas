@@ -30,8 +30,8 @@ test('a `soon` item renders as a dead span with a Soon pill, not a link', () => 
     const html = renderSidebar();
     assert.match(html, /<span class="sidebar-link is-disabled"[^>]*aria-disabled="true"/);
     assert.match(html, /<span class="sidebar-soon">Soon<\/span>/);
-    // Stock Journal is still `soon: true` — and it must NOT be clickable.
-    assert.doesNotMatch(html, /<a class="sidebar-link[^"]*"[^>]*>\s*<i[^>]*><\/i>\s*<span class="sidebar-link-text">Stock Journal</);
+    // Collect Payments is still `soon: true` — and it must NOT be clickable.
+    assert.doesNotMatch(html, /<a class="sidebar-link[^"]*"[^>]*>\s*<i[^>]*><\/i>\s*<span class="sidebar-link-text">Collect Payments</);
 });
 
 test('groups appear in the LiveKeeping order', () => {
