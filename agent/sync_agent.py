@@ -974,9 +974,18 @@ def _push_voucher(tally: TallyConnector, v: dict, company: Optional[str] = None)
         resp = tally.create_journal(v["dr_ledger"], v["cr_ledger"], v["date"],
                                     v.get("amount", 0), v.get("narration", ""),
                                     vch_type=v.get("vch_type", "Journal"), company=company)
-    else:  # payment
+    elif kind == "payment":
         resp = tally.create_payment(v["party"], v["date"], v.get("amount", 0),
                                     mode=v.get("mode", "Cash"), company=company)
+    else:
+        # An unrecognised voucher_kind must NEVER be guessed at -- silently
+        # treating it as a payment would write the wrong voucher into the
+        # customer's books. Refuse cleanly instead: no Tally call, and the
+        # kind is named in the reason so a missed branch is caught fast.
+        res = {"record_type": v["record_type"], "record_id": v["id"],
+               "company_id": v["company_id"], "status": "failed",
+               "message": f"Unknown voucher_kind: {kind!r}"}
+        return res
     ok, info = _interpret_tally(resp)
     res = {"record_type": v["record_type"], "record_id": v["id"],
            "company_id": v["company_id"], "status": "synced" if ok else "failed"}
