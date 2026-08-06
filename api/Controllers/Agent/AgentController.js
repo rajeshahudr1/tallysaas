@@ -23,13 +23,18 @@ const fs         = require('node:fs');
 const path       = require('node:path');
 const R          = require('../../Helpers/response');
 const jwt        = require('../../Helpers/jwt');
-const licenseKey = require('../../Helpers/licenseKey');
+const crypto     = require('node:crypto');
+const passwords  = require('../../Helpers/passwords');
+const mail       = require('../../Helpers/mail');
+const agentOtp   = require('../../Helpers/agentOtp');
+const throttle   = require('../../Helpers/throttle');
 const db         = require('../../config/db').db;
 const masterDb   = require('../../config/masterDb').db;
 const { runWithTenant } = require('../../config/db');
 const { getKnexForLicense } = require('../../config/tenantDb');
 const { recordHistory } = require('../../Helpers/history');
 const agentRelease      = require('../../Helpers/agentRelease');
+const envelopeSigning   = require('../../Helpers/envelopeSigning');
 const { logger }        = require('../../Helpers/logger');
 
 // ── Toggleable agent diagnostics ────────────────────────────────
@@ -42,8 +47,6 @@ function adbg(...args) {
     if (AGENT_DEBUG) { try { console.log('[AGENT_DEBUG]', new Date().toISOString(), ...args); } catch (_) { /* never break a request on a log */ } }
 }
 
-const AGENT_TOKEN_TTL = '7d';
-const INVALID_KEY_MSG = 'Invalid license key.';
 
 /**
  * Company SYNC gating (on-the-fly, NO stored flag): a license may sync only its
@@ -68,73 +71,322 @@ async function syncingCompanies(licenseId, maxCompanies, columns) {
 }
 
 /**
- * POST /api/v1/agent/activate
- * Body (validated): { license_key, machine_id, agent_version? }
+ * ── AGENT SIGN-IN ────────────────────────────────────────────────
+ *
+ * Replaces licence-key activation. A licence key typed into a desktop app is a
+ * bearer secret: anyone who reads it over a shoulder can activate an agent and
+ * pull the whole book, and it binds one licence to one machine with no way to
+ * revoke a single device.
+ *
+ * The flow is two calls. `login` checks the password and emails a code;
+ * `verify` exchanges the code for a long-lived, machine-bound agent token and
+ * records the device in `agents`.
+ *
+ * NO VALIDATION HAPPENS IN THE AGENT. Joi schemas in Validators/agent.js own
+ * every rule, and the desktop app renders whatever `msg` comes back — so the
+ * rules and the wording can change without shipping a new exe.
  */
-async function activate(req, res) {
-    const { license_key, machine_id, agent_version } = req.body;
+
+// Effectively non-expiring. The agent is a Windows service that runs unattended
+// for months; a token that expires stops sync until somebody walks to the PC and
+// signs in again. Revocation is `agents.status`, enforced on every request by
+// authenticateAgent — which is a better control anyway, because it can be
+// applied the moment a machine is lost rather than whenever the token happens
+// to lapse. (The previous 7-day token only worked because the agent kept the
+// licence key and silently re-activated itself; with the key gone, that crutch
+// is gone too.)
+const AGENT_TOKEN_TTL = '3650d';
+
+// Sign-in throttles. Two keys, because they defend against different things: a
+// per-email counter stops password guessing against one account, a per-IP
+// counter stops one host spraying many accounts. See Helpers/throttle.js for
+// why this is in-process and why the OTP attempt cap is NOT.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_PER_EMAIL = 5;
+const LOGIN_MAX_PER_IP = 20;
+
+// One response for every rejection in `login`. Returning "no such user" or
+// "wrong password" would turn this endpoint into an email-enumeration oracle —
+// an attacker could discover which addresses are registered without ever
+// guessing a password. forgotPassword already takes this line; this follows it.
+const LOGIN_GENERIC_MSG = 'Email or password is incorrect.';
+
+function clientIp(req) {
+    return String(req.headers['x-forwarded-for'] || req.ip || '').split(',')[0].trim() || 'unknown';
+}
+
+/**
+ * POST /api/v1/agent/login   (public)
+ * Body (validated): { email, password, machine_id, machine_name?, agent_version? }
+ * → { challenge_id, email_masked, expires_in }
+ */
+async function login(req, res) {
+    const { email, password, machine_id } = req.body;
+    const ip = clientIp(req);
+
     try {
-        const parsed = licenseKey.parse(license_key);
-        if (!parsed) return R.errorResponse(res, INVALID_KEY_MSG, 404);
-
-        const lic = await masterDb('licenses')
-            .where({ key_prefix: parsed.prefix, license_key_hash: parsed.hash })
-            .whereNull('deleted_at')
-            .first();
-        if (!lic) return R.errorResponse(res, INVALID_KEY_MSG, 404);
-
-        if (lic.status !== 'active') {
-            return R.errorResponse(res, `This license is ${lic.status}. Please contact support.`, 403);
+        const byIp = throttle.hit(`agent:login:ip:${ip}`, LOGIN_MAX_PER_IP, LOGIN_WINDOW_MS);
+        const byEmail = throttle.hit(`agent:login:email:${email}`, LOGIN_MAX_PER_EMAIL, LOGIN_WINDOW_MS);
+        if (!byIp.allowed || !byEmail.allowed) {
+            const wait = Math.max(byIp.retryAfterSeconds, byEmail.retryAfterSeconds);
+            return R.errorResponse(res,
+                `Too many sign-in attempts. Try again in ${Math.ceil(wait / 60)} minute(s).`, 429);
         }
+
+        // Auth is against the MASTER db (users/licences live there, not in a
+        // tenant). role_slug is denormalised onto master.users for exactly this.
+        const user = await masterDb('users')
+            .whereRaw('lower(email) = ?', [String(email).toLowerCase()])
+            .whereNull('deleted_at')
+            .first('id', 'name', 'email', 'password_hash', 'status', 'license_id', 'role_slug');
+
+        // Every failure below returns LOGIN_GENERIC_MSG with the same status, so
+        // the caller cannot tell which check failed. The REASON is logged, since
+        // support needs to distinguish "wrong password" from "licence expired".
+        const deny = (reason) => {
+            logger.warn(`[agent-login] denied ip=${ip} email=${email} reason=${reason}`);
+            return R.errorResponse(res, LOGIN_GENERIC_MSG, 401);
+        };
+
+        if (!user) return deny('no_user');
+        if (user.status !== 'Active') return deny(`user_status:${user.status}`);
+        if (!(await passwords.verify(password, user.password_hash))) return deny('bad_password');
+        if (!user.license_id) return deny('no_license');
+
+        const lic = await masterDb('licenses').where('id', user.license_id)
+            .whereNull('deleted_at').first('id', 'status', 'valid_until');
+        if (!lic) return deny('license_missing');
+        if (lic.status !== 'active') return deny(`license_status:${lic.status}`);
         const today = new Date().toISOString().slice(0, 10);
         if (lic.valid_until && String(lic.valid_until).slice(0, 10) < today) {
-            return R.errorResponse(res, 'This license has expired. Please renew to continue.', 403);
+            return deny('license_expired');
         }
 
-        // Machine binding — bind on first activation; reject a different machine.
+        // Not every user of a licence may attach a machine to it. Reuses the
+        // existing 'tally-sync' RBAC module rather than inventing a permission.
+        if (!(await canSetUpAgent(user))) return deny('no_permission');
+
+        // Latest-wins: one live challenge per (user, machine). Without this a
+        // user who clicks Continue twice ends up with two valid codes, and the
+        // attempt cap applies to each separately.
+        await masterDb('agent_otp_challenges')
+            .where({ user_id: user.id, machine_id }).whereNull('consumed_at').del();
+
+        const code = agentOtp.generateCode();
+        const { row, expires_in } = agentOtp.buildChallenge({
+            id: crypto.randomUUID(), userId: user.id, machineId: machine_id, code,
+        });
+        await masterDb('agent_otp_challenges').insert(row);
+
+        // THE MAIL IS SENT AFTER THE RESPONSE, not before it. Handing the SMTP
+        // round-trip to the customer meant the agent sat on a dead "Continue"
+        // button for as long as the mail server felt like taking — several
+        // seconds on a bad day, and the customer cannot tell a slow send from a
+        // hung app.
+        //
+        // Waiting bought exactly one thing: a 502 when the send failed. That is
+        // now covered by Resend, which IS synchronous and reports the failure —
+        // the code screen already offers it, and a customer who never got a mail
+        // reaches for it anyway. The challenge is left in place so that resend
+        // has something to resend.
+        setImmediate(() => {
+            mail.sendAgentLoginCode(user.email, code, user.name)
+                .catch((mailErr) => logger.error(
+                    `[agent-login] mail failed for ${user.email}: ${mailErr.message}`));
+        });
+
+        return R.successResponse(res, {
+            challenge_id: row.id,
+            email_masked: agentOtp.maskEmail(user.email),
+            expires_in,
+        }, 'We emailed you a 6-digit code.');
+    } catch (err) {
+        console.error('AgentController.login error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * Whether this user may attach a machine to the licence.
+ *
+ * Roles live in the TENANT db while auth happens against master, so this binds
+ * the licence's tenant to read the role's permissions. Super Admin bypasses, as
+ * everywhere else. Any error is a denial: failing open here would let a user
+ * with no permission activate an agent.
+ */
+async function canSetUpAgent(user) {
+    if (user.role_slug === 'super-admin') return true;
+    try {
+        return await runWithTenant(getKnexForLicense(user.license_id), async () => {
+            const row = await db('role_permissions as rp')
+                .join('permissions as p', 'p.id', 'rp.permission_id')
+                .join('roles as r', 'r.id', 'rp.role_id')
+                .where('r.slug', user.role_slug)
+                .where('p.module', 'tally-sync')
+                .whereIn('p.action', ['create', 'manage'])
+                .first('p.id');
+            return !!row;
+        });
+    } catch (err) {
+        logger.error(`[agent-login] permission check failed for user=${user.id}: ${err.message}`);
+        return false;
+    }
+}
+
+/**
+ * POST /api/v1/agent/verify   (public — the challenge_id is the proof)
+ * Body (validated): { challenge_id, code, machine_id, machine_name?, agent_version? }
+ * → { agent_token, agent_id, license }
+ */
+async function verify(req, res) {
+    const { challenge_id, code, machine_id, machine_name, agent_version } = req.body;
+
+    try {
+        const row = await masterDb('agent_otp_challenges').where('id', challenge_id).first();
+        const verdict = agentOtp.verifyChallenge(row, { code, machineId: machine_id });
+
+        if (!verdict.ok) {
+            // The helper decides WHAT should happen; the writes happen here.
+            if (verdict.countAttempt && row) {
+                await masterDb('agent_otp_challenges').where('id', row.id).increment('attempts', 1);
+            }
+            if (verdict.burn && row) {
+                await masterDb('agent_otp_challenges').where('id', row.id).del();
+            }
+            logger.warn(`[agent-verify] refused challenge=${challenge_id} reason=${verdict.reason}`);
+            return R.errorResponse(res, verdict.message, 401);
+        }
+
+        // Consume BEFORE issuing the token. If token signing then fails the code
+        // is spent and the customer requests a new one — annoying but safe. The
+        // other order would leave a valid code usable after a token was issued.
+        const consumed = await masterDb('agent_otp_challenges')
+            .where('id', row.id).whereNull('consumed_at')
+            .update({ consumed_at: new Date() });
+        if (!consumed) {
+            // Lost a race with a concurrent verify of the same code.
+            return R.errorResponse(res, 'This code is no longer valid. Start again.', 401);
+        }
+
+        const user = await masterDb('users').where('id', row.user_id)
+            .whereNull('deleted_at')
+            .first('id', 'email', 'license_id', 'status');
+        if (!user || user.status !== 'Active' || !user.license_id) {
+            return R.errorResponse(res, 'This account can no longer sign in.', 403);
+        }
+
+        // Re-check the licence: it may have lapsed between login and verify.
+        const lic = await masterDb('licenses').where('id', user.license_id)
+            .whereNull('deleted_at')
+            .first('id', 'holder_name', 'plan', 'valid_until', 'max_companies', 'status');
+        if (!lic || lic.status !== 'active') {
+            return R.errorResponse(res, 'This licence is not active. Contact support.', 403);
+        }
+
         const now = new Date();
-        if (!lic.machine_id) {
-            await masterDb('licenses').where('id', lic.id).update({
-                machine_id, machine_bound_at: now, agent_version: agent_version || null,
+        // Upsert on (license_id, machine_id): re-activating the SAME PC updates
+        // its row. Inserting a second row would inflate the device list and make
+        // any future seat limit count one machine repeatedly.
+        const [agent] = await masterDb('agents')
+            .insert({
+                license_id: lic.id, user_id: user.id,
+                machine_id, machine_name: machine_name || null,
+                agent_version: agent_version || null,
+                status: 'active', activated_at: now,
+                last_seen_at: now, created_at: now, updated_at: now,
+                revoked_at: null, revoked_by: null,
+            })
+            .onConflict(['license_id', 'machine_id'])
+            .merge({
+                user_id: user.id, machine_name: machine_name || null,
+                agent_version: agent_version || null,
+                // A previously revoked machine that signs in again with a valid
+                // password AND a valid emailed code is legitimately back.
+                status: 'active', revoked_at: null, revoked_by: null,
                 last_seen_at: now, updated_at: now,
-            });
-        } else if (lic.machine_id !== machine_id) {
-            return R.errorResponse(res,
-                'This license is already activated on another machine. Ask your administrator to reset it.', 403);
-        } else {
-            await masterDb('licenses').where('id', lic.id)
-                .update({ agent_version: agent_version || lic.agent_version, last_seen_at: now, updated_at: now });
-        }
+            })
+            .returning(['id']);
 
-        // Companies this license may sync — only the FIRST max_companies
-        // (created_at asc, id asc), on-the-fly. The rest are over the limit and
-        // are excluded from sync everywhere (queue / commands / results).
-        // activate() is PUBLIC (no authenticateAgent), so no tenant db is bound
-        // yet — companies live in THIS licence's tenant db, so bind it explicitly
-        // for the read.
         const companies = await runWithTenant(
             getKnexForLicense(lic.id),
             () => syncingCompanies(lic.id, lic.max_companies, ['id', 'name', 'slug', 'status']),
         );
 
         const agentToken = jwt.sign(
-            { kind: 'agent', license_id: lic.id, machine_id },
+            { kind: 'agent', license_id: lic.id, machine_id, agent_id: agent.id },
             AGENT_TOKEN_TTL,
         );
 
+        // A completed sign-in clears the throttle so a user who fumbled their
+        // password first is not left locked out of their own machine.
+        throttle.reset(`agent:login:email:${String(user.email).toLowerCase()}`);
+
+        logger.info(`[agent-verify] activated agent=${agent.id} license=${lic.id} machine=${machine_id}`);
         return R.successResponse(res, {
             agent_token: agentToken,
+            agent_id: agent.id,
             license: {
                 id: lic.id, holder_name: lic.holder_name, plan: lic.plan,
                 valid_until: lic.valid_until, max_companies: lic.max_companies,
             },
             companies,
-        }, 'Agent activated.');
+        }, 'This computer is now connected.');
     } catch (err) {
-        console.error('AgentController.activate error:', err);
+        console.error('AgentController.verify error:', err);
         return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
     }
 }
+
+/**
+ * POST /api/v1/agent/otp/resend   (public)
+ * Body (validated): { challenge_id }
+ */
+async function resendOtp(req, res) {
+    const { challenge_id } = req.body;
+    try {
+        const row = await masterDb('agent_otp_challenges').where('id', challenge_id).first();
+        const verdict = agentOtp.canResend(row);
+        if (!verdict.ok) {
+            return R.errorResponse(res, verdict.message,
+                verdict.reason === 'cooldown' ? 429 : 401);
+        }
+
+        const user = await masterDb('users').where('id', row.user_id)
+            .whereNull('deleted_at').first('id', 'name', 'email', 'status');
+        if (!user || user.status !== 'Active') {
+            return R.errorResponse(res, 'This code is no longer valid. Start again.', 401);
+        }
+
+        // A resend REPLACES the code. Leaving the old one alive would multiply
+        // the number of guessable codes for a single challenge.
+        const code = agentOtp.generateCode();
+        const now = new Date();
+        try {
+            await mail.sendAgentLoginCode(user.email, code, user.name);
+        } catch (mailErr) {
+            logger.error(`[agent-resend] mail failed for ${user.email}: ${mailErr.message}`);
+            return R.errorResponse(res,
+                'Could not send the code by email. Try again in a moment.', 502);
+        }
+        await masterDb('agent_otp_challenges').where('id', row.id).update({
+            code_hash: agentOtp.hashCode(code),
+            // The attempt budget resets with the code: the attempts already
+            // spent were against a code that no longer exists.
+            attempts: 0,
+            resends: Number(row.resends) + 1,
+            last_sent_at: now,
+        });
+
+        return R.successResponse(res, {
+            challenge_id: row.id,
+            email_masked: agentOtp.maskEmail(user.email),
+        }, 'We emailed you a new code.');
+    } catch (err) {
+        console.error('AgentController.resendOtp error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
 
 /**
  * POST /api/v1/agent/heartbeat   (behind authenticateAgent → req.license)
@@ -174,6 +426,18 @@ async function heartbeat(req, res) {
             patch.last_open_companies = JSON.stringify(names);
         }
         await masterDb('licenses').where('id', req.license.id).update(patch);
+
+        // Liveness is per DEVICE now. The licence-level columns above are still
+        // written so the existing admin screens keep working, but with several
+        // machines on one licence they only ever show whichever agent phoned in
+        // last — which is why the device list reads from `agents` instead.
+        if (req.agent && req.agent.agent_id) {
+            await masterDb('agents').where('id', req.agent.agent_id).update({
+                last_seen_at: now,
+                agent_version: (req.body && req.body.agent_version) || undefined,
+                updated_at: now,
+            });
+        }
 
         // Per-license AUTO-sync toggles: the MASTER switch (sync_enabled) and the
         // two DIRECTION toggles (push/pull). authenticateAgent selects a fixed
@@ -304,7 +568,7 @@ async function pending(req, res) {
         const pushSel = SM.parseModules(licRow && licRow.sync_push_modules);
         const companies = await syncingCompanies(
             req.license.id, maxCompanies,
-            ['id', 'name', 'slug', 'tally_guid', 'tally_dirty', 'mailing_name', 'email', 'phone', 'mobile',
+            ['id', 'name', 'slug', 'tally_guid', 'tally_synced_at', 'tally_dirty', 'mailing_name', 'email', 'phone', 'mobile',
              'gst_number', 'pan_number', 'state', 'pincode', 'country', 'address', 'books_from'],
         );
         const companyIds = companies.map((c) => c.id);
@@ -315,13 +579,16 @@ async function pending(req, res) {
             });
         }
 
-        // Web-made companies not yet created in Tally (tally_guid NULL) — the
-        // agent creates each in Tally then reports back so result() stamps the guid.
+        // Web-made companies not yet created in Tally — the agent creates each in
+        // Tally then reports back so result() stamps tally_synced_at.
+        // Gate on tally_synced_at, NOT tally_guid: a Tally master-import response
+        // carries no GUID, so the guid only ever arrives on a later PULL. Keying
+        // "exists in Tally" off the guid is what forced the old placeholder writes.
         const companiesToCreate = companies
-            .filter((c) => !c.tally_guid || c.tally_dirty)
+            .filter((c) => !c.tally_synced_at || c.tally_dirty)
             .map((c) => ({
                 id: c.id, name: c.name,
-                action: c.tally_guid ? 'Alter' : 'Create',
+                action: c.tally_synced_at ? 'Alter' : 'Create',
                 mailing_name: c.mailing_name || null, email: c.email || null,
                 phone: c.phone || null, mobile: c.mobile || null,
                 gst: c.gst_number || null, pan: c.pan_number || null,
@@ -332,21 +599,21 @@ async function pending(req, res) {
             }));
 
         // ── Ledgers ──
-        // New (tally_guid NULL) OR edited-after-sync (tally_dirty) records — the
-        // latter re-push as an ALTER so cloud edits reach Tally (bidirectional).
-        const _newOrDirty = (q) => q.whereNull('tally_guid').orWhere('tally_dirty', true);
+        // Never-pushed (tally_synced_at NULL) OR edited-after-sync (tally_dirty)
+        // records — the latter re-push as an ALTER so cloud edits reach Tally.
+        const _newOrDirty = (q) => q.whereNull('tally_synced_at').orWhere('tally_dirty', true);
         const customers = await db('customers')
             .whereIn('company_id', companyIds).whereNull('deleted_at')
             .where('is_tally_ledger', true).where(_newOrDirty)
             .limit(50)
             .select('id', 'company_id', 'name', 'gst_number', 'opening_balance',
-                    'mobile', 'email', 'pan_number', 'billing_address', 'credit_limit', 'tally_guid');
+                    'mobile', 'email', 'pan_number', 'billing_address', 'credit_limit', 'tally_synced_at');
         const suppliers = await db('suppliers')
             .whereIn('company_id', companyIds).whereNull('deleted_at')
             .where('is_tally_ledger', true).where(_newOrDirty)
             .limit(50)
             .select('id', 'company_id', 'name', 'gst_number', 'opening_balance',
-                    'mobile', 'email', 'pan_number', 'address', 'tally_guid');
+                    'mobile', 'email', 'pan_number', 'address', 'tally_synced_at');
         // FULL party record pushed to Tally (not just name/gstin/opening). Already-
         // synced rows (tally_guid set) come through dirty → ACTION 'Alter'.
         const ledgers = [
@@ -356,14 +623,14 @@ async function pending(req, res) {
                 mobile: c.mobile || null, email: c.email || null, pan: c.pan_number || null,
                 address: c.billing_address || null,
                 credit_limit: (c.credit_limit != null ? Number(c.credit_limit) : null),
-                action: c.tally_guid ? 'Alter' : 'Create',
+                action: c.tally_synced_at ? 'Alter' : 'Create',
             })),
             ...suppliers.map((s) => ({
                 record_type: 'supplier', id: s.id, company_id: s.company_id, name: s.name,
                 parent: 'Sundry Creditors', gstin: s.gst_number || null, opening: Number(s.opening_balance) || 0,
                 mobile: s.mobile || null, email: s.email || null, pan: s.pan_number || null,
                 address: s.address || null,
-                action: s.tally_guid ? 'Alter' : 'Create',
+                action: s.tally_synced_at ? 'Alter' : 'Create',
             })),
         ];
 
@@ -372,20 +639,19 @@ async function pending(req, res) {
             .whereIn('company_id', companyIds).whereNull('deleted_at')
             .where('is_tally_item', true).where(_newOrDirty)
             .limit(50)
-            .select('id', 'company_id', 'name', 'unit', 'hsn_code', 'gst_rate', 'tally_guid');
+            .select('id', 'company_id', 'name', 'unit', 'hsn_code', 'gst_rate', 'tally_synced_at');
         const stock_items = products.map((p) => ({
             record_type: 'product', id: p.id, company_id: p.company_id, name: p.name,
             unit: p.unit || 'Nos', hsn: p.hsn_code || null, gst_rate: Number(p.gst_rate) || 0,
-            action: p.tally_guid ? 'Alter' : 'Create',
+            action: p.tally_synced_at ? 'Alter' : 'Create',
         }));
 
         // ── Locations → Tally godowns ──
-        // All non-deleted locations not yet synced (tally_guid NULL). The
-        // locations table HAS tally_guid, so result() stamps it and these stop
-        // appearing here. (company_id, id, name are the only columns we push.)
+        // All non-deleted locations not yet pushed. result() stamps
+        // tally_synced_at so these stop appearing here.
         const locationRows = await db('locations')
             .whereIn('company_id', companyIds).whereNull('deleted_at')
-            .whereNull('tally_guid')
+            .where(_newOrDirty)
             .limit(50)
             .select('id', 'company_id', 'name');
         const locations = locationRows.map((l) => ({
@@ -393,13 +659,12 @@ async function pending(req, res) {
         }));
 
         // ── Categories → Tally stock groups ──
-        // The categories table has NO tally_guid / sync column, so we cannot
-        // stamp them and they would re-push every cycle; the Tally-side create is
-        // idempotent (a duplicate stock group is harmless) so this is safe. We
-        // push all non-deleted categories (batched). result() no-ops on
-        // record_type 'category' (nothing to stamp).
+        // Categories now carry tally_synced_at/tally_dirty (tenant migration 002),
+        // so they push ONCE and are stamped — no more re-pushing every cycle, and
+        // result() can finally write the audit row for them.
         const categoryRows = await db('categories')
             .whereIn('company_id', companyIds).whereNull('deleted_at')
+            .where(_newOrDirty)
             .limit(50)
             .select('id', 'company_id', 'name');
         const categories = categoryRows.map((c) => ({
@@ -577,64 +842,70 @@ async function result(req, res) {
             if (!allowed.has(cid)) continue;          // never touch another license's data
             const now = new Date();
             const synced = r.status === 'synced';
+            // A Tally master-import response does NOT return the new master's
+            // GUID, so agents historically sent the literal strings 'synced' /
+            // 'tally' here just to mark the row as pushed. tally_guid is now a
+            // real identity column with a unique index — a placeholder would
+            // collide on the second record. Accept ONLY a genuine GUID; the real
+            // one arrives on the next PULL, which fetches GUID for every master.
+            const guid = (typeof r.tally_guid === 'string'
+                && !['synced', 'tally', ''].includes(r.tally_guid.trim().toLowerCase()))
+                ? r.tally_guid.trim() : null;
+            // Push-state stamp shared by every master branch.
+            const pushed = { tally_synced_at: now, tally_dirty: false, updated_at: now };
+            if (guid) pushed.tally_guid = guid;
 
             if (r.record_type === 'customer' || r.record_type === 'supplier') {
                 if (synced) {
                     const table = r.record_type === 'customer' ? 'customers' : 'suppliers';
-                    // tally_dirty:false — the cloud edit has now reached Tally.
-                    await db(table).where({ id: r.record_id, company_id: cid })
-                        .update({ tally_guid: r.tally_guid || 'synced', tally_synced_at: now, tally_dirty: false, updated_at: now });
+                    await db(table).where({ id: r.record_id, company_id: cid }).update(pushed);
                 }
             } else if (r.record_type === 'product') {
                 if (synced) {
-                    await db('products').where({ id: r.record_id, company_id: cid })
-                        .update({ tally_guid: r.tally_guid || 'synced', tally_synced_at: now, tally_dirty: false, updated_at: now });
+                    await db('products').where({ id: r.record_id, company_id: cid }).update(pushed);
                 }
             } else if (r.record_type === 'sales_invoice' || r.record_type === 'purchase_invoice') {
                 // invoices track sync via status + tally_voucher_no (no synced_at column).
                 await db('invoices').where({ id: r.record_id, company_id: cid }).update({
                     status: synced ? 'created' : 'failed',
                     tally_voucher_no: r.tally_voucher_no || null,
-                    tally_guid: r.tally_guid || null, updated_at: now,
+                    tally_guid: guid, updated_at: now,
                 });
             } else if (r.record_type === 'payment' || r.record_type === 'receipt') {
+                // Stamp tally_guid too (it was previously omitted, leaving every
+                // pushed payment guid-less and so eligible for the importer's
+                // content-dedupe path on the next pull).
                 await db('payments').where({ id: r.record_id, company_id: cid }).update({
                     status: synced ? 'created' : 'failed',
-                    tally_voucher_no: r.tally_voucher_no || null, updated_at: now,
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
                 });
             } else if (r.record_type === 'journal') {
                 await db('journals').where({ id: r.record_id, company_id: cid }).update({
                     status: synced ? 'created' : 'failed',
-                    tally_voucher_no: r.tally_voucher_no || null, updated_at: now,
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
                 });
             } else if (r.record_type === 'company') {
-                // Web-made company created/altered in Tally → stamp guid + clear
-                // dirty so /pending stops listing it.
                 if (synced) {
                     await db('companies').where({ id: r.record_id, license_id: req.license.id })
-                        .whereNull('deleted_at')
-                        .update({ tally_guid: r.tally_guid || 'tally', tally_dirty: false, updated_at: now });
+                        .whereNull('deleted_at').update(pushed);
                 }
             } else if (r.record_type === 'location') {
-                // Location pushed as a Tally godown → stamp tally_guid +
-                // tally_synced_at + clear dirty so /pending stops returning it.
                 if (synced) {
                     await db('locations').where({ id: r.record_id, company_id: cid })
-                        .whereNull('deleted_at')
-                        .update({ tally_guid: r.tally_guid || 'tally', tally_synced_at: now, tally_dirty: false, updated_at: now });
+                        .whereNull('deleted_at').update(pushed);
                 }
             } else if (r.record_type === 'category') {
-                // Category pushed as a Tally stock group. The categories table
-                // has no tally_guid/sync column, so there is nothing to stamp and
-                // the category is necessarily RE-PUSHED every cycle (the Tally-side
-                // STOCKGROUP create is idempotent, so this is harmless in Tally).
-                // We deliberately DO NOT write a tally_sync_logs audit row here:
-                // without a sync column we cannot tell a first push from a repeat,
-                // so logging every cycle would grow tally_sync_logs without bound
-                // (up to 50 rows per company per cycle, forever). Count it as
-                // processed but skip the audit write.
-                processed += 1;
-                continue;
+                // Categories now carry tally_synced_at/tally_dirty (migration 002),
+                // so a stock-group push is stamped once and stops re-appearing in
+                // /pending — which also makes the audit row below safe to write
+                // (previously it would have grown without bound, one row per
+                // category per cycle, forever).
+                if (synced) {
+                    await db('categories').where({ id: r.record_id, company_id: cid })
+                        .whereNull('deleted_at').update(pushed);
+                }
             } else {
                 continue;
             }
@@ -756,10 +1027,13 @@ async function importFromTally(req, res) {
             }
             const [row] = await db('companies').insert({
                 name: companyName, slug, license_id: licenseId, status: 'Active',
-                // Stamp the STABLE guid (real Tally guid when known, else the 'tally'
-                // placeholder) so the cloud->Tally push never re-creates it AND the
-                // next pull dedups on it.
-                tally_guid: cmGuid || 'tally',
+                // Stamp the STABLE Tally guid when known — and ONLY when known.
+                // The old 'tally' placeholder made every company in a licence share
+                // one "guid", so the next pull's guid-dedup matched the wrong
+                // company. tally_synced_at (not the guid) is what tells the push
+                // side this company already exists in Tally.
+                tally_guid: cmGuid || null,
+                tally_synced_at: new Date(),
                 created_at: new Date(), updated_at: new Date(),
             }).returning('id');
             cid = row.id || row;
@@ -820,6 +1094,25 @@ async function importFromTally(req, res) {
                         patch.financial_year = `${start}-${start + 1}`;
                     }
                 }
+                // Registration numbers Tally holds that the cloud had no column
+                // for until tenant migration 004.
+                for (const [col, val] of [['formal_name', cm.formal_name], ['tan_number', cm.tan],
+                                          ['cin_number', cm.cin], ['currency', cm.currency]]) {
+                    if (val && await db.schema.hasColumn('companies', col)) patch[col] = String(val);
+                }
+                // F11 feature flags, stored verbatim. Unlike everything above this
+                // is NOT fill-empty: the flags describe what Tally is doing right
+                // now, so switching cost centres on must be reflected — it decides
+                // which collections the next sync even asks for.
+                if (cm.features && typeof cm.features === 'object'
+                    && await db.schema.hasColumn('companies', 'tally_features')) {
+                    patch.tally_features = JSON.stringify(cm.features);
+                }
+                // The company's own GUID, once Tally reports it (the row may have
+                // been created before GUID capture, or by a web "Add Company").
+                if (cm.guid) patch.tally_guid = String(cm.guid);
+                if (cm.master_id) patch.tally_master_id = Number(cm.master_id);
+
                 if (Object.keys(patch).length) {
                     patch.updated_at = now;
                     await db('companies').where('id', cid).update(patch);
@@ -831,19 +1124,130 @@ async function importFromTally(req, res) {
         //    pulled VERBATIM by the agent — store each as the cloud's EXACT mirror
         //    so /reports shows Tally's figures, not a reconstruction. Upsert per
         //    (company, report_type). Best-effort: never blocks the import. ──
-        const freports = req.body.financial_reports;
-        if (freports && typeof freports === 'object' && cid) {
-            for (const rtype of Object.keys(freports)) {
-                const payload = freports[rtype];
-                if (payload && typeof payload === 'object' && Object.keys(payload).length) {
-                    try {
-                        const rrow = {
-                            company_id: cid, report_type: rtype,
-                            payload: JSON.stringify(payload), synced_at: now,
-                        };
-                        await db('tally_reports').insert(rrow)
-                            .onConflict(['company_id', 'report_type']).merge(rrow);
-                    } catch (e) { /* best-effort: a report store never blocks the import */ }
+        //    `fy` is '' for this undated pull — the "current period" bucket the
+        //    existing screens read. Per-year copies land under their FY label
+        //    below, so the two never overwrite each other.
+        const storeReports = async (reports, fy) => {
+            if (!reports || typeof reports !== 'object' || !cid) return;
+            for (const rtype of Object.keys(reports)) {
+                const payload = reports[rtype];
+                if (!payload || typeof payload !== 'object' || !Object.keys(payload).length) continue;
+                try {
+                    const rrow = {
+                        company_id: cid, report_type: rtype, fy: String(fy || ''),
+                        payload: JSON.stringify(payload), synced_at: now,
+                    };
+                    await db('tally_reports').insert(rrow)
+                        .onConflict(['company_id', 'report_type', 'fy']).merge(rrow);
+                } catch (e) { /* best-effort: a report store never blocks the import */ }
+            }
+        };
+        await storeReports(req.body.financial_reports, '');
+
+        // ── The same reports per FINANCIAL YEAR ({'2026-27': {...}}), so a
+        //    comparative statement has last year to put beside this one. Each is
+        //    keyed by its label; an unparseable key is skipped rather than
+        //    stored under a wrong year. ──
+        const byYear = req.body.financial_reports_by_year;
+        if (byYear && typeof byYear === 'object' && cid
+            && (await db.schema.hasColumn('tally_reports', 'fy'))) {
+            for (const fy of Object.keys(byYear)) {
+                if (!/^\d{4}-\d{2}$/.test(fy)) continue;
+                await storeReports(byYear[fy], fy);
+            }
+        }
+
+        // ── SERVER-PUBLISHED reports the agent has no parser for, as RAW Tally
+        //    XML keyed by slug ({cash_flow: {raw, label}}). This is the half of
+        //    "add a report without shipping an exe" that lands here: the
+        //    envelope in config/tallyEnvelopes.json makes the agent ASK, and
+        //    storing the answer unparsed means the parser is a change to this
+        //    repo, not to every customer's machine.
+        //
+        //    Stored through the same storeReports path (report_type = slug, so
+        //    they never collide with the parsed ones) under the CURRENT period,
+        //    matching the undated financial_reports pull above. ──
+        const extra = req.body.extra_reports;
+        if (extra && typeof extra === 'object' && cid) {
+            // Guard the size here rather than trusting the agent: raw XML is
+            // unbounded, and one enormous report must not blow up the row or the
+            // request log. A truncated report is visible and fixable; an OOM is
+            // neither.
+            const MAX_RAW = 4 * 1024 * 1024;   // 4 MB of XML per report
+            const safe = {};
+            for (const slug of Object.keys(extra)) {
+                if (!/^[a-z0-9_]{1,64}$/.test(slug)) continue;   // slug, not a path
+                const v = extra[slug];
+                if (!v || typeof v !== 'object' || typeof v.raw !== 'string') continue;
+                if (!v.raw.trim()) continue;
+                safe[slug] = {
+                    label: typeof v.label === 'string' ? v.label.slice(0, 120) : slug,
+                    truncated: v.raw.length > MAX_RAW,
+                    raw: v.raw.slice(0, MAX_RAW),
+                };
+            }
+            if (Object.keys(safe).length) await storeReports(safe, '');
+        }
+
+        // ── Tally's OWN bill-wise outstanding. Replace-per-side: Tally emits the
+        //    complete live list each time, so a bill that has since been settled
+        //    must DISAPPEAR — merging would leave paid bills outstanding forever.
+        //    Scoped to the side being replaced so a failed Payable read cannot
+        //    wipe Receivable. ──
+        const outs = req.body.outstandings;
+        if (outs && typeof outs === 'object' && cid
+            && (await db.schema.hasTable('tally_outstanding_bills'))) {
+            // The agent sends ONE flat list; each row carries its own side
+            // (derived from Tally's sign). Split here so a side that was read
+            // can be replaced without touching a side that was not.
+            const allRows = Array.isArray(outs.rows) ? outs.rows : [];
+            const bySide = { receivable: [], payable: [] };
+            for (const r of allRows) {
+                const s = r && r.side === 'payable' ? 'payable' : 'receivable';
+                bySide[s].push(r);
+            }
+            for (const side of ['receivable', 'payable']) {
+                const block = { rows: bySide[side], total: null };
+                // Nothing pulled at all this cycle → leave BOTH sides untouched
+                // rather than deleting the last good snapshot.
+                if (!allRows.length) continue;
+                // The agent already normalises these to YYYY-MM-DD, but older
+                // builds send Tally's raw YYYYMMDD — accept both, and store NULL
+                // rather than an invalid date for anything else.
+                const day = (v) => {
+                    const s = String(v || '').trim();
+                    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+                    m = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+                    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+                };
+                try {
+                    const rows = block.rows
+                        .filter((r) => r && (r.party || r.bill))
+                        .map((r) => ({
+                            company_id: cid, side, fy: String(r.fy || ''),
+                            party: String(r.party || '').slice(0, 255),
+                            bill: String(r.bill || '').slice(0, 255),
+                            bill_date: day(r.bill_date), due_date: day(r.due_date),
+                            amount: Number(r.amount) || 0,
+                            overdue_days: Number(r.overdue_days) || 0,
+                            synced_at: now,
+                        }));
+                    await db.transaction(async (trx) => {
+                        await trx('tally_outstanding_bills')
+                            .where({ company_id: cid, side }).del();
+                        for (let i = 0; i < rows.length; i += 500) {
+                            await trx('tally_outstanding_bills')
+                                .insert(rows.slice(i, i + 500))
+                                // Tally can list the same (party, bill, date) twice
+                                // across periods; keep one rather than abort the batch.
+                                .onConflict(['company_id', 'side', 'fy', 'party', 'bill', 'bill_date'])
+                                .ignore();
+                        }
+                    });
+                    adbg(`OUTSTANDING ${side}: stored=${rows.length} total=${block.rows.length}`);
+                } catch (e) {
+                    adbg(`OUTSTANDING ${side} store failed: ${e.message}`);
                 }
             }
         }
@@ -924,8 +1328,39 @@ async function importFromTally(req, res) {
             adbg(`IMPORT FAILED  module=${module} name="${name}" -> ${detail}`);
         }
 
+        /**
+         * Upsert one Tally master, keyed on its GUID when we have one.
+         *
+         * The GUID is rename-stable, the name is not. Keying on name alone (what
+         * this did before) meant renaming a ledger in Tally produced a SECOND
+         * cloud row and orphaned the first — the old row then lived forever,
+         * since nothing ever deletes. Order of attempts:
+         *
+         *   1. UPDATE ... WHERE tally_guid = guid  → catches renames in place.
+         *   2. INSERT ... ON CONFLICT (company_id, name) MERGE → first sight of
+         *      this master, or an existing guid-less row adopting its real GUID.
+         *
+         * Falls back to name-only when Tally returned no GUID (older builds, or a
+         * collection where the tag simply isn't populated).
+         */
+        const upsertMaster = async (table, { guid, masterId, name, row }) => {
+            const payload = { ...row };
+            if (guid) payload.tally_guid = guid;
+            if (masterId) payload.tally_master_id = masterId;
+
+            if (guid) {
+                const updated = await db(table)
+                    .where({ company_id: cid, tally_guid: guid })
+                    .update(payload);
+                if (updated) return 'updated';
+            }
+            await db(table).insert({ ...payload, created_at: now })
+                .onConflict(['company_id', 'name']).merge(payload);
+            return 'upserted';
+        };
+
         // ── FULL MIRROR: account GROUPS -> tally_groups (Balance Sheet / P&L
-        //    hierarchy). Incremental on ALTERID; idempotent via (company_id, name). ──
+        //    hierarchy). Incremental on ALTERID; idempotent via GUID, then name. ──
         for (const g of groups) {
             try {
                 const gname = String(g.name || '').trim();
@@ -935,12 +1370,57 @@ async function importFromTally(req, res) {
                 if (galter > maxAlterId) maxAlterId = galter;
                 const grow = {
                     company_id: cid, name: gname, parent: String(g.parent || ''),
+                    // Tally's top-of-tree primary group, for Balance Sheet / P&L
+                    // grouping. NOT what classifies cash/bank/debtors/creditors —
+                    // that walks `parent` (see Helpers/ledgerGroups.js).
+                    primary_group: String(g.primary_group || '') || null,
                     is_revenue: !!g.is_revenue, is_deemed_positive: g.is_deemed_positive !== false,
-                    tally_guid: 'tally', tally_alter_id: galter, updated_at: now,
+                    tally_alter_id: galter, updated_at: now,
                 };
-                await db('tally_groups').insert({ ...grow, created_at: now })
-                    .onConflict(['company_id', 'name']).merge(grow);
+                await upsertMaster('tally_groups', {
+                    guid: g.guid || null, masterId: Number(g.master_id) || null,
+                    name: gname, row: grow,
+                });
             } catch (e) { /* best-effort */ }
+        }
+
+        // ── REGISTRY-DRIVEN MASTERS: units, stock groups/categories, cost
+        //    categories/centres, currencies, voucher types, the full StockItem
+        //    mirror, budgets, GST/TDS/TCS classifications and payroll. Each is
+        //    upserted guid-first exactly like ledgers, so the reconcile pass
+        //    (delete-sync) works on all of them with no extra code. ──
+        const masters = (req.body && typeof req.body.masters === 'object' && req.body.masters) || {};
+        for (const [kind, rows] of Object.entries(masters)) {
+            const spec = MASTER_TABLES[kind];
+            if (!spec || !Array.isArray(rows) || !rows.length) continue;
+            if (!(await db.schema.hasTable(spec.table))) continue;   // migration not applied yet
+            let wrote = 0;
+            for (const m of rows) {
+                try {
+                    const mname = String(m.name || '').trim();
+                    if (!mname) continue;
+                    const malter = aid(m);
+                    if (malter && malter <= watermark) continue;     // unchanged
+                    if (malter > maxAlterId) maxAlterId = malter;
+
+                    const row = { company_id: cid, name: mname, tally_alter_id: malter, updated_at: now };
+                    for (const col of spec.columns) {
+                        if (m[col] === undefined) continue;
+                        // Tally dates arrive as YYYYMMDD; everything else passes through.
+                        row[col] = (spec.dates || []).includes(col) ? tdate(m[col]) : m[col];
+                    }
+                    await upsertMaster(spec.table, {
+                        guid: m.guid || null, masterId: Number(m.master_id) || null,
+                        name: mname, row,
+                    });
+                    wrote += 1;
+                } catch (e) {
+                    counts.failed = (counts.failed || 0) + 1;
+                    await logPullError(kind, String((m && m.name) || '?'), e);
+                }
+            }
+            counts.masters_updated += wrote;
+            adbg(`MASTERS ${kind}: received=${rows.length} written=${wrote}`);
         }
 
         // ── FULL MIRROR: upsert EVERY ledger (all groups, not just debtors/
@@ -964,10 +1444,51 @@ async function importFromTally(req, res) {
                 const row = {
                     company_id: cid, name: lname, parent: String(l.parent || ''),
                     opening_balance: opening, closing_balance: closing, gstin: l.gstin || null,
-                    tally_guid: 'tally', tally_alter_id: lalter, updated_at: now,
+                    tally_alter_id: lalter, updated_at: now,
                 };
-                await db('tally_ledgers').insert({ ...row, created_at: now })
-                    .onConflict(['company_id', 'name']).merge(row);
+                await upsertMaster('tally_ledgers', {
+                    guid: l.guid || null, masterId: Number(l.master_id) || null,
+                    name: lname, row,
+                });
+
+                // Nested ledger lists. A flat FETCH cannot carry a repeating
+                // list, which is why the bank columns on tally_ledgers were
+                // always empty and opening balances were a single lump.
+                // Replace-by-ledger keeps a re-pull idempotent.
+                if (Array.isArray(l.bank_details)) {
+                    await db('tally_ledger_bank_details')
+                        .where({ company_id: cid, ledger_name: lname }).del();
+                    const brows = l.bank_details.map((b, i) => ({
+                        company_id: cid, ledger_name: lname, line_no: i,
+                        account_no: b.account_no || null, ifsc: b.ifsc || null,
+                        bank_name: b.bank_name || null, branch: b.branch || null,
+                        account_holder: b.account_holder || null, created_at: now,
+                    }));
+                    if (brows.length) await db('tally_ledger_bank_details').insert(brows);
+                }
+                if (Array.isArray(l.opening_bills)) {
+                    await db('tally_ledger_opening_bills')
+                        .where({ company_id: cid, ledger_name: lname }).del();
+                    const obrows = l.opening_bills.map((b, i) => {
+                        const bdate = tdate(b.bill_date);
+                        return {
+                            company_id: cid, ledger_name: lname, line_no: i,
+                            bill_name: b.bill_name || null,
+                            bill_date: bdate,
+                            amount: Number(b.amount) || 0,
+                            credit_period_days: b.credit_period_days != null ? Number(b.credit_period_days) : null,
+                            // Derive the due date so ageing an OPENING bill is the
+                            // same date comparison as ageing a transacted one.
+                            due_date: (bdate && b.credit_period_days != null)
+                                ? new Date(new Date(bdate).getTime()
+                                    + Number(b.credit_period_days) * 86400000)
+                                    .toISOString().slice(0, 10)
+                                : null,
+                            created_at: now,
+                        };
+                    });
+                    if (obrows.length) await db('tally_ledger_opening_bills').insert(obrows);
+                }
             } catch (e) { /* best-effort: one bad ledger never aborts the import */ }
         }
 
@@ -1027,12 +1548,25 @@ async function importFromTally(req, res) {
             const gstin = l.gstin ? String(l.gstin).trim() : null;
             const opening = num(l.opening);
 
-            const _selCols = ['id', 'tally_guid', 'gst_number', 'opening_balance', 'mobile', 'email', 'pan_number'];
+            const lguid = l.guid ? String(l.guid).trim() : null;
+            const _selCols = ['id', 'name', 'tally_guid', 'tally_synced_at', 'gst_number',
+                              'opening_balance', 'mobile', 'email', 'pan_number'];
             if (table === 'customers') _selCols.push('billing_address', 'credit_limit', 'location_id');
             else if (table === 'suppliers') _selCols.push('address', 'location_id');
-            const existing = await db(table).where('company_id', cid).whereNull('deleted_at')
-                .whereRaw('lower(name) = ?', [name.toLowerCase()])
-                .first(..._selCols);
+            // GUID first, name second. The GUID survives a rename in Tally, so
+            // matching on it updates the party in place; matching only on name
+            // (the old behaviour) created a duplicate and left the original
+            // stranded forever, since nothing in the pull ever deletes.
+            let existing = null;
+            if (lguid) {
+                existing = await db(table).where({ company_id: cid, tally_guid: lguid })
+                    .whereNull('deleted_at').first(..._selCols);
+            }
+            if (!existing) {
+                existing = await db(table).where('company_id', cid).whereNull('deleted_at')
+                    .whereRaw('lower(name) = ?', [name.toLowerCase()])
+                    .first(..._selCols);
+            }
             if (existing) {
                 // UPDATE the synced fields when Tally's value actually differs
                 // (so a GST/opening change in Tally reaches the cloud). Always
@@ -1040,7 +1574,17 @@ async function importFromTally(req, res) {
                 const upd = {};
                 if (gstin && gstin !== (existing.gst_number || '')) upd.gst_number = gstin;
                 if (Number(existing.opening_balance) !== opening) upd.opening_balance = opening;
-                if (!existing.tally_guid) upd.tally_guid = 'tally';
+                // Adopt the real GUID/MASTERID (the row may predate GUID capture),
+                // and follow a rename in Tally through to the cloud name.
+                if (lguid && existing.tally_guid !== lguid) upd.tally_guid = lguid;
+                if (l.master_id) upd.tally_master_id = Number(l.master_id);
+                if (lguid && existing.name !== name) upd.name = name;
+                // A party that came back from Tally is by definition in Tally —
+                // stamp it so /pending never queues it for a redundant push.
+                // Only when unset: an unconditional write here would make `upd`
+                // non-empty for EVERY ledger, defeating the "already in sync →
+                // no write, no log spam" branch below.
+                if (!existing.tally_synced_at) upd.tally_synced_at = now;
                 // Fill-empty the party fields Tally now sends (mobile/email/PAN +
                 // customer billing address / credit limit / location).
                 if (l.mobile && !existing.mobile) upd.mobile = String(l.mobile);
@@ -1081,7 +1625,9 @@ async function importFromTally(req, res) {
             } else {
                 const insertRow = {
                     company_id: cid, name, status: 'Active', is_tally_ledger: true,
-                    tally_guid: 'tally', gst_number: gstin, opening_balance: opening,
+                    tally_guid: lguid, tally_master_id: Number(l.master_id) || null,
+                    tally_synced_at: now,
+                    gst_number: gstin, opening_balance: opening,
                     created_at: now, updated_at: now,
                 };
                 // Common party fields Tally now sends.
@@ -1128,8 +1674,11 @@ async function importFromTally(req, res) {
             let cat = await db('categories').where('company_id', cid).whereNull('deleted_at')
                 .whereRaw('lower(name) = ?', [key]).first('id');
             if (!cat) {
+                // Came FROM a Tally stock group, so it already exists there —
+                // stamp tally_synced_at or /pending would push it straight back.
                 const [r] = await db('categories')
-                    .insert({ company_id: cid, name: nm, created_at: now, updated_at: now })
+                    .insert({ company_id: cid, name: nm, tally_synced_at: now,
+                              created_at: now, updated_at: now })
                     .returning('id');
                 cat = { id: r.id || r };
             }
@@ -1155,9 +1704,71 @@ async function importFromTally(req, res) {
             const gstRate = num(s.gst_rate);
             const categoryId = await resolveCategoryId(s.parent);
 
-            const existing = await db('products').where('company_id', cid).whereNull('deleted_at')
-                .whereRaw('lower(name) = ?', [name.toLowerCase()])
-                .first('id', 'tally_guid', 'unit', 'hsn_code', 'opening_stock', 'sales_price', 'purchase_price', 'gst_rate', 'category_id');
+            // GST rate SLABS. `products.gst_rate` holds one number, which is
+            // wrong for any item whose rate changed mid-year — the slab history
+            // is what a period-correct return needs. Replace-by-item.
+            if (Array.isArray(s.gst_slabs) && await db.schema.hasTable('tally_stock_item_gst_rates')) {
+                try {
+                    await db('tally_stock_item_gst_rates')
+                        .where({ company_id: cid, stock_item: name }).del();
+                    const grows = s.gst_slabs.map((g, i) => ({
+                        company_id: cid, stock_item: name, line_no: i,
+                        applicable_from: tdate(g.applicable_from),
+                        hsn_code: g.hsn_code || null, taxability: g.taxability || null,
+                        rate: num(g.rate), cgst: num(g.cgst), sgst: num(g.sgst),
+                        igst: num(g.igst), cess: num(g.cess), created_at: now,
+                    }));
+                    if (grows.length) await db('tally_stock_item_gst_rates').insert(grows);
+                } catch (e) { adbg(`gst slabs failed for "${name}": ${e.message}`); }
+            }
+
+            // Nested StockItem lists — opening batches, price list rates and the
+            // bill of materials. Replace-by-item, so a re-pull overwrites.
+            for (const [table, rows, build, key] of [
+                ['tally_batches', s.batches, (b, i) => ({
+                    company_id: cid, name: `${name} / ${b.batch_name}`,
+                    stock_item: name, godown: b.godown || null,
+                    manufactured_on: tdate(b.manufactured_on), expires_on: tdate(b.expires_on),
+                    opening_qty: num(b.opening_qty), tally_alter_id: alterId,
+                    updated_at: now, created_at: now, _i: i,
+                }), 'stock_item'],
+                ['tally_price_lists', s.price_list, (p, i) => ({
+                    company_id: cid, name: `${name} / ${p.price_level || 'Default'} / ${i}`,
+                    stock_item: name, price_level: p.price_level || null,
+                    applicable_from: tdate(p.applicable_from),
+                    from_qty: num(p.from_qty), to_qty: p.to_qty != null ? num(p.to_qty) : null,
+                    rate: num(p.rate), discount: num(p.discount),
+                    tally_alter_id: alterId, updated_at: now, created_at: now, _i: i,
+                }), 'stock_item'],
+                ['tally_bom_components', s.bom, (b, i) => ({
+                    company_id: cid, name: `${name} / ${b.component_item}`,
+                    parent_item: name, component_item: b.component_item,
+                    qty: num(b.qty), godown: b.godown || null,
+                    tally_alter_id: alterId, updated_at: now, created_at: now, _i: i,
+                }), 'parent_item'],
+            ]) {
+                if (!Array.isArray(rows) || !rows.length) continue;
+                if (!(await db.schema.hasTable(table))) continue;
+                try {
+                    await db(table).where({ company_id: cid, [key]: name }).del();
+                    const built = rows.map(build).map(({ _i, ...r }) => r);
+                    if (built.length) await db(table).insert(built);
+                } catch (e) { adbg(`${table} failed for "${name}": ${e.message}`); }
+            }
+
+            // GUID first, then name — see the customer/supplier lookup above.
+            const sguid = s.guid ? String(s.guid).trim() : null;
+            const _pCols = ['id', 'name', 'tally_guid', 'tally_synced_at', 'unit', 'hsn_code',
+                            'opening_stock', 'sales_price', 'purchase_price', 'gst_rate', 'category_id'];
+            let existing = null;
+            if (sguid) {
+                existing = await db('products').where({ company_id: cid, tally_guid: sguid })
+                    .whereNull('deleted_at').first(..._pCols);
+            }
+            if (!existing) {
+                existing = await db('products').where('company_id', cid).whereNull('deleted_at')
+                    .whereRaw('lower(name) = ?', [name.toLowerCase()]).first(..._pCols);
+            }
             if (existing) {
                 const upd = {};
                 if (unit && unit !== (existing.unit || '')) upd.unit = unit;
@@ -1167,7 +1778,10 @@ async function importFromTally(req, res) {
                 if (purchasePrice && Number(existing.purchase_price) !== purchasePrice) upd.purchase_price = purchasePrice;
                 if (gstRate && Number(existing.gst_rate) !== gstRate) upd.gst_rate = gstRate;
                 if (categoryId && !existing.category_id) upd.category_id = categoryId;
-                if (!existing.tally_guid) upd.tally_guid = 'tally';
+                if (sguid && existing.tally_guid !== sguid) upd.tally_guid = sguid;
+                if (s.master_id) upd.tally_master_id = Number(s.master_id);
+                if (sguid && existing.name !== name) upd.name = name;   // follow a Tally rename
+                if (!existing.tally_synced_at) upd.tally_synced_at = now;
 
                 if (Object.keys(upd).length) {
                     upd.updated_at = now;
@@ -1192,7 +1806,9 @@ async function importFromTally(req, res) {
                 }
             } else {
                 const insertRow = {
-                    company_id: cid, name, status: 'Active', is_tally_item: true, tally_guid: 'tally',
+                    company_id: cid, name, status: 'Active', is_tally_item: true,
+                    tally_guid: sguid, tally_master_id: Number(s.master_id) || null,
+                    tally_synced_at: now,
                     unit: unit || 'Nos', hsn_code: hsn, opening_stock: closing,
                     purchase_price: purchasePrice, sales_price: salesPrice, gst_rate: gstRate,
                     category_id: categoryId || null, created_at: now, updated_at: now,
@@ -1217,22 +1833,41 @@ async function importFromTally(req, res) {
         }
 
         // ── Godowns → locations. Each Tally godown becomes a location row
-        //    (is_tally_godown=true, tally_guid='tally'). Idempotent by
-        //    lower(name) per company: an existing same-named location is left
-        //    untouched (no duplicate); a new name is INSERTED. ──
+        //    (is_tally_godown=true) carrying its real GUID/MASTERID. Idempotent
+        //    by GUID, then by lower(name) per company. ──
         // Selective AUTO-pull: skip Locations (godowns) when not selected.
         for (const g of (SM.isEnabled(pullSel, 'locations') ? godowns : [])) {
           try {
             const name = String(g.name || '').trim();
             if (!name) { counts.skipped += 1; continue; }
+            const gguid = g.guid ? String(g.guid).trim() : null;
 
-            const existing = await db('locations').where('company_id', cid).whereNull('deleted_at')
-                .whereRaw('lower(name) = ?', [name.toLowerCase()]).first('id');
-            if (existing) { counts.skipped += 1; continue; }   // already present → no dup
+            let existing = null;
+            if (gguid) {
+                existing = await db('locations').where({ company_id: cid, tally_guid: gguid })
+                    .whereNull('deleted_at').first('id', 'name');
+            }
+            if (!existing) {
+                existing = await db('locations').where('company_id', cid).whereNull('deleted_at')
+                    .whereRaw('lower(name) = ?', [name.toLowerCase()]).first('id', 'name');
+            }
+            if (existing) {
+                // Adopt the identity (and any rename) rather than skipping
+                // outright — a guid-less legacy location must still learn its GUID
+                // or the reconcile pass could never match, and would delete it.
+                const upd = { tally_synced_at: now, updated_at: now };
+                if (gguid) upd.tally_guid = gguid;
+                if (g.master_id) upd.tally_master_id = Number(g.master_id);
+                if (gguid && existing.name !== name) upd.name = name;
+                await db('locations').where('id', existing.id).update(upd);
+                counts.skipped += 1;
+                continue;
+            }
 
             const insertRow = {
                 company_id: cid, name, status: 'Active',
-                is_tally_godown: true, tally_guid: 'tally', tally_synced_at: now,
+                is_tally_godown: true, tally_guid: gguid,
+                tally_master_id: Number(g.master_id) || null, tally_synced_at: now,
                 created_at: now, updated_at: now,
             };
             const [row] = await db('locations').insert(insertRow).returning('id');
@@ -1289,6 +1924,160 @@ async function importFromTally(req, res) {
             const _debitSum  = _sumAbs(_vEntries.filter((e) => e.is_debit && !_isRound(e)));
             const _creditSum = _sumAbs(_vEntries.filter((e) => !e.is_debit && !_isRound(e)));
 
+            // ── FULL MIRROR: the voucher HEADER + every nested allocation.
+            //    This runs BEFORE the entries/inventory blocks because the child
+            //    tables FK to tally_vouchers(company_id, guid) — and before any
+            //    classification skip, so EVERY voucher type is mirrored (delivery
+            //    note, stock journal, order, payroll …), not just the three that
+            //    map onto invoices/payments/journals. ──
+            if (guid) {
+                try {
+                    const vhead = {
+                        company_id: cid, guid,
+                        tally_master_id: Number(v.master_id) || null,
+                        tally_alter_id: Number(v.alterid) || 0,
+                        voucher_key: v.voucher_key || null,
+                        voucher_date: date || null,
+                        effective_date: tdate(v.effective_date) || null,
+                        voucher_type: v.vtype || null,
+                        voucher_no: vno || null,
+                        reference: v.reference || null,
+                        reference_date: tdate(v.reference_date) || null,
+                        party_ledger: partyName || null,
+                        party_gstin: v.party_gstin || null,
+                        place_of_supply: v.place_of_supply || null,
+                        state: v.state || null,
+                        country: v.country || null,
+                        narration: v.narration || null,
+                        amount,
+                        is_invoice: !!v.is_invoice,
+                        is_optional: !!v.is_optional,
+                        is_cancelled: !!v.is_cancelled,
+                        is_post_dated: !!v.is_post_dated,
+                        has_cashflow: !!v.has_cashflow,
+                        entered_by: v.entered_by || null,
+                        dispatch_doc_no: v.dispatch_doc_no || null,
+                        dispatch_through: v.dispatch_through || null,
+                        destination: v.destination || null,
+                        carrier_name: v.carrier_name || null,
+                        bill_of_lading: v.bill_of_lading || null,
+                        vehicle_number: v.vehicle_number || null,
+                        order_reference: v.order_reference || null,
+                        deleted_at: null,
+                        updated_at: now,
+                    };
+                    await db('tally_vouchers').insert({ ...vhead, created_at: now })
+                        .onConflict(['company_id', 'guid']).merge(vhead);
+
+                    // Allocations are replace-by-voucher: delete then re-insert, so
+                    // re-pulling an AlterID window (which the agent does whenever a
+                    // cycle is interrupted) overwrites instead of duplicating.
+                    const allocRows = {
+                        tally_bill_allocations: (v.bill_allocations || []).map((b, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            ledger_name: String(b.ledger || partyName || '').trim() || null,
+                            bill_name: b.bill_name || null,
+                            bill_type: b.bill_type || null,
+                            amount: Number(b.amount) || 0,
+                            credit_period_days: b.credit_period_days != null ? Number(b.credit_period_days) : null,
+                            bill_date: tdate(b.bill_date) || null,
+                            // Tally gives a credit PERIOD, not a due date; derive it
+                            // so ageing is a plain date comparison.
+                            due_date: (date && b.credit_period_days != null)
+                                ? new Date(new Date(date).getTime()
+                                    + Number(b.credit_period_days) * 86400000)
+                                    .toISOString().slice(0, 10)
+                                : null,
+                        })).filter((r) => r.ledger_name),
+                        tally_batch_allocations: (v.batch_allocations || []).map((b, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            item_name: String(b.item || '').trim(),
+                            batch_name: b.batch_name || null,
+                            godown: b.godown || null,
+                            destination_godown: b.destination_godown || null,
+                            actual_qty: Number(b.actual_qty) || 0,
+                            billed_qty: Number(b.billed_qty) || 0,
+                            amount: Number(b.amount) || 0,
+                            manufactured_on: tdate(b.manufactured_on) || null,
+                            expires_on: tdate(b.expires_on) || null,
+                            tracking_no: b.tracking_no || null,
+                            order_no: b.order_no || null,
+                        })).filter((r) => r.item_name),
+                        tally_cost_allocations: (v.cost_allocations || []).map((c, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            ledger_name: c.ledger || null,
+                            cost_category: c.cost_category || null,
+                            cost_centre: String(c.cost_centre || '').trim(),
+                            amount: Number(c.amount) || 0,
+                        })).filter((r) => r.cost_centre),
+                        tally_bank_allocations: (v.bank_allocations || []).map((b, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            ledger_name: b.ledger || null,
+                            instrument_no: b.instrument_no || null,
+                            instrument_date: tdate(b.instrument_date) || null,
+                            transaction_type: b.transaction_type || null,
+                            bank_name: b.bank_name || null,
+                            payment_favouring: b.payment_favouring || null,
+                            unique_reference: b.unique_reference || null,
+                            status: b.status || null,
+                            bank_date: tdate(b.bank_date) || null,
+                        })),
+                        tally_eway_bills: (v.eway_bills || []).map((b, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            ewb_number: b.ewb_number || null,
+                            ewb_date: tdate(b.ewb_date) || null,
+                            valid_until: tdate(b.valid_until) || null,
+                            status: b.status || null,
+                            transporter_name: b.transporter_name || null,
+                            transporter_id: b.transporter_id || null,
+                            vehicle_number: b.vehicle_number || null,
+                            vehicle_type: b.vehicle_type || null,
+                            transport_mode: b.transport_mode || null,
+                            doc_number: b.doc_number || null,
+                            doc_date: tdate(b.doc_date) || null,
+                            distance_km: Number(b.distance_km) || null,
+                            from_place: b.from_place || null, from_state: b.from_state || null,
+                            to_place: b.to_place || null, to_state: b.to_state || null,
+                        })).filter((r) => r.ewb_number),
+                        tally_einvoice_details: (v.einvoice || []).map((e, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            irn: e.irn || null,
+                            ack_number: e.ack_number || null,
+                            ack_date: tdate(e.ack_date) || null,
+                            signed_qr_code: e.signed_qr_code || null,
+                            status: e.status || null,
+                            cancelled_date: tdate(e.cancelled_date) || null,
+                            cancel_reason: e.cancel_reason || null,
+                        })).filter((r) => r.irn),
+                        tally_inventory_accounting_allocations: (v.inventory_accounting || []).map((a, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            item_name: a.item || null,
+                            ledger_name: String(a.ledger || '').trim(),
+                            amount: Number(a.amount) || 0,
+                            is_debit: !!a.is_debit,
+                        })).filter((r) => r.ledger_name),
+                        tally_voucher_gst_details: (v.gst_details || []).map((g, i) => ({
+                            company_id: cid, voucher_guid: guid, line_no: i,
+                            item_name: g.item || null,
+                            ledger_name: g.ledger || null,
+                            hsn_code: g.hsn_code || null,
+                            taxable_value: Number(g.taxable_value) || 0,
+                            rate: Number(g.rate) || 0,
+                            cgst: Number(g.cgst) || 0, sgst: Number(g.sgst) || 0,
+                            igst: Number(g.igst) || 0, cess: Number(g.cess) || 0,
+                        })),
+                    };
+                    for (const [table, rows] of Object.entries(allocRows)) {
+                        await db(table).where({ company_id: cid, voucher_guid: guid }).del();
+                        if (rows.length) await db(table).insert(rows);
+                    }
+                } catch (e) {
+                    // Best-effort, like every other mirror block: a malformed
+                    // allocation must never cost us the voucher itself.
+                    adbg(`voucher mirror failed guid=${guid}: ${e.message}`);
+                }
+            }
+
             // ── FULL MIRROR: store this voucher's COMPLETE double-entry (every
             //    ledger debit/credit) into tally_voucher_entries BEFORE any skip,
             //    so even Contra / zero-party vouchers feed the Trial Balance /
@@ -1297,11 +2086,21 @@ async function importFromTally(req, res) {
             if (guid && Array.isArray(v.entries) && v.entries.length) {
                 try {
                     await db('tally_voucher_entries').where({ company_id: cid, voucher_guid: guid }).del();
-                    const erows = v.entries.map((e) => ({
+                    const erows = v.entries.map((e, i) => ({
                         company_id: cid, voucher_guid: guid, voucher_type: v.vtype || null,
                         voucher_no: vno || null, voucher_date: date || null,
+                        // line_no preserves Tally's entry ORDER and, with
+                        // (company_id, voucher_guid), forms the unique key that
+                        // makes a concurrent re-import impossible to duplicate.
+                        line_no: i,
                         ledger_name: String(e.ledger || '').trim(),
                         amount: Number(e.amount) || 0, is_debit: !!e.is_debit,
+                        // Which LEG this is, stated by Tally rather than guessed
+                        // from the ledger's name (the totals code regex-matches
+                        // /round/i on the name to exclude round-off).
+                        is_party_ledger: !!e.is_party_ledger,
+                        ledger_from_item: !!e.ledger_from_item,
+                        amount_rate: e.amount_rate || null,
                         tally_alter_id: Number(v.alterid) || 0, created_at: now,
                     })).filter((r) => r.ledger_name);
                     if (erows.length) await db('tally_voucher_entries').insert(erows);
@@ -1311,11 +2110,27 @@ async function importFromTally(req, res) {
             if (guid && Array.isArray(v.inventory) && v.inventory.length) {
                 try {
                     await db('tally_inventory_entries').where({ company_id: cid, voucher_guid: guid }).del();
-                    const irows = v.inventory.map((it) => ({
+                    const irows = v.inventory.map((it, i) => ({
                         company_id: cid, voucher_guid: guid, voucher_date: date || null,
+                        line_no: i,
                         item_name: String(it.item || '').trim(),
                         qty: Number(it.qty) || 0, rate: Number(it.rate) || 0,
-                        amount: Number(it.amount) || 0, created_at: now,
+                        amount: Number(it.amount) || 0,
+                        // ACTUAL drives stock valuation, BILLED drives invoice
+                        // value; they differ on shortages and free issues.
+                        billed_qty: Number(it.billed_qty != null ? it.billed_qty : it.qty) || 0,
+                        actual_qty: Number(it.actual_qty != null ? it.actual_qty : it.qty) || 0,
+                        discount: Number(it.discount) || 0,
+                        unit: it.unit || null,
+                        tracking_no: it.tracking_no || null,
+                        order_no: it.order_no || null,
+                        order_due_date: tdate(it.order_due_date) || null,
+                        is_deemed_positive: !!it.is_deemed_positive,
+                        // The godown column has existed since the table was created
+                        // but was never populated — so every godown-wise stock
+                        // report had nothing to group by.
+                        godown: it.godown ? String(it.godown).trim() : null,
+                        created_at: now,
                     })).filter((r) => r.item_name);
                     if (irows.length) await db('tally_inventory_entries').insert(irows);
                 } catch (e) { /* best-effort */ }
@@ -1819,4 +2634,447 @@ async function download(req, res) {
     }
 }
 
-module.exports = { activate, heartbeat, offline, pending, result, importFromTally, getCommands, commandResult, getVersion, download };
+// ── Generic master ingestion ─────────────────────────────────
+/**
+ * kind → { table, columns } for every registry-driven master the agent sends
+ * under `masters` (see agent/tally_schema.py). This mirrors that registry: a new
+ * master needs an entry HERE and a table in a tenant migration, and no new
+ * handler code — which is exactly why only five masters ever existed before.
+ *
+ * `columns` is an allow-list. The agent is trusted (licence-authenticated) but
+ * the payload still reaches a raw knex insert, so writing only known columns
+ * keeps a stale/rogue agent from probing the schema — and means an agent that
+ * is NEWER than the server degrades by dropping unknown fields instead of 500ing
+ * every sync until the server catches up.
+ */
+const MASTER_TABLES = {
+    unit:               { table: 'tally_units',               columns: ['original_name', 'is_simple', 'base_units', 'additional_units', 'conversion', 'decimal_places'] },
+    stock_group:        { table: 'tally_stock_groups',        columns: ['parent', 'is_addable'] },
+    stock_category:     { table: 'tally_stock_categories',    columns: ['parent'] },
+    cost_category:      { table: 'tally_cost_categories',     columns: ['allocate_revenue', 'allocate_non_revenue'] },
+    cost_centre:        { table: 'tally_cost_centres',        columns: ['parent', 'category'] },
+    currency:           { table: 'tally_currencies',          columns: ['symbol', 'formal_name', 'mailing_name', 'decimal_places', 'is_suffixed', 'has_space', 'decimal_symbol'] },
+    voucher_type:       { table: 'tally_voucher_types',       columns: ['parent', 'numbering_method', 'is_deemed_positive', 'affects_stock', 'use_for_pos', 'is_active'] },
+    stock_item_full:    { table: 'tally_stock_items',         columns: ['parent', 'category', 'base_units', 'additional_units', 'hsn_code', 'gst_rate', 'costing_method', 'valuation_method', 'is_batchwise', 'has_mfg_date', 'is_perishable', 'is_cost_tracking', 'reorder_level', 'minimum_order_qty', 'opening_qty', 'opening_rate', 'opening_value', 'closing_qty', 'closing_rate', 'closing_value', 'standard_price', 'standard_cost'] },
+    price_level:        { table: 'tally_price_levels',        columns: [] },
+    budget:             { table: 'tally_budgets',             columns: ['parent', 'period_from', 'period_to'], dates: ['period_from', 'period_to'] },
+    tax_unit:           { table: 'tally_tax_units',           columns: ['gstin', 'state', 'registration_type', 'applicable_from', 'is_default'], dates: ['applicable_from'] },
+    gst_classification: { table: 'tally_gst_classifications', columns: ['hsn_code', 'rate', 'taxability', 'applicable_from'], dates: ['applicable_from'] },
+    tds_category:       { table: 'tally_tds_categories',      columns: ['section_number', 'payment_code'] },
+    tds_rate:           { table: 'tally_tds_rates',           columns: ['category', 'deductee_type', 'applicable_from', 'rate', 'surcharge', 'cess', 'zero_rate_reason', 'exemption_limit'], dates: ['applicable_from'] },
+    tcs_category:       { table: 'tally_tcs_categories',      columns: ['section_number', 'rate'] },
+    employee_group:     { table: 'tally_employee_groups',     columns: ['parent'] },
+    employee:           { table: 'tally_employees',           columns: ['parent', 'employee_code', 'designation', 'date_of_joining', 'date_of_release', 'bank_name', 'bank_account_no', 'ifsc', 'pan_number', 'pf_account', 'esi_number'], dates: ['date_of_joining', 'date_of_release'] },
+    attendance_type:    { table: 'tally_attendance_types',    columns: ['parent', 'attendance_period', 'production_type'] },
+    pay_head:           { table: 'tally_pay_heads',           columns: ['parent', 'pay_head_type', 'calculation_type', 'calculation_period', 'affects_net_salary'] },
+};
+
+// ── Delete sync ──────────────────────────────────────────────
+/**
+ * Which cloud tables mirror each Tally master kind, and how a row is recognised
+ * as "came from Tally". The reconcile pass only ever soft-deletes rows that
+ * carry a Tally identity — a cloud-native customer that was never in Tally is
+ * untouchable here, no matter what Tally does or does not list.
+ */
+const RECONCILE_TARGETS = {
+    ledger:     [{ table: 'tally_ledgers' },
+                 { table: 'customers', flag: 'is_tally_ledger' },
+                 { table: 'suppliers', flag: 'is_tally_ledger' }],
+    group:      [{ table: 'tally_groups' }],
+    stock_item: [{ table: 'products', flag: 'is_tally_item' }],
+    godown:     [{ table: 'locations', flag: 'is_tally_godown' }],
+    // Every registry-driven master reconciles against its own table. Derived
+    // from MASTER_TABLES rather than restated, so a master added there gets
+    // delete-sync for free instead of quietly never being reconciled.
+    ...Object.fromEntries(Object.entries(MASTER_TABLES)
+        .map(([kind, spec]) => [kind, [{ table: spec.table }]])),
+};
+
+/**
+ * POST /api/v1/agent/reconcile   (authenticateAgent → req.license)
+ *
+ * Tally → Cloud DELETE detection. Body:
+ *   { company_id | company_name, kind: 'ledger'|'group'|'stock_item'|'godown',
+ *     master_ids: [301, 302, …], guids: ['…'], complete: true, dry_run?: bool }
+ *
+ * Tally's XML API emits no tombstones — a deleted master simply stops appearing
+ * in its collection. So the agent periodically sends the FULL live id list for
+ * one kind and we soft-delete every Tally-sourced row whose identity is absent
+ * from it (a set difference).
+ *
+ * Two safety rails, because a wrong answer here deletes real books:
+ *   • `complete` must be true. A partial/failed Tally read must never be read
+ *     as "everything was deleted".
+ *   • An EMPTY id list is refused outright. Tally returning nothing is far more
+ *     likely to be a bad request or a closed company than a company whose every
+ *     ledger was genuinely deleted.
+ */
+async function reconcile(req, res) {
+    try {
+        const licenseId = req.license.id;
+        const body = req.body || {};
+        const kind = String(body.kind || '').trim();
+        const targets = RECONCILE_TARGETS[kind];
+        if (!targets) return R.errorResponse(res, `Unknown reconcile kind "${kind}".`, 422);
+
+        const masterIds = Array.isArray(body.master_ids)
+            ? body.master_ids.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0) : [];
+        const guids = Array.isArray(body.guids)
+            ? body.guids.map((g) => String(g || '').trim()).filter(Boolean) : [];
+
+        if (body.complete !== true) {
+            return R.errorResponse(res, 'Refusing to reconcile from an incomplete Tally read.', 422);
+        }
+        if (!masterIds.length && !guids.length) {
+            // See the doc comment: an empty list is treated as a failed read.
+            return R.errorResponse(res, 'Refusing to reconcile against an empty master list.', 422);
+        }
+
+        // Resolve + gate the company exactly as the import path does.
+        const licRow = await masterDb('licenses').where('id', licenseId).first('max_companies');
+        const syncSet = await syncingCompanies(licenseId, licRow ? licRow.max_companies : null, ['id', 'name']);
+        let cid = Number(body.company_id) || null;
+        if (!cid && body.company_name) {
+            const match = syncSet.find((c) => String(c.name || '').toLowerCase()
+                === String(body.company_name).trim().toLowerCase());
+            cid = match ? Number(match.id) : null;
+        }
+        if (!cid || !syncSet.some((c) => Number(c.id) === cid)) {
+            return R.errorResponse(res, 'Unknown or non-syncing company.', 403);
+        }
+
+        const now = new Date();
+        const dryRun = body.dry_run === true;
+        const deleted = {};
+
+        for (const { table, flag } of targets) {
+            if (!(await db.schema.hasTable(table))) continue;
+
+            const q = db(table).where('company_id', cid).whereNull('deleted_at');
+            if (flag) q.where(flag, true);
+            // Only rows that carry a Tally identity are candidates. A row with
+            // neither guid nor master_id predates identity capture — we cannot
+            // prove Tally dropped it, so we leave it alone rather than guess.
+            q.where((w) => w.whereNotNull('tally_master_id').orWhereNotNull('tally_guid'));
+            // Survivors: identity still present in Tally's list.
+            if (masterIds.length) q.whereNotIn('tally_master_id', masterIds);
+            if (guids.length) {
+                q.where((w) => w.whereNull('tally_guid').orWhereNotIn('tally_guid', guids));
+            }
+
+            if (dryRun) {
+                const [{ count }] = await q.clone().count('id as count');
+                deleted[table] = Number(count) || 0;
+                continue;
+            }
+
+            const victims = await q.clone().select('id', 'name');
+            if (!victims.length) { deleted[table] = 0; continue; }
+
+            await db(table).whereIn('id', victims.map((v) => v.id))
+                .update({ deleted_at: now, updated_at: now });
+            deleted[table] = victims.length;
+
+            for (const v of victims) {
+                try {
+                    await recordHistory(db, {
+                        company_id: cid, module: table, record_type: kind,
+                        record_id: v.id, action: 'deleted', source: 'tally',
+                        before: v, after: null, changed_by: null,
+                        note: 'Deleted in Tally (reconcile)',
+                    });
+                    await db('tally_sync_logs').insert({
+                        company_id: cid, module: table, record_type: kind, record_id: v.id,
+                        direction: 'pull', status: 'synced', retry_count: 0, synced_at: now,
+                        message: `Deleted in Tally: ${v.name}`,
+                    });
+                } catch (_) { /* auditing must never break the reconcile */ }
+            }
+        }
+
+        adbg(`RECONCILE company=${cid} kind=${kind} live=${masterIds.length}/${guids.length}`,
+             `deleted=${JSON.stringify(deleted)}${dryRun ? ' (dry run)' : ''}`);
+        return R.successResponse(res, { company_id: cid, kind, dry_run: dryRun, deleted },
+                                 'Reconciled.');
+    } catch (err) {
+        console.error('AgentController.reconcile error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+// Hard ceiling on one voucher-diff payload. A company with a large book is
+// swept in pages by the agent; this bounds a single request's memory and the
+// size of the NOT IN (...) the delete pass builds. It is a SAFETY limit, not a
+// tuning knob — a caller that ignores it gets a 413, never a truncated compare
+// (silently comparing against a truncated list would read as "everything else
+// was deleted").
+const VOUCHER_DIFF_MAX_IDS = 20000;
+
+/**
+ * POST /api/v1/agent/voucher-diff   (authenticateAgent → req.license)
+ *
+ * Tally → Cloud voucher RECONCILIATION. Body:
+ *   { company_id | company_name, voucher_type, page, pages,
+ *     ids: [{ guid, alterid }, …], complete: bool, dry_run?: bool }
+ *
+ * Returns the guids the cloud needs — new ones plus any whose AlterID moved —
+ * and, when the sweep for this voucher type is COMPLETE, soft-deletes the
+ * vouchers of that type the cloud holds but Tally no longer lists.
+ *
+ * Why a diff rather than a watermark: a watermark only moves forward, so a
+ * window skipped for any reason (Tally stalls, the agent is killed mid-cycle,
+ * the cursor is bumped past a gap) is never revisited — those vouchers are
+ * missing forever and nothing reports it. Comparing full id lists finds such
+ * holes however old they are, and finds deletions in the same pass.
+ *
+ * Safety rails, because a wrong answer here deletes real books:
+ *   • `complete` must be true before ANY delete — a partial or failed Tally read
+ *     must never be read as "the rest were deleted";
+ *   • an empty id list never deletes;
+ *   • deletes are scoped to the ONE voucher type that was swept;
+ *   • only rows the mirror itself created (a Tally guid) are touched, never a
+ *     cloud-native voucher;
+ *   • the payload is capped, and an oversized one is REJECTED rather than
+ *     truncated.
+ */
+async function voucherDiff(req, res) {
+    try {
+        const licenseId = req.license.id;
+        const body = req.body || {};
+        const vtype = String(body.voucher_type || '').trim();
+        const ids = Array.isArray(body.ids) ? body.ids : [];
+
+        if (!vtype) return R.errorResponse(res, 'voucher_type is required.', 422);
+        if (ids.length > VOUCHER_DIFF_MAX_IDS) {
+            return R.errorResponse(res,
+                `Too many ids in one request (max ${VOUCHER_DIFF_MAX_IDS}). Sweep in pages.`, 413);
+        }
+
+        // Company resolution + sync gate, identical to the import path.
+        const licRow = await masterDb('licenses').where('id', licenseId).first('max_companies');
+        const syncSet = await syncingCompanies(licenseId, licRow ? licRow.max_companies : null, ['id', 'name']);
+        let cid = Number(body.company_id) || null;
+        if (!cid && body.company_name) {
+            const m = syncSet.find((c) => String(c.name || '').toLowerCase()
+                === String(body.company_name).trim().toLowerCase());
+            cid = m ? Number(m.id) : null;
+        }
+        if (!cid || !syncSet.some((c) => Number(c.id) === cid)) {
+            return R.errorResponse(res, 'Unknown or non-syncing company.', 403);
+        }
+
+        // Normalise + de-duplicate. A guid repeated in the payload must not make
+        // the cloud think it is present twice.
+        const live = new Map();
+        for (const r of ids) {
+            const g = String((r && r.guid) || '').trim();
+            if (g) live.set(g, Number(r.alterid) || 0);
+        }
+
+        // What the cloud already holds for THIS type.
+        const held = await db('tally_vouchers')
+            .where({ company_id: cid, voucher_type: vtype }).whereNull('deleted_at')
+            .select('guid', 'tally_alter_id');
+        const heldMap = new Map(held.map((h) => [h.guid, Number(h.tally_alter_id) || 0]));
+
+        // NEW = Tally has it, we do not. STALE = we have it but Tally's AlterID
+        // moved (the voucher was edited), so the stored copy is out of date.
+        const missing = [];
+        for (const [guid, alterid] of live) {
+            const have = heldMap.get(guid);
+            if (have === undefined || alterid > have) missing.push(guid);
+        }
+
+        let deleted = 0;
+        const canDelete = body.complete === true && live.size > 0;
+        if (canDelete) {
+            const gone = [...heldMap.keys()].filter((g) => !live.has(g));
+            if (gone.length) {
+                if (body.dry_run === true) {
+                    deleted = gone.length;
+                } else {
+                    const now = new Date();
+                    // Soft-delete in chunks: a single whereIn with tens of
+                    // thousands of ids makes a query no planner enjoys.
+                    for (let i = 0; i < gone.length; i += 1000) {
+                        const chunk = gone.slice(i, i + 1000);
+                        await db('tally_vouchers')
+                            .where('company_id', cid).whereIn('guid', chunk)
+                            .update({ deleted_at: now, updated_at: now });
+                        // Cascade to the classified copies. Scoped to rows that
+                        // carry a Tally guid, so a cloud-native invoice a user
+                        // typed in the web app is never touched.
+                        for (const t of ['invoices', 'payments', 'journals']) {
+                            await db(t).where('company_id', cid)
+                                .whereIn('tally_guid', chunk).whereNull('deleted_at')
+                                .update({ deleted_at: now, updated_at: now })
+                                .catch(() => { /* table may lack deleted_at */ });
+                        }
+                    }
+                    deleted = gone.length;
+                    try {
+                        await db('tally_sync_logs').insert({
+                            company_id: cid, module: 'vouchers', record_type: vtype,
+                            direction: 'pull', status: 'synced', retry_count: 0, synced_at: now,
+                            message: `Deleted in Tally: ${deleted} ${vtype} voucher(s)`,
+                        });
+                    } catch (_) { /* auditing must never break the diff */ }
+                }
+            }
+        }
+
+        adbg(`VOUCHER-DIFF company=${cid} type="${vtype}" live=${live.size} held=${heldMap.size}`
+            + ` missing=${missing.length} deleted=${deleted}${body.dry_run ? ' (dry run)' : ''}`);
+
+        return R.successResponse(res, {
+            company_id: cid, voucher_type: vtype,
+            live: live.size, held: heldMap.size,
+            missing, missing_count: missing.length,
+            deleted, delete_applied: canDelete && body.dry_run !== true,
+        }, 'Diffed.');
+    } catch (err) {
+        console.error('AgentController.voucherDiff error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * GET /api/v1/agent/envelopes   (authenticateAgent → req.license)
+ *
+ * The Tally request envelopes this agent should use, signed.
+ *
+ * WHY THIS ENDPOINT EXISTS: queries used to be compiled into the exe, so adding
+ * a report meant a release, a signature, and every customer downloading 23 MB.
+ * Now a report is an entry in config/tallyEnvelopes.json.
+ *
+ * WHY IT IS SIGNED: the same channel could otherwise tell thousands of agents
+ * what XML to send to their customers' Tally, and Tally's XML API writes as
+ * well as reads. The signature is made with ENVELOPE_SIGNING_SECRET, which is
+ * NOT a web-tier credential — it belongs to whoever publishes envelopes. A
+ * compromised API server can therefore serve this file but cannot forge a
+ * different one, and the agent refuses anything that does not verify.
+ *
+ * signEnvelopeSet also refuses to sign a set containing any envelope that could
+ * modify Tally, so a mistake in the JSON is caught before it ships rather than
+ * on a customer's machine.
+ */
+async function getEnvelopes(req, res) {
+    try {
+        const secret = process.env.ENVELOPE_SIGNING_SECRET || '';
+        if (!secret) {
+            // Fail LOUD and closed. Serving unsigned envelopes would be
+            // rejected by every agent anyway, and silently returning nothing
+            // would look like "there are no reports".
+            console.error('ENVELOPE_SIGNING_SECRET is not set — cannot serve envelopes.');
+            return R.errorResponse(res, 'Envelope publishing is not configured.', 503);
+        }
+
+        let set;
+        try {
+            // Read per request rather than at boot: publishing a new report is
+            // then a file change, not a restart.
+            const raw = fs.readFileSync(
+                path.join(__dirname, '..', '..', 'config', 'tallyEnvelopes.json'), 'utf8');
+            set = JSON.parse(raw);
+        } catch (readErr) {
+            console.error('Could not read tallyEnvelopes.json:', readErr.message);
+            return R.errorResponse(res, 'Envelope set is unavailable.', 503);
+        }
+
+        let signed;
+        try {
+            signed = envelopeSigning.signEnvelopeSet(set, secret);
+        } catch (signErr) {
+            // signEnvelopeSet refuses the WHOLE set if any envelope can write.
+            console.error('Refusing to publish envelopes:', signErr.message);
+            return R.errorResponse(res, 'Envelope set failed its safety check.', 500);
+        }
+
+        adbg(`ENVELOPES served set=${set.id} count=${Object.keys(set.envelopes || {}).length}`);
+        return R.successResponse(res, signed, 'Envelopes.');
+    } catch (err) {
+        console.error('AgentController.getEnvelopes error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+// ── Data Backup (Task 1, cloud side) ──────────────────────────────────
+// The copy itself runs on the agent's own machine — it is the only side
+// that can see both the Tally data folder and the chosen destination. These
+// two endpoints are the agent's half of the contract: read the INTENT the
+// customer set on the dashboard, and report the OUTCOME of a run. Both live
+// in the MASTER db (license_backup_settings / backup_runs are license-level,
+// not tenant tables) — see api/db/migrations/20260806080000_backup_settings_and_runs.js.
+
+const BACKUP_RUN_STATUSES = ['success', 'partial', 'failed', 'running'];
+
+/**
+ * GET /api/v1/agent/backup-settings   (authenticateAgent → req.license)
+ * Returns this license's backup intent. A license with no row yet gets the
+ * same "disabled, nothing configured" default the cloud dashboard shows.
+ */
+async function getBackupSettings(req, res) {
+    try {
+        const row = await masterDb('license_backup_settings')
+            .where('license_id', req.license.id).first();
+        const data = row ? {
+            enabled: !!row.enabled,
+            destination_path: row.destination_path || null,
+            frequency: row.frequency || 'daily',
+            run_at: row.run_at,
+            keep_copies: Number(row.keep_copies),
+        } : {
+            enabled: false, destination_path: null,
+            frequency: 'daily', run_at: '02:00:00', keep_copies: 7,
+        };
+        return R.successResponse(res, data);
+    } catch (err) {
+        console.error('AgentController.getBackupSettings error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+/**
+ * POST /api/v1/agent/backup-runs   (authenticateAgent → req.license)
+ * Body: { started_at?, finished_at?, status, files_copied?, files_skipped?,
+ *         bytes_copied?, destination?, skipped_list?, error? }
+ *
+ * Records ONE run exactly as the agent reports it — the cloud never upgrades
+ * or invents a status. `status` must be one of success|partial|failed|running;
+ * anything else is refused rather than silently stored as a success.
+ */
+async function recordBackupRun(req, res) {
+    try {
+        const body = req.body || {};
+        const status = String(body.status || '').trim().toLowerCase();
+        if (!BACKUP_RUN_STATUSES.includes(status)) {
+            return R.errorResponse(res, `status must be one of: ${BACKUP_RUN_STATUSES.join(', ')}.`, 422);
+        }
+
+        const toInt = (v) => {
+            const n = parseInt(v, 10);
+            return Number.isFinite(n) && n >= 0 ? n : 0;
+        };
+        const row = {
+            license_id: req.license.id,
+            started_at: body.started_at ? new Date(body.started_at) : new Date(),
+            finished_at: body.finished_at ? new Date(body.finished_at) : (status === 'running' ? null : new Date()),
+            status,
+            files_copied: toInt(body.files_copied),
+            files_skipped: toInt(body.files_skipped),
+            bytes_copied: toInt(body.bytes_copied),
+            destination: body.destination != null ? String(body.destination) : null,
+            skipped_list: Array.isArray(body.skipped_list) ? JSON.stringify(body.skipped_list) : null,
+            error: body.error != null ? String(body.error) : null,
+        };
+
+        const [inserted] = await masterDb('backup_runs').insert(row).returning('id');
+        const id = inserted && inserted.id != null ? inserted.id : inserted;
+        return R.successResponse(res, { id }, 'Backup run recorded.', { status: 201 });
+    } catch (err) {
+        console.error('AgentController.recordBackupRun error:', err);
+        return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);
+    }
+}
+
+module.exports = { login, verify, resendOtp, getEnvelopes, heartbeat, offline, pending, result, importFromTally, reconcile, voucherDiff, getCommands, commandResult, getVersion, download, getBackupSettings, recordBackupRun };

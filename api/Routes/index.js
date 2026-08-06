@@ -186,6 +186,7 @@ const AppReleaseController     = require('../Controllers/SuperAdmin/AppReleaseCo
 const EInvoiceGspController    = require('../Controllers/SuperAdmin/EInvoiceGspController');
 const GpsSettingsController    = require('../Controllers/SuperAdmin/GpsSettingsController');
 const AgentCommandController  = require('../Controllers/Tenant/AgentCommandController');
+const BackupController        = require('../Controllers/Tenant/BackupController');
 const DashboardController     = require('../Controllers/Tenant/DashboardController');
 const TallyLedgerController   = require('../Controllers/Tenant/TallyLedgerController');
 const GstSearchController     = require('../Controllers/Tenant/GstSearchController');
@@ -321,6 +322,11 @@ router.get('/agent/version',  authenticateAgent, AgentController.getVersion);
 // that same channel becoming a way to send arbitrary XML into customers' Tally.
 router.get('/agent/envelopes', authenticateAgent, AgentController.getEnvelopes);
 router.get('/agent/download', authenticateAgent, AgentController.download);
+
+// Data Backup — agent's half (Task 1). The agent reads its license's backup
+// intent, then reports the outcome of each run it actually performed.
+router.get('/agent/backup-settings', authenticateAgent, AgentController.getBackupSettings);
+router.post('/agent/backup-runs',    authenticateAgent, AgentController.recordBackupRun);
 
 // Mobile-app auto-update: PUBLIC so the app can check (and force-update) even at
 // the login screen. /app/version → published-latest apk + the GLOBAL on/off;
@@ -1413,6 +1419,19 @@ router.post('/account/agent/self-update',
 // License-scoped via req.user.license_id (super-admin may pass license_id).
 router.patch('/account/sync-direction',
     authenticate, resolveTenant, AgentCommandController.setSyncDirection);
+
+// Data Backup — cloud's half (Task 1). Settings are license-level (stored in
+// the master db), not company-scoped, so no resolveCompany here — same
+// pattern as the agent-command routes above. run-now queues a 'backup_now'
+// command through the SAME agent_commands channel 'open_company' uses.
+router.get('/backup/settings',
+    authenticate, resolveTenant, can('data-backup', 'view'), BackupController.getSettings);
+router.put('/backup/settings',
+    authenticate, resolveTenant, can('data-backup', 'edit'), BackupController.updateSettings);
+router.get('/backup/runs',
+    authenticate, resolveTenant, can('data-backup', 'view'), BackupController.listRuns);
+router.post('/backup/run-now',
+    authenticate, resolveTenant, can('data-backup', 'edit'), BackupController.runNow);
 
 // Users — company user management.
 router.get(
