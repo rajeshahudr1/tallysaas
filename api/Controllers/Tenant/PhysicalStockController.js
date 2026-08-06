@@ -202,6 +202,12 @@ async function create(req, res) {
                     notes:           it.godown || null,
                     voucher_no:      voucherNo,
                     voucher_kind:    'physical_stock',
+                    // New sheets are pushable to Tally as soon as they are
+                    // written. Old rows (created before this column existed)
+                    // default to 'draft_cloud' via the migration and are
+                    // never picked up by the push query — see
+                    // 20260806120000_stock_adjustments_status.js.
+                    status:          'pending_tally',
                     adjustment_date: body.count_date || null,
                     created_by:      createdBy,
                 }).returning('*');

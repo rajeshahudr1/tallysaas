@@ -989,6 +989,26 @@ def _push_voucher(tally: TallyConnector, v: dict, company: Optional[str] = None)
         vtype = "Credit Note" if kind == "credit_note" else "Debit Note"
         resp = tally.create_voucher_from_ledgers(vtype, v["party"], v["date"],
                                                  v["ledgers"], company=company)
+    elif kind in ("stock_journal", "physical_stock"):
+        # GOODS vouchers: no ledgers, only item/godown/qty lines. A line
+        # missing any of those must refuse the WHOLE voucher (see
+        # TallyConnector._validate_stock_lines) rather than post a partial
+        # stock movement into the customer's books.
+        try:
+            if kind == "stock_journal":
+                resp = tally.create_stock_journal(
+                    v["voucher_no"], v["date"], v.get("source_items", []),
+                    v.get("destination_items", []), narration=v.get("narration", ""),
+                    company=company)
+            else:
+                resp = tally.create_physical_stock(
+                    v["voucher_no"], v["date"], v.get("items", []),
+                    narration=v.get("narration", ""), company=company)
+        except ValueError as exc:
+            res = {"record_type": v["record_type"], "record_id": v["id"],
+                   "company_id": v["company_id"], "status": "failed",
+                   "message": str(exc)}
+            return res
     else:
         # An unrecognised voucher_kind must NEVER be guessed at -- silently
         # treating it as a payment would write the wrong voucher into the

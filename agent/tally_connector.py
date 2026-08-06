@@ -859,6 +859,32 @@ class TallyConnector:
         """
         return self.create_ledger(name, parent=parent, company=company)
 
+    def create_stock_journal(self, voucher_no: str, date: str,
+                             source_items: list[dict[str, Any]],
+                             destination_items: list[dict[str, Any]],
+                             narration: str = "", company: Optional[str] = None) -> str:
+        """Create a Stock Journal voucher in Tally; returns the raw response.
+
+        Pass ``company`` to import the voucher into that specific loaded
+        company. Raises :class:`ValueError` (never sends anything) when a
+        line is missing its item, godown or a positive quantity -- see
+        :meth:`create_stock_journal_xml`.
+        """
+        return self.send(self.create_stock_journal_xml(
+            voucher_no, date, source_items, destination_items, narration, company))
+
+    def create_physical_stock(self, voucher_no: str, date: str,
+                              items: list[dict[str, Any]],
+                              narration: str = "", company: Optional[str] = None) -> str:
+        """Create a Physical Stock voucher in Tally; returns the raw response.
+
+        Pass ``company`` to import the voucher into that specific loaded
+        company. Raises :class:`ValueError` (never sends anything) when a
+        line is missing its item, godown or quantity -- see
+        :meth:`create_physical_stock_xml`.
+        """
+        return self.send(self.create_physical_stock_xml(voucher_no, date, items, narration, company))
+
     def create_receipt(self, party: str, date: str, amount: float, mode: str = "Cash",
                        company: Optional[str] = None) -> str:
         """Create a Receipt voucher in Tally; returns the raw response.
@@ -1417,6 +1443,144 @@ class TallyConnector:
         """IMPORT: create a Purchase voucher (party credit, Purchase a/c debit)."""
         return self._inventory_voucher_xml("Purchase", party, date, items, party_is_debit=False,
                                            company=company, amount=amount)
+
+    # ── Stock Journal / Physical Stock (GOODS vouchers) ──────────────────
+    #
+    # Neither carries a ledger, a GST split or a money total -- they move or
+    # assert QUANTITY. Both share the same per-line shape: an inventory entry
+    # (STOCKITEMNAME) wrapping a BATCHALLOCATIONS.LIST that names the GODOWN
+    # and the quantity. A Stock Journal ISDEEMEDPOSITIVE follows the SAME
+    # convention as the ledger builders above (Yes = the side that goes down,
+    # i.e. the source; No = the side that goes up, i.e. the destination) so
+    # this file's sign convention stays consistent across every voucher type.
+    # A Physical Stock line has no direction at all -- ISDEEMEDPOSITIVE=No and
+    # the quantity IS the count, never a delta.
+    @staticmethod
+    def _validate_stock_lines(lines: list[dict[str, Any]], label: str) -> None:
+        """Refuse the WHOLE voucher if any line is missing item/godown/qty.
+
+        A half-formed line sent to Tally either fails opaquely or -- worse --
+        posts a wrong, partial stock movement into the customer's books. Every
+        line must carry an item name, a godown and a strictly positive
+        quantity, or nothing is built at all.
+        """
+        if not lines:
+            raise ValueError(label + ": no lines supplied, refusing to build an empty voucher")
+        for i, ln in enumerate(lines):
+            item = str((ln or {}).get("item") or "").strip()
+            godown = str((ln or {}).get("godown") or "").strip()
+            try:
+                qty = float((ln or {}).get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0.0
+            if not item:
+                raise ValueError(f"{label}: line {i + 1} has no item name, refusing to build an incomplete voucher")
+            if not godown:
+                raise ValueError(f"{label}: line {i + 1} ({item!r}) has no godown, refusing to build an incomplete voucher")
+            if qty <= 0:
+                raise ValueError(f"{label}: line {i + 1} ({item!r}) has no quantity, refusing to build an incomplete voucher")
+
+    def _stock_line_xml(self, line: dict[str, Any], is_deemed_positive: bool) -> str:
+        """One ALLINVENTORYENTRIES.LIST entry: item, godown and quantity.
+
+        ``qty`` is emitted as-is (no sign flip here -- callers pass the
+        magnitude and choose ``is_deemed_positive`` for direction), formatted
+        as Tally expects a quantity: ``"<n> Nos"``. The unit is fixed at "Nos"
+        the way the rest of this file leaves unit-of-measure to the caller's
+        stock-item master (Tally resolves the item's actual unit from its own
+        master; this string is only the quantity magnitude, which is what
+        Tally's importer keys off).
+        """
+        item_e = self._esc(line.get("item"))
+        godown_e = self._esc(line.get("godown"))
+        qty = float(line.get("qty") or 0)
+        qty_s = "%s Nos" % ("%.2f" % qty).rstrip("0").rstrip(".")
+        pos = "Yes" if is_deemed_positive else "No"
+        return (
+            "<ALLINVENTORYENTRIES.LIST>"
+            "<STOCKITEMNAME>" + item_e + "</STOCKITEMNAME>"
+            "<ISDEEMEDPOSITIVE>" + pos + "</ISDEEMEDPOSITIVE>"
+            "<ACTUALQTY>" + qty_s + "</ACTUALQTY>"
+            "<BILLEDQTY>" + qty_s + "</BILLEDQTY>"
+            "<BATCHALLOCATIONS.LIST>"
+            "<GODOWNNAME>" + godown_e + "</GODOWNNAME>"
+            "<ACTUALQTY>" + qty_s + "</ACTUALQTY>"
+            "<BILLEDQTY>" + qty_s + "</BILLEDQTY>"
+            "</BATCHALLOCATIONS.LIST>"
+            "</ALLINVENTORYENTRIES.LIST>"
+        )
+
+    def create_stock_journal_xml(self, voucher_no: str, date: str,
+                                 source_items: list[dict[str, Any]],
+                                 destination_items: list[dict[str, Any]],
+                                 narration: str = "", company: Optional[str] = None) -> str:
+        """IMPORT: create a Stock Journal voucher (VCHTYPE "Stock Journal").
+
+        ``source_items`` / ``destination_items`` are
+        ``[{"item": str, "godown": str, "qty": float}, ...]`` -- source lines
+        DECREASE stock at their godown, destination lines INCREASE it at
+        theirs. Every line needs an item, a godown and a positive quantity;
+        see :meth:`_validate_stock_lines`. Raises :class:`ValueError` (builds
+        nothing) on any incomplete line -- never sends a half-formed voucher.
+        """
+        self._validate_stock_lines(source_items, "Stock Journal source")
+        self._validate_stock_lines(destination_items, "Stock Journal destination")
+
+        lines = "".join(self._stock_line_xml(ln, is_deemed_positive=True) for ln in source_items)
+        lines += "".join(self._stock_line_xml(ln, is_deemed_positive=False) for ln in destination_items)
+        narration_e = ("<NARRATION>" + self._esc(narration) + "</NARRATION>") if narration else ""
+
+        return (
+            "<ENVELOPE>"
+            "<HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>"
+            "<BODY><IMPORTDATA>"
+            + self._import_requestdesc("Vouchers", company) +
+            "<REQUESTDATA>"
+            '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            '<VOUCHER VCHTYPE="Stock Journal" ACTION="Create">'
+            "<DATE>" + self._esc(date) + "</DATE>"
+            "<VOUCHERTYPENAME>Stock Journal</VOUCHERTYPENAME>"
+            "<VOUCHERNUMBER>" + self._esc(voucher_no) + "</VOUCHERNUMBER>"
+            + narration_e + lines +
+            "</VOUCHER>"
+            "</TALLYMESSAGE>"
+            "</REQUESTDATA></IMPORTDATA></BODY>"
+            "</ENVELOPE>"
+        )
+
+    def create_physical_stock_xml(self, voucher_no: str, date: str,
+                                  items: list[dict[str, Any]],
+                                  narration: str = "", company: Optional[str] = None) -> str:
+        """IMPORT: create a Physical Stock voucher (VCHTYPE "Physical Stock").
+
+        ``items`` is ``[{"item": str, "godown": str, "qty": float}, ...]``
+        where ``qty`` is the COUNTED quantity -- an absolute figure, never a
+        delta from the book quantity. Every line needs an item, a godown and
+        a positive counted quantity; see :meth:`_validate_stock_lines`.
+        Raises :class:`ValueError` (builds nothing) on any incomplete line.
+        """
+        self._validate_stock_lines(items, "Physical Stock")
+
+        lines = "".join(self._stock_line_xml(ln, is_deemed_positive=False) for ln in items)
+        narration_e = ("<NARRATION>" + self._esc(narration) + "</NARRATION>") if narration else ""
+
+        return (
+            "<ENVELOPE>"
+            "<HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>"
+            "<BODY><IMPORTDATA>"
+            + self._import_requestdesc("Vouchers", company) +
+            "<REQUESTDATA>"
+            '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            '<VOUCHER VCHTYPE="Physical Stock" ACTION="Create">'
+            "<DATE>" + self._esc(date) + "</DATE>"
+            "<VOUCHERTYPENAME>Physical Stock</VOUCHERTYPENAME>"
+            "<VOUCHERNUMBER>" + self._esc(voucher_no) + "</VOUCHERNUMBER>"
+            + narration_e + lines +
+            "</VOUCHER>"
+            "</TALLYMESSAGE>"
+            "</REQUESTDATA></IMPORTDATA></BODY>"
+            "</ENVELOPE>"
+        )
 
     def _settlement_voucher_xml(
         self,

@@ -860,6 +860,65 @@ async function pending(req, res) {
             amount: Number(j.amount) || 0, narration: j.narration || '',
         }));
 
+        // ── Vouchers: stock journals (goods voucher — no ledger, no GST) ──
+        const stockJournalRows = await db('stock_journals')
+            .whereIn('company_id', companyIds).whereNull('deleted_at')
+            .where('status', 'pending_tally')
+            .limit(50)
+            .select('id', 'company_id', 'voucher_no', 'journal_date', 'narration');
+        const sjIds = stockJournalRows.map((j) => j.id);
+        let itemsByStockJournal = {};
+        if (sjIds.length) {
+            const sjItems = await db('stock_journal_items as it')
+                .whereIn('it.stock_journal_id', sjIds)
+                .leftJoin('products as p', 'p.id', 'it.product_id')
+                .select('it.stock_journal_id', 'it.direction', 'it.godown', 'it.quantity',
+                        'p.name as product_name');
+            itemsByStockJournal = sjItems.reduce((acc, it) => {
+                (acc[it.stock_journal_id] = acc[it.stock_journal_id] || []).push(it);
+                return acc;
+            }, {});
+        }
+        const stockJournalVouchers = stockJournalRows.map((j) => {
+            const its = itemsByStockJournal[j.id] || [];
+            const toLine = (it) => ({ item: it.product_name || 'Item', godown: it.godown || '', qty: Number(it.quantity) || 0 });
+            return {
+                record_type: 'stock_journal', id: j.id, company_id: j.company_id,
+                voucher_kind: 'stock_journal',
+                voucher_no: j.voucher_no, date: tallyDate(j.journal_date),
+                source_items: its.filter((it) => it.direction === 'source').map(toLine),
+                destination_items: its.filter((it) => it.direction === 'destination').map(toLine),
+                narration: j.narration || '',
+            };
+        });
+
+        // ── Vouchers: physical stock (goods voucher — a "sheet" is just the
+        // set of stock_adjustments rows sharing one voucher_no; see
+        // PhysicalStockController's header comment) ──
+        const physicalStockRows = await db('stock_adjustments')
+            .whereIn('stock_adjustments.company_id', companyIds)
+            .where('stock_adjustments.voucher_kind', 'physical_stock')
+            .where('stock_adjustments.status', 'pending_tally')
+            .leftJoin('products', 'products.id', 'stock_adjustments.product_id')
+            .select('stock_adjustments.company_id', 'stock_adjustments.voucher_no',
+                    'stock_adjustments.adjustment_date', 'stock_adjustments.after_qty',
+                    'stock_adjustments.notes', 'products.name as product_name');
+        const physicalStockByVoucher = physicalStockRows.reduce((acc, r) => {
+            const key = `${r.company_id}::${r.voucher_no}`;
+            (acc[key] = acc[key] || { company_id: r.company_id, voucher_no: r.voucher_no,
+                                       date: r.adjustment_date, items: [] })
+                .items.push({ item: r.product_name || 'Item', godown: r.notes || '', qty: Number(r.after_qty) || 0 });
+            return acc;
+        }, {});
+        const physicalStockVouchers = Object.values(physicalStockByVoucher)
+            .slice(0, 50)
+            .map((v) => ({
+                record_type: 'physical_stock', id: v.voucher_no, company_id: v.company_id,
+                voucher_kind: 'physical_stock',
+                voucher_no: v.voucher_no, date: tallyDate(v.date),
+                items: v.items, narration: '',
+            }));
+
         // ── Vouchers: credit / debit notes (rows fetched earlier, ahead of
         // ledMap, so their ledger names are detected too) ──
         const returnNoteVouchers = returnNoteRows.map((i) => {
@@ -923,7 +982,8 @@ async function pending(req, res) {
             stock_journal: 'stock-journal', physical_stock: 'physical-stock',
         };
         const keep = (r) => SM.isEnabled(pushSel, REC2MOD[r && r.record_type] || '');
-        const allVouchers = [...invoiceVouchers, ...payVouchers, ...journalVouchers, ...returnNoteVouchers].filter(keep);
+        const allVouchers = [...invoiceVouchers, ...payVouchers, ...journalVouchers, ...returnNoteVouchers,
+                             ...stockJournalVouchers, ...physicalStockVouchers].filter(keep);
 
         return R.successResponse(res, {
             companies,
@@ -1018,6 +1078,23 @@ async function result(req, res) {
                     tally_voucher_no: r.tally_voucher_no || null,
                     tally_guid: guid, updated_at: now,
                 });
+            } else if (r.record_type === 'stock_journal') {
+                await db('stock_journals').where({ id: r.record_id, company_id: cid }).update({
+                    status: synced ? 'created' : 'failed',
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
+                });
+            } else if (r.record_type === 'physical_stock') {
+                // No header row — a Physical Stock "sheet" IS the set of
+                // stock_adjustments rows sharing this voucher_no (record_id
+                // carries the voucher_no here, not a numeric id — see pending()).
+                await db('stock_adjustments')
+                    .where({ voucher_no: r.record_id, voucher_kind: 'physical_stock', company_id: cid })
+                    .update({
+                        status: synced ? 'created' : 'failed',
+                        tally_voucher_no: r.tally_voucher_no || null,
+                        tally_guid: guid, updated_at: now,
+                    });
             } else if (r.record_type === 'company') {
                 if (synced) {
                     await db('companies').where({ id: r.record_id, license_id: req.license.id })
@@ -1047,9 +1124,14 @@ async function result(req, res) {
                 continue;
             }
 
+            // record_id is a bigint column; physical_stock has no numeric id
+            // (its record_id carries the voucher_no string instead, since a
+            // "sheet" has no header row — see the physical_stock branch
+            // above), so a non-numeric id logs as NULL rather than erroring.
+            const logRecordId = /^\d+$/.test(String(r.record_id)) ? r.record_id : null;
             await db('tally_sync_logs').insert({
                 company_id: cid, module: r.record_type, record_type: r.record_type,
-                record_id: r.record_id, direction: 'push',
+                record_id: logRecordId, direction: 'push',
                 status: synced ? 'synced' : 'failed',
                 message: r.message || null, retry_count: 0,
                 synced_at: synced ? now : null,

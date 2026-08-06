@@ -166,6 +166,7 @@ async function create(req, res) {
                 voucher_no:   voucherNo,
                 journal_date: body.journal_date || null,
                 narration:    body.narration || null,
+                status:       'pending_tally',
                 created_by:   createdBy,
             }).returning('*');
 
