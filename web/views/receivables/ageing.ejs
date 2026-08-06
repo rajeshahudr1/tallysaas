@@ -1,0 +1,88 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * receivables/ageing.ejs — the individual open sales invoices behind one
+ * dashboard ageing bucket (GET /receivables?bucket=N), or every open
+ * invoice when no bucket is chosen.
+ *
+ * The bucket LABEL shown here comes straight from the api response
+ * (Helpers/receivablesAgeing.BUCKETS) — this page never invents its own
+ * day-boundary text, so it can never say something the dashboard doughnut
+ * disagrees with.
+ * ─────────────────────────────────────────────────────────── */
+var _rows   = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _bucketLabel = (typeof bucketLabel !== 'undefined') ? bucketLabel : null;
+var _total  = (typeof total !== 'undefined') ? total : 0;
+var _page   = (typeof page !== 'undefined') ? page : 1;
+var _perPage = (typeof perPage !== 'undefined') ? perPage : 20;
+var _totalOutstanding = (typeof totalOutstanding !== 'undefined') ? totalOutstanding : '₹0';
+
+var _from = _total ? ((_page - 1) * _perPage) + 1 : 0;
+var _to   = Math.min(_page * _perPage, _total);
+%>
+
+<%- include('../partials/page-head', {
+    title: (typeof title !== 'undefined' ? title : 'Receivables'),
+    breadcrumb: (typeof breadcrumb !== 'undefined' ? breadcrumb : [{ label: 'Receivables' }]),
+}) %>
+
+<div class="ledger-head">
+    <div>
+        <div class="ledger-head-total">
+            <% if (_bucketLabel) { %>
+                Bills aged <strong><%= _bucketLabel %></strong>:
+            <% } else { %>
+                All open bills — Total Outstanding:
+            <% } %>
+            <strong><%= _totalOutstanding %></strong>
+        </div>
+        <% if (_bucketLabel) { %>
+            <div class="ledger-dc" style="margin-top:6px;">
+                <a href="/receivables">&times; Clear filter — show every open bill</a>
+            </div>
+        <% } %>
+    </div>
+</div>
+
+<div class="card">
+    <% if (!_rows.length) { %>
+        <p class="daybook-empty">
+            <% if (_bucketLabel) { %>
+                No open bills aged <%= _bucketLabel %>.
+            <% } else { %>
+                No open bills — every sales invoice is fully settled.
+            <% } %>
+        </p>
+    <% } else { %>
+        <table class="daybook-table ledger-table">
+            <thead>
+                <tr>
+                    <th>Invoice No</th>
+                    <th>Customer</th>
+                    <th>Invoice Date</th>
+                    <th>Due Date</th>
+                    <th>Age</th>
+                    <th>Bucket</th>
+                    <th class="is-num">Outstanding</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <td>
+                            <% if (r.href) { %>
+                                <a class="daybook-voucher" href="<%= r.href %>"><%= r.invoice_no %></a>
+                            <% } else { %><%= r.invoice_no %><% } %>
+                        </td>
+                        <td><%= r.customer %></td>
+                        <td><%= r.invoice_date %></td>
+                        <td><%= r.due_date %></td>
+                        <td><%= r.age_days %> days</td>
+                        <td><%= r.bucket_label %></td>
+                        <td class="is-num"><%= r.outstanding %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+        <div class="ledger-foot"><%= _from %>-<%= _to %> of <%= _total %></div>
+    <% } %>
+</div>

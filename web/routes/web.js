@@ -1010,6 +1010,11 @@ async function buildDashboardModel(req, res, section) {
                 label:  b.label,
                 amount: inr(b.amount),
                 color:  RECV_COLORS[i] || '#9CA3AF',
+                // Drill-down: which bills make up this bucket. `i` is the same
+                // index Helpers/receivablesAgeing.BUCKETS uses server-side, so
+                // /receivables re-derives nothing — it just asks the api for
+                // that index.
+                href:   `/receivables?bucket=${i}`,
             })),
         };
 
@@ -2320,10 +2325,65 @@ async function renderLedgerBucket(req, res, next, bucket) {
     } catch (err) { next(err); }
 }
 
+/* ── Receivables · ageing bucket drill-down (GET /receivables?bucket=N) ──
+ * Reached from the dashboard's Receivables legend (dashboard/_receivables.ejs
+ * links each band to /receivables?bucket=<index>). `index` is the SAME
+ * position the api's Helpers/receivablesAgeing.BUCKETS uses — this page never
+ * re-derives the day boundaries, it just forwards the index and shows
+ * whatever bucket_label the api hands back, so the dashboard total and this
+ * list can never disagree about where the boundary sits.
+ *
+ * With no ?bucket it shows every open sales invoice. "View All" on the
+ * dashboard panel still links to plain /receivables (no bucket param), which
+ * this same branch renders — the ledger-balance view below only shows when
+ * bucket is entirely absent, so nothing about that existing screen changed.
+ */
+async function renderReceivablesBills(req, res, next) {
+    try {
+        if (ledgerScreenBarred(res)) return res.redirect('/licenses');
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const qs = new URLSearchParams({ page: String(page), per_page: '20' });
+        if (req.query.bucket !== undefined && req.query.bucket !== '') {
+            qs.set('bucket', String(req.query.bucket));
+        }
+        const { body } = await api.get(req, `/dashboard/receivables/bills?${qs.toString()}`);
+        const d = (body && body.data) || {};
+        const meta = d.meta || {};
+        const grp = (v) => '₹' + Number(v || 0).toLocaleString('en-IN',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+        res.render('receivables/ageing', {
+            title: 'Receivables',
+            activeMenu: 'customers',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Receivables' }],
+            bucketLabel: meta.bucket_label || null,
+            totalOutstanding: grp(meta.total_outstanding),
+            page: meta.page || page,
+            perPage: meta.per_page || 20,
+            total: meta.total || 0,
+            rows: (d.data || []).map((r) => ({
+                invoice_no: r.invoice_no || '',
+                customer: r.customer || '',
+                invoice_date: fmtDate(r.invoice_date),
+                due_date: r.due_date ? fmtDate(r.due_date) : '—',
+                age_days: r.age_days,
+                bucket_label: r.bucket_label,
+                outstanding: grp(r.outstanding),
+                href: r.customer ? `/ledgers/${encodeURIComponent(r.customer)}` : null,
+            })),
+        });
+    } catch (err) { next(err); }
+}
+
 router.get('/cash',        (req, res, next) => renderLedgerBucket(req, res, next, 'cash'));
 router.get('/bank',        (req, res, next) => renderLedgerBucket(req, res, next, 'bank'));
 router.get('/payables',    (req, res, next) => renderLedgerBucket(req, res, next, 'payables'));
-router.get('/receivables', (req, res, next) => renderLedgerBucket(req, res, next, 'receivables'));
+router.get('/receivables', (req, res, next) => {
+    if (req.query.bucket !== undefined && req.query.bucket !== '') {
+        return renderReceivablesBills(req, res, next);
+    }
+    return renderLedgerBucket(req, res, next, 'receivables');
+});
 
 /* ── Ledger statement (GET /ledgers/:name) ──────────────────────
  * One ledger's voucher-wise movement for a period, with the opening /

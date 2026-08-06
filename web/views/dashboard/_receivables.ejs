@@ -30,12 +30,14 @@ var _recvChart = (typeof receivablesChart !== 'undefined' && receivablesChart)
         </div>
         <ul class="recv-legend">
             <% (_recv.buckets || []).forEach(function (b) { %>
-                <li class="recv-legend-row">
-                    <span class="recv-legend-swatch" style="background: <%= b.color %>"></span>
-                    <span class="recv-legend-text">
-                        <span class="recv-legend-band"><%= b.label %></span>
-                        <span class="recv-legend-amount"><%= b.amount %></span>
-                    </span>
+                <li>
+                    <a class="recv-legend-row" href="<%= b.href %>" title="Bills aged <%= b.label %>">
+                        <span class="recv-legend-swatch" style="background: <%= b.color %>"></span>
+                        <span class="recv-legend-text">
+                            <span class="recv-legend-band"><%= b.label %></span>
+                            <span class="recv-legend-amount"><%= b.amount %></span>
+                        </span>
+                    </a>
                 </li>
             <% }); %>
         </ul>

@@ -1266,6 +1266,16 @@ router.get(
     DashboardController.summary,
 );
 
+// Receivables panel drill-down — the individual open sales invoices behind
+// one ageing bucket (?bucket=0-5), or all of them with no ?bucket. Walks the
+// exact same computation as /dashboard/summary's receivables panel, see
+// DashboardController.receivablesBills.
+router.get(
+    '/dashboard/receivables/bills',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('dashboard', 'view'),
+    DashboardController.receivablesBills,
+);
+
 // Tally chart-of-accounts listing — the drill-down target for the dashboard's
 // CASH / BANK / PAYABLES tiles (?group=cash|bank|payables).
 router.get(

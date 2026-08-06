@@ -79,7 +79,7 @@
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
 const { sumBalances } = require('../../Helpers/ledgerGroups');
-const { buildReceivables } = require('../../Helpers/receivablesAgeing');
+const { BUCKETS, buildReceivables, buildReceivablesRows } = require('../../Helpers/receivablesAgeing');
 
 const OOPS_MSG = 'Oops..Something went wrong. Please try again.';
 
@@ -949,4 +949,103 @@ async function summary(req, res) {
     }
 }
 
-module.exports = { summary, pctChange };
+/**
+ * GET /dashboard/receivables/bills — the individual open sales invoices
+ * behind the Receivables panel's ageing doughnut, optionally narrowed to one
+ * ?bucket= index (drill-down from the dashboard).
+ *
+ * Walks the EXACT same open-invoices + FIFO-receipts computation `summary`
+ * feeds into buildReceivables() (Helpers/receivablesAgeing), so a bucket's
+ * total here always equals what the dashboard shows for that bucket — see
+ * buildReceivablesRows()'s own contract for why.
+ *
+ * Query:
+ *   bucket    optional integer index into receivablesAgeing.BUCKETS (0-5).
+ *             Omitted → every open invoice, any age.
+ *   page, per_page  pagination (defaults 1 / 20, max 100).
+ */
+async function receivablesBills(req, res) {
+    try {
+        const companyId = req.companyId;
+
+        let bucketIndex = null;
+        if (req.query.bucket !== undefined && req.query.bucket !== '') {
+            const n = Number(req.query.bucket);
+            if (!Number.isInteger(n) || n < 0 || n >= BUCKETS.length) {
+                return R.errorResponse(res, 'Invalid bucket.', 422);
+            }
+            bucketIndex = n;
+        }
+
+        let page = parseInt(req.query.page, 10);
+        let perPage = parseInt(req.query.per_page, 10);
+        if (!Number.isInteger(page) || page < 1) page = 1;
+        if (!Number.isInteger(perPage) || perPage < 1) perPage = 20;
+        if (perPage > 100) perPage = 100;
+
+        // Same location + "my invoices" scoping as the dashboard panel itself
+        // (Requirement C / SFA), so a location-restricted or salesman user
+        // drilling into a bucket sees the same subset their dashboard totalled.
+        const locationId = req.locationId;
+        const loc = (qb, col) => (locationId != null ? qb.where(col, locationId) : qb);
+        const mineId = req.isSalesman ? req.user.sub : null;
+        const mine = (qb, col) => (mineId != null ? qb.where(col, mineId) : qb);
+
+        const openInvoicesQ = mine(loc(db('invoices')
+            .leftJoin('customers', 'customers.id', 'invoices.customer_id')
+            .where('invoices.company_id', companyId)
+            .whereNull('invoices.deleted_at').where('invoices.type', 'sales')
+            .whereNot('invoices.status', 'failed')
+            .whereNotNull('invoices.customer_id'), 'invoices.location_id'), 'invoices.created_by')
+            .select(
+                'invoices.id', 'invoices.invoice_no', 'invoices.customer_id',
+                'customers.name as customer',
+                'invoices.invoice_date', 'invoices.due_date', 'invoices.total',
+            );
+
+        const customerReceiptsQ = db('payments').where('company_id', companyId)
+            .whereNull('deleted_at').where('type', 'receipt')
+            .whereNotNull('customer_id')
+            .select('customer_id').sum('amount as amount')
+            .groupBy('customer_id');
+
+        const [openInvoices, customerReceipts] = await Promise.all([openInvoicesQ, customerReceiptsQ]);
+
+        let rows = buildReceivablesRows(openInvoices, customerReceipts, new Date());
+        if (bucketIndex != null) rows = rows.filter((r) => r.bucket_index === bucketIndex);
+
+        // Oldest first — the reference "which bills make up the ageing bucket"
+        // reads most-overdue-first, and it makes every page's total_outstanding
+        // add up to the header the same way whichever page you land on.
+        rows.sort((a, b) => b.age_days - a.age_days);
+
+        const total = rows.length;
+        const totalOutstanding = rows.reduce((s, r) => s + r.outstanding, 0);
+        const paged = rows.slice((page - 1) * perPage, page * perPage);
+
+        return R.successResponse(res, {
+            data: paged.map((r) => ({
+                id: r.id,
+                invoice_no: r.invoice_no,
+                customer: r.customer || '',
+                invoice_date: r.invoice_date,
+                due_date: r.due_date,
+                outstanding: r.outstanding,
+                age_days: r.age_days,
+                bucket_index: r.bucket_index,
+                bucket_label: r.bucket_label,
+            })),
+            meta: {
+                total, page, per_page: perPage,
+                total_outstanding: totalOutstanding,
+                bucket_index: bucketIndex,
+                bucket_label: bucketIndex != null ? BUCKETS[bucketIndex].label : null,
+            },
+        });
+    } catch (err) {
+        console.error('dashboard.receivablesBills error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+module.exports = { summary, receivablesBills, pctChange };
