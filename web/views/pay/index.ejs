@@ -8,13 +8,14 @@
  * PayController.show):
  *   notFound  boolean
  *   message   string   — shown when notFound (bad token / rate-limited)
- *   pay       { company_name, invoice_no, amount, status, upi_uri } | null
+ *   pay       { company_name, invoice_no, amount, status, upi_uri,
+ *               qr_data_uri? } | null
  *
- * No QR code here: `qrcode` is only a dependency of api/, not web/, and
- * adding a new dependency to web/ (or reaching into api/'s Controllers,
- * which is Task 1's file, not this task's) wasn't clean — so this page
- * renders the upi:// link and the VPA/amount clearly instead of a broken
- * image. See the Task 2 report for the full reasoning.
+ * The QR is generated API-side (PayController.show, using api/'s own
+ * `qrcode` dependency) and handed to this page as a ready PNG data-URI —
+ * `qr_data_uri` is present ONLY when a upi_uri exists, so this page never
+ * has to render a broken image; when absent it falls back to the plain
+ * link + VPA, same as before.
  * ─────────────────────────────────────────────────────────── */
 var _notFound = (typeof notFound !== 'undefined') ? notFound : false;
 var _message  = (typeof message  !== 'undefined') ? message  : '';
@@ -52,6 +53,9 @@ var _isPaid = _pay && _pay.status === 'paid';
     text-decoration: none; margin-bottom: 14px;
   }
   .btn-pay:active { opacity: .85; }
+  .qr-wrap { margin: 4px 0 18px; }
+  .qr-wrap img { width: 200px; height: 200px; border-radius: 12px; border: 1px solid #E5E7EB; padding: 8px; background: #fff; }
+  .qr-note { font-size: 12px; color: var(--muted); margin: 8px 0 0; }
   .vpa-row {
     display: flex; align-items: center; justify-content: center; gap: 8px;
     font-size: 13px; color: var(--muted); background: var(--paper); border-radius: 8px; padding: 8px 12px;
@@ -88,9 +92,16 @@ var _isPaid = _pay && _pay.status === 'paid';
           <p>This payment request has been cancelled.</p>
         </div>
       <% } else if (_pay.upi_uri) { %>
+        <% var _vpa = (_pay.upi_uri.match(/pa=([^&]+)/) || [])[1] ? decodeURIComponent((_pay.upi_uri.match(/pa=([^&]+)/) || [])[1]) : ''; %>
+        <% if (_pay.qr_data_uri) { %>
+          <div class="qr-wrap">
+            <img src="<%= _pay.qr_data_uri %>" alt="Scan to pay with UPI">
+            <p class="qr-note">Scan to pay <code><%= _vpa %></code></p>
+          </div>
+        <% } %>
         <a class="btn-pay" href="<%= _pay.upi_uri %>">Pay with UPI</a>
         <div class="vpa-row">
-          <span>UPI:</span> <code id="pay-vpa"><%= (_pay.upi_uri.match(/pa=([^&]+)/) || [])[1] ? decodeURIComponent((_pay.upi_uri.match(/pa=([^&]+)/) || [])[1]) : '' %></code>
+          <span>UPI:</span> <code id="pay-vpa"><%= _vpa %></code>
           <button type="button" id="pay-copy-vpa">Copy</button>
         </div>
         <p class="footer-note">Open this page on your phone and tap "Pay with UPI" to launch your UPI app, or copy the UPI ID above to pay from another app.</p>

@@ -8454,7 +8454,7 @@ router.get('/collect-payments', async (req, res, next) => {
         const [settingsRes, listRes, invoicesRes] = await Promise.all([
             api.get(req, '/collect-payments/settings'),
             api.get(req, `/collect-payments?per_page=50${status ? `&status=${encodeURIComponent(status)}` : ''}`),
-            api.get(req, '/sales-invoices?per_page=100'),
+            api.get(req, '/collect-payments/outstanding-invoices'),
         ]);
 
         const settingsBody = (settingsRes.body && settingsRes.body.data) || {};
@@ -8468,6 +8468,9 @@ router.get('/collect-payments', async (req, res, next) => {
             pay_url: `${req.protocol}://${req.get('host')}/pay/${r.token}`,
         }));
 
+        // Already filtered to "still owes something" server-side (Collect
+        // PaymentController.outstandingOnly) — a fully-settled bill must never
+        // be offered here, and each row carries `outstanding`.
         const invoices = ((invoicesRes.body && invoicesRes.body.data && invoicesRes.body.data.data) || []);
 
         res.render('collect-payments/index', {

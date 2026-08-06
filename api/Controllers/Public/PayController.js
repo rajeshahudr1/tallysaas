@@ -32,6 +32,7 @@ const R  = require('../../Helpers/response');
 const tenantDb = require('../../config/tenantDb');
 const { buildUpiUri } = require('../../Helpers/upiLink');
 const throttle = require('../../Helpers/throttle');
+const QRCode = require('qrcode');
 
 const NOT_FOUND_MSG = 'Payment link not found.';
 
@@ -116,13 +117,32 @@ async function show(req, res) {
             })
             : null;
 
-        return R.successResponse(res, {
+        // qrcode is only a dependency of api/ (not web/) — this is why the QR is
+        // generated here, server-side, and shipped as a ready PNG data-URI
+        // rather than asking web/ to build one from the upi_uri. When there is
+        // no UPI URI (company hasn't finished setup), the field is simply
+        // omitted — never a broken <img>.
+        let qrDataUri;
+        if (upiUri) {
+            try {
+                qrDataUri = await QRCode.toDataURL(upiUri, { margin: 1, width: 240 });
+            } catch (err) {
+                // A QR that fails to render is not fatal — the page still has
+                // the plain upi_uri link + VPA to fall back on.
+                console.error('PayController.show QR generation error:', err.message);
+            }
+        }
+
+        const payload = {
             company_name: (company && company.name) || '',
             invoice_no:   (invoice && invoice.invoice_no) || '',
             amount:       request.amount,
             status:       request.status,
             upi_uri:      upiUri,
-        });
+        };
+        if (qrDataUri) payload.qr_data_uri = qrDataUri;
+
+        return R.successResponse(res, payload);
     } catch (err) {
         console.error('PayController.show error:', err);
         return R.errorResponse(res, 'Oops..Something went wrong. Please try again.', 500);

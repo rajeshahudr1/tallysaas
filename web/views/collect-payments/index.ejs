@@ -16,7 +16,10 @@
  *   settings   { enabled, upi_vpa, payee_name }
  *   gateway    { available, reason }
  *   requests   [ { id, token, pay_url, status, amount, invoice_no, customer, created_fmt, note } ]
- *   invoices   [ { id, invoice_no, customer, total } ]  — for the "New request" picker
+ *   invoices   [ { id, invoice_no, customer, total, outstanding } ]  — for the
+ *              "New request" picker; already filtered to bills that still owe
+ *              something (CollectPaymentController.outstandingOnly) — a
+ *              fully-settled invoice is never offered here.
  *   statusFilter string
  * ─────────────────────────────────────────────────────────── */
 var _settings = (typeof settings !== 'undefined' && settings) ? settings : { enabled: false, upi_vpa: '', payee_name: '' };
@@ -104,7 +107,7 @@ function _statusPillClass(s) {
                 <button type="button" class="btn btn-gradient" disabled title="No outstanding invoices to request payment for">
                     <i class="fa-solid fa-plus me-1"></i>New Request
                 </button>
-                <span class="form-hint text-muted ms-2">No invoices available to request payment for.</span>
+                <span class="form-hint text-muted ms-2">All invoices are already settled — nothing outstanding to request.</span>
             <% } else { %>
                 <button type="button" class="btn btn-gradient" data-bs-toggle="modal" data-bs-target="#cpNewRequestModal">
                     <i class="fa-solid fa-plus me-1"></i>New Request
@@ -191,7 +194,7 @@ function _statusPillClass(s) {
                     <select class="form-select" id="cp-invoice" name="invoice_id" required>
                         <option value="">Select an invoice…</option>
                         <% _invoices.forEach(function (inv) { %>
-                            <option value="<%= inv.id %>"><%= inv.invoice_no %> — <%= inv.customer || '' %> — <%= _inr(inv.total) %></option>
+                            <option value="<%= inv.id %>"><%= inv.invoice_no %> — <%= inv.customer || '' %> — <%= _inr(inv.outstanding) %> due</option>
                         <% }); %>
                     </select>
                 </div>

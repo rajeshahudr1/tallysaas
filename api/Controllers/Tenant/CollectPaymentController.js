@@ -29,6 +29,7 @@ const crypto = require('crypto');
 const R  = require('../../Helpers/response');
 const db = require('../../config/db').db;
 const { recordHistory } = require('../../Helpers/history');
+const { buildBills, buildBillwiseQuery, openingBillRows } = require('../../Helpers/billwiseOutstanding');
 
 const OOPS_MSG      = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND_MSG = 'Payment request not found.';
@@ -55,6 +56,30 @@ function parsePagination(query) {
  */
 async function gatewayStatus() {
     return { available: false, reason: 'not_configured' };
+}
+
+// Round to paise, same convention as billwiseOutstanding — a bill left at
+// 0.0000001 due to float error must read as settled, not "outstanding".
+function r2(n) {
+    return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+/**
+ * PURE — filters a list of bills down to the ones that still owe something.
+ * Each row needs `total` and `paid` (paid defaults to 0 when absent — a bill
+ * with no recorded payment is NOT an error, it's simply unpaid). Adds
+ * `outstanding` = total - paid to every row that survives, rounded to paise.
+ * A fully-paid or overpaid bill (paid >= total) is dropped entirely — never
+ * offered for collection, and never shown with a negative due amount.
+ *
+ * Asking a customer to pay a bill they've already settled is worse than
+ * useless, so this is the single gate every "which bills can we request
+ * payment for" list must pass through.
+ */
+function outstandingOnly(rows) {
+    return (rows || [])
+        .map((r) => ({ ...r, outstanding: r2((Number(r.total) || 0) - (Number(r.paid) || 0)) }))
+        .filter((r) => r.outstanding > 0);
 }
 
 /** Read the `collect_payments` settings blob for a company (defaults when unset). */
@@ -102,6 +127,59 @@ async function updateSettings(req, res) {
         return R.successResponse(res, { settings }, 'Settings saved.');
     } catch (err) {
         console.error('collectPayments.updateSettings error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * GET /collect-payments/outstanding-invoices — feeds the "New Request" bill
+ * picker. Only sales invoices that still owe something, each with how much.
+ *
+ * "How much is paid" is NOT read from `payments` — that table records a
+ * receipt against a PARTY, not an invoice (see this file's header + Helpers/
+ * billwiseOutstanding.js's header), so it cannot say what a SPECIFIC invoice
+ * still owes. billwiseOutstanding already computes the exact per-bill balance
+ * from Tally's own bill allocations, matched by bill name == invoice_no — so
+ * that is reused here rather than re-deriving a second, possibly-different
+ * outstanding figure. An invoice with no matching Tally bill allocation at
+ * all (not yet synced, or synced but never referenced by a receipt) is
+ * treated as fully outstanding — the safe default, since there is no
+ * evidence anything against it was ever settled.
+ */
+async function outstandingInvoices(req, res) {
+    try {
+        const cid = req.companyId;
+
+        let invQ = db('invoices')
+            .leftJoin('customers', 'customers.id', 'invoices.customer_id')
+            .where('invoices.company_id', cid)
+            .where('invoices.type', 'sales')
+            .whereNull('invoices.deleted_at');
+        if (req.locationId != null) invQ = invQ.where('invoices.location_id', req.locationId);
+        const invoices = await invQ
+            .orderBy('invoices.id', 'desc')
+            .select('invoices.id', 'invoices.invoice_no', 'invoices.total', 'customers.name as customer');
+
+        const [billRows, openingRows] = await Promise.all([
+            buildBillwiseQuery(db, cid),
+            openingBillRows(db, cid),
+        ]);
+        const bills = buildBills([...billRows, ...openingRows]);
+        const outstandingByBill = new Map();
+        bills.forEach((b) => {
+            if (b.outstanding > 0) outstandingByBill.set(String(b.bill).trim().toLowerCase(), b.outstanding);
+        });
+
+        const withPaid = invoices.map((inv) => {
+            const total = Number(inv.total) || 0;
+            const key = String(inv.invoice_no || '').trim().toLowerCase();
+            const stillDue = outstandingByBill.has(key) ? outstandingByBill.get(key) : total;
+            return { ...inv, total, paid: total - stillDue };
+        });
+
+        return R.successResponse(res, { data: outstandingOnly(withPaid) });
+    } catch (err) {
+        console.error('collectPayments.outstandingInvoices error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);
     }
 }
@@ -349,4 +427,4 @@ async function cancel(req, res) {
     }
 }
 
-module.exports = { getSettings, updateSettings, list, create, markPaid, cancel };
+module.exports = { getSettings, updateSettings, list, create, markPaid, cancel, outstandingOnly, outstandingInvoices };

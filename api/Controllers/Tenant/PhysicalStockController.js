@@ -143,6 +143,10 @@ async function get(req, res) {
             voucher_no: voucherNo,
             count_date: items[0].adjustment_date,
             created_by: items[0].created_by,
+            // create() writes the sheet's narration into every line's `notes`
+            // when one was given (see create()'s comment) — the first line's
+            // value is the sheet's narration.
+            narration:  items[0].notes || null,
             items,
         });
     } catch (err) {
@@ -156,6 +160,13 @@ async function create(req, res) {
         const body = req.body;
         const items = normaliseCounts(body.items || []);
         const createdBy = req.user && req.user.sub ? req.user.sub : null;
+        // The sheet's narration (accepted by Validators/stockVoucher.js's
+        // createPhysicalStockSchema but, until now, never written anywhere —
+        // it silently vanished). stock_adjustments has no dedicated narration
+        // column, so it is stored in the same `notes` column each line already
+        // uses for its godown — but ONLY when a narration was actually given,
+        // so a sheet with none keeps behaving exactly as before.
+        const narration = (body.notes && String(body.notes).trim()) || null;
         const effectiveLocationId = req.locationId != null
             ? req.locationId
             : (body.location_id || null);
@@ -199,7 +210,7 @@ async function create(req, res) {
                     before_qty:      before,
                     after_qty:       after,
                     reason:          'Physical Stock',
-                    notes:           it.godown || null,
+                    notes:           narration || it.godown || null,
                     voucher_no:      voucherNo,
                     voucher_kind:    'physical_stock',
                     // New sheets are pushable to Tally as soon as they are
@@ -214,7 +225,7 @@ async function create(req, res) {
                 insertedRows.push(adjRow);
             }
 
-            return { voucher_no: voucherNo, count_date: body.count_date || null, items: insertedRows };
+            return { voucher_no: voucherNo, count_date: body.count_date || null, narration, items: insertedRows };
         });
 
         return R.successResponse(res, result, 'Physical stock recorded.');

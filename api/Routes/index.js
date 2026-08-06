@@ -1209,6 +1209,9 @@ router.get('/collect-payments/settings',
 router.put('/collect-payments/settings',
     authenticate, resolveTenant, resolveCompany, can('collect-payments', 'edit'),
     CollectPaymentController.updateSettings);
+router.get('/collect-payments/outstanding-invoices',
+    authenticate, resolveTenant, resolveCompany, can('collect-payments', 'view'),
+    CollectPaymentController.outstandingInvoices);
 router.get('/collect-payments',
     authenticate, resolveTenant, resolveCompany, can('collect-payments', 'view'),
     CollectPaymentController.list);
