@@ -145,8 +145,13 @@ async function list(req, res) {
  * POST /collect-payments — body: { invoice_id, note? }
  * The amount is ALWAYS read from the invoice itself — anything the client
  * sends for amount is ignored (there is none in the accepted body shape).
- * token is crypto.randomBytes-derived — never sequential, never time-based,
- * so it cannot be guessed or enumerated.
+ *
+ * token shape: `<licenseId>.<48 hex chars>` — the licence id is not a secret
+ * (it adds no guessability), it just lets the public GET /pay/:token route
+ * (Public/PayController.show) parse straight to this one licence's tenant db
+ * instead of fanning the lookup out across every active licence. All the
+ * unguessability still comes from the random half: crypto.randomBytes(24),
+ * same as before this prefix was added.
  */
 async function create(req, res) {
     try {
@@ -161,7 +166,11 @@ async function create(req, res) {
             .first();
         if (!invoice) return R.errorResponse(res, 'Invoice not found.', 404);
 
-        const token = crypto.randomBytes(24).toString('hex');
+        const licenseId = req.user && req.user.license_id;
+        if (!Number.isInteger(licenseId) || licenseId <= 0) {
+            return R.errorResponse(res, OOPS_MSG, 500);
+        }
+        const token = `${licenseId}.${crypto.randomBytes(24).toString('hex')}`;
 
         const row = {
             company_id:  req.companyId,

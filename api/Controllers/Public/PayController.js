@@ -17,22 +17,42 @@
  *
  * TENANT LOOKUP: this app is database-PER-LICENSE (see config/tenantDb.js's
  * header comment) — `payment_requests` lives in each licence's own tenant
- * db, and a bare token carries no licence id. This public route has no JWT
- * (no db_name claim) to route by, so it fans the lookup out across every
- * active licence's tenant db and takes the one that matches. Token
- * collision across tenants is not a practical concern (24 random bytes),
- * and the fan-out is bounded by the (small, cached-pool) licence count —
- * the same trade every db-per-tenant SaaS with a public unauthenticated
- * link makes.
+ * db. The token is `<licenseId>.<48 hex chars>` (see Tenant/
+ * CollectPaymentController.create) precisely so this public, unauthenticated
+ * route never has to fan a lookup out across every active licence's tenant
+ * db — it parses the licence id straight off the token and queries only
+ * that one db. A token that doesn't parse (no licence part, non-numeric,
+ * or the licence doesn't exist) 404s immediately, before touching any
+ * database — the cheapest possible response to a guessed/malformed token.
+ * The licence id is not a secret and adds no guessability; all the
+ * unguessability still lives in the random half.
  */
 
 const R  = require('../../Helpers/response');
-const masterDb = require('../../config/masterDb').db;
 const tenantDb = require('../../config/tenantDb');
 const { buildUpiUri } = require('../../Helpers/upiLink');
 const throttle = require('../../Helpers/throttle');
 
 const NOT_FOUND_MSG = 'Payment link not found.';
+
+// token shape: "<licenseId>.<random>" — licenseId is digits only, random is
+// whatever CollectPaymentController.create emits (currently 48 hex chars,
+// but this parser does not pin the random part's exact length/alphabet so a
+// future longer/differently-encoded random half still parses).
+const TOKEN_RE = /^(\d+)\.([A-Za-z0-9]+)$/;
+
+/**
+ * Parse "<licenseId>.<random>" → { licenseId, random } or null. Pure string
+ * work — never touches a database — so a malformed token 404s before any
+ * query runs.
+ */
+function parseToken(token) {
+    const m = TOKEN_RE.exec(token);
+    if (!m) return null;
+    const licenseId = Number(m[1]);
+    if (!Number.isInteger(licenseId) || licenseId <= 0) return null;
+    return { licenseId, random: m[2] };
+}
 
 // Guessing a 24-byte random token is already infeasible, but this endpoint
 // is public and unauthenticated, so throttle it anyway — per Helpers/throttle.js,
@@ -58,17 +78,20 @@ async function show(req, res) {
         const token = String(req.params.token || '').trim();
         if (!token) return R.errorResponse(res, NOT_FOUND_MSG, 404);
 
-        const licenses = await masterDb('licenses')
-            .whereNull('deleted_at')
-            .select('id');
+        const parsed = parseToken(token);
+        if (!parsed) return R.errorResponse(res, NOT_FOUND_MSG, 404);
 
-        let db = null;
-        let request = null;
-        for (const lic of licenses) {
-            const tk = tenantDb.getKnexForLicense(lic.id);
-            // eslint-disable-next-line no-await-in-loop
-            const row = await tk('payment_requests').where({ token }).whereNull('deleted_at').first();
-            if (row) { db = tk; request = row; break; }
+        let db;
+        let request;
+        try {
+            db = tenantDb.getKnexForLicense(parsed.licenseId);
+            request = await db('payment_requests').where({ token }).whereNull('deleted_at').first();
+        } catch (err) {
+            // Licence id parsed but doesn't map to a real tenant db (e.g. a
+            // pre-shape testing row, or a licence id that never existed) —
+            // fail clean, same as "not found", never a 500.
+            console.error('PayController.show tenant lookup error:', err.message);
+            return R.errorResponse(res, NOT_FOUND_MSG, 404);
         }
         if (!request || request.status === 'cancelled') {
             return R.errorResponse(res, NOT_FOUND_MSG, 404);
@@ -106,4 +129,4 @@ async function show(req, res) {
     }
 }
 
-module.exports = { show };
+module.exports = { show, parseToken };
