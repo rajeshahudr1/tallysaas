@@ -1582,6 +1582,123 @@ class TallyConnector:
             "</ENVELOPE>"
         )
 
+    # ── Shared item-voucher builder (Quotation / Sales Order / Purchase Order /
+    #    Delivery Note / Receipt Note) ──────────────────────────────────────
+    #
+    # These five differ from the plain Sales/Purchase builder above in that they
+    # DO carry item lines (a quotation without line items is useless to read),
+    # and from each other only in their Tally VOUCHER TYPE NAME and whether they
+    # are OPTIONAL. The type name is NEVER hard-coded here -- Tally ships none
+    # of "Quotation" out of the box (someone creates it per company) and Sales/
+    # Purchase Order only exist once order processing is switched on, so the
+    # caller (sync_agent, from the row's own tally_voucher_type) decides the
+    # name every time.
+    def create_item_voucher_xml(
+        self,
+        vtype: str,
+        party: str,
+        date: str,
+        items: list[dict[str, Any]],
+        company: Optional[str] = None,
+        voucher_no: Optional[str] = None,
+        is_optional: bool = False,
+        extra_date: Optional[str] = None,
+        extra_date_tag: Optional[str] = None,
+        narration: Optional[str] = None,
+    ) -> str:
+        """IMPORT: build any item-carrying voucher -- Quotation, Sales/Purchase
+        Order, Delivery/Receipt Note.
+
+        ``items`` is ``[{"item": str, "qty": float, "rate": float}, ...]``. A
+        line missing an item name or a positive quantity is dropped rather than
+        sent half-formed; if NOTHING usable remains, the whole voucher is
+        refused (:class:`ValueError`) -- never built and sent empty.
+
+        ``is_optional`` sets ``ISOPTIONAL`` -- the flag that keeps a Quotation
+        or Order out of the company's real books while still letting Tally
+        record it. ``extra_date``/``extra_date_tag`` cover the second date some
+        of these carry (a Sales Order's due date, a Delivery Note's dispatch
+        date) and are omitted entirely when not given, matching every other
+        optional block in this file.
+        """
+        lines_xml = ""
+        for it in (items or []):
+            name = str((it or {}).get("item") or "").strip()
+            try:
+                qty = float((it or {}).get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0.0
+            if not name or qty <= 0:
+                continue
+            try:
+                rate = float((it or {}).get("rate") or 0)
+            except (TypeError, ValueError):
+                rate = 0.0
+            qty_s = "%s Nos" % ("%.2f" % qty).rstrip("0").rstrip(".")
+            amount = qty * rate
+            lines_xml += (
+                "<ALLINVENTORYENTRIES.LIST>"
+                "<STOCKITEMNAME>" + self._esc(name) + "</STOCKITEMNAME>"
+                "<ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>"
+                "<ACTUALQTY>" + qty_s + "</ACTUALQTY>"
+                "<BILLEDQTY>" + qty_s + "</BILLEDQTY>"
+                "<RATE>" + ("%.2f" % rate) + "</RATE>"
+                "<AMOUNT>" + ("%.2f" % amount) + "</AMOUNT>"
+                "</ALLINVENTORYENTRIES.LIST>"
+            )
+        if not lines_xml:
+            raise ValueError(
+                vtype + ": no usable item line (name + positive quantity), "
+                "refusing to build an empty voucher")
+
+        voucher_no_e = ("<VOUCHERNUMBER>" + self._esc(voucher_no) + "</VOUCHERNUMBER>"
+                        if voucher_no else "")
+        optional_e = "<ISOPTIONAL>Yes</ISOPTIONAL>" if is_optional else ""
+        narration_e = ("<NARRATION>" + self._esc(narration) + "</NARRATION>") if narration else ""
+        extra_date_e = ""
+        if extra_date and extra_date_tag:
+            extra_date_e = ("<" + extra_date_tag + ">" + self._esc(extra_date)
+                            + "</" + extra_date_tag + ">")
+
+        return (
+            "<ENVELOPE>"
+            "<HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>"
+            "<BODY><IMPORTDATA>"
+            + self._import_requestdesc("Vouchers", company) +
+            "<REQUESTDATA>"
+            '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+            '<VOUCHER VCHTYPE="' + self._esc(vtype) + '" ACTION="Create">'
+            "<DATE>" + self._esc(date) + "</DATE>"
+            "<VOUCHERTYPENAME>" + self._esc(vtype) + "</VOUCHERTYPENAME>"
+            + voucher_no_e + optional_e +
+            "<PARTYLEDGERNAME>" + self._esc(party) + "</PARTYLEDGERNAME>"
+            + extra_date_e + narration_e + lines_xml +
+            "</VOUCHER>"
+            "</TALLYMESSAGE>"
+            "</REQUESTDATA></IMPORTDATA></BODY>"
+            "</ENVELOPE>"
+        )
+
+    def create_item_voucher(
+        self,
+        vtype: str,
+        party: str,
+        date: str,
+        items: list[dict[str, Any]],
+        company: Optional[str] = None,
+        voucher_no: Optional[str] = None,
+        is_optional: bool = False,
+        extra_date: Optional[str] = None,
+        extra_date_tag: Optional[str] = None,
+        narration: Optional[str] = None,
+    ) -> str:
+        """Build AND send an item voucher (Quotation/Order/Delivery/Receipt Note);
+        returns Tally's raw response."""
+        return self.send(self.create_item_voucher_xml(
+            vtype, party, date, items, company=company, voucher_no=voucher_no,
+            is_optional=is_optional, extra_date=extra_date,
+            extra_date_tag=extra_date_tag, narration=narration))
+
     def _settlement_voucher_xml(
         self,
         vtype: str,

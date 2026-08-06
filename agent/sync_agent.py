@@ -1009,6 +1009,39 @@ def _push_voucher(tally: TallyConnector, v: dict, company: Optional[str] = None)
                    "company_id": v["company_id"], "status": "failed",
                    "message": str(exc)}
             return res
+    elif kind in ("quotation", "sales_order", "purchase_order",
+                  "delivery_note", "receipt_note"):
+        # Item-carrying vouchers, all built by the same shared XML -- they
+        # differ only in Tally's VOUCHER TYPE NAME (never hard-coded: it comes
+        # from the row's own tally_voucher_type, since a company may call its
+        # Quotation type anything, or not have one) and in whether they are
+        # OPTIONAL. Tally can legitimately refuse all five -- Sales/Purchase
+        # Order and Delivery/Receipt Note only exist when order processing is
+        # switched on, and "Quotation" is not a stock Tally voucher type -- so
+        # a missing voucher type here is an ordinary, expected failure, not a
+        # bug; the ValueError/interpreted message below carries the reason
+        # back rather than flattening it into a bare "failed".
+        vtype = v.get("vch_type") or v.get("tally_voucher_type")
+        if not vtype:
+            res = {"record_type": v["record_type"], "record_id": v["id"],
+                   "company_id": v["company_id"], "status": "failed",
+                   "message": f"{kind}: no tally_voucher_type supplied, "
+                              "refusing to build a voucher with no type name"}
+            return res
+        try:
+            resp = tally.create_item_voucher(
+                vtype, v["party"], v["date"], v.get("items", []),
+                company=company, voucher_no=v.get("voucher_no"),
+                is_optional=(kind == "quotation"),
+                extra_date=v.get("extra_date"),
+                extra_date_tag=v.get("extra_date_tag"),
+                narration=v.get("narration", ""),
+            )
+        except ValueError as exc:
+            res = {"record_type": v["record_type"], "record_id": v["id"],
+                   "company_id": v["company_id"], "status": "failed",
+                   "message": str(exc)}
+            return res
     else:
         # An unrecognised voucher_kind must NEVER be guessed at -- silently
         # treating it as a payment would write the wrong voucher into the
