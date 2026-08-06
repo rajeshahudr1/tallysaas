@@ -284,6 +284,10 @@ async function create(req, res) {
                 total:           totals.total,
                 notes:           body.notes || null,
                 created_by:      req.user && req.user.sub ? req.user.sub : null,
+                // Ready to sync as soon as it's saved — the DB default is
+                // 'draft_cloud' (pre-push), so this row must say explicitly
+                // it is waiting for the agent to pick it up. (Task 2.)
+                status:          'pending_tally',
             };
 
             const [quotationRow] = await trx('quotations').insert(header).returning('*');

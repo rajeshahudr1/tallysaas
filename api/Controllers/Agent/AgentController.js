@@ -557,6 +557,23 @@ function isPushableReturnNote(row) {
 }
 
 /**
+ * Whether a Quotation / Sales Order / Purchase Order / Delivery Note /
+ * Receipt Note row may be pushed to Tally.
+ *
+ * Same rule as isPushableReturnNote above, and for the same reason: these
+ * five tables (like `invoices`) can be written to from Tally in a later
+ * phase, and a row that already carries a tally_guid must never be pushed
+ * BACK — that would create it in Tally a second time. Kept identical in
+ * shape to isPushableReturnNote on purpose, not merged with it, because the
+ * two source tables are unrelated and a future divergence (e.g. these five
+ * gaining a status Tally-origin rows never use) should not have to fight a
+ * shared implementation.
+ */
+function isPushableVoucherRow(row) {
+    return !!row && row.status === 'pending_tally' && !row.tally_guid;
+}
+
+/**
  * GET /api/v1/agent/pending   (authenticateAgent → req.license)
  *
  * Everything under this license that still needs pushing to Tally, shaped for
@@ -761,6 +778,123 @@ async function pending(req, res) {
                 return acc;
             }, {});
         }
+
+        // ── Vouchers: Quotation / Sales Order / Purchase Order / Delivery Note /
+        // Receipt Note — five item-voucher kinds that carry NO ledger double-
+        // entry (Task 1's shared _inventory_voucher_xml builder just wants
+        // party + items + dates), so unlike invoices/returnNoteRows above these
+        // do not need ledMap. Each is its own table with its own items table
+        // (see the migrations under api/db/migrations_tenant/), so five
+        // sibling queries rather than one shared one. isPushableVoucherRow is
+        // the SAME "never push a Tally-origin row back" rule as
+        // isPushableReturnNote, applied here for exactly the same reason.
+        const quotationRows = await db('quotations as q')
+            .whereIn('q.company_id', companyIds).whereNull('q.deleted_at')
+            .where('q.status', 'pending_tally')
+            .leftJoin('customers as c', 'c.id', 'q.customer_id')
+            .limit(50)
+            .select('q.id', 'q.company_id', 'q.quotation_no', 'q.quotation_date', 'q.valid_till',
+                    'q.tally_voucher_type', 'q.tally_guid', 'q.status', 'c.name as customer')
+            .then((rows) => rows.filter(isPushableVoucherRow));
+        const salesOrderRows = await db('sales_orders as so')
+            .whereIn('so.company_id', companyIds).whereNull('so.deleted_at')
+            .where('so.status', 'pending_tally')
+            .leftJoin('customers as c', 'c.id', 'so.customer_id')
+            .limit(50)
+            .select('so.id', 'so.company_id', 'so.order_no', 'so.order_date', 'so.due_on',
+                    'so.tally_voucher_type', 'so.tally_guid', 'so.status', 'c.name as customer')
+            .then((rows) => rows.filter(isPushableVoucherRow));
+        const purchaseOrderRows = await db('purchase_orders as po')
+            .whereIn('po.company_id', companyIds).whereNull('po.deleted_at')
+            .where('po.status', 'pending_tally')
+            .leftJoin('suppliers as s', 's.id', 'po.supplier_id')
+            .limit(50)
+            .select('po.id', 'po.company_id', 'po.order_no', 'po.order_date', 'po.due_on',
+                    'po.tally_voucher_type', 'po.tally_guid', 'po.status', 's.name as supplier')
+            .then((rows) => rows.filter(isPushableVoucherRow));
+        const deliveryNoteRows = await db('delivery_notes as dn')
+            .whereIn('dn.company_id', companyIds).whereNull('dn.deleted_at')
+            .where('dn.status', 'pending_tally')
+            .leftJoin('customers as c', 'c.id', 'dn.customer_id')
+            .limit(50)
+            .select('dn.id', 'dn.company_id', 'dn.note_no', 'dn.note_date', 'dn.dispatch_date',
+                    'dn.tally_voucher_type', 'dn.tally_guid', 'dn.status', 'c.name as customer')
+            .then((rows) => rows.filter(isPushableVoucherRow));
+        const receiptNoteRows = await db('receipt_notes as rn')
+            .whereIn('rn.company_id', companyIds).whereNull('rn.deleted_at')
+            .where('rn.status', 'pending_tally')
+            .leftJoin('suppliers as s', 's.id', 'rn.supplier_id')
+            .limit(50)
+            .select('rn.id', 'rn.company_id', 'rn.note_no', 'rn.note_date', 'rn.received_date',
+                    'rn.tally_voucher_type', 'rn.tally_guid', 'rn.status', 's.name as supplier')
+            .then((rows) => rows.filter(isPushableVoucherRow));
+
+        const qIds  = quotationRows.map((r) => r.id);
+        const soIds = salesOrderRows.map((r) => r.id);
+        const poIds = purchaseOrderRows.map((r) => r.id);
+        const dnIds = deliveryNoteRows.map((r) => r.id);
+        const rnIds2 = receiptNoteRows.map((r) => r.id);
+
+        const loadItems = async (table, fkCol) => {
+            const ids = { quotation_items: qIds, sales_order_items: soIds,
+                          purchase_order_items: poIds, delivery_note_items: dnIds,
+                          receipt_note_items: rnIds2 }[table];
+            if (!ids.length) return {};
+            const rows = await db(`${table} as it`)
+                .whereIn(`it.${fkCol}`, ids)
+                .leftJoin('products as p', 'p.id', 'it.product_id')
+                .select(`it.${fkCol} as header_id`, 'it.quantity', 'it.rate', 'it.godown',
+                        'it.description', 'p.name as product_name');
+            return rows.reduce((acc, it) => {
+                (acc[it.header_id] = acc[it.header_id] || []).push({
+                    name: it.product_name || it.description || 'Item',
+                    qty: Number(it.quantity) || 0, rate: Number(it.rate) || 0,
+                    godown: it.godown || null,
+                });
+                return acc;
+            }, {});
+        };
+        const itemsByQuotation     = await loadItems('quotation_items', 'quotation_id');
+        const itemsBySalesOrder    = await loadItems('sales_order_items', 'sales_order_id');
+        const itemsByPurchaseOrder = await loadItems('purchase_order_items', 'purchase_order_id');
+        const itemsByDeliveryNote  = await loadItems('delivery_note_items', 'delivery_note_id');
+        const itemsByReceiptNote   = await loadItems('receipt_note_items', 'receipt_note_id');
+
+        const quotationVouchers = quotationRows.map((q) => ({
+            record_type: 'quotation', id: q.id, company_id: q.company_id,
+            voucher_kind: 'quotation', vch_type: q.tally_voucher_type || 'Quotation',
+            voucher_no: q.quotation_no, date: tallyDate(q.quotation_date),
+            valid_till: q.valid_till ? tallyDate(q.valid_till) : null,
+            party: q.customer, items: itemsByQuotation[q.id] || [],
+        }));
+        const salesOrderVouchers = salesOrderRows.map((so) => ({
+            record_type: 'sales_order', id: so.id, company_id: so.company_id,
+            voucher_kind: 'sales_order', vch_type: so.tally_voucher_type || 'Sales Order',
+            voucher_no: so.order_no, date: tallyDate(so.order_date),
+            due_on: so.due_on ? tallyDate(so.due_on) : null,
+            party: so.customer, items: itemsBySalesOrder[so.id] || [],
+        }));
+        const purchaseOrderVouchers = purchaseOrderRows.map((po) => ({
+            record_type: 'purchase_order', id: po.id, company_id: po.company_id,
+            voucher_kind: 'purchase_order', vch_type: po.tally_voucher_type || 'Purchase Order',
+            voucher_no: po.order_no, date: tallyDate(po.order_date),
+            due_on: po.due_on ? tallyDate(po.due_on) : null,
+            party: po.supplier, items: itemsByPurchaseOrder[po.id] || [],
+        }));
+        const deliveryNoteVouchers = deliveryNoteRows.map((dn) => ({
+            record_type: 'delivery_note', id: dn.id, company_id: dn.company_id,
+            voucher_kind: 'delivery_note', vch_type: dn.tally_voucher_type || 'Delivery Note',
+            voucher_no: dn.note_no, date: tallyDate(dn.note_date),
+            dispatch_date: dn.dispatch_date ? tallyDate(dn.dispatch_date) : null,
+            party: dn.customer, items: itemsByDeliveryNote[dn.id] || [],
+        }));
+        const receiptNoteVouchers = receiptNoteRows.map((rn) => ({
+            record_type: 'receipt_note', id: rn.id, company_id: rn.company_id,
+            voucher_kind: 'receipt_note', vch_type: rn.tally_voucher_type || 'Receipt Note',
+            voucher_no: rn.note_no, date: tallyDate(rn.note_date),
+            received_date: rn.received_date ? tallyDate(rn.received_date) : null,
+            party: rn.supplier, items: itemsByReceiptNote[rn.id] || [],
+        }));
 
         // Detect each company's REAL Sales/Purchase + GST + Round-off ledger names
         // (from its synced vouchers) so a pushed invoice reproduces Tally's EXACT
@@ -983,7 +1117,9 @@ async function pending(req, res) {
         };
         const keep = (r) => SM.isEnabled(pushSel, REC2MOD[r && r.record_type] || '');
         const allVouchers = [...invoiceVouchers, ...payVouchers, ...journalVouchers, ...returnNoteVouchers,
-                             ...stockJournalVouchers, ...physicalStockVouchers].filter(keep);
+                             ...stockJournalVouchers, ...physicalStockVouchers,
+                             ...quotationVouchers, ...salesOrderVouchers, ...purchaseOrderVouchers,
+                             ...deliveryNoteVouchers, ...receiptNoteVouchers].filter(keep);
 
         return R.successResponse(res, {
             companies,
@@ -1074,6 +1210,36 @@ async function result(req, res) {
                 // Credit/Debit notes live in `invoices` — same update shape as
                 // sales_invoice/purchase_invoice above.
                 await db('invoices').where({ id: r.record_id, company_id: cid }).update({
+                    status: synced ? 'created' : 'failed',
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
+                });
+            } else if (r.record_type === 'quotation') {
+                await db('quotations').where({ id: r.record_id, company_id: cid }).update({
+                    status: synced ? 'created' : 'failed',
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
+                });
+            } else if (r.record_type === 'sales_order') {
+                await db('sales_orders').where({ id: r.record_id, company_id: cid }).update({
+                    status: synced ? 'created' : 'failed',
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
+                });
+            } else if (r.record_type === 'purchase_order') {
+                await db('purchase_orders').where({ id: r.record_id, company_id: cid }).update({
+                    status: synced ? 'created' : 'failed',
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
+                });
+            } else if (r.record_type === 'delivery_note') {
+                await db('delivery_notes').where({ id: r.record_id, company_id: cid }).update({
+                    status: synced ? 'created' : 'failed',
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
+                });
+            } else if (r.record_type === 'receipt_note') {
+                await db('receipt_notes').where({ id: r.record_id, company_id: cid }).update({
                     status: synced ? 'created' : 'failed',
                     tally_voucher_no: r.tally_voucher_no || null,
                     tally_guid: guid, updated_at: now,
@@ -3296,4 +3462,4 @@ async function recordBackupRun(req, res) {
     }
 }
 
-module.exports = { login, verify, resendOtp, getEnvelopes, heartbeat, offline, pending, result, importFromTally, reconcile, voucherDiff, getCommands, commandResult, getVersion, download, getBackupSettings, recordBackupRun, isPushableReturnNote };
+module.exports = { login, verify, resendOtp, getEnvelopes, heartbeat, offline, pending, result, importFromTally, reconcile, voucherDiff, getCommands, commandResult, getVersion, download, getBackupSettings, recordBackupRun, isPushableReturnNote, isPushableVoucherRow };

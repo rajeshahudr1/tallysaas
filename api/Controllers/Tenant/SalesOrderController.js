@@ -268,6 +268,8 @@ async function create(req, res) {
                 total:           totals.total,
                 notes:           body.notes || null,
                 created_by:      req.user && req.user.sub ? req.user.sub : null,
+                // Ready to sync as soon as it's saved (see QuotationController.create).
+                status:          'pending_tally',
             };
 
             const [orderRow] = await trx('sales_orders').insert(header).returning('*');
