@@ -126,7 +126,8 @@ const {
     listPaymentSchema,
 } = require('../Validators/payment');
 const { createLicenseSchema, updateLicenseSchema, listLicenseSchema } = require('../Validators/license');
-const { activateSchema, heartbeatSchema }        = require('../Validators/agent');
+const { loginSchema: agentLoginSchema, verifySchema: agentVerifySchema,
+        resendSchema: agentResendSchema, heartbeatSchema } = require('../Validators/agent');
 const { createUserSchema, listUserSchema }       = require('../Validators/user');
 const {
     createRoleSchema,
@@ -174,6 +175,7 @@ const DeliveryNoteController  = require('../Controllers/Tenant/DeliveryNoteContr
 const StockJournalController  = require('../Controllers/Tenant/StockJournalController');
 const PhysicalStockController = require('../Controllers/Tenant/PhysicalStockController');
 const ReceiptNoteController   = require('../Controllers/Tenant/ReceiptNoteController');
+const MyEntriesController     = require('../Controllers/Tenant/MyEntriesController');
 const ReturnNoteController    = require('../Controllers/Tenant/ReturnNoteController');
 const PaymentController       = require('../Controllers/Tenant/PaymentController');
 const LicenseController       = require('../Controllers/SuperAdmin/LicenseController');
@@ -192,6 +194,7 @@ const InventoryController     = require('../Controllers/Tenant/InventoryControll
 const UserController          = require('../Controllers/Tenant/UserController');
 const SettingsController      = require('../Controllers/Tenant/SettingsController');
 const SyncController          = require('../Controllers/Tenant/SyncController');
+const DeviceController        = require('../Controllers/Tenant/DeviceController');
 const HistoryController       = require('../Controllers/Tenant/HistoryController');
 const ReportController        = require('../Controllers/Tenant/ReportController');
 const RoleController          = require('../Controllers/Tenant/RoleController');
@@ -279,7 +282,13 @@ router.get('/config/options', authenticate, ConfigController.options);
 // ───────────────────────────────────────────────────────────────────
 
 // Public: the agent presents the secret license key + its machine fingerprint.
-router.post('/agent/activate', validate(activateSchema), AgentController.activate);
+// Agent sign-in. Public by necessity — this IS how an agent gets its token.
+// Licence-key activation was removed: a key typed into a desktop app is a bearer
+// secret anyone can copy, and it bound one licence to one machine with no way to
+// revoke a single device. Now: password → emailed code → machine-bound token.
+router.post('/agent/login',      validate(agentLoginSchema),  AgentController.login);
+router.post('/agent/verify',     validate(agentVerifySchema), AgentController.verify);
+router.post('/agent/otp/resend', validate(agentResendSchema), AgentController.resendOtp);
 // Agent-token authenticated heartbeat (re-validates the license server-side).
 router.post('/agent/heartbeat', authenticateAgent, validate(heartbeatSchema), AgentController.heartbeat);
 // Graceful "going offline" signal — a clean agent stop (service stop / GUI Stop /
@@ -291,6 +300,13 @@ router.get('/agent/pending',  authenticateAgent, AgentController.pending);
 router.post('/agent/result',  authenticateAgent, AgentController.result);
 // Tally → Cloud: the agent imports masters read from the open Tally company.
 router.post('/agent/import',  authenticateAgent, AgentController.importFromTally);
+// Tally → Cloud DELETE detection: the agent sends the FULL live master-id list
+// for one kind and the cloud soft-deletes whatever Tally no longer lists.
+router.post('/agent/reconcile', authenticateAgent, AgentController.reconcile);
+// Voucher reconciliation: the agent sends the live GUID+AlterID list for ONE
+// voucher type; the cloud replies with what it is missing/stale on and (when the
+// sweep is complete) soft-deletes what Tally no longer has.
+router.post('/agent/voucher-diff', authenticateAgent, AgentController.voucherDiff);
 // Command channel: the agent drains queued commands (open_company …) and reports
 // each outcome. Pickup is transactional + license-scoped (see getCommands).
 router.get('/agent/commands',             authenticateAgent, AgentController.getCommands);
@@ -299,6 +315,10 @@ router.post('/agent/commands/:id/result', authenticateAgent, AgentController.com
 // allowed) streams it from /agent/download to self-replace. Both are agent-auth
 // (re-validate the license); download serves the single is_current release file.
 router.get('/agent/version',  authenticateAgent, AgentController.getVersion);
+// The Tally queries the agent should run, SIGNED. Adding a report becomes a
+// server-side change instead of a new exe — and the signature is what stops
+// that same channel becoming a way to send arbitrary XML into customers' Tally.
+router.get('/agent/envelopes', authenticateAgent, AgentController.getEnvelopes);
 router.get('/agent/download', authenticateAgent, AgentController.download);
 
 // Mobile-app auto-update: PUBLIC so the app can check (and force-update) even at
@@ -1025,6 +1045,12 @@ router.post('/receipt-notes/:id/convert', authenticate, resolveTenant, resolveCo
 router.delete('/receipt-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('receipt-notes', 'delete'), ReceiptNoteController.destroy);
 
+// My Vouchers — a read-only roll-up of every voucher family the CURRENT user
+// created, across companies' worth of tables. Gated the same way the SFA
+// "field-sales" own-invoices view is (canOwnInvoice uses this same module).
+router.get('/my/vouchers', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('field-sales', 'view'), MyEntriesController.list);
+
 router.get('/purchase-orders', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('purchase-orders', 'view'), validate(listPurchaseOrderSchema, 'query'), PurchaseOrderController.list);
 router.get('/purchase-orders/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
@@ -1195,6 +1221,14 @@ router.get(
     DashboardController.summary,
 );
 
+// Tally chart-of-accounts listing — the drill-down target for the dashboard's
+// CASH / BANK / PAYABLES tiles (?group=cash|bank|payables).
+router.get(
+    '/tally/ledgers',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('dashboard', 'view'),
+    TallyLedgerController.list,
+);
+
 // Sales ledgers (Tally group "Sales Accounts") for the Quotation form's
 // "Ledger Type" combobox. Gated on the quotations module, not dashboard —
 // this is used from the quotation create screen, not a dashboard drill-down.
@@ -1240,6 +1274,20 @@ router.get(
     '/geo/cities',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
     GeoController.cities,
+);
+
+// One ledger's voucher-wise statement (Cash & Bank → ledger drill-down).
+router.get(
+    '/tally/ledgers/:name/statement',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('dashboard', 'view'),
+    TallyLedgerController.statement,
+);
+
+// One Tally-origin voucher — its double entry + item movement (read-only).
+router.get(
+    '/tally/vouchers/:guid',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('dashboard', 'view'),
+    TallyLedgerController.voucher,
 );
 
 // SFA — the logged-in salesman's field dashboard (assigned locations + their
@@ -1322,6 +1370,12 @@ router.get('/account/reminders',
     authenticate, resolveTenant, resolveCompany, can('customers', 'view'), ReminderTenantController.overdue);
 router.post('/account/reminders/:id/send',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'edit'), ReminderTenantController.send);
+// Per-party reminder schedule ("Set Reminder"): reading it is view-gated,
+// changing it is edit-gated — same split as sending.
+router.get('/account/reminders/:id/schedule',
+    authenticate, resolveTenant, resolveCompany, can('customers', 'view'), ReminderTenantController.schedule);
+router.put('/account/reminders/:id/schedule',
+    authenticate, resolveTenant, resolveCompany, can('customers', 'edit'), ReminderTenantController.saveSchedule);
 
 // Account · Business Analytics — one read-only insights bundle (sales trend,
 // cash-flow, top customers/products, receivables aging, KPIs).
@@ -1374,6 +1428,22 @@ router.put(
     '/settings',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('settings', 'edit'),
     SettingsController.update,
+);
+
+// Connected computers. Licence-level, so no company/location scope — a device
+// belongs to the licence, not to one company's books. Viewing needs the same
+// permission as the rest of Tally sync; DISCONNECTING needs 'delete', because
+// cutting a machine off stops that customer syncing until someone signs in on
+// it again.
+router.get(
+    '/devices',
+    authenticate, resolveTenant, can('tally-sync', 'view'),
+    DeviceController.list,
+);
+router.post(
+    '/devices/:id/revoke',
+    authenticate, resolveTenant, can('tally-sync', 'delete'),
+    DeviceController.revoke,
 );
 
 // Tally sync — connection summary + log stream.

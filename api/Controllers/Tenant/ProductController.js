@@ -26,6 +26,7 @@
 const crud = require('../../Helpers/crudController');
 const db   = require('../../config/db').db;
 const { fullUrl } = require('../../Helpers/uploads');
+const { cutoffFromDays } = require('../../Helpers/inactiveCutoff');
 const customerUsers = require('./CustomerUserController');
 
 /**
@@ -196,12 +197,27 @@ const controller = crud.build({
         },
         gst_rate: (qb, v) => qb.where('products.gst_rate', v),
         hsn:      (qb, v) => qb.where('products.hsn_code', 'ilike', `%${v}%`),
+        // ?inactive=90 — products not sold in the last N days. Drives the
+        // dashboard's "Inactive Stocks" tile.
+        inactive: (qb, v) => {
+            const cutoff = cutoffFromDays(v);
+            if (!cutoff) return qb;
+            return qb.whereNotExists(function () {
+                this.select(db.raw('1')).from('invoice_items')
+                    .join('invoices', 'invoices.id', 'invoice_items.invoice_id')
+                    .whereRaw('invoice_items.product_id = products.id')
+                    .whereNull('invoices.deleted_at')
+                    .where('invoices.type', 'sales')
+                    .where('invoices.invoice_date', '>=', cutoff);
+            });
+        },
     },
     baseQuery,
     buildInsert,
     buildUpdate,
     decorate,
     extraScope: productExtraScope,
+    hasCreatedBy: true,
 });
 
 module.exports = {

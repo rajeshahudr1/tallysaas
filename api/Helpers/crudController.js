@@ -110,6 +110,13 @@ function build(config) {
         // enrich list/get rows (e.g. attach product image URLs). Runs with req so
         // it can build absolute URLs. Backward-compatible (skipped when absent).
         decorate,
+        // Opt-in: does this table carry a `created_by` column? Only customers +
+        // products do today (20260806060000_created_by_backfill_columns.js) — NOT
+        // every crud-built table (suppliers/categories/locations/sales_persons/
+        // customer_groups don't have the column), so this must be explicit rather
+        // than assumed. When true: create() stamps created_by = req.user.sub, and
+        // list() honours ?mine=1 the same one-line way every other list does.
+        hasCreatedBy = false,
     } = config;
 
     // Whitelist of sortable UI keys → SQL columns. `name`/`status`/`created_at`
@@ -222,8 +229,8 @@ function build(config) {
             //   • last_update=YYYY-MM-DD   → rows updated ON/AFTER that date
             //   • (full ISO datetime also works — passed straight to updated_at >=)
             const lastUpdate = (req.query.last_update || '').toString().trim();
+            let since = null;
             if (lastUpdate) {
-                let since;
                 if (lastUpdate === '1') {
                     since = new Date();
                     since.setHours(0, 0, 0, 0);
@@ -232,6 +239,9 @@ function build(config) {
                 }
                 qb = qb.where(`${table}.updated_at`, '>=', since);
             }
+
+            // "मेरे बनाए" — वैकल्पिक। न भेजा जाए तो list का पुराना व्यवहार अछूता।
+            if (hasCreatedBy && req.query.mine === '1' && req.user) qb = qb.where(`${table}.created_by`, req.user.sub);
 
             // Declarative per-resource filters (?key=value → custom WHERE).
             if (filters) {
@@ -260,10 +270,35 @@ function build(config) {
             let rows = await rowQb;
             if (typeof decorate === 'function') rows = await decorate(rows, req);
 
-            return R.successResponse(res, {
+            const payload = {
                 data: rows,
                 meta: { total, page, per_page: perPage },
-            });
+            };
+
+            // Incremental-sync companion to `data`: soft-deleted rows never show
+            // up in a scoped list (applyScope adds whereNull(deleted_at)), so a
+            // third-party poller would never learn that a row disappeared. When
+            // ?last_update= is used we therefore also return the ids removed
+            // since the same cutoff, as a plain array: "deleted": [10, 1, 2, 3].
+            // NOT paginated — the id list is small and must arrive complete.
+            // Omitted entirely without ?last_update= (no change for normal calls).
+            if (since) {
+                const delQb = D(req)(table)
+                    .where(tenantColQualified, req.companyId)
+                    .whereNotNull(deletedColQualified)
+                    .where(deletedColQualified, '>=', since);
+                if (hasLocation && req.locationId != null) {
+                    delQb.where(locationColQualified, req.locationId);
+                }
+                if (typeof extraScope === 'function') {
+                    await extraScope(delQb, req, { table, idColQualified });
+                }
+                const delRows = await delQb.orderBy(deletedColQualified, 'desc')
+                    .select(`${idColQualified} as id`);
+                payload.deleted = delRows.map((r) => Number(r.id));
+            }
+
+            return R.successResponse(res, payload);
         } catch (err) {
             console.error(`${table}.list error:`, err);
             return R.errorResponse(res, OOPS_MSG, 500);
@@ -299,6 +334,7 @@ function build(config) {
             }
             // Always stamp the tenant id, even if buildInsert forgot it.
             const row = { [tenantCol]: req.companyId, ...buildInsert(req.body, req.companyId) };
+            if (hasCreatedBy) row.created_by = req.user ? req.user.sub : null;
 
             // Location scoping on create: a location-restricted creator (a user
             // pinned to one branch) can only create rows IN that branch. Force

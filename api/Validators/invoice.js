@@ -154,6 +154,8 @@ const listInvoiceSchema = Joi.object({
     // Incremental sync (third-party pollers): 1 = updated today, or an ISO
     // date/datetime — returns rows with updated_at >= cutoff.
     last_update: Joi.alternatives().try(Joi.valid('1', 1), Joi.string().isoDate()).allow('', null),
+    // "मेरे बनाए" — वैकल्पिक। न भेजा जाए तो list का पुराना व्यवहार अछूता।
+    mine:        Joi.string().valid('1').allow('', null),
 });
 
 module.exports = {

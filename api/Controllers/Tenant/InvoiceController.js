@@ -201,8 +201,22 @@ async function listByType(req, res, type) {
         // A customer-portal login sees EVERY invoice cut for THEIR customer —
         // their own portal orders AND the ones the office raised for them.
         if (req.isCustomerUser) qb = qb.where('invoices.customer_id', req.customerId);
+        // "मेरे बनाए" — वैकल्पिक। न भेजा जाए तो list का पुराना व्यवहार अछूता।
+        if (req.query.mine === '1' && req.user) qb = qb.where('invoices.created_by', req.user.sub);
 
         if (status)   qb = qb.where('invoices.status', status);
+
+        // ?overdue=1 — invoices whose due date has passed. Backs the dashboard's
+        // "Overdue Invoices" tile. NOTE: payments are recorded against a PARTY,
+        // not an invoice, so this cannot net off partial receipts — it is a
+        // due-date filter, not a settlement filter.
+        const overdue = (req.query.overdue || '').toString().trim();
+        if (overdue === '1' || overdue === 'true') {
+            qb = qb.whereNotNull('invoices.due_date')
+                .whereRaw('invoices.due_date < current_date')
+                .whereNot('invoices.status', 'failed');
+        }
+
         // Approval-status filter (SFA). The Sales list + register show REAL sales
         // only — an un-approved invoice (pending/draft/rejected) must NOT appear
         // here nor count in the totals until a company-admin approves it. So:
@@ -230,8 +244,9 @@ async function listByType(req, res, type) {
         //   • last_update=1          → updated TODAY (since local midnight)
         //   • last_update=YYYY-MM-DD → updated on/after that date/datetime
         const lastUpdate = (req.query.last_update || '').toString().trim();
+        let since = null;
         if (lastUpdate) {
-            let since = lastUpdate;
+            since = lastUpdate;
             if (lastUpdate === '1') {
                 since = new Date();
                 since.setHours(0, 0, 0, 0);
@@ -295,10 +310,33 @@ async function listByType(req, res, type) {
             });
         }
 
-        return R.successResponse(res, {
+        const payload = {
             data: rows,
             meta: { total, page, per_page: perPage, grand_total: grandTotal },
-        });
+        };
+
+        // Same incremental-sync contract as the generic crud list: soft-deleted
+        // invoices never appear in `data`, so a third-party poller would never
+        // learn a voucher was removed. With ?last_update= we also return the ids
+        // deleted since the SAME cutoff, as a plain array: "deleted": [10, 1, 2].
+        // Not paginated; omitted entirely when ?last_update= is absent.
+        if (since) {
+            let delQb = (req.db || db)('invoices')
+                .where('invoices.company_id', req.companyId)
+                .where('invoices.type', type)
+                .whereNotNull('invoices.deleted_at')
+                .where('invoices.deleted_at', '>=', since);
+            // Same universe as `data`: credit/debit notes are excluded there too.
+            delQb = excludeReturns(delQb, type);
+            if (req.locationId != null)  delQb.where('invoices.location_id', req.locationId);
+            if (req.isSalesman)          delQb.where('invoices.created_by', req.user.sub);
+            if (req.isCustomerUser)      delQb.where('invoices.customer_id', req.customerId);
+            const delRows = await delQb.orderBy('invoices.deleted_at', 'desc')
+                .select('invoices.id as id');
+            payload.deleted = delRows.map((r) => Number(r.id));
+        }
+
+        return R.successResponse(res, payload);
     } catch (err) {
         console.error(`invoices.list(${type}) error:`, err);
         return R.errorResponse(res, OOPS_MSG, 500);

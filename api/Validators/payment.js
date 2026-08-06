@@ -107,6 +107,8 @@ const listPaymentSchema = Joi.object({
     date_to:   Joi.date().iso(),
     page:      Joi.number().integer().min(1).default(1),
     per_page:  Joi.number().integer().min(1).max(100).default(20),
+    // "मेरे बनाए" — वैकल्पिक। न भेजा जाए तो list का पुराना व्यवहार अछूता।
+    mine:      Joi.string().valid('1').allow('', null),
 });
 
 module.exports = {

@@ -115,6 +115,8 @@ async function listByType(req, res, type) {
 
         if (status) qb = qb.where('payments.status', status);
         if (mode)   qb = qb.where('payments.mode', mode);
+        // "मेरे बनाए" — वैकल्पिक। न भेजा जाए तो list का पुराना व्यवहार अछूता।
+        if (req.query.mine === '1' && req.user) qb = qb.where('payments.created_by', req.user.sub);
         if (dateFrom) qb = qb.where('payments.payment_date', '>=', dateFrom);
         if (dateTo)   qb = qb.where('payments.payment_date', '<=', dateTo);
 

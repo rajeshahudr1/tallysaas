@@ -39,6 +39,8 @@ async function list(req, res) {
         // वैकल्पिक: एक ही voucher family दिखाओ (Contra का अपना screen इसी से चलता है)।
         // न भेजा जाए तो सब लौटे — Journals का पुराना व्यवहार अछूता।
         if (req.query.vch_type) qb = qb.where('vch_type', req.query.vch_type);
+        // "मेरे बनाए" — वैकल्पिक। न भेजा जाए तो list का पुराना व्यवहार अछूता।
+        if (req.query.mine === '1' && req.user) qb = qb.where('created_by', req.user.sub);
         if (req.query.search) {
             const like = `%${String(req.query.search).trim()}%`;
             qb = qb.where((b) => {

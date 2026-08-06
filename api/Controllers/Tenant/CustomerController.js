@@ -224,6 +224,7 @@ const controller = crud.build({
     buildInsert,
     buildUpdate,
     extraScope:  customerExtraScope,
+    hasCreatedBy: true,
 });
 
 module.exports = {

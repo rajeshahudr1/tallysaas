@@ -61,6 +61,8 @@ async function list(req, res) {
         }
         if (dateFrom) base.where('i.invoice_date', '>=', dateFrom);
         if (dateTo)   base.where('i.invoice_date', '<=', dateTo);
+        // "मेरे बनाए" — वैकल्पिक। न भेजा जाए तो list का पुराना व्यवहार अछूता।
+        if (req.query.mine === '1' && req.user) base.where('i.created_by', req.user.sub);
         if (status === 'none')            base.whereNull('e.id');
         else if (status === 'generated')  base.where('e.irp_status', 'generated');
         else if (status === 'pending')    base.whereIn('e.irp_status', ['pending', 'generating']);
