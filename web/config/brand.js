@@ -14,20 +14,32 @@
  *                                            (keep the same path).
  *   • the brand chip icon                  → change iconClass (any Font Awesome).
  *
- * The Flutter app mirrors this at app/lib/core/brand.dart — keep the two in sync.
+ * This is ONE of FOUR brand files — one per runtime, because they can't share
+ * code: this one, api/config/brand.js, agent/brand.py, and app/lib/core/brand.dart.
+ * They must all agree. api/tests/brandConsistency.test.js pins name/tagline
+ * across all four and fails loudly if one is changed without the others.
  */
 
 module.exports = {
     // Full product name — shown in the UI and in the "<page> · <name>" titles.
-    name:      'Tally Cloud Sync',
+    name:      'Teloora',
     // Compact form for tight spaces / the PWA short_name.
-    shortName: 'Tally Cloud',
+    shortName: 'Teloora',
     // One-line description (meta description + PWA description).
-    tagline:   'Cloud accounting that syncs with Tally.',
+    tagline:   'Connected Accounting',
     // The single logo image (favicon + any <img> logo). Replace the file to swap.
     logo:      '/img/logo.svg',
     // The brand chip's Font Awesome icon class (login + sidebar badge).
-    iconClass: 'fa-solid fa-cloud',
+    iconClass: 'fa-solid fa-diagram-project',
     // Primary accent (chip gradient / theme). One knob for the brand colour.
-    color:     '#2563EB',
+    color:     '#1560E0',
+    // Full brand palette — the logo's blue→green gradient and its deep navy
+    // wordmark colour. Used by theme.css, the PDF/letterhead footer, and
+    // anywhere else that needs more than a single accent.
+    colors: {
+        navy:     '#17265E',
+        blue:     '#1560E0',
+        green:    '#45B649',
+        gradient: 'linear-gradient(135deg, #1560E0, #45B649)',
+    },
 };

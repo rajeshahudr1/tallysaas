@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Teloora logo — favicon / sidebar brand badge. Same artwork as
-  logo-mark.svg (see that file for how it was made); kept as a separate
-  file because web/config/brand.js's `logo` path and the favicon link both
-  point at /img/logo.svg specifically.
+  Teloora logo mark — square "T" chip, used for the favicon, the sidebar
+  brand badge, and the desktop-agent exe icon.
 
   NOTE: this is a hand-drawn RECREATION of the "T" glyph from the full
   Teloora banner (web/public/img/logo-full.png), not an extraction/crop of
-  that artwork. Do not mistake it for the source banner.
+  that artwork — PNG raster art can't be turned into vector paths. It is
+  built to sit close to the original's proportions and colours (deep navy
+  stem, blue→green gradient top bar) but is an independent vector redraw.
+  Do not mistake it for the source banner.
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
     <defs>
