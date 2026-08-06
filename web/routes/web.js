@@ -2908,7 +2908,7 @@ router.get('/quotations/create', async (req, res, next) => {
         ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         nextQuotationNo: 'Auto-generated on save',
 
-        pageScript: '<script src="/js/quotation.js" defer></script>',
+        pageScript: '<script src="/js/quotation.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
     });
   } catch (err) { next(err); }
 });
@@ -3031,7 +3031,7 @@ router.get('/sales-orders/create', async (req, res, next) => {
         ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         nextSalesOrderNo: 'Auto-generated on save',
 
-        pageScript: '<script src="/js/sales-order.js" defer></script>',
+        pageScript: '<script src="/js/sales-order.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
     });
   } catch (err) { next(err); }
 });
@@ -5485,6 +5485,38 @@ router.get('/reports', (req, res) => {
             ]},
         ],
     });
+});
+
+/* ── GST Search (GET /gst-search) ──────────────────────────────
+ * A GSTIN encodes its own truth — state, PAN and entity number are all
+ * derivable offline from the number itself (see api/Helpers/gstin.js).
+ * The screen just renders the shell; the actual lookup happens client-side
+ * against the forwarding route below.
+ */
+router.get('/gst-search', (req, res) => {
+    res.render('gst-search/index', {
+        title: 'GST Search',
+        activeMenu: 'gst-search',
+        breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'GST Search' }],
+    });
+});
+
+/* GET /gst/verify?gstin=… — forwards to the api's GET /gst/verify so the
+ * browser never talks to the api directly (same trick as
+ * /delivery-notes/order/:id above). Used by the GST Search screen AND by
+ * the customer form / quotation & sales-order "Create New Customer" modals
+ * for their State auto-fill. AJAX/JSON only. */
+router.get('/gst/verify', async (req, res) => {
+    try {
+        const gstin = String(req.query.gstin || '').trim().toUpperCase();
+        const result = await api.get(req, `/gst/verify?gstin=${encodeURIComponent(gstin)}`);
+        if (apiOk(result) && result.body && result.body.data) {
+            return res.json({ ok: true, data: result.body.data });
+        }
+        return res.status(422).json({ ok: false, error: apiError(result, 'Could not verify that GSTIN.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not reach the server.' });
+    }
 });
 
 /* ── REPORTS · server-rendered PDF proxy (data-only) ──────────

@@ -225,7 +225,8 @@ var headActions =
                 <div class="form-group">
                     <label class="form-label" for="cust-gst">GST Number</label>
                     <input type="text" class="form-control text-uppercase" id="cust-gst" name="gst_number"
-                           value="<%= _v('gst_number') %>" placeholder="24ABCDE1234F1Z5" maxlength="30">
+                           value="<%= _v('gst_number') %>" placeholder="24ABCDE1234F1Z5" maxlength="30"
+                           data-gst-autofill data-gst-state="#cust-state" data-gst-country="#cust-country">
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="cust-pan">PAN Number</label>
@@ -384,3 +385,4 @@ var headActions =
     });
 })();
 </script>
+<script src="/js/gst-autofill.js" defer></script>

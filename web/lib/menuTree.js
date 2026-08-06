@@ -112,7 +112,7 @@ const MENU_TREE = [
         { key: 'einvoice-gsp', label: 'e-Invoice GSP',      icon: 'fa-file-invoice-dollar', href: '/einvoice-gsp', superOnly: true, module: 'einvoice' },
     ]},
     { label: null, items: [
-        { key: 'gst-search',  label: 'GST Search',  icon: 'fa-magnifying-glass', href: '#', soon: true, module: 'gst-search' },
+        { key: 'gst-search',  label: 'GST Search',  icon: 'fa-magnifying-glass', href: '/gst-search', module: 'gst-search' },
         { key: 'data-backup', label: 'Data Backup', icon: 'fa-cloud-arrow-up',   href: '#', soon: true, module: 'data-backup' },
     ]},
 ];

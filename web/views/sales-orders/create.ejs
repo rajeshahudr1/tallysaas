@@ -286,7 +286,8 @@ var _today = new Date().toISOString().slice(0, 10);
                     <div class="form-grid form-grid--3col">
                         <div class="form-group">
                             <label class="form-label" for="so-nc-gst">GST Number</label>
-                            <input type="text" class="form-control text-uppercase" id="so-nc-gst" maxlength="30">
+                            <input type="text" class="form-control text-uppercase" id="so-nc-gst" maxlength="30"
+                                   data-gst-autofill data-gst-state="#so-nc-state" data-gst-country="#so-nc-country">
                         </div>
                         <div class="form-group">
                             <label class="form-label" for="so-nc-name">Ledger Name<span class="req">*</span></label>

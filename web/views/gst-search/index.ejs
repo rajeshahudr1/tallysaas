@@ -1,0 +1,139 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/gst-search/index.ejs — GET /gst-search.
+ *
+ * A big GSTIN input + Search button, and two clearly separate result
+ * sections:
+ *   1. "What the GSTIN itself tells you" — valid/invalid, state, PAN,
+ *      entity number. Computed offline from the number's own characters,
+ *      so this ALWAYS shows.
+ *   2. "What a lookup service would add" — legal name, trade name,
+ *      address, registration status. No such service is configured in
+ *      this build, so this section says so plainly instead of showing
+ *      empty boxes or a "—" that could be mistaken for real (empty) data.
+ * ─────────────────────────────────────────────────────────── */
+%>
+
+<%- include('../partials/page-head', {
+    title: 'GST Search',
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'GST Search' }],
+}) %>
+
+<div class="card form-card">
+    <div class="form-card-body">
+        <div class="form-group" style="max-width:520px;">
+            <label class="form-label" for="gst-search-input">GSTIN</label>
+            <div class="d-flex gap-2">
+                <input type="text" class="form-control text-uppercase" id="gst-search-input"
+                       placeholder="e.g. 27AAPFU0939F1ZV" maxlength="15" autocomplete="off"
+                       style="font-size:1.1rem; letter-spacing:0.5px;">
+                <button type="button" class="btn btn-primary" id="gst-search-btn">
+                    <i class="fa-solid fa-magnifying-glass me-1"></i>Search
+                </button>
+            </div>
+            <div class="form-hint" id="gst-search-error" style="display:none; color:var(--bs-danger,#dc3545);"></div>
+        </div>
+
+        <div id="gst-search-results" style="display:none;">
+            <hr class="form-divider">
+
+            <h6 class="mb-3">From the GSTIN itself</h6>
+            <div class="form-grid mb-4">
+                <div class="form-group">
+                    <label class="form-label">Status</label>
+                    <div id="gst-r-status" class="fw-semibold"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">State</label>
+                    <div id="gst-r-state"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">PAN</label>
+                    <div id="gst-r-pan"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Entity Number</label>
+                    <div id="gst-r-entity"></div>
+                </div>
+            </div>
+
+            <h6 class="mb-3">From a lookup service</h6>
+            <div id="gst-r-lookup" class="form-hint"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    var input   = document.getElementById('gst-search-input');
+    var btn     = document.getElementById('gst-search-btn');
+    var errBox  = document.getElementById('gst-search-error');
+    var results = document.getElementById('gst-search-results');
+    var elStatus = document.getElementById('gst-r-status');
+    var elState  = document.getElementById('gst-r-state');
+    var elPan    = document.getElementById('gst-r-pan');
+    var elEntity = document.getElementById('gst-r-entity');
+    var elLookup = document.getElementById('gst-r-lookup');
+
+    function setError(msg) {
+        errBox.textContent = msg || '';
+        errBox.style.display = msg ? '' : 'none';
+    }
+
+    function describeShapeProblem(gstin) {
+        if (!gstin) return 'Enter a GSTIN.';
+        if (gstin.length !== 15) return 'A GSTIN is exactly 15 characters — this one has ' + gstin.length + '.';
+        if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstin)) {
+            return 'That does not match the GSTIN pattern (2 digits, 5 letters, 4 digits, 1 letter, entity number, "Z", check digit).';
+        }
+        return 'The check digit does not match the rest of the GSTIN — please re-check what was typed.';
+    }
+
+    function search() {
+        var gstin = (input.value || '').trim().toUpperCase();
+        setError('');
+        results.style.display = 'none';
+        if (!gstin) { setError('Enter a GSTIN.'); return; }
+
+        fetch('/gst/verify?gstin=' + encodeURIComponent(gstin))
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                if (!j || !j.ok || !j.data) {
+                    setError((j && j.error) || 'Could not verify that GSTIN.');
+                    return;
+                }
+                var data = j.data;
+                results.style.display = '';
+                if (data.valid && data.decoded) {
+                    elStatus.textContent = 'Valid';
+                    elStatus.style.color = 'var(--bs-success,#198754)';
+                    elState.textContent = data.decoded.stateName || ('Unknown state code (' + data.decoded.stateCode + ')');
+                    elPan.textContent = data.decoded.pan;
+                    elEntity.textContent = data.decoded.entityNumber;
+                } else {
+                    elStatus.textContent = 'Invalid — ' + describeShapeProblem(gstin);
+                    elStatus.style.color = 'var(--bs-danger,#dc3545)';
+                    elState.textContent = '';
+                    elPan.textContent = '';
+                    elEntity.textContent = '';
+                }
+                var lookup = data.lookup || {};
+                if (lookup.available) {
+                    // A real provider would render legal name / trade name /
+                    // address / registration status here.
+                    elLookup.textContent = JSON.stringify(lookup);
+                } else {
+                    elLookup.textContent = 'Legal name, trade name, address and registration status are not available — no GSTIN lookup service is configured for this account.';
+                }
+            })
+            .catch(function () {
+                setError('Could not reach the server.');
+            });
+    }
+
+    btn.addEventListener('click', search);
+    input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); search(); }
+    });
+})();
+</script>

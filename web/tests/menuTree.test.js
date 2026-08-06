@@ -167,3 +167,10 @@ test('every My Entries item is live, not "Soon"', () => {
         assert.strictEqual(byKey[k].soon, undefined, `${k} still soon`);
     }
 });
+
+test('GST Search is live in the menu, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['gst-search'].soon, undefined, 'GST Search still soon');
+    assert.strictEqual(byKey['gst-search'].href, '/gst-search');
+});
