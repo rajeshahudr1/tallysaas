@@ -35,6 +35,7 @@ from logger import get_logger
 from api_client import ApiClient, ActivationError, AgentError
 from tally_connector import TallyConnector, TallyUnavailable
 import tally_control
+import backup_runner
 
 
 # Exit codes (POSIX-ish): 0 ok, non-zero = startup/activation failure.
@@ -452,6 +453,139 @@ def _tally_ini_path(cfg: Config, exe: Optional[str]) -> Optional[str]:
     return os.path.join(os.path.dirname(exe), "tally.ini")
 
 
+# --------------------------------------------------------------------------- #
+# Data Backup (Task 2 — the agent side of Task 1's cloud endpoints)
+# --------------------------------------------------------------------------- #
+# When the most recent backup ran, in this process's memory only. A restart
+# forgets it, which at worst causes one extra scheduled run shortly after
+# restart (due_now still gates on the scheduled time of day) — never a data
+# loss risk, since old copies are only ever removed AFTER a new one finishes.
+_LAST_BACKUP_RUN_AT: Optional[datetime.datetime] = None
+
+
+def _run_one_backup(cfg: Config, logger, api: ApiClient,
+                    reason: str = "scheduled") -> Optional[dict]:
+    """Run exactly one backup (if a destination is configured) and report it.
+
+    Resolves Tally's data folder the SAME way the rest of the agent does
+    (``tally_control._read_data_path`` off ``tally.ini`` — no second method),
+    runs :func:`backup_runner.run_backup`, and reports the outcome to
+    ``POST /agent/backup-runs`` regardless of whether it succeeded, was
+    partial, or failed — a customer relying on this backup needs to see EVERY
+    outcome, not just the good ones.
+
+    Returns the result dict, or ``None`` when there is no token or no
+    destination configured (nothing to report in that case). Never raises:
+    every step is wrapped so a backup problem can never take down the sync
+    loop (mirrors every other command handler in this module).
+    """
+    global _LAST_BACKUP_RUN_AT
+    token = cfg.get_token()
+    if not token:
+        return None
+
+    try:
+        settings = api.get_backup_settings(token)
+    except AgentError as exc:
+        logger.warning("Backup (%s): could not fetch backup settings: %s", reason, exc)
+        return None
+
+    destination = str(settings.get("destination_path") or "").strip()
+    if not destination:
+        logger.debug("Backup (%s): no destination configured - skipping.", reason)
+        return None
+
+    keep_copies = settings.get("keep_copies", 7)
+
+    exe = _find_tally_exe(cfg)
+    ini_path = _tally_ini_path(cfg, exe)
+    data_path = tally_control._read_data_path(ini_path) if ini_path else None
+
+    started_at = datetime.datetime.utcnow()
+    if not data_path:
+        logger.warning("Backup (%s): could not resolve Tally data path from tally.ini.", reason)
+        result = {
+            "status": "failed",
+            "files_copied": 0, "files_skipped": 0, "bytes_copied": 0,
+            "skipped": [], "destination": None,
+            "error": "Could not resolve the Tally data folder (tally.ini Data=).",
+        }
+    else:
+        echo(f"[backup] Starting backup ({reason}) -> {destination}")
+        try:
+            result = backup_runner.run_backup(data_path, destination, keep_copies, logger)
+        except Exception as exc:  # backup_runner is best-effort by contract, but be defensive.
+            logger.error("Backup (%s): unexpected error: %s", reason, exc)
+            result = {
+                "status": "failed",
+                "files_copied": 0, "files_skipped": 0, "bytes_copied": 0,
+                "skipped": [], "destination": None,
+                "error": "agent error: " + str(exc)[:200],
+            }
+    finished_at = datetime.datetime.utcnow()
+    _LAST_BACKUP_RUN_AT = datetime.datetime.now()
+
+    status = result.get("status")
+    if status == "success":
+        logger.info("Backup (%s): success - %d file(s), %d byte(s).",
+                    reason, result.get("files_copied", 0), result.get("bytes_copied", 0))
+        echo(f"[backup] Success - {result.get('files_copied', 0)} file(s) copied.")
+    elif status == "partial":
+        logger.warning("Backup (%s): PARTIAL - %d copied, %d skipped: %s",
+                       reason, result.get("files_copied", 0), result.get("files_skipped", 0),
+                       result.get("skipped"))
+        echo(f"[backup] Partial - {result.get('files_skipped', 0)} file(s) could not be read.")
+    else:
+        logger.error("Backup (%s): FAILED - %s", reason, result.get("error"))
+        echo(f"[backup] Failed - {result.get('error')}")
+
+    try:
+        api.record_backup_run(
+            token,
+            started_at=started_at.isoformat(),
+            finished_at=finished_at.isoformat(),
+            status=status,
+            files_copied=result.get("files_copied", 0),
+            files_skipped=result.get("files_skipped", 0),
+            bytes_copied=result.get("bytes_copied", 0),
+            destination=result.get("destination"),
+            skipped_list=result.get("skipped") or [],
+            error=result.get("error"),
+        )
+    except Exception as exc:  # reporting must never break the loop either.
+        logger.warning("Backup (%s): could not report run result to cloud: %s", reason, exc)
+
+    return result
+
+
+def _maybe_run_scheduled_backup(cfg: Config, logger, api: ApiClient) -> None:
+    """Once per cycle, check the backup schedule and run it if due.
+
+    Best-effort + fully isolated (like every command handler here): a backup
+    failure of any kind is logged and reported, never raised, so it can never
+    stop the normal push/pull sync.
+    """
+    token = cfg.get_token()
+    if not token:
+        return
+    try:
+        settings = api.get_backup_settings(token)
+    except AgentError as exc:
+        logger.debug("Scheduled backup: could not fetch settings: %s", exc)
+        return
+    try:
+        due = backup_runner.due_now(settings, _LAST_BACKUP_RUN_AT, datetime.datetime.now())
+    except Exception as exc:  # a bad settings shape must never crash the cycle.
+        logger.warning("Scheduled backup: due_now check failed: %s", exc)
+        return
+    if not due:
+        return
+    try:
+        _run_one_backup(cfg, logger, api, reason="scheduled")
+    except Exception as exc:  # absolute backstop - scheduled backup never raises out.
+        logger.error("Scheduled backup: unexpected error: %s", exc)
+
+
 def _dispatch_commands(cfg: Config, logger, api: ApiClient) -> bool:
     """Poll the cloud command channel and run each queued command.
 
@@ -518,6 +652,27 @@ def _dispatch_commands(cfg: Config, logger, api: ApiClient) -> bool:
                      "re-importing from Tally this cycle).")
                 api.command_result(token, cmd_id, "done",
                                    result="pull watermark reset; re-importing this cycle")
+                continue
+
+            if ctype == "backup_now":
+                # "Backup now" from the web — run one backup immediately,
+                # regardless of the schedule, and report the real outcome
+                # (success/partial/failed) back as this command's result too
+                # so the web click gets an honest answer, not just "done".
+                echo("[cmd] Backup requested by the cloud - running now.")
+                outcome = _run_one_backup(cfg, logger, api, reason="manual")
+                if outcome is None:
+                    api.command_result(token, cmd_id, "failed",
+                                       error="backup destination is not configured")
+                elif outcome.get("status") == "failed":
+                    api.command_result(token, cmd_id, "failed",
+                                       error=outcome.get("error") or "backup failed")
+                else:
+                    api.command_result(
+                        token, cmd_id, "done",
+                        result=f"{outcome.get('status')}: "
+                               f"{outcome.get('files_copied', 0)} file(s) copied, "
+                               f"{outcome.get('files_skipped', 0)} skipped")
                 continue
 
             if ctype != "open_company":
@@ -652,6 +807,14 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
     # cycle EVEN when the AUTO pull toggle is OFF - a manual action must always
     # work (the cloud reset the watermark; this consumes it now).
     pull_now = _dispatch_commands(cfg, logger, api)
+
+    # 2c) Scheduled data backup - checked once per cycle, isolated from the
+    # rest of the cycle so a backup problem never stops syncing.
+    try:
+        _maybe_run_scheduled_backup(cfg, logger, api)
+    except Exception as exc:  # never let a backup problem break the cycle.
+        logger.error("Scheduled backup check failed unexpectedly: %s", exc)
+
     if pull_now:
         # The cloud reset only the MASTERS watermark; vouchers keep a separate
         # LOCAL cursor, so clear it too — else "Sync from Tally" re-imports masters

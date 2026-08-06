@@ -562,6 +562,56 @@ class ApiClient:
         self.log.info("Downloaded update OK (%d bytes) -> %s", written, dest_path)
         return True
 
+    # ------------------------------------------------------------------ #
+    # Data Backup (Task 2 — the agent side of Task 1's cloud endpoints)
+    # ------------------------------------------------------------------ #
+    def get_backup_settings(self, agent_token: str) -> dict[str, Any]:
+        """Fetch this license's backup intent (enabled/destination/schedule).
+
+        GETs ``{api_url}/agent/backup-settings`` (Bearer agent_token). Returns
+        the ``data`` dict: ``{enabled, destination_path, frequency, run_at,
+        keep_copies}``. Raises :class:`AgentError` on transport/non-200 so the
+        caller can skip this cycle's schedule check rather than guess.
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        try:
+            resp = self._get("agent/backup-settings", headers=headers)
+        except requests.RequestException as exc:
+            self.log.warning("Backup-settings transport error: %s", exc)
+            raise AgentError("Cannot reach the cloud server.") from exc
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            raise AgentError(body.get("msg", "Could not fetch backup settings."))
+        return body.get("data") or {}
+
+    def record_backup_run(self, agent_token: str, **fields: Any) -> bool:
+        """Report the outcome of one backup run (success, partial, or failed).
+
+        POSTs ``fields`` (``status``, ``files_copied``, ``files_skipped``,
+        ``bytes_copied``, ``destination``, ``skipped_list``, ``error``,
+        ``started_at``, ``finished_at``) to ``{api_url}/agent/backup-runs``
+        (Bearer agent_token). Best-effort: returns ``True`` when the cloud
+        accepted it, ``False`` on any transport/non-200 failure — never
+        raises, so a failed report can never be mistaken for a failed backup
+        or crash the sync loop.
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        try:
+            resp = self._post("agent/backup-runs", json=fields, headers=headers)
+        except requests.RequestException as exc:
+            self.log.warning("Backup-run report transport error: %s", exc)
+            return False
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            self.log.warning(
+                "Backup-run report rejected (status=%s): %s",
+                body.get("status"), body.get("msg", "?"),
+            )
+            return False
+        return True
+
     @staticmethod
     def _remove_quietly(path: str) -> None:
         """Best-effort delete of a partial/failed download (never raises)."""
