@@ -1036,12 +1036,12 @@ async function pending(req, res) {
             .leftJoin('products', 'products.id', 'stock_adjustments.product_id')
             .select('stock_adjustments.company_id', 'stock_adjustments.voucher_no',
                     'stock_adjustments.adjustment_date', 'stock_adjustments.after_qty',
-                    'stock_adjustments.notes', 'products.name as product_name');
+                    'stock_adjustments.godown', 'products.name as product_name');
         const physicalStockByVoucher = physicalStockRows.reduce((acc, r) => {
             const key = `${r.company_id}::${r.voucher_no}`;
             (acc[key] = acc[key] || { company_id: r.company_id, voucher_no: r.voucher_no,
                                        date: r.adjustment_date, items: [] })
-                .items.push({ item: r.product_name || 'Item', godown: r.notes || '', qty: Number(r.after_qty) || 0 });
+                .items.push({ item: r.product_name || 'Item', godown: r.godown || '', qty: Number(r.after_qty) || 0 });
             return acc;
         }, {});
         const physicalStockVouchers = Object.values(physicalStockByVoucher)

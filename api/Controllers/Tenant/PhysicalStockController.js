@@ -143,10 +143,16 @@ async function get(req, res) {
             voucher_no: voucherNo,
             count_date: items[0].adjustment_date,
             created_by: items[0].created_by,
-            // create() writes the sheet's narration into every line's `notes`
-            // when one was given (see create()'s comment) — the first line's
-            // value is the sheet's narration.
-            narration:  items[0].notes || null,
+            // `notes` now holds only the sheet's narration (see create()).
+            // Sheets written before the godown/notes split still have their
+            // line's godown sitting in `notes` — there is no way to tell
+            // those old rows apart from a real narration by inspection, so
+            // we deliberately do NOT surface `notes` as narration for rows
+            // that predate the split (godown column is NULL there); doing so
+            // would misreport an old godown as if it were a narration. New
+            // sheets (godown populated, or no lines at all) surface it
+            // normally.
+            narration:  items[0].godown != null ? (items[0].notes || null) : null,
             items,
         });
     } catch (err) {
@@ -161,11 +167,10 @@ async function create(req, res) {
         const items = normaliseCounts(body.items || []);
         const createdBy = req.user && req.user.sub ? req.user.sub : null;
         // The sheet's narration (accepted by Validators/stockVoucher.js's
-        // createPhysicalStockSchema but, until now, never written anywhere —
-        // it silently vanished). stock_adjustments has no dedicated narration
-        // column, so it is stored in the same `notes` column each line already
-        // uses for its godown — but ONLY when a narration was actually given,
-        // so a sheet with none keeps behaving exactly as before.
+        // createPhysicalStockSchema). It is stored in `notes` on every line;
+        // each line's own godown now has its own dedicated `godown` column
+        // (see 20260806140000_stock_adjustments_godown.js) so the two no
+        // longer collide/overwrite each other.
         const narration = (body.notes && String(body.notes).trim()) || null;
         const effectiveLocationId = req.locationId != null
             ? req.locationId
@@ -210,7 +215,8 @@ async function create(req, res) {
                     before_qty:      before,
                     after_qty:       after,
                     reason:          'Physical Stock',
-                    notes:           narration || it.godown || null,
+                    notes:           narration,
+                    godown:          it.godown || null,
                     voucher_no:      voucherNo,
                     voucher_kind:    'physical_stock',
                     // New sheets are pushable to Tally as soon as they are
