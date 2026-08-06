@@ -36,6 +36,8 @@ var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
     <!-- PWA -->
     <link rel="manifest" href="/manifest.webmanifest">
     <link rel="icon" type="image/svg+xml" href="<%= _brand.logo %>">
+    <!-- .ico fallback: Safari and older Windows browsers ignore the SVG icon. -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" sizes="any">
     <link rel="apple-touch-icon" href="/icons/icon-192.svg">
 
     <!-- Inter (Google Fonts) -->
