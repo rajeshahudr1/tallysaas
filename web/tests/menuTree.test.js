@@ -154,3 +154,16 @@ test('Stock Journal and Physical Stock are live, not "Soon"', () => {
     assert.strictEqual(byKey['new-phys-stock'].soon, undefined);
     assert.strictEqual(byKey['new-phys-stock'].href, '/physical-stock/create');
 });
+
+test('every My Entries item is live, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['my-vouchers'].href, '/my/vouchers');
+    assert.strictEqual(byKey['my-eway'].href, '/einvoices?mine=1&kind=eway');
+    assert.strictEqual(byKey['my-einvoices'].href, '/einvoices?mine=1');
+    assert.strictEqual(byKey['my-parties'].href, '/customers?mine=1');
+    assert.strictEqual(byKey['my-stock'].href, '/products?mine=1');
+    for (const k of ['my-vouchers', 'my-eway', 'my-einvoices', 'my-parties', 'my-stock']) {
+        assert.strictEqual(byKey[k].soon, undefined, `${k} still soon`);
+    }
+});

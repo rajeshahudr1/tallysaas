@@ -1,0 +1,135 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/my-entries/vouchers.ejs — My Entries · My Vouchers.
+ * Route: GET /my/vouchers. activeMenu: 'my-vouchers'.
+ *
+ * A read-only roll-up of every voucher family the current user created
+ * (api/Controllers/Tenant/MyEntriesController.js — GET /my/vouchers, a
+ * UNION ALL across VOUCHER_SOURCES). No action buttons — this is a "see
+ * what I made" screen, not a "manage" screen; row click opens that
+ * voucher's real screen (routes/web.js decides the href from `kind`).
+ *
+ * Expected locals (routes/web.js → res.render):
+ *   voucherRows    [ { kind, label, date, voucher_no, party, amount, status, href } ]
+ *   vouchersTotal  number
+ *   page, perPage  numbers
+ * ─────────────────────────────────────────────────────────── */
+
+var _rows    = (typeof voucherRows !== 'undefined' && voucherRows) ? voucherRows : [];
+var _total   = (typeof vouchersTotal !== 'undefined') ? vouchersTotal : _rows.length;
+var _page    = (typeof page !== 'undefined' && page) ? page : 1;
+var _perPage = (typeof perPage !== 'undefined' && perPage) ? perPage : 20;
+
+/* ── FilterCard config ──────────────────────────────────────── */
+var filterFields = [
+    { type: 'text', name: 'search', label: 'Search', placeholder: 'Voucher no / party...', colClass: 'filter-col-fifth' },
+];
+
+var KIND_PILL_CLASS = {
+    quotation:        'pill-status--info',
+    sales_order:      'pill-status--info',
+    purchase_order:   'pill-status--warning',
+    delivery_note:    'pill-status--info',
+    receipt_note:     'pill-status--warning',
+    sales_invoice:    'pill-status--success',
+    purchase_invoice: 'pill-status--warning',
+    receipt_voucher:  'pill-status--success',
+    payment_voucher:  'pill-status--warning',
+    journal:          'pill-status--muted',
+};
+function _kindPillClass(k) {
+    return KIND_PILL_CLASS[k] || 'pill-status--muted';
+}
+function _inr(v) {
+    var n = Number(v || 0);
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+%>
+
+<%- include('../partials/page-head', {
+    title: 'My Vouchers',
+    infoKey: 'my-vouchers',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'My Vouchers' },
+    ],
+}) %>
+
+<form id="my-vouchers-filters-form" autocomplete="off" method="get" action="/my/vouchers">
+    <%- include('../partials/filter-card', {
+        filterId: 'my-vouchers-filters',
+        title: 'Advanced Filters',
+        fields: filterFields,
+        collapsed: true,
+    }) %>
+</form>
+
+<div class="card">
+
+    <div class="table-toolbar">
+        <label class="toolbar-show mb-0">
+            <span>Show</span>
+            <select class="form-select form-select-sm" aria-label="Rows per page">
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+            </select>
+            <span>entries</span>
+        </label>
+    </div>
+
+    <div class="table-responsive data-table-wrap">
+        <table class="table data-table align-middle mb-0" id="my-vouchers-table">
+            <thead>
+                <tr>
+                    <th class="data-table-idx">#</th>
+                    <th>Type</th>
+                    <th>Date</th>
+                    <th>Voucher No</th>
+                    <th>Party</th>
+                    <th class="text-end">Amount</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr>
+                        <td class="data-table-empty text-center text-muted py-5" colspan="7">
+                            <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
+                            You haven't created any vouchers yet.
+                        </td>
+                    </tr>
+                <% } %>
+                <% _rows.forEach(function (r, i) { %>
+                    <tr class="my-voucher-row" data-href="<%= r.href %>" style="cursor:pointer">
+                        <td class="data-table-idx text-muted"><%= i + 1 %></td>
+                        <td><a class="pill-status <%= _kindPillClass(r.kind) %>" href="<%= r.href %>"><%= r.label %></a></td>
+                        <td><%= r.date %></td>
+                        <td><a href="<%= r.href %>"><%= r.voucher_no %></a></td>
+                        <td><%= r.party %></td>
+                        <td class="text-end"><span class="data-table-money"><%= _inr(r.amount) %></span></td>
+                        <td><span class="pill-status pill-status--muted"><%= r.status %></span></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+
+    <%- include('../partials/pagination', {
+        page: _page,
+        perPage: _perPage,
+        total: _total,
+    }) %>
+
+</div>
+
+<script>
+document.querySelectorAll('#my-vouchers-table tbody tr.my-voucher-row').forEach(function (tr) {
+    tr.addEventListener('click', function (e) {
+        if (e.target.closest('a')) return; // let the inner links navigate normally
+        var href = tr.getAttribute('data-href');
+        if (href && href !== '#') window.location.href = href;
+    });
+});
+</script>

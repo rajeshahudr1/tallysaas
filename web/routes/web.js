@@ -2172,7 +2172,9 @@ router.post('/suppliers', async (req, res, next) => {
 /* ── MASTERS · Products listing (GET /products) ─────────────── */
 router.get('/products', async (req, res, next) => {
     try {
-        const { rows, meta } = await apiList(req, '/products');
+        const mineRaw = String(req.query.mine || '');
+        const mine = mineRaw === '1' || mineRaw.toLowerCase() === 'true';
+        const { rows, meta } = await apiList(req, mine ? '/products?mine=1' : '/products');
         const config = await fetchConfig(req, ['gst_rates']);
         const catOpts = await fetchOptions(req, '/categories');   // real org categories
         const productRows = rows.map((r) => {
@@ -2207,11 +2209,11 @@ router.get('/products', async (req, res, next) => {
             };
         });
         res.render('products/list', {
-            title: 'Products',
-            activeMenu: 'products',
-            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Products' }],
+            title: mine ? 'My Stock Items' : 'Products',
+            activeMenu: mine ? 'my-stock' : 'products',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: mine ? 'My Stock Items' : 'Products' }],
             productRows, productsTotal: meta.total, page: meta.page, perPage: meta.per_page,
-            categoryNames: catOpts.map((o) => o.name), ...config,
+            categoryNames: catOpts.map((o) => o.name), mine, ...config,
         });
     } catch (err) { next(err); }
 });
@@ -2586,6 +2588,54 @@ router.get('/sales-invoices', async (req, res, next) => {
         invoiceStatuses: mock.invoiceStatuses,
     });
   } catch (err) { next(err); }
+});
+
+/* ── My Entries · My Vouchers (GET /my/vouchers) ──────────────────
+ * Aggregated read-only roll-up of every voucher family the current user
+ * created (api/Controllers/Tenant/MyEntriesController.js — UNION ALL across
+ * VOUCHER_SOURCES). `kind` on each row decides where a click lands: kinds
+ * with a real per-record edit page (quotation, sales_invoice) go straight
+ * there; every other kind has no per-record page in this app (their lists
+ * use an inline modal, not a route), so those land on that family's list.
+ * No action buttons here — this is a "see what I made", not a "manage" screen. */
+const MY_VOUCHER_KIND_HREF = {
+    quotation:         (id) => `/quotations/${id}/edit`,
+    sales_order:        ()  => '/sales-orders',
+    purchase_order:      () => '/purchase-orders',
+    delivery_note:       () => '/delivery-notes',
+    receipt_note:        () => '/receipt-notes',
+    sales_invoice:      (id) => `/sales-invoices/${id}/edit`,
+    purchase_invoice:    () => '/purchase-invoices',
+    receipt_voucher:     () => '/receipts',
+    payment_voucher:     () => '/payments',
+    journal:             () => '/journals',
+};
+router.get('/my/vouchers', async (req, res, next) => {
+    try {
+        const { rows, meta } = await apiList(req, '/my/vouchers');
+        const voucherRows = rows.map((r) => {
+            const hrefFn = MY_VOUCHER_KIND_HREF[r.kind];
+            return {
+                kind: r.kind,
+                label: r.label,
+                date: fmtDate(r.date),
+                voucher_no: r.voucher_no,
+                party: r.party || '',
+                amount: r.amount,
+                status: r.status || '',
+                href: hrefFn ? hrefFn(r.id) : '#',
+            };
+        });
+        res.render('my-entries/vouchers', {
+            title: 'My Vouchers',
+            activeMenu: 'my-vouchers',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'My Vouchers' }],
+            voucherRows,
+            vouchersTotal: meta.total,
+            page: meta.page,
+            perPage: meta.per_page,
+        });
+    } catch (err) { next(err); }
 });
 
 /* ── TRANSACTIONS · Quotations (list) ─────────────────────────
@@ -6070,25 +6120,40 @@ router.post('/bank-reconciliation/:id/ignore',  _bankAction('ignore',  'Ignored.
 router.post('/bank-reconciliation/:id/delete',  _bankAction('delete',  'Line deleted.',  'Could not delete.'));
 
 /* ── e-Invoice & e-Way Bill ── */
+/* `?mine=1` is the "My eInvoices" entry (My Entries menu); `?kind=eway` (only
+ * meaningful together with mine=1, "My eWay Bills") maps onto the einvoices
+ * list's existing `status=eway` filter (see EInvoiceController.list — status
+ * === 'eway' → whereNotNull('e.ewb_no')), the only real distinction the api
+ * has between an e-Way Bill and a plain e-Invoice row: both live in the same
+ * `einvoices` table, an e-Way Bill is just a row that also has an ewb_no. If
+ * the caller already passed an explicit `status`, that wins over `kind`. */
 router.get('/einvoices', async (req, res, next) => {
     try {
+        const mineRaw = String(req.query.mine || '');
+        const mine = mineRaw === '1' || mineRaw.toLowerCase() === 'true';
+        const kind = String(req.query.kind || '').trim();
+        const status = req.query.status ? String(req.query.status) : (kind === 'eway' ? 'eway' : '');
+
         const qs = new URLSearchParams();
         if (req.query.page) qs.set('page', req.query.page);
         if (req.query.per_page) qs.set('per_page', req.query.per_page);
         if (req.query.search) qs.set('search', req.query.search);
-        if (req.query.status) qs.set('status', req.query.status);
+        if (status) qs.set('status', status);
         if (req.query.date_from) qs.set('date_from', req.query.date_from);
         if (req.query.date_to) qs.set('date_to', req.query.date_to);
+        if (mine) qs.set('mine', '1');
         const r = await api.get(req, '/einvoices' + (qs.toString() ? `?${qs}` : ''));
         const d = (r.body && r.body.data) || {};
         const meta = d.meta || {};
+        const pageTitle = mine ? (kind === 'eway' ? 'My eWay Bills' : 'My eInvoices') : 'e-Invoice & e-Way Bill';
         res.render('einvoices/index', {
-            title: 'e-Invoice & e-Way Bill', activeMenu: 'einvoice',
-            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'e-Invoice' }],
+            title: pageTitle, activeMenu: mine ? (kind === 'eway' ? 'my-eway' : 'my-einvoices') : 'einvoice',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: pageTitle }],
             rows: Array.isArray(d.data) ? d.data : [], gspConfigured: !!d.gsp_configured,
             total: meta.total || 0, page: meta.page || 1, perPage: meta.per_page || 20,
             search: req.query.search || '',
-            statusFilter: req.query.status || '', dateFrom: req.query.date_from || '', dateTo: req.query.date_to || '',
+            statusFilter: status, dateFrom: req.query.date_from || '', dateTo: req.query.date_to || '',
+            mine, kind,
         });
     } catch (err) { next(err); }
 });
@@ -6496,9 +6561,12 @@ router.get('/settings', async (req, res, next) => {
  * with a flash-free fallback. */
 router.get('/customers', async (req, res, next) => {
     try {
+        const mineRaw = String(req.query.mine || '');
+        const mine = mineRaw === '1' || mineRaw.toLowerCase() === 'true';
         const page    = Math.max(1, parseInt(req.query.page, 10) || 1);
         const perPage = parseInt(req.query.per_page, 10) || 10;
         const qs = new URLSearchParams({ page: String(page), per_page: String(perPage) });
+        if (mine) qs.set('mine', '1');
         if (req.query.search) qs.set('search', String(req.query.search));
         if (req.query.status) qs.set('status', String(req.query.status));
         if (req.query.sort)   qs.set('sort',  String(req.query.sort));
@@ -6565,17 +6633,18 @@ router.get('/customers', async (req, res, next) => {
         }));
 
         res.render('customers/list', {
-            title: 'Customers',
-            activeMenu: 'customers',
+            title: mine ? 'My Parties' : 'Customers',
+            activeMenu: mine ? 'my-parties' : 'customers',
             breadcrumb: [
                 { label: 'Dashboard', href: '/' },
-                { label: 'Customers' },
+                { label: mine ? 'My Parties' : 'Customers' },
             ],
 
             customers,
             customersTotal: meta.total,
             page:           meta.page,
             perPage:        meta.per_page,
+            mine,
 
             // Filter dropdown option sources — REAL org data.
             locations:      locOpts.map((o) => o.name),

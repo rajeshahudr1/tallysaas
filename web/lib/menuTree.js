@@ -81,12 +81,12 @@ const MENU_TREE = [
         { key: 'analytics', label: 'Business Analytics', icon: 'fa-chart-pie',    href: '/analytics', module: 'reports' },
     ]},
     { label: 'My Entries', icon: 'fa-square-check', items: [
-        { key: 'my-vouchers',   label: 'My Vouchers',    icon: 'fa-file-lines',        href: '#', soon: true, module: 'field-sales' },
+        { key: 'my-vouchers',   label: 'My Vouchers',    icon: 'fa-file-lines',        href: '/my/vouchers', module: 'field-sales' },
         { key: 'my-quotations', label: 'My Quotations',  icon: 'fa-file-signature',    href: '/quotations?mine=1', module: 'quotations' },
-        { key: 'my-eway',       label: 'My eWay Bills',  icon: 'fa-truck-fast',        href: '#', soon: true, module: 'field-sales' },
-        { key: 'my-einvoices',  label: 'My eInvoices',   icon: 'fa-file-circle-check', href: '#', soon: true, module: 'field-sales' },
-        { key: 'my-parties',    label: 'My Parties',     icon: 'fa-address-book',      href: '#', soon: true, module: 'field-sales' },
-        { key: 'my-stock',      label: 'My Stock Items', icon: 'fa-boxes-stacked',     href: '#', soon: true, module: 'field-sales' },
+        { key: 'my-eway',       label: 'My eWay Bills',  icon: 'fa-truck-fast',        href: '/einvoices?mine=1&kind=eway', module: 'field-sales' },
+        { key: 'my-einvoices',  label: 'My eInvoices',   icon: 'fa-file-circle-check', href: '/einvoices?mine=1', module: 'field-sales' },
+        { key: 'my-parties',    label: 'My Parties',     icon: 'fa-address-book',      href: '/customers?mine=1', module: 'field-sales' },
+        { key: 'my-stock',      label: 'My Stock Items', icon: 'fa-boxes-stacked',     href: '/products?mine=1', module: 'field-sales' },
         { key: 'field-tracking', label: 'Tracking Report', icon: 'fa-map-location-dot', href: '/field-tracking', approve: true, module: 'field-sales' },
     ]},
     { label: 'Field Sales', icon: 'fa-location-dot', items: [
