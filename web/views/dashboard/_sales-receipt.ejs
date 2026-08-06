@@ -1,0 +1,69 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * dashboard/_sales-receipt.ejs — the Sales & Receipt panel.
+ *
+ * Rendered inside dashboard/index.ejs and on its own by
+ * GET /dashboard/section?section=salesreceipt, so it guards its own
+ * locals and carries its OWN chart-data island — after an AJAX swap
+ * dashboard.js re-reads that island and rebuilds the chart.
+ * ─────────────────────────────────────────────────────────── */
+var _sr = (typeof salesReceipt !== 'undefined' && salesReceipt) ? salesReceipt : {
+    total_sales: '₹0', total_receipt: '₹0',
+    sales_this_month: '₹0', receipt_this_month: '₹0',
+    sales_delta: null, receipt_delta: null,
+};
+// The range <select> is the Summary panel's control, reused verbatim so both
+// headers always show the same period off one source of truth.
+var _rangeControl = (typeof summaryPanel !== 'undefined' && summaryPanel && summaryPanel.control)
+    ? summaryPanel.control : '';
+var _srChart = (typeof salesReceiptChart !== 'undefined' && salesReceiptChart)
+    ? salesReceiptChart : { labels: [], sales: [], receipt: [] };
+%>
+<div class="card chart-card chart-card--sr" data-dash-section="salesreceipt">
+    <div class="chart-card-head">
+        <h2 class="chart-card-title">Sales &amp; Receipt</h2>
+        <%- _rangeControl %>
+    </div>
+
+    <div class="sr-figures">
+        <div class="sr-figure">
+            <span class="sr-figure-label">Total Sales</span>
+            <span class="sr-figure-value"><%= _sr.total_sales %></span>
+        </div>
+        <div class="sr-figure">
+            <span class="sr-figure-label">Total Receipt</span>
+            <span class="sr-figure-value"><%= _sr.total_receipt %></span>
+        </div>
+    </div>
+
+    <div class="chart-card-canvas-wrap">
+        <canvas id="salesChart" aria-label="Monthly sales and receipt bar chart" role="img"></canvas>
+    </div>
+
+    <div class="sr-footer">
+        <div class="sr-footer-cell">
+            <div class="sr-footer-label">Sales This Month</div>
+            <div class="sr-footer-value"><%= _sr.sales_this_month %></div>
+            <% if (_sr.sales_delta) { %>
+                <div class="sr-footer-delta <%= _sr.sales_delta.down ? 'is-down' : '' %>">
+                    <%= _sr.sales_delta.text %>
+                    <i class="fa-solid <%= _sr.sales_delta.down ? 'fa-arrow-down' : 'fa-arrow-up' %>"></i>
+                    vs Last Month
+                </div>
+            <% } %>
+        </div>
+        <div class="sr-footer-cell">
+            <div class="sr-footer-label">Receipt This Month</div>
+            <div class="sr-footer-value"><%= _sr.receipt_this_month %></div>
+            <% if (_sr.receipt_delta) { %>
+                <div class="sr-footer-delta <%= _sr.receipt_delta.down ? 'is-down' : '' %>">
+                    <%= _sr.receipt_delta.text %>
+                    <i class="fa-solid <%= _sr.receipt_delta.down ? 'fa-arrow-down' : 'fa-arrow-up' %>"></i>
+                    vs Last Month
+                </div>
+            <% } %>
+        </div>
+    </div>
+
+    <script type="application/json" data-chart="salesReceipt"><%- JSON.stringify(_srChart) %></script>
+</div>

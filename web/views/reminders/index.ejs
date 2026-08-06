@@ -84,6 +84,12 @@ var _anyChannel = _ch.email || _ch.whatsapp;
                                         </form>
                                     <% } %>
                                     <% if (!_anyChannel) { %><span class="pr-muted pr-sub">Not enabled</span><% } %>
+                                    <!-- Per-party schedule: chase THIS party on
+                                         its own terms instead of the licence's. -->
+                                    <a class="pr-btn" href="/reminders/<%= r.id %>/schedule"
+                                       title="Set an automatic reminder schedule for this party">
+                                        <i class="fa-regular fa-clock"></i> Set Reminder
+                                    </a>
                                 </div>
                             </td>
                         </tr>

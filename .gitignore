@@ -52,20 +52,15 @@ Thumbs.db
 *.bak
 *.tmp
 api/db/scripts/reset_keep_superadmin.sql
-# Generated docs screenshots + the scripts that capture/build them
-docs/screens/
-docs/TallySaaS-Project-Guide.doc
-docs/TallySaaS-Project-Guide - Copy.doc
-docs/build-doc.js
-docs/capture-app.js
-docs/resize-shots.js
+# Generated screenshots + the scripts that capture/build them
 api/scripts/shoot-web.js
-docs/HOW-TO-FINISH.md
 api/scripts/seed-waytoweb-demo.js
-docs/TallySaaS-API.postman_collection.json
-docs/ThirdParty-API-Guide.doc
-docs/ThirdParty-API-Guide.md
-docs/ThirdParty-API.postman_collection.json
-docs/superpowers/specs/2026-07-30-customer-users-design.md
-docs/~$llySaaS-Project-Guide.doc
-docs/LiveKeeping-vs-TallySaaS.md
+
+# ── Browser-automation capture artifacts (Playwright MCP session dumps) ──
+# 85 throwaway page snapshots + console logs from the Livekeeping capture.
+# The findings live in doc/livekeeping/ — these raw dumps are noise.
+.playwright-mcp/
+
+# ── Documentation folders (reference material, kept local only) ──
+doc/
+docs/

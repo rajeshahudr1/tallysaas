@@ -26,6 +26,10 @@ const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
 const { htmlToPdf } = require('../../Helpers/pdf');
 const { reportPdfHtml } = require('../../Helpers/reportPdf');
+// Every figure on every report must exclude what Tally no longer holds — see
+// Helpers/tallyScope.js. Without this a deleted voucher keeps posting to the
+// Trial Balance and the cloud disagrees with Tally by exactly that amount.
+const { liveVoucherEntries, liveVoucherSql } = require('../../Helpers/tallyScope');
 
 const OOPS_MSG         = 'Oops..Something went wrong. Please try again.';
 const DEFAULT_PER_PAGE = 10;
@@ -230,6 +234,7 @@ async function outstanding(req, res) {
         const closingByName = {};
         if (useClosing) {
             const lrows = await db('tally_ledgers').where('company_id', cid)
+                .whereNull('deleted_at')
                 .select('name', 'closing_balance');
             lrows.forEach((l) => {
                 closingByName[String(l.name || '').trim().toLowerCase()] = Number(l.closing_balance) || 0;
@@ -274,11 +279,11 @@ async function gstSummary(req, res) {
         // CGST/SGST/IGST split, but tally_voucher_entries does (the C/S/I GST
         // ledger postings). Output = on sales vouchers, input = on purchases.
         async function sumPat(vmatch, pat, excl) {
-            let q = db('tally_voucher_entries').where('company_id', cid)
-                .whereRaw('voucher_type ilike ?', [vmatch])
-                .whereRaw('ledger_name ~* ?', [pat]);
-            if (excl) q = q.whereRaw('ledger_name !~* ?', [excl]);
-            const r = await q.sum('amount as s').first();
+            let q = liveVoucherEntries(db, cid)
+                .whereRaw('e.voucher_type ilike ?', [vmatch])
+                .whereRaw('e.ledger_name ~* ?', [pat]);
+            if (excl) q = q.whereRaw('e.ledger_name !~* ?', [excl]);
+            const r = await q.sum('e.amount as s').first();
             return Math.abs(Number(r && r.s) || 0);
         }
         async function agg(vmatch) {
@@ -378,13 +383,15 @@ async function partyLedger(req, res) {
         const ledgerName = String(req.query.ledger || '').trim();
         if (ledgerName) {
             const led = await db('tally_ledgers').where('company_id', cid)
+                .whereNull('deleted_at')
                 .whereRaw('lower(name)=lower(?)', [ledgerName])
                 .first('name', 'opening_balance', 'parent');
             if (!led) return R.errorResponse(res, 'Ledger not found.', 404);
-            const posts = await db('tally_voucher_entries').where('company_id', cid)
-                .whereRaw('lower(ledger_name)=lower(?)', [ledgerName])
-                .orderBy('voucher_date', 'asc').orderBy('id', 'asc')
-                .select('voucher_date as date', 'voucher_type as vtype', 'voucher_no as ref', 'amount');
+            const posts = await liveVoucherEntries(db, cid)
+                .whereRaw('lower(e.ledger_name)=lower(?)', [ledgerName])
+                .orderBy('e.voucher_date', 'asc').orderBy('e.id', 'asc')
+                .select('e.voucher_date as date', 'e.voucher_type as vtype',
+                    'e.voucher_no as ref', 'e.amount');
             const opening = Number(led.opening_balance) || 0;
             let running = opening;
             const rows = posts.map((p) => {
@@ -526,6 +533,7 @@ async function tallySnapshot(cid, reportType) {
 async function hasClosingBalances(cid) {
     try {
         const [{ cc }] = await db('tally_ledgers').where('company_id', cid)
+            .whereNull('deleted_at')
             .whereRaw('coalesce(closing_balance,0) <> 0').count({ cc: '*' });
         return Number(cc) > 0;
     } catch (_) { return false; }
@@ -563,9 +571,10 @@ async function trialBalance(req, res) {
                left join (
                     select lower(ledger_name) as ln, sum(amount) as posted
                       from tally_voucher_entries where company_id = ?
+                       and ${liveVoucherSql()}
                      group by lower(ledger_name)
                ) p on p.ln = lower(l.name)
-              where l.company_id = ?
+              where l.company_id = ? and l.deleted_at is null
               order by l.parent, l.name`, [cid, cid]);
         let totalDr = 0, totalCr = 0;
         const data = (result.rows || []).map((r) => {
@@ -598,6 +607,7 @@ async function trialBalance(req, res) {
  *  Sheet nature, resolved by walking tally_groups up to a revenue primary group. */
 async function realLedgerBalances(cid) {
     const groups = await db('tally_groups').where('company_id', cid)
+        .whereNull('deleted_at')
         .select('name', 'parent', 'is_revenue');
     const gmap = {};
     groups.forEach((g) => { gmap[String(g.name || '').toLowerCase()] = g; });
@@ -622,9 +632,11 @@ async function realLedgerBalances(cid) {
                 ${balExpr} as balance
            from tally_ledgers l
            left join (select lower(ledger_name) as ln, sum(amount) as posted
-                        from tally_voucher_entries where company_id=? group by lower(ledger_name)) p
+                        from tally_voucher_entries where company_id=?
+                         and ${liveVoucherSql()}
+                       group by lower(ledger_name)) p
              on p.ln=lower(l.name)
-          where l.company_id=?`, [cid, cid]);
+          where l.company_id=? and l.deleted_at is null`, [cid, cid]);
     return (result.rows || []).map((r) => ({
         name: r.ledger, group: r.grp || '', balance: Number(r.balance) || 0,
         isRevenue: isRev(r.grp),

@@ -34,6 +34,10 @@ class AgentError(Exception):
 TIMEOUT = 15          # seconds, per request
 RETRIES = 1           # one extra attempt on transport errors
 BACKOFF = 1.5         # seconds between attempts
+# Sign-in / verify / resend: someone is watching the button. Eight seconds is
+# already longer than anyone waits before deciding an app is broken, and the
+# server answers these in well under a second when it is there at all.
+AUTH_TIMEOUT = 8
 
 
 class ApiClient:
@@ -68,6 +72,7 @@ class ApiClient:
         json: dict[str, Any],
         headers: Optional[dict[str, str]] = None,
         timeout: Optional[int] = None,
+        retries: Optional[int] = None,
     ) -> requests.Response:
         """POST with a short retry/backoff on transport-level errors.
 
@@ -75,13 +80,20 @@ class ApiClient:
         IMPORT processes large batches (double-entry storage), so it needs a much
         longer read window than a heartbeat.
 
+        ``retries`` overrides RETRIES. Retrying is right for the BACKGROUND sync
+        (nobody is waiting; a blip should not become a failed cycle) and wrong
+        for anything a person just clicked: there, the retry is a second silent
+        wait on top of the first, and pressing the button again is both faster
+        and something the customer chooses.
+
         Returns the :class:`requests.Response` (whatever HTTP status it
         carries). Raises :class:`requests.RequestException` only after the
         retries are exhausted, so callers can map it to a domain error.
         """
         url = self._url(path)
         last_exc: Optional[Exception] = None
-        for attempt in range(RETRIES + 1):
+        attempts = RETRIES if retries is None else retries
+        for attempt in range(attempts + 1):
             try:
                 resp = self._session.post(
                     url, json=json, headers=headers, timeout=(timeout or TIMEOUT)
@@ -93,10 +105,10 @@ class ApiClient:
                     "POST %s failed (attempt %d/%d): %s",
                     url,
                     attempt + 1,
-                    RETRIES + 1,
+                    attempts + 1,
                     exc,
                 )
-                if attempt < RETRIES:
+                if attempt < attempts:
                     time.sleep(BACKOFF)
         # Exhausted retries.
         assert last_exc is not None
@@ -136,49 +148,142 @@ class ApiClient:
     # ------------------------------------------------------------------ #
     # Public API
     # ------------------------------------------------------------------ #
-    def activate(
+    def login(
         self,
-        license_key: str,
+        email: str,
+        password: str,
         machine_id: str,
-        agent_version: str,
+        machine_name: str = "",
+        agent_version: str = "",
     ) -> dict[str, Any]:
-        """Activate this machine against the cloud with the license key.
+        """Step 1 of sign-in: check the password and have a code emailed.
 
-        POSTs ``{license_key, machine_id, agent_version}`` to
-        ``{api_url}/agent/activate``.
+        POSTs to ``{api_url}/agent/login``. Returns ``{challenge_id,
+        email_masked, expires_in}``.
 
-        Returns the ``data`` part of the envelope, which holds
-        ``agent_token``, ``license`` and ``companies``.
+        NOTHING IS VALIDATED HERE. Not the email shape, not the password
+        length. The server owns every rule (Validators/agent.js) and this sends
+        what the customer typed, so the rules and their wording can change
+        without shipping a new exe. The only failure this code decides for
+        itself is "could not reach the server" - there is no server to ask.
 
         Raises
         ------
         ActivationError
-            On any transport failure or when ``body['status'] != 200``
-            (invalid key / bound to another machine / suspended / expired).
-            The message is taken from ``body['msg']`` when present.
+            On transport failure or any non-200 envelope. The message is the
+            server's, verbatim, because the UI shows it verbatim.
         """
-        self.log.info("Activating agent (machine_id=%s, v=%s)", machine_id, agent_version)
+        self.log.info("Agent sign-in for %s (machine_id=%s)", email, machine_id)
         payload = {
-            "license_key": license_key,
+            "email": email,
+            "password": password,
             "machine_id": machine_id,
-            "agent_version": agent_version,
+            "machine_name": machine_name or "",
+            "agent_version": agent_version or "",
         }
+        return self._auth_post("agent/login", payload, "Sign-in failed.")
+
+    def verify_otp(
+        self,
+        challenge_id: str,
+        code: str,
+        machine_id: str,
+        machine_name: str = "",
+        agent_version: str = "",
+    ) -> dict[str, Any]:
+        """Step 2: exchange the emailed code for the agent token.
+
+        Returns ``{agent_token, agent_id, license, companies}``.
+
+        ``machine_id`` is sent again and the server checks it against the one
+        the challenge was created with, so a code obtained on one computer
+        cannot be redeemed on another.
+        """
+        payload = {
+            "challenge_id": challenge_id,
+            "code": code,
+            "machine_id": machine_id,
+            "machine_name": machine_name or "",
+            "agent_version": agent_version or "",
+        }
+        data = self._auth_post("agent/verify", payload, "Could not verify the code.")
+        self.log.info("Agent verified (agent_id=%s).", data.get("agent_id"))
+        return data
+
+    def resend_otp(self, challenge_id: str) -> dict[str, Any]:
+        """Ask for a fresh code on an existing challenge.
+
+        The server enforces the cooldown and the per-challenge cap; the UI only
+        displays the countdown it is told about.
+        """
+        return self._auth_post("agent/otp/resend", {"challenge_id": challenge_id},
+                               "Could not send a new code.")
+
+    def _auth_post(self, path: str, payload: dict[str, Any],
+                   fallback_msg: str) -> dict[str, Any]:
+        """POST an unauthenticated sign-in call and unwrap the envelope.
+
+        Shared by the three sign-in endpoints because their error handling is
+        identical: surface the server's message when there is one, and a plain
+        connectivity message when there is not.
+        """
         try:
-            resp = self._post("agent/activate", json=payload)
+            # A PERSON is watching a spinner for this one, so it fails fast: a
+            # short read window and no silent retry. An unreachable server used
+            # to cost 3 seconds on a refused connection and half a minute on a
+            # network that drops packets, with nothing on screen but "Signing
+            # in..." — long enough that the app looked broken rather than
+            # offline. Pressing the button again is the retry.
+            resp = self._post(path, json=payload, timeout=AUTH_TIMEOUT, retries=0)
         except requests.RequestException as exc:
-            self.log.error("Activation transport error: %s", exc)
-            raise ActivationError("Cannot reach the cloud server.") from exc
+            self.log.error("%s transport error: %s", path, exc)
+            # Deliberately NOT the server's wording - there was no server.
+            raise ActivationError(
+                "Cannot reach the server. Check the internet connection."
+            ) from exc
 
         body = self._envelope(resp)
         status = body.get("status")
         if status != 200:
-            msg = body.get("msg", "Activation failed.")
-            self.log.error("Activation rejected (status=%s): %s", status, msg)
+            msg = body.get("msg") or fallback_msg
+            self.log.warning("%s rejected (status=%s): %s", path, status, msg)
+            # A 4xx/5xx that is ABOUT THE SERVER, not about what was typed. The
+            # server's own wording for these is written for whoever is running
+            # it — "Route not found" told a customer their email was wrong when
+            # the truth was that the API had not been deployed yet. Anything the
+            # customer can act on (bad password, expired licence, wrong code)
+            # still comes through verbatim, which is the whole point of keeping
+            # validation server-side.
+            if status in (404, 405, 500, 502, 503, 504):
+                raise ActivationError(
+                    "The server is not responding correctly. "
+                    "Please try again shortly, or contact support."
+                )
             raise ActivationError(msg)
+        return body.get("data") or {}
 
-        data = body.get("data") or {}
-        self.log.info("Activation successful.")
-        return data
+
+    def get_envelopes(self, agent_token: str) -> dict[str, Any]:
+        """The SIGNED Tally envelope set this agent should use.
+
+        GETs ``{api_url}/agent/envelopes``. Returns the raw document — signature
+        and all — WITHOUT interpreting it. Verification belongs to
+        :mod:`envelope_store`, which is also what decides whether to fall back
+        to the last verified set. Splitting those apart would make it possible
+        to fetch here and forget to verify there.
+
+        Raises :class:`AgentError` on transport failure or a non-200 envelope so
+        the store treats it as "no fresh set" and keeps using the cache.
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        try:
+            resp = self._get("agent/envelopes", headers=headers)
+        except requests.RequestException as exc:
+            raise AgentError("Cannot reach the cloud server.") from exc
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            raise AgentError(body.get("msg", "Could not fetch envelopes."))
+        return body.get("data") or {}
 
     def heartbeat(
         self,
@@ -319,6 +424,10 @@ class ApiClient:
         company_name: str | None = None,
         company_id: int | None = None,
         financial_reports: dict[str, Any] | None = None,
+        masters: dict[str, list[dict[str, Any]]] | None = None,
+        financial_reports_by_year: dict[str, dict[str, Any]] | None = None,
+        outstandings: dict[str, Any] | None = None,
+        extra_reports: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Tally → Cloud: upload masters + vouchers read from one Tally company.
 
@@ -334,7 +443,8 @@ class ApiClient:
         godowns = godowns or []
         groups = groups or []
         if (not ledgers and not stock_items and not vouchers and not godowns
-                and not groups and not financial_reports):
+                and not groups and not financial_reports and not masters
+                and not financial_reports_by_year and not outstandings):
             return {}
         headers = {"Authorization": f"Bearer {agent_token}"}
         payload: dict[str, Any] = {"ledgers": ledgers,
@@ -348,6 +458,27 @@ class ApiClient:
             payload["company_id"] = company_id
         if financial_reports:
             payload["financial_reports"] = financial_reports
+        # The registry-driven masters (units, cost centres, voucher types,
+        # payroll, …) keyed by kind — the cloud routes each kind to its table
+        # from its own matching registry, so neither side needs new code per
+        # master. See agent/tally_schema.py and MASTER_TABLES in the controller.
+        if masters:
+            payload["masters"] = masters
+        # Reports keyed by FY label ({'2026-27': {...}}). Stored per (company,
+        # report_type, fy) so last year sits beside this year instead of
+        # overwriting it — which is what an undated pull used to do.
+        if financial_reports_by_year:
+            payload["financial_reports_by_year"] = financial_reports_by_year
+        # Tally's own bill-wise outstanding, kept as the independent check on the
+        # cloud's derived ageing rather than replacing it.
+        if outstandings:
+            payload["outstandings"] = outstandings
+        # SERVER-PUBLISHED reports this build has no parser for, as raw Tally
+        # XML keyed by slug. The whole point is that the cloud, not the agent,
+        # decides what a new report means — so this travels unparsed and a new
+        # report needs no agent release. See TallyConnector.extra_reports.
+        if extra_reports:
+            payload["extra_reports"] = extra_reports
         # Field-diagnosable summary of EXACTLY what we're uploading (INFO so it
         # shows without DEBUG). If a pull fails, this proves whether masters were
         # even pulled (e.g. ledgers=0 -> wrong/empty Tally company) vs a cloud
@@ -388,6 +519,96 @@ class ApiClient:
             except Exception:
                 pass
             raise AgentError(body.get("msg", "Could not import from Tally."))
+        return body.get("data") or {}
+
+    def reconcile(
+        self,
+        agent_token: str,
+        kind: str,
+        master_ids: list[int],
+        guids: list[str],
+        *,
+        company_name: str | None = None,
+        company_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Tally → Cloud DELETE detection for one master kind.
+
+        Sends the COMPLETE live identity list read from Tally; the cloud
+        soft-deletes every Tally-sourced row of that kind whose identity is
+        missing from it. ``complete: True`` is asserted here because this method
+        is only ever called with a full, successful read — a partial list would
+        make the cloud delete records that still exist.
+
+        Returns ``{company_id, kind, deleted: {table: n}}``.
+        """
+        if not master_ids and not guids:
+            # Never send an empty list: the cloud would (correctly) refuse it,
+            # but not sending it at all saves a pointless round trip.
+            return {}
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        payload: dict[str, Any] = {
+            "kind": kind,
+            "master_ids": master_ids,
+            "guids": guids,
+            "complete": True,
+        }
+        if company_name:
+            payload["company_name"] = company_name
+        if company_id:
+            payload["company_id"] = company_id
+        try:
+            resp = self._post("agent/reconcile", json=payload, headers=headers, timeout=120)
+        except requests.RequestException as exc:
+            self.log.error("Reconcile transport error: %s", exc)
+            raise AgentError("Cannot reach the cloud server.") from exc
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            self.log.error("Reconcile REJECTED by cloud [%s]: %s", kind, body.get("msg", "?"))
+            raise AgentError(body.get("msg", "Could not reconcile."))
+        return body.get("data") or {}
+
+    def voucher_diff(
+        self,
+        agent_token: str,
+        voucher_type: str,
+        ids: list[dict[str, Any]],
+        *,
+        complete: bool = False,
+        company_name: str | None = None,
+        company_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Ask the cloud which vouchers of one type it is missing or stale on.
+
+        ``ids`` is the live ``[{guid, alterid}]`` list read from Tally. The reply
+        carries ``missing`` — the guids to fetch in full — and, when ``complete``
+        is set (this list is the WHOLE type, not a page), the cloud also
+        soft-deletes the vouchers it holds that Tally no longer lists.
+
+        ``complete`` is passed explicitly rather than inferred: only the caller
+        knows whether it swept the entire type or gave up part-way, and guessing
+        wrong deletes real vouchers.
+        """
+        headers = {"Authorization": f"Bearer {agent_token}"}
+        payload: dict[str, Any] = {
+            "voucher_type": voucher_type,
+            "ids": ids,
+            "complete": bool(complete),
+        }
+        if company_name:
+            payload["company_name"] = company_name
+        if company_id:
+            payload["company_id"] = company_id
+        try:
+            resp = self._post("agent/voucher-diff", json=payload, headers=headers, timeout=120)
+        except requests.RequestException as exc:
+            self.log.error("Voucher diff transport error: %s", exc)
+            raise AgentError("Cannot reach the cloud server.") from exc
+
+        body = self._envelope(resp)
+        if body.get("status") != 200:
+            self.log.error("Voucher diff REJECTED [%s]: %s", voucher_type, body.get("msg", "?"))
+            raise AgentError(body.get("msg", "Could not diff vouchers."))
         return body.get("data") or {}
 
     # ------------------------------------------------------------------ #

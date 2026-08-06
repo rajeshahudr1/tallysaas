@@ -2363,3 +2363,21 @@ ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS cash_extra_pct numeric(6,2
 ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS online_extra_pct numeric(6,2) NOT NULL DEFAULT 0;
 ALTER TABLE public.invoices  ADD COLUMN IF NOT EXISTS payment_mode character varying(20);
 CREATE UNIQUE INDEX IF NOT EXISTS customers_api_token_uq ON public.customers (api_token) WHERE api_token IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS public.customer_reminder_schedules (
+    id bigserial PRIMARY KEY,
+    company_id bigint NOT NULL,
+    customer_id bigint NOT NULL,
+    enabled boolean NOT NULL DEFAULT true,
+    channel varchar(16) NOT NULL DEFAULT 'whatsapp',
+    frequency varchar(16) NOT NULL DEFAULT 'daily',
+    send_hour integer NOT NULL DEFAULT 10,
+    weekday integer NOT NULL DEFAULT 1,
+    day_of_month integer NOT NULL DEFAULT 1,
+    created_by bigint,
+    created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS customer_reminder_schedules_customer_uniq
+    ON public.customer_reminder_schedules (company_id, customer_id);

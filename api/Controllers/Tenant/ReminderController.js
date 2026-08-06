@@ -11,6 +11,12 @@
  *   send    POST /account/reminders/:id/send   { channel: 'email' | 'whatsapp' }
  *           → send one reminder now (manual). Gated by the licence's Super-Admin
  *             switches; overdue re-checked server-side; every send is logged.
+ *   schedule    GET  /account/reminders/:id/schedule
+ *   saveSchedule PUT /account/reminders/:id/schedule
+ *           → the PER-PARTY reminder schedule ("Set Reminder"). A party with a
+ *             schedule is chased on ITS terms; parties without one keep the
+ *             licence-wide auto reminder. Channels are Email / WhatsApp only —
+ *             there is no SMS gateway in this product.
  */
 
 const R  = require('../../Helpers/response');
@@ -18,6 +24,7 @@ const db = require('../../config/db').db;
 const { getSettings, overdueCustomers, reminderText } = require('../../Helpers/reminders');
 const { sendPaymentReminder } = require('../../Helpers/mail');
 const { sendWhatsApp }        = require('../../Helpers/whatsapp');
+const { normalizeSchedule, FREQUENCIES, CHANNELS } = require('../../Helpers/reminderSchedule');
 
 const OOPS = 'Oops..Something went wrong. Please try again.';
 
@@ -104,4 +111,95 @@ async function send(req, res) {
     }
 }
 
-module.exports = { overdue, send };
+/**
+ * GET /account/reminders/:id/schedule — one party's schedule plus the message
+ * that would be sent, so the UI can show a live preview.
+ */
+async function schedule(req, res) {
+    try {
+        const companyId  = req.companyId;
+        const licenseId  = (req.user && req.user.license_id) || null;
+        const customerId = Number(req.params.id);
+        if (!Number.isInteger(customerId) || customerId < 1) {
+            return R.errorResponse(res, 'Customer not found.', 404);
+        }
+
+        const customer = await db('customers')
+            .where({ company_id: companyId, id: customerId }).whereNull('deleted_at')
+            .first('id', 'name', 'mobile', 'email');
+        if (!customer) return R.errorResponse(res, 'Customer not found.', 404);
+
+        const [row, settings, company, overdueRows] = await Promise.all([
+            db('customer_reminder_schedules')
+                .where({ company_id: companyId, customer_id: customerId }).first(),
+            getSettings(licenseId),
+            db('companies').where('id', companyId).first('name'),
+            overdueCustomers(companyId),
+        ]);
+
+        const mine = overdueRows.find((r) => Number(r.id) === customerId) || null;
+
+        return R.successResponse(res, {
+            customer: {
+                id: customer.id, name: customer.name,
+                mobile: customer.mobile || '', email: customer.email || '',
+            },
+            // An absent row is a real state ("no schedule set"), so it comes back
+            // disabled rather than as null — the UI renders one form either way.
+            schedule: normalizeSchedule(row || { enabled: false }),
+            options: { frequencies: FREQUENCIES, channels: CHANNELS },
+            // The licence-level switches still gate what may actually be sent.
+            allowed: { email: settings.email_enabled, whatsapp: settings.whatsapp_enabled },
+            outstanding: mine ? mine.outstanding : 0,
+            preview: reminderText({
+                customerName: customer.name,
+                companyName: (company && company.name) || '',
+                outstanding: mine ? mine.outstanding : 0,
+                oldestDue: mine ? mine.oldest_due : null,
+                overdueCount: mine ? mine.overdue_count : 0,
+            }),
+        });
+    } catch (err) {
+        console.error('reminders.schedule error:', err);
+        return R.errorResponse(res, OOPS, 500);
+    }
+}
+
+/** PUT /account/reminders/:id/schedule — create or replace one party's schedule. */
+async function saveSchedule(req, res) {
+    try {
+        const companyId  = req.companyId;
+        const customerId = Number(req.params.id);
+        if (!Number.isInteger(customerId) || customerId < 1) {
+            return R.errorResponse(res, 'Customer not found.', 404);
+        }
+
+        const customer = await db('customers')
+            .where({ company_id: companyId, id: customerId }).whereNull('deleted_at')
+            .first('id');
+        if (!customer) return R.errorResponse(res, 'Customer not found.', 404);
+
+        // normalizeSchedule is the validator: anything unrecognised falls back
+        // to a safe value, so a hand-posted body can never store junk.
+        const s = normalizeSchedule(req.body);
+        const row = {
+            company_id: companyId, customer_id: customerId,
+            enabled: s.enabled, channel: s.channel, frequency: s.frequency,
+            send_hour: s.send_hour, weekday: s.weekday, day_of_month: s.day_of_month,
+            created_by: (req.user && req.user.sub) || null,
+            updated_at: new Date(),
+        };
+
+        await db('customer_reminder_schedules')
+            .insert({ ...row, created_at: new Date() })
+            .onConflict(['company_id', 'customer_id'])
+            .merge({ ...row, created_by: undefined });
+
+        return R.successResponse(res, { schedule: s });
+    } catch (err) {
+        console.error('reminders.saveSchedule error:', err);
+        return R.errorResponse(res, OOPS, 500);
+    }
+}
+
+module.exports = { overdue, send, schedule, saveSchedule };

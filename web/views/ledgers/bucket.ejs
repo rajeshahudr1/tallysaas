@@ -1,0 +1,73 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * ledgers/bucket.ejs — the Cash / Bank / Payables / Receivables list.
+ *
+ * One screen over four buckets: a total header, a period picker, and a
+ * Name | Balance table whose rows open that ledger's statement.
+ *
+ * Balances are period-derived server-side (the API replays the synced
+ * double entry), so the range control genuinely changes the figures
+ * rather than re-labelling a snapshot.
+ * ─────────────────────────────────────────────────────────── */
+var _rows   = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _ranges = (typeof ranges !== 'undefined' && ranges) ? ranges : [];
+var _range  = (typeof range !== 'undefined' && range) ? range : { value: '' };
+var _meta   = (typeof meta !== 'undefined' && meta) ? meta : { total: 0, page: 1, per_page: 20 };
+var _title  = (typeof title !== 'undefined' ? title : 'Ledgers');
+
+// 1-based row window for the "1-10 of 1136" caption.
+var _from = _meta.total ? ((_meta.page - 1) * _meta.per_page) + 1 : 0;
+var _to   = Math.min(_meta.page * _meta.per_page, _meta.total);
+%>
+
+<%- include('../partials/page-head', {
+    title: _title,
+    breadcrumb: (typeof breadcrumb !== 'undefined' ? breadcrumb : [{ label: _title }]),
+}) %>
+
+<div class="ledger-head">
+    <div>
+        <div class="ledger-head-total">
+            Total Amount:
+            <strong><%= (typeof totalAmount !== 'undefined' ? totalAmount : '₹0') %></strong>
+            <span class="ledger-dc"><%= (typeof totalDc !== 'undefined' ? totalDc : '') %></span>
+        </div>
+    </div>
+    <form method="get" class="ledger-head-controls">
+        <select class="kpi-panel-select no-search" name="range" aria-label="Period"
+                onchange="this.form.submit()">
+            <% _ranges.forEach(function (r) { %>
+                <option value="<%= r.value %>" <%= r.value === _range.value ? 'selected' : '' %>><%= r.label %></option>
+            <% }); %>
+        </select>
+    </form>
+</div>
+
+<div class="card">
+    <% if (!_rows.length) { %>
+        <p class="daybook-empty">
+            No ledgers found for this period.
+            <br>They appear once Tally Sync has pulled this company's chart of accounts.
+        </p>
+    <% } else { %>
+        <table class="daybook-table ledger-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th class="is-num">Balance</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <td><a class="daybook-voucher" href="<%= r.href %>"><%= r.name %></a></td>
+                        <td class="is-num">
+                            <%= r.balance %> <span class="ledger-dc"><%= r.dc %></span>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+        <div class="ledger-foot"><%= _from %>-<%= _to %> of <%= _meta.total %></div>
+    <% } %>
+</div>

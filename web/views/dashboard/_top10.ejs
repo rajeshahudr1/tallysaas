@@ -1,0 +1,63 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * dashboard/_top10.ejs — the Top 10 leaderboards panel.
+ *
+ * All six datasets ship together and the tab strip switches between them
+ * purely client-side, so changing tab costs no request at all.
+ * ─────────────────────────────────────────────────────────── */
+var _top10 = (typeof top10Tabs !== 'undefined' && Array.isArray(top10Tabs)) ? top10Tabs : [];
+%>
+<div class="card recent-card" data-dash-section="top10">
+    <div class="recent-card-head">
+        <h2 class="recent-card-title">Top 10</h2>
+    </div>
+
+    <!-- The strip scrolls horizontally with its native scrollbar hidden; the
+         two chevrons page it and appear only when there is overflow to reach
+         (dashboard.js toggles them). Selecting a tab scrolls it into view. -->
+    <div class="top10-tabbar">
+        <button type="button" class="top10-scroll top10-scroll--prev" data-top10-scroll="-1"
+                aria-label="Scroll tabs left" hidden><i class="fa-solid fa-chevron-left"></i></button>
+
+        <div class="top10-tabs" role="tablist" data-top10-strip>
+            <% _top10.forEach(function (t, i) { %>
+                <button type="button" role="tab"
+                        class="top10-tab <%= i === 0 ? 'is-active' : '' %>"
+                        data-top10-tab="<%= t.key %>"
+                        aria-selected="<%= i === 0 ? 'true' : 'false' %>"><%= t.label %></button>
+            <% }); %>
+        </div>
+
+        <button type="button" class="top10-scroll top10-scroll--next" data-top10-scroll="1"
+                aria-label="Scroll tabs right" hidden><i class="fa-solid fa-chevron-right"></i></button>
+    </div>
+
+    <% _top10.forEach(function (t, i) { %>
+        <div class="top10-panel" data-top10-panel="<%= t.key %>" <%= i === 0 ? '' : 'hidden' %>>
+            <% if (!t.rows.length) { %>
+                <p class="top10-empty">No data available</p>
+            <% } else { %>
+                <ul class="top10-list">
+                    <% t.rows.forEach(function (row, idx) { %>
+                        <li>
+                            <% var tag = row.href ? 'a' : 'div'; %>
+                            <<%= tag %> class="top10-item"<% if (row.href) { %> href="<%= row.href %>"<% } %>>
+                                <span class="top10-rank <%= idx < 3 ? 'top10-rank--' + (idx + 1) : '' %>">
+                                    <% if (idx < 3) { %>
+                                        <i class="fa-solid fa-medal" aria-hidden="true"></i>
+                                        <span class="visually-hidden"><%= idx + 1 %></span>
+                                    <% } else { %><%= idx + 1 %><% } %>
+                                </span>
+                                <span class="top10-name"><%= row.name %></span>
+                                <span class="top10-value"><%= row.value %></span>
+                                <% if (row.qty !== null && row.qty !== undefined) { %>
+                                    <span class="top10-qty"><%= row.qty %></span>
+                                <% } %>
+                            </<%= tag %>>
+                        </li>
+                    <% }); %>
+                </ul>
+            <% } %>
+        </div>
+    <% }); %>
+</div>

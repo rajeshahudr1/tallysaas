@@ -20,6 +20,7 @@ so parsing is best-effort and tolerant.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -27,6 +28,8 @@ import xml.etree.ElementTree as ET
 from typing import Any, Optional
 
 import requests
+
+from tally_schema import BY_KIND, MASTERS, RESERVED_VOUCHER_TYPES
 
 
 # A process-unique nonce for voucher-collection NAMES. Tally caches an inline TDL
@@ -46,9 +49,88 @@ class TallyUnavailable(Exception):
     """Raised when Tally Prime cannot be reached or refuses the request."""
 
 
+class TallySkipped(TallyUnavailable):
+    """Raised for a request this run has ALREADY seen TallyPrime die on.
+
+    A subclass of TallyUnavailable so every existing caller keeps handling it
+    the way it handles "Tally could not answer" — the difference matters to the
+    log, not to the control flow.
+    """
+
+
+# Requests TallyPrime has died on, shared by EVERY connector in this process.
+#
+# It CANNOT live on the instance. A new TallyConnector is built for each sync
+# cycle, so a per-instance quarantine forgot everything the moment the cycle
+# ended — the next cycle sent the same fatal request and killed Tally again, a
+# minute later, forever. Learning it once per process is the difference between
+# one crash and one crash every interval.
+_POISON: set[str] = set()
+
+# Where that set is REMEMBERED between runs. Set once at startup (see
+# use_skip_store). Without it the knowledge died with the process: the service
+# restarts — after an update, a reboot, or because the operator pressed Stop and
+# Start — and the very first cycle of the new process crashes TallyPrime again
+# to re-learn what the old one already knew. Once per install, not once per
+# lifetime of a process.
+_POISON_FILE: Optional[str] = None
+
+
+def use_skip_store(path: str) -> None:
+    """Point the quarantine at a file and load what is already in it.
+
+    Wholly best-effort: an unreadable or corrupt store just means the agent
+    re-learns the hard way, which is exactly where it was before the file
+    existed. It must never stop the agent from starting.
+    """
+    global _POISON_FILE
+    _POISON_FILE = path
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for label in json.load(fh) or []:
+                if isinstance(label, str) and label.strip():
+                    _POISON.add(label.strip())
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
+def _save_skip_store() -> None:
+    """Persist the quarantine. Best-effort, for the same reason as loading it."""
+    if not _POISON_FILE:
+        return
+    try:
+        with open(_POISON_FILE, "w", encoding="utf-8") as fh:
+            json.dump(sorted(_POISON), fh, indent=1)
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
+def _killed_tally(exc: BaseException) -> bool:
+    """True when the failure looks like Tally dying MID-REQUEST.
+
+    A refused connection means Tally is not running; that is ordinary and
+    retryable. A connection closed with no response, on a request Tally had
+    already accepted, means it fell over while serving it — the desktop symptom
+    is "Internal Error. Contact Tally Solutions. Incorrect Object Type!", which
+    happens when a company is asked for an object type it does not have (TDS
+    masters on a company with TDS switched off, say). Retrying that only kills
+    Tally again after the customer restarts it.
+    """
+    text = repr(exc).lower()
+    return ("remotedisconnected" in text
+            or "connection aborted" in text
+            or "without response" in text)
+
+
 # Default Tally XML gateway endpoint and per-request timeout.
 DEFAULT_URL = "http://localhost:9000"
 TIMEOUT = 30  # seconds; large exports (stock summary) can be slow
+
+# Transient-failure retry for Tally requests. Tally is a desktop app that stalls
+# while the user opens a report or switches company; a request landing in that
+# window fails though Tally is fine a second later. See TallyConnector.send.
+SEND_RETRIES = 2      # extra attempts after the first (so 3 total)
+SEND_BACKOFF = 0.5    # seconds; doubles per attempt
 
 
 class TallyConnector:
@@ -64,13 +146,31 @@ class TallyConnector:
         every request and failure.
     """
 
-    def __init__(self, url: str = DEFAULT_URL, logger: Optional[logging.Logger] = None) -> None:
+    def __init__(self, url: str = DEFAULT_URL, logger: Optional[logging.Logger] = None,
+                 envelopes=None) -> None:
         self.url = (url or DEFAULT_URL).rstrip("/")
         self.log = logger or logging.getLogger(__name__)
+        # OPTIONAL server-published queries (an envelope_store.EnvelopeStore).
+        # When present, a report the server publishes is pulled WITHOUT a new
+        # exe. When absent — no network, an unverified set, an old build — the
+        # compiled-in XML below still runs, so shipping envelopes can never make
+        # the agent worse than it was.
+        self.envelopes = envelopes
         self._session = requests.Session()
         # Gentle request throttle (see send()) — timestamp of the last request so
         # we never fire Tally calls back-to-back.
         self._last_send = 0.0
+        # Shared with every other connector in this process — see _POISON.
+        self._poison = _POISON
+        # Labels already announced at INFO this run (see _send_once).
+        self._seen_labels: set[str] = set()
+        # Label of the request currently in flight (see _req_label). Tally is a
+        # desktop app that can DIE on a request it dislikes ("Internal Error.
+        # Contact Tally Solutions. Incorrect Object Type!"), and the agent then
+        # sees only a bare RemoteDisconnected — with no way to tell WHICH of the
+        # ~20 reports a pull sends was the one that killed it. Carrying the label
+        # into the error line makes the culprit obvious in a normal INFO log.
+        self._last_label = "?"
 
     # ------------------------------------------------------------------ #
     # Transport
@@ -78,31 +178,155 @@ class TallyConnector:
     def is_available(self) -> bool:
         """Quick probe: is Tally reachable on the configured URL?
 
-        Sends a tiny "List of Companies" export and returns ``True`` on any
-        HTTP reply. Never raises — returns ``False`` if Tally is down so the
-        main loop can simply skip this cycle and retry later.
+        A BARE HTTP GET, deliberately — no TDL, no collection, no report. The
+        probe used to send the company-list export, which meant the cheapest,
+        most frequent call the agent makes was also one of the heaviest: Tally
+        had to compile and evaluate TDL just to answer "are you there". Worse,
+        when that envelope was malformed it put a modal error box on Tally and
+        wedged it — and the probe then re-sent the same thing every few seconds.
+
+        A GET asks the gateway to prove only what is being asked: that it is
+        listening and speaking HTTP. Any reply at all is a yes; Tally answers
+        even an unrecognised GET. Never raises — ``False`` means "down", and the
+        caller's next move (start Tally, skip the cycle) is the same either way.
         """
         try:
-            self.send(self._companies_request_xml())
-            return True
-        except TallyUnavailable:
-            return False
+            # 4s: a listening gateway on localhost answers in milliseconds, and
+            # a probe that can hang for the full request timeout is a probe that
+            # blocks the thing it was meant to make responsive.
+            resp = self._session.get(self.url, timeout=4)
+            return resp is not None
         except Exception as exc:  # noqa: BLE001 - probe must never raise
             self.log.debug("Tally probe failed: %s", exc)
             return False
 
-    def send(self, xml: str, timeout: "int | None" = None) -> str:
+    def send(self, xml: str, timeout: "int | None" = None,
+             retries: "int | None" = None) -> str:
         """POST a Tally XML envelope and return the raw response text.
 
         ``timeout`` overrides the module default (used by the voucher pull, whose
         chunked collections can be a couple of MB and need longer than a master read).
 
+        Retries transient failures with exponential backoff. Tally is a DESKTOP
+        app: it stalls while the user opens a report, recalculates, or switches
+        company, and a request landing in that window fails even though Tally is
+        perfectly healthy a second later. Without a retry, one such blip cost the
+        whole company its cycle — masters, vouchers and all — and the log blamed
+        "Tally unavailable". ``retries=0`` disables it (used by the probe, where
+        a fast negative IS the answer).
+
         Raises
         ------
         TallyUnavailable
-            On any transport-level error (connection refused, timeout, DNS),
-            or when Tally answers with a non-2xx HTTP status.
+            After the final attempt: on any transport-level error (connection
+            refused, timeout, DNS), or a non-2xx HTTP status.
         """
+        attempts = SEND_RETRIES if retries is None else int(retries)
+        last: Exception | None = None
+        for attempt in range(attempts + 1):
+            try:
+                return self._send_once(xml, timeout)
+            except TallyUnavailable as exc:
+                last = exc
+                if attempt >= attempts:
+                    break
+                # 0.5s, 1s, 2s … — long enough for a mid-recalculation Tally to
+                # come back, short enough not to stall the cycle.
+                delay = SEND_BACKOFF * (2 ** attempt)
+                self.log.warning("Tally request failed (attempt %d/%d), retrying in %.1fs: %s",
+                                 attempt + 1, attempts + 1, delay, exc)
+                time.sleep(delay)
+        raise last if last else TallyUnavailable("Tally request failed.")
+
+    @staticmethod
+    def _req_label(xml: str) -> str:
+        """A short human label for a request: its TYPE, ID and target company.
+
+        Only for diagnostics. Tally kills itself on some requests, so the label
+        of the request IN FLIGHT is the single most useful thing an error line
+        can carry — without it the log says "Tally is not reachable" and names
+        none of the twenty reports the pull just sent.
+        """
+        def _tag(name: str) -> str:
+            m = re.search("<" + name + r">(.*?)</" + name + ">", xml or "", re.S | re.I)
+            return (m.group(1).strip()[:60] if m else "")
+        parts = [p for p in (_tag("TYPE"), _tag("ID")) if p]
+        company = _tag("SVCURRENTCOMPANY")
+        if company:
+            parts.append("company=" + company)
+        return " ".join(parts) or "(unlabelled request)"
+
+    @staticmethod
+    def _poison_key(label: str) -> str:
+        """The part of a request label that identifies WHAT was asked for.
+
+        Labels carry the company ("Collection TSSMTDSCategory company=ACME"),
+        but an object type TallyPrime cannot serve is a property of the TDL, not
+        of the company. Quarantining the whole label meant the second company in
+        a multi-company Tally crashed it a second time — one avoidable crash per
+        company. The key drops the company so the first crash protects them all.
+        """
+        return str(label).split(" company=")[0].strip()
+
+    def _is_poison(self, label: str) -> bool:
+        return self._poison_key(label) in self._poison
+
+    @staticmethod
+    def _poison_family(label: str) -> set[str]:
+        """Every request that should be quarantined along with ``label``.
+
+        When TallyPrime dies on one master, its SIBLINGS behind the same F11
+        feature are about to die too — TDSCategory and TDSRate are the same
+        feature, served by the same part of Tally, and a company that cannot
+        answer for one cannot answer for the other. Quarantining the label
+        alone meant the customer's Tally fell over once per master: crash on
+        TDSCategory this cycle, on TDSRate the next, and so on down the family.
+        One crash should buy the whole answer.
+        """
+        key = TallyConnector._poison_key(label)
+        out = {key}
+        coll = key.replace("Collection TSSM", "", 1).strip()
+        spec = next((s for s in MASTERS if s.collection_type == coll), None)
+        if spec is None:
+            return out
+        if spec.feature_must_be_on:
+            # feature_must_be_on marks the types whose ABSENCE crashes Tally
+            # rather than returning nothing. A Tally that has just proved it
+            # crashes on one of them will crash on the others — this build,
+            # this edition, this company's data. Losing those few masters costs
+            # a table; finding out one crash at a time costs the customer their
+            # accounting software, twice more.
+            for sib in MASTERS:
+                if sib.feature_must_be_on:
+                    out.add("Collection TSSM" + sib.collection_type)
+            return out
+        for sib in MASTERS:
+            if spec.requires_feature and sib.requires_feature == spec.requires_feature:
+                out.add("Collection TSSM" + sib.collection_type)
+        return out
+
+    def _send_once(self, xml: str, timeout: "int | None" = None) -> str:
+        """One POST attempt — the transport half of :meth:`send`."""
+        label = self._req_label(xml)
+        self._last_label = label
+        if self._is_poison(label):
+            # Already known to kill Tally on this machine — see the handler
+            # below. Refusing here keeps the retry loop from re-sending it and
+            # keeps the next cycle from starting the whole thing again.
+            raise TallySkipped(
+                "Skipping [" + label + "]: TallyPrime closed the connection on "
+                "it earlier in this run.")
+        # BREADCRUMB. Logged at INFO the first time each distinct request goes
+        # out in a run — about twenty lines, once. Tally can die MID-request and
+        # take the process's chance to log anything with it, so without a line
+        # written BEFORE the send, a crash leaves no record of what caused it.
+        # That gap cost three rounds of guessing at an "Incorrect Object Type!"
+        # box; the label was only at DEBUG, which nobody has on when it happens.
+        if label not in self._seen_labels:
+            self._seen_labels.add(label)
+            self.log.info("Tally request -> %s", label)
+        else:
+            self.log.debug("Tally request: %s", label)
         # Gentle throttle: never fire Tally requests back-to-back. A minimum gap
         # keeps Tally stable AND avoids tripping a licence's abnormal-access guard
         # (request floods can get a Tally licence temporarily locked).
@@ -120,22 +344,43 @@ class TallyConnector:
                 timeout=timeout or TIMEOUT,
             )
         except (requests.ConnectionError, requests.Timeout) as exc:
-            self.log.error("Tally transport error: %s", exc)
+            # A RemoteDisconnected here means Tally dropped the connection while
+            # SERVING this request — i.e. it crashed on it. Naming the request is
+            # what turns "Tally is down" into "Tally dies on THIS report".
+            self.log.error("Tally transport error on [%s]: %s", label, exc)
+            if _killed_tally(exc):
+                # QUARANTINE IT. Tally did not merely fail to answer — it died
+                # mid-answer, which is what an object type it does not support
+                # looks like from this side ("Internal Error … Incorrect Object
+                # Type!" on screen). Retrying is actively harmful: the customer
+                # restarts Tally, the same request goes out again, and Tally
+                # dies again. One master that this company cannot serve should
+                # cost that master, not the whole sync.
+                for key in self._poison_family(label):
+                    self._poison.add(key)
+                _save_skip_store()
+                self.log.error(
+                    "Tally CLOSED THE CONNECTION on [%s] — that request will be "
+                    "skipped for the rest of this run. If this company does not "
+                    "use that feature, this is expected.", label)
             raise TallyUnavailable(
                 "Tally Prime is not reachable on "
                 + self.url
-                + ". Is Tally running with the XML port enabled?"
+                + " (request: " + label + ")."
+                + " Is Tally running with the XML port enabled?"
             ) from exc
         except requests.RequestException as exc:
-            self.log.error("Tally request error: %s", exc)
+            self.log.error("Tally request error on [%s]: %s", label, exc)
             raise TallyUnavailable(
                 "Tally Prime is not reachable on "
                 + self.url
-                + ". Is Tally running with the XML port enabled?"
+                + " (request: " + label + ")."
+                + " Is Tally running with the XML port enabled?"
             ) from exc
 
         if resp.status_code >= 400:
-            self.log.error("Tally HTTP %s: %s", resp.status_code, resp.text[:200])
+            self.log.error("Tally HTTP %s on [%s]: %s", resp.status_code, label,
+                           resp.text[:200])
             raise TallyUnavailable(
                 "Tally Prime returned HTTP "
                 + str(resp.status_code)
@@ -195,12 +440,27 @@ class TallyConnector:
         financial-year start. Returns ``{}`` on miss. Best-effort."""
         xml = self._collection_request_xml(
             "TSSCmpFull", "Company",
-            ["NAME", "GUID", "MAILINGNAME", "ADDRESS", "STATENAME", "PINCODE", "COUNTRYNAME",
+            ["NAME", "GUID", "MASTERID", "ALTERID", "FORMALNAME", "MAILINGNAME",
+             "ADDRESS", "STATENAME", "CMPSTATENAME", "PINCODE", "COUNTRYNAME",
              "EMAIL", "PHONENUMBER", "MOBILENUMBERS", "CMPGSTIN",
-             "GSTREGISTRATIONNUMBER", "INCOMETAXNUMBER", "STARTINGFROM", "BOOKSFROM"], None)
+             "GSTREGISTRATIONNUMBER", "INCOMETAXNUMBER", "TANNUMBER", "CINNUMBER",
+             "STARTINGFROM", "BOOKSFROM", "ENDINGAT",
+             "CURRENCYNAME", "ISSECURITYON",
+             # F11 feature flags — they decide which optional collections are even
+             # worth pulling for this company (bill-wise, cost centres, batches …).
+             "ISINVENTORYON", "ISBILLWISEON", "ISCOSTCENTRESON", "ISMULTIGODOWNON",
+             "ISBATCHON", "ISPAYROLLON", "ISMULTICURRENCYON",
+             # Gates for the TDS/TCS masters: a company with these off
+             # has no such objects, and asking anyway kills Tally.
+             "ISTDSON", "ISTCSON"],
+            # Scope to the REQUESTED company. This used to pass None, so in a
+            # multi-company Tally every company in the loop got whichever company
+            # happened to be active — every cloud company mirrored the same master.
+            company)
         root = self._safe_parse(self.send(xml, timeout=60))
         if root is None:
             return {}
+        want = (company or "").strip().lower()
 
         def _fy(s: str) -> Optional[str]:
             m = re.match(r"^(\d{4})(\d{2})(\d{2})$", str(s or "").strip())
@@ -212,6 +472,10 @@ class TallyConnector:
             nm = (el.get("NAME") or "").strip() or self._child_text(el, "NAME")
             if not nm:
                 continue
+            # Belt-and-braces: even scoped, a Tally build may echo every loaded
+            # company. Never return someone else's master under this name.
+            if want and nm.strip().lower() != want:
+                continue
             lines = [a.text.strip() for a in el.iter()
                      if self._localname(a.tag).upper() == "ADDRESS" and (a.text or "").strip()]
             return {
@@ -220,13 +484,20 @@ class TallyConnector:
                 # this (NOT the mutable name), so a renamed/blank-named company
                 # never spawns a duplicate. None if Tally didn't return it (then
                 # the cloud falls back to name matching).
-                "guid": self._child_text(el, "GUID") or None,
+                "guid": self._guid(el),
+                "master_id": self._masterid(el),
+                "alterid": self._alterid(el),
+                "formal_name": self._child_text(el, "FORMALNAME") or None,
                 "mailing_name": self._child_text(el, "MAILINGNAME") or None,
                 "email": self._child_text(el, "EMAIL") or None,
                 "pincode": self._child_text(el, "PINCODE") or None,
-                "state": self._child_text(el, "STATENAME") or None,
+                "state": (self._child_text(el, "STATENAME")
+                          or self._child_text(el, "CMPSTATENAME") or None),
                 "country": self._child_text(el, "COUNTRYNAME") or None,
                 "pan": self._child_text(el, "INCOMETAXNUMBER") or None,
+                "tan": self._child_text(el, "TANNUMBER") or None,
+                "cin": self._child_text(el, "CINNUMBER") or None,
+                "currency": self._child_text(el, "CURRENCYNAME") or None,
                 "gstin": (self._child_text(el, "CMPGSTIN")
                           or self._child_text(el, "GSTREGISTRATIONNUMBER") or None),
                 # Tally keeps landline (PHONENUMBER) and mobile (MOBILENUMBERS)
@@ -236,6 +507,18 @@ class TallyConnector:
                 "address": "\n".join(lines) or None,
                 "books_from": _fy(self._child_text(el, "STARTINGFROM")
                                   or self._child_text(el, "BOOKSFROM")),
+                "books_to": _fy(self._child_text(el, "ENDINGAT")),
+                # F11 feature flags, kept verbatim. fetch_all_masters() reads
+                # these to skip collections the company does not use (a company
+                # without payroll has no Employee collection at all).
+                "features": {
+                    tag: self._child_text(el, tag)
+                    for tag in ("ISINVENTORYON", "ISBILLWISEON", "ISCOSTCENTRESON",
+                                "ISMULTIGODOWNON", "ISBATCHON", "ISPAYROLLON",
+                                "ISMULTICURRENCYON", "ISSECURITYON",
+                                "ISTDSON", "ISTCSON")
+                    if self._child_text(el, tag)
+                },
             }
         return {}
 
@@ -243,17 +526,122 @@ class TallyConnector:
     # Financial reports — pulled VERBATIM from Tally so the cloud mirrors
     # them EXACTLY (no reconstruction → no inventory/opening-balance drift).
     # ------------------------------------------------------------------ #
-    def _report_xml(self, report_id: str, company: Optional[str]) -> str:
-        """EXPORT one of Tally's built-in financial reports as XML."""
+    def _report_xml(self, report_id: str, company: Optional[str],
+                    from_date: Optional[str] = None,
+                    to_date: Optional[str] = None) -> str:
+        """EXPORT one of Tally's built-in financial reports as XML.
+
+        ``from_date``/``to_date`` are Tally YYYYMMDD. WITHOUT them Tally answers
+        for whatever period the company is currently open at — so the cloud got
+        one unlabelled snapshot and could never show last year's Balance Sheet,
+        nor say which period the figures it holds belong to. With them the same
+        report can be pulled per financial year.
+        """
         cmp_xml = ("<SVCURRENTCOMPANY>" + self._esc(company) + "</SVCURRENTCOMPANY>") if company else ""
+        period = ""
+        if from_date:
+            period += "<SVFROMDATE>" + self._esc(from_date) + "</SVFROMDATE>"
+        if to_date:
+            period += "<SVTODATE>" + self._esc(to_date) + "</SVTODATE>"
+
+        # A server-published envelope wins when there is one, so a report can be
+        # changed or added centrally. The built-in request below is the fallback,
+        # never the dead code path: it is what runs when the agent is offline,
+        # when a set fails verification, and for every report nobody has
+        # published an override for.
+        published = self._published_envelope(report_id)
+        if published:
+            return self.send(self._with_context(published, cmp_xml, period), timeout=60)
+
         req = (
             "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
             "<TYPE>Data</TYPE><ID>" + self._esc(report_id) + "</ID></HEADER>"
             "<BODY><DESC><STATICVARIABLES>"
-            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>" + cmp_xml +
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>" + cmp_xml + period +
             "</STATICVARIABLES></DESC></BODY></ENVELOPE>"
         )
         return self.send(req, timeout=60)
+
+    # ── Server-published envelopes ────────────────────────────────────────
+    @staticmethod
+    def envelope_key(report_id: str) -> str:
+        """The envelope name a report is published under.
+
+        'Balance Sheet' -> 'report:balance_sheet'. Normalised so the server side
+        can be written in readable English without the two sides having to agree
+        on punctuation.
+        """
+        slug = re.sub(r"[^a-z0-9]+", "_", str(report_id or "").lower()).strip("_")
+        return "report:" + slug
+
+    def _published_envelope(self, report_id: str) -> Optional[str]:
+        """A server-published override for this report, or None.
+
+        Every failure is a None, never an exception: an envelope problem must
+        degrade to the built-in query, not stop the sync. The store has already
+        verified the signature and refused anything that could write, so
+        reaching here means the XML is safe to send.
+        """
+        # getattr, not self.envelopes: a subclass or a test double that builds
+        # itself without calling __init__ must fall back to the built-in query,
+        # not raise AttributeError halfway through a report pull. Same rule as
+        # everywhere else here — an envelope problem degrades, never breaks.
+        store = getattr(self, "envelopes", None)
+        if store is None:
+            return None
+        try:
+            return store.xml(self.envelope_key(report_id)) or None
+        except Exception as exc:      # noqa: BLE001
+            self.log.debug("No published envelope for %s (%s)", report_id, exc)
+            return None
+
+    def _with_context(self, xml: str, cmp_xml: str, period: str) -> str:
+        """Inject company + period into a published envelope.
+
+        The server cannot know which company is open or which financial year is
+        being pulled, so it publishes the SHAPE of the query and the agent fills
+        in the context. Injected into the existing STATICVARIABLES block when
+        there is one; anything already specifying its own company or period is
+        left untouched, since that was a deliberate choice by whoever published
+        it.
+        """
+        extra = (cmp_xml or "") + (period or "")
+        if not extra:
+            return xml
+        if "SVCURRENTCOMPANY" in xml and cmp_xml:
+            extra = period or ""
+        if "SVFROMDATE" in xml and period:
+            extra = cmp_xml if "SVCURRENTCOMPANY" not in xml else ""
+        if not extra:
+            return xml
+        if "</STATICVARIABLES>" in xml:
+            return xml.replace("</STATICVARIABLES>", extra + "</STATICVARIABLES>", 1)
+        # No STATICVARIABLES block: leave it exactly as published rather than
+        # guessing at a structure we did not write.
+        return xml
+
+    # ── Financial years ───────────────────────────────────────────────────
+    @staticmethod
+    def financial_years(count: int = 2) -> list[dict[str, str]]:
+        """The last ``count`` Indian financial years, newest first.
+
+        Each entry is ``{label, from_date, to_date}`` with Tally YYYYMMDD dates —
+        e.g. ``{'label': '2026-27', 'from_date': '20260401', 'to_date': '20270331'}``.
+        The label is what the cloud stores alongside a report, so a figure can
+        never be shown under the wrong year.
+        """
+        import datetime
+        today = datetime.date.today()
+        start = today.year if today.month >= 4 else today.year - 1
+        out: list[dict[str, str]] = []
+        for i in range(max(1, count)):
+            y = start - i
+            out.append({
+                "label": "%04d-%02d" % (y, (y + 1) % 100),
+                "from_date": "%04d0401" % y,
+                "to_date": "%04d0331" % (y + 1),
+            })
+        return out
 
     @staticmethod
     def _rx_amt(s: str) -> float:
@@ -263,34 +651,125 @@ class TallyConnector:
         except ValueError:
             return 0.0
 
-    def financial_reports(self, company: Optional[str] = None) -> dict[str, Any]:
+    def financial_reports(self, company: Optional[str] = None,
+                          from_date: Optional[str] = None,
+                          to_date: Optional[str] = None) -> dict[str, Any]:
         """Pull Tally's EXACT Balance Sheet / Profit&Loss / Trial Balance so the
-        cloud shows them verbatim. Each is best-effort ({} on a miss)."""
+        cloud shows them verbatim. Each is best-effort ({} on a miss).
+
+        With no dates this asks for the company's current period, exactly as
+        before. Pass a financial year's dates to pull that year instead.
+        """
+        specs = (
+            ("balance_sheet",     "Balance Sheet",     self._parse_balance_sheet),
+            ("profit_loss",       "Profit and Loss",   self._parse_pl),
+            ("trial_balance",     "Trial Balance",     self._parse_tb),
+            ("sales_register",    "Sales Register",    self._parse_register),
+            ("purchase_register", "Purchase Register", self._parse_register),
+            ("stock_summary",     "Stock Summary",     self._parse_stock),
+            # Group Summary is the Dr/Cr closing of every GROUP and ledger with
+            # its GUID and parent GUID — Tally's own account tree with figures
+            # attached. It is what lets a Balance Sheet line be drilled into
+            # without re-deriving the hierarchy from ledger parents.
+            ("group_summary",     "Group Summary",     self._parse_group_summary),
+        )
         out: dict[str, Any] = {}
+        for key, report_id, parse in specs:
+            try:
+                out[key] = parse(self._report_xml(report_id, company, from_date, to_date))
+            except Exception as exc:      # noqa: BLE001 — one bad report must not
+                self.log.warning("%s pull failed: %s", report_id, exc)   # cost the rest
+                out[key] = {}
+        return out
+
+    # The slugs `financial_reports` above already covers. extra_reports() skips
+    # these so a PUBLISHED envelope for one of them stays what it was meant to
+    # be — an override of that report's XML — instead of being run a second time
+    # and stored again as raw.
+    BUILTIN_REPORT_SLUGS: frozenset = frozenset({
+        "balance_sheet", "profit_loss", "trial_balance",
+        "sales_register", "purchase_register", "stock_summary", "group_summary",
+    })
+
+    def extra_reports(self, company: Optional[str] = None,
+                      from_date: Optional[str] = None,
+                      to_date: Optional[str] = None) -> dict[str, Any]:
+        """Run every PUBLISHED report envelope the agent has no parser for.
+
+        WHAT THIS UNLOCKS: adding a Tally report used to need a new exe — a
+        request builder, a parser and a release. The server could already publish
+        the XML (envelope_store), but nothing ever ran an envelope the agent did
+        not already know by name, so `cash_flow`, `ratio_analysis` and
+        `godown_summary` sat published and unused. Here they run, and the RAW
+        XML goes to the cloud, where a parser is a server-side change.
+
+        Raw on purpose. Parsing is the half that keeps changing (Tally renames
+        tags between builds, and every report nests differently), so it belongs
+        where it can be fixed without touching a single customer's machine. The
+        agent's job is only to ask Tally the question and carry the answer back.
+
+        Returns ``{slug: {"raw": xml, "label": str, "fetched_for": period}}``.
+        Best-effort per envelope: one report that fails or times out must not
+        cost the others, and no envelope failure may ever break the sync.
+        """
+        store = getattr(self, "envelopes", None)
+        if store is None:
+            return {}
         try:
-            out["balance_sheet"] = self._parse_balance_sheet(self._report_xml("Balance Sheet", company))
-        except Exception as exc:
-            self.log.warning("Balance Sheet pull failed: %s", exc); out["balance_sheet"] = {}
-        try:
-            out["profit_loss"] = self._parse_pl(self._report_xml("Profit and Loss", company))
-        except Exception as exc:
-            self.log.warning("P&L pull failed: %s", exc); out["profit_loss"] = {}
-        try:
-            out["trial_balance"] = self._parse_tb(self._report_xml("Trial Balance", company))
-        except Exception as exc:
-            self.log.warning("Trial Balance pull failed: %s", exc); out["trial_balance"] = {}
-        try:
-            out["sales_register"] = self._parse_register(self._report_xml("Sales Register", company))
-        except Exception as exc:
-            self.log.warning("Sales Register pull failed: %s", exc); out["sales_register"] = {}
-        try:
-            out["purchase_register"] = self._parse_register(self._report_xml("Purchase Register", company))
-        except Exception as exc:
-            self.log.warning("Purchase Register pull failed: %s", exc); out["purchase_register"] = {}
-        try:
-            out["stock_summary"] = self._parse_stock(self._report_xml("Stock Summary", company))
-        except Exception as exc:
-            self.log.warning("Stock Summary pull failed: %s", exc); out["stock_summary"] = {}
+            names = store.names()
+        except Exception as exc:          # noqa: BLE001
+            self.log.debug("No published envelope set to scan (%s)", exc)
+            return {}
+
+        cmp_xml = ("<SVCURRENTCOMPANY>" + self._esc(company) + "</SVCURRENTCOMPANY>") if company else ""
+        period = ""
+        if from_date:
+            period += "<SVFROMDATE>" + self._esc(from_date) + "</SVFROMDATE>"
+        if to_date:
+            period += "<SVTODATE>" + self._esc(to_date) + "</SVTODATE>"
+
+        out: dict[str, Any] = {}
+        for name in names:
+            # Only `report:` envelopes are reports. Others (licence info, and
+            # whatever is published later) belong to their own call sites and
+            # must not be swept into the report table.
+            if not str(name).startswith("report:"):
+                continue
+            slug = str(name)[len("report:"):]
+            if not slug or slug in self.BUILTIN_REPORT_SLUGS:
+                continue
+            try:
+                xml = store.xml(name)
+                if not xml:
+                    continue
+                raw = self.send(self._with_context(xml, cmp_xml, period), timeout=60)
+            except TallyUnavailable:
+                raise                     # Tally is gone — the caller must stop.
+            except Exception as exc:      # noqa: BLE001
+                self.log.warning("Published report %s failed: %s", name, exc)
+                continue
+            if not str(raw or "").strip():
+                continue
+            out[slug] = {"raw": raw, "label": slug.replace("_", " ").title()}
+        return out
+
+    def financial_reports_by_year(self, company: Optional[str] = None,
+                                  years: int = 2) -> dict[str, dict[str, Any]]:
+        """Every report for the last ``years`` financial years, keyed by label.
+
+        ``{'2026-27': {...}, '2025-26': {...}}``. A company whose books start
+        mid-way answers the earlier year with empty reports rather than failing,
+        so a short history costs nothing but is not silently mislabelled either.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        for fy in self.financial_years(years):
+            try:
+                out[fy["label"]] = self.financial_reports(
+                    company, from_date=fy["from_date"], to_date=fy["to_date"])
+            except TallyUnavailable:
+                raise                      # Tally is gone — the caller must stop.
+            except Exception as exc:       # noqa: BLE001
+                self.log.warning("Reports for FY %s failed: %s", fy["label"], exc)
         return out
 
     def _parse_balance_sheet(self, xml: str) -> dict[str, Any]:
@@ -321,27 +800,43 @@ class TallyConnector:
         return {"liabilities": liab, "assets": asset, "total": round(total, 2)}
 
     def _parse_pl(self, xml: str) -> dict[str, Any]:
-        """P&L rows: <DSPDISPNAME>name</> <PLAMT><PLSUBAMT>sub</><BSMAINAMT>main</>.
-        +ve = credit (income), -ve = debit (expense). Keep the main-group rows."""
-        blocks = re.findall(
-            r"<DSPDISPNAME>(.*?)</DSPDISPNAME>\s*</DSPACCNAME>\s*<PLAMT>\s*"
-            r"<PLSUBAMT>(.*?)</PLSUBAMT>\s*<BSMAINAMT>(.*?)</BSMAINAMT>", xml, re.S)
-        # Only the MAIN group rows (BSMAINAMT present) drive the totals — the
-        # SUB rows (Opening Stock / Purchases / Closing Stock / Direct Expenses)
-        # are details UNDER 'Cost of Sales', so counting both double-counts. Keep
-        # the subs in `details` (for display), totals from mains only.
+        """P&L rows. +ve = credit (income), -ve = debit (expense).
+
+        Real shape (confirmed against a live export):
+            <DSPACCNAME><DSPDISPNAME>Sales Accounts</DSPDISPNAME><GUID>…</GUID>
+              <ISGROUP>Yes</ISGROUP><BSMAINAMT>30151900.11</BSMAINAMT></DSPACCNAME>
+            <PLAMT><BSMAINAMT>30151900.11</BSMAINAMT></PLAMT>
+
+        A row carries EITHER BSMAINAMT (a main group) or PLSUBAMT (a detail
+        under the previous main) — never both, and GUID/ISGROUP sit between the
+        name and the amount. An earlier version required both amounts adjacent
+        to the name, so it matched nothing and the P&L mirrored as empty with no
+        error anywhere. Read from the DSPACCNAME block only; the PLAMT sibling
+        restates the same figure and counting both doubles every total.
+
+        Only MAIN rows drive the totals: the subs (Opening Stock, Purchases,
+        Closing Stock, Direct Expenses) are details UNDER 'Cost of Sales', so
+        including them would double-count.
+        """
         income, expense, details = [], [], []
         cur = None
-        for name, sub, main in blocks:
-            nm = self._unesc(name).strip()
-            if main.strip():                       # MAIN group row
+        for blk in re.findall(r"<DSPACCNAME>(.*?)</DSPACCNAME>", xml, re.S):
+            def tag(name: str) -> str:
+                m = re.search(r"<%s>(.*?)</%s>" % (name, name), blk, re.S)
+                return m.group(1).strip() if m else ""
+
+            nm = self._unesc(tag("DSPDISPNAME")).strip()
+            if not nm:
+                continue
+            main, sub = tag("BSMAINAMT"), tag("PLSUBAMT")
+            if main:                               # MAIN group row
                 amt = self._rx_amt(main)
                 if abs(amt) < 0.005:
                     cur = None
                     continue
                 (income if amt > 0 else expense).append({"name": nm, "amount": round(abs(amt), 2)})
                 cur = nm
-            else:                                  # SUB detail under the last main
+            elif sub:                              # SUB detail under the last main
                 details.append({"name": nm, "amount": round(self._rx_amt(sub), 2), "under": cur})
         return {"income": income, "expense": expense, "details": details}
 
@@ -399,7 +894,234 @@ class TallyConnector:
                          "rate": round(self._rx_amt(rate), 2), "amount": round(a, 2)})
         return {"rows": rows, "total": round(total, 2)}
 
-    def ledger_list(self, company: Optional[str] = None) -> list[dict[str, Any]]:
+    def _parse_group_summary(self, xml: str) -> dict[str, Any]:
+        """Group Summary: every group/ledger with its closing Dr and Cr.
+
+        Real shape (confirmed against a live export):
+            <DSPACCNAME><DSPDISPNAME>Capital Account</DSPDISPNAME>
+              <GUID>…-00000001</GUID><ISGROUP>Yes</ISGROUP>
+              <DSPCLDRAMTA></DSPCLDRAMTA><DSPCLCRAMTA>11808076.45</DSPCLCRAMTA>
+            </DSPACCNAME><DSPACCINFO>…repeats the same amounts…</DSPACCINFO>
+
+        Parsed from DSPACCNAME only — DSPACCINFO restates the same two figures,
+        so reading both would double every balance. Empty amount tags are normal
+        (a row sits on one side), and PGUID is absent on top-level groups.
+        """
+        rows: list[dict[str, Any]] = []
+        for blk in re.findall(r"<DSPACCNAME>(.*?)</DSPACCNAME>", xml, re.S):
+            def tag(name: str) -> str:
+                m = re.search(r"<%s>(.*?)</%s>" % (name, name), blk, re.S)
+                return self._unesc(m.group(1)).strip() if m else ""
+
+            name = tag("DSPDISPNAME")
+            if not name:
+                continue
+            dr = self._rx_amt(tag("DSPCLDRAMTA"))
+            cr = self._rx_amt(tag("DSPCLCRAMTA"))
+            rows.append({
+                "name": name,
+                "guid": tag("GUID"),
+                "parent_guid": tag("PGUID"),      # '' on a top-level group
+                "is_group": tag("ISGROUP").lower() == "yes",
+                "debit": round(abs(dr), 2),
+                "credit": round(abs(cr), 2),
+            })
+        return {"rows": rows, "total": len(rows)}
+
+    # ── Outstanding (bill-wise) ───────────────────────────────────────────
+    #
+    # SHAPE OF THE REAL REPORT (confirmed against a live Tally export, not
+    # guessed). Tally answers PER LEDGER with a flat run of bills and NO party
+    # name anywhere in the payload — the party is whichever ledger was asked
+    # for:
+    #
+    #   <ENVELOPE>
+    #     <BILLFIXED><BILLDATE>4-Jun-26</BILLDATE><BILLREF>638/2026-27</BILLREF></BILLFIXED>
+    #     <BILLOP>-18653.00</BILLOP><BILLCL>-18653.00</BILLCL>
+    #     <BILLDUE>4-Jun-26</BILLDUE><BILLOVERDUE>300</BILLOVERDUE>
+    #     …repeated…
+    #   </ENVELOPE>
+    #
+    # Three things here bite anyone who assumes the usual report shape:
+    #   • the amount tag is BILLCL, not BILLCLAMT/DSPCLAMTA;
+    #   • dates are 'd-Mmm-yy', NOT Tally's usual YYYYMMDD;
+    #   • BILLFIXED is a wrapper around date+ref only — the amounts are its
+    #     SIBLINGS, so a regex scoped to the BILLFIXED element finds no money.
+    def outstandings(self, company: Optional[str] = None,
+                     ledgers: Optional[list[str]] = None,
+                     from_date: Optional[str] = None,
+                     to_date: Optional[str] = None) -> dict[str, Any]:
+        """Tally's OWN bill-wise outstanding, per party.
+
+        The cloud already DERIVES outstanding from the mirrored bill allocations
+        (Helpers/billwiseOutstanding.js) and that stays the number the screens
+        use. This is the INDEPENDENT second opinion: Tally's own figure,
+        computed by Tally, stored verbatim. Without it a derived total that has
+        drifted is indistinguishable from one that is right.
+
+        ``ledgers`` are the party names to ask for. Tally has no "every party's
+        bills in one call" export — the report is per ledger — so the caller
+        passes the parties worth asking about (typically the debtor/creditor
+        ledgers). Returns ``{rows, total, parties, failed}`` where each row is
+        ``{party, bill, bill_date, due_date, opening, amount, overdue_days}``.
+        """
+        rows: list[dict[str, Any]] = []
+        failed: list[str] = []
+        for name in (ledgers or []):
+            if not str(name or "").strip():
+                continue
+            try:
+                xml = self._ledger_outstanding_xml(name, company, from_date, to_date)
+                rows.extend(self._parse_bills(xml, party=name))
+            except TallyUnavailable:
+                raise                     # Tally is gone — the caller must stop.
+            except Exception as exc:      # noqa: BLE001 — one unreadable party
+                self.log.debug("Outstanding for %r failed: %s", name, exc)
+                failed.append(str(name))  # must not cost the other parties
+        total = round(sum(abs(float(r["amount"])) for r in rows), 2)
+        return {"rows": rows, "total": total,
+                "parties": len({r["party"] for r in rows}), "failed": failed}
+
+    # The Tally group names every party ledger ultimately descends from. A
+    # company may nest its own groups under these ("Debtors - North"), so
+    # membership is decided by WALKING the parent chain, not by comparing the
+    # immediate parent — which would miss every company that organises its
+    # parties into sub-groups.
+    PARTY_ROOT_GROUPS = ("sundry debtors", "sundry creditors")
+
+    def party_ledger_names(self, company: Optional[str] = None,
+                           roots: Optional[tuple[str, ...]] = None) -> list[str]:
+        """The ledgers that can carry an outstanding bill: parties only.
+
+        Outstanding is a per-ledger report, so something has to choose which
+        ledgers to ask about. Asking for all of them costs one Tally round trip
+        per ledger (thousands); asking only the ones directly parented to a party
+        group silently skips every sub-grouped party. This walks the group tree
+        instead, so a party nested three levels deep is still found.
+        """
+        wanted = tuple(r.lower() for r in (roots or self.PARTY_ROOT_GROUPS))
+        groups = self.group_list(company=company)
+        parent_of = {str(g.get("name", "")).strip().lower():
+                     str(g.get("parent", "")).strip().lower() for g in groups}
+
+        def is_party_group(name: str, depth: int = 0) -> bool:
+            n = (name or "").strip().lower()
+            # Depth cap: a self-referential or circular parent chain in a
+            # corrupted company would otherwise spin forever.
+            if not n or depth > 25:
+                return False
+            if n in wanted:
+                return True
+            return is_party_group(parent_of.get(n, ""), depth + 1)
+
+        out: list[str] = []
+        for led in self.ledger_list(company=company):
+            name = str(led.get("name", "")).strip()
+            if name and is_party_group(str(led.get("parent", ""))):
+                out.append(name)
+        return out
+
+    def _ledger_outstanding_xml(self, ledger: str, company: Optional[str],
+                                from_date: Optional[str],
+                                to_date: Optional[str]) -> str:
+        """Request one ledger's bill-wise outstanding.
+
+        SVLEDGERNAME is what scopes the report to a party; without it Tally
+        answers for whatever ledger is in context, which silently attributes one
+        party's bills to another.
+        """
+        cmp_xml = ("<SVCURRENTCOMPANY>" + self._esc(company) + "</SVCURRENTCOMPANY>") if company else ""
+        period = ""
+        if from_date:
+            period += "<SVFROMDATE>" + self._esc(from_date) + "</SVFROMDATE>"
+        if to_date:
+            period += "<SVTODATE>" + self._esc(to_date) + "</SVTODATE>"
+        req = (
+            "<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST>"
+            "<TYPE>Data</TYPE><ID>Ledger Outstandings</ID></HEADER>"
+            "<BODY><DESC><STATICVARIABLES>"
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>" + cmp_xml + period +
+            "<SVLEDGERNAME>" + self._esc(ledger) + "</SVLEDGERNAME>"
+            "</STATICVARIABLES></DESC></BODY></ENVELOPE>"
+        )
+        return self.send(req, timeout=60)
+
+    def _parse_bills(self, xml: str, party: str = "") -> list[dict[str, Any]]:
+        """One ledger's outstanding XML -> a list of bill rows.
+
+        Parsed POSITIONALLY: the tags are siblings in document order, so each
+        bill is the BILLFIXED element plus everything up to the next one. A
+        per-tag findall would work only while every bill carried every tag —
+        one bill missing BILLDUE would shift every later due date onto the wrong
+        bill, which reads as valid data.
+        """
+        out: list[dict[str, Any]] = []
+        # Cut the document into per-bill segments at each BILLFIXED.
+        parts = re.split(r"(?=<BILLFIXED>)", xml)
+        for seg in parts:
+            if "<BILLFIXED>" not in seg:
+                continue           # preamble before the first bill
+
+            def tag(name: str) -> str:
+                m = re.search(r"<%s>(.*?)</%s>" % (name, name), seg, re.S)
+                return self._unesc(m.group(1)).strip() if m else ""
+
+            ref = tag("BILLREF")
+            closing = tag("BILLCL")
+            if not ref and not closing:
+                continue
+            amt = self._rx_amt(closing)
+            out.append({
+                "party": str(party or "").strip(),
+                # Tally stores a debit NEGATIVE (the same inverted convention as
+                # ledger balances), so a negative closing is money owed TO us.
+                # The side is only recoverable here — every consumer wants the
+                # magnitude, so the sign is read before it is dropped.
+                "side": "receivable" if amt < 0 else "payable",
+                "bill": ref,
+                "bill_date": self._tally_date(tag("BILLDATE")),
+                "due_date": self._tally_date(tag("BILLDUE")),
+                # Signed the way Tally reports it (a receivable is negative);
+                # magnitude is what every ageing screen wants, and both sides
+                # must read positive or a mixed total cancels itself out.
+                "opening": round(abs(self._rx_amt(tag("BILLOP"))), 2),
+                "amount": round(abs(amt), 2),
+                "overdue_days": int(self._rx_amt(tag("BILLOVERDUE")) or 0),
+            })
+        return out
+
+    # Tally's month abbreviations, as they appear in an XML export.
+    _MONTHS = {m: i + 1 for i, m in enumerate(
+        ("jan", "feb", "mar", "apr", "may", "jun",
+         "jul", "aug", "sep", "oct", "nov", "dec"))}
+
+    @classmethod
+    def _tally_date(cls, s: str) -> str:
+        """Any date shape Tally emits -> 'YYYY-MM-DD'; '' if unrecognised.
+
+        Three shapes are real: 'YYYYMMDD' (collections), 'd-Mmm-yy' (report
+        exports — e.g. '4-Jun-26') and an already-ISO date. The two-digit year
+        is read as 20xx: Tally writes it for the CURRENT books, and no Indian
+        company files a 19xx return.
+        """
+        t = str(s or "").strip()
+        if not t:
+            return ""
+        if re.fullmatch(r"\d{8}", t):
+            return "%s-%s-%s" % (t[:4], t[4:6], t[6:])
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})", t)
+        if m:
+            return m.group(1)
+        m = re.fullmatch(r"(\d{1,2})-([A-Za-z]{3})-(\d{2}|\d{4})", t)
+        if m:
+            mon = cls._MONTHS.get(m.group(2).lower())
+            if mon:
+                yr = int(m.group(3))
+                return "%04d-%02d-%02d" % (yr if yr > 99 else 2000 + yr, mon, int(m.group(1)))
+        return ""
+
+    def ledger_list(self, company: Optional[str] = None,
+                    after_alterid: int = 0) -> list[dict[str, Any]]:
         """Fetch ledgers from Tally via a COLLECTION (name, parent, alterid, ...).
 
         Uses a Collection of TYPE Ledger that FETCHes NAME, PARENT, ALTERID,
@@ -411,7 +1133,7 @@ class TallyConnector:
         omit it to read whichever company is currently active in Tally. Returns
         ``[{name, parent, gstin, opening, alterid:int}, ...]``.
         """
-        xml = self.send(self._ledger_collection_request_xml(company))
+        xml = self.send(self._ledger_collection_request_xml(company, after_alterid))
         root = self._safe_parse(xml)
         ledgers: list[dict[str, Any]] = []
         if root is not None:
@@ -426,6 +1148,11 @@ class TallyConnector:
                                   if self._localname(a.tag).upper() == "ADDRESS" and (a.text or "").strip()]
                     ledgers.append({
                         "name": name,
+                        # Rename-stable identity — the cloud upserts on guid, so a
+                        # ledger renamed in Tally updates its row instead of
+                        # creating a second one. master_id drives delete detection.
+                        "guid": self._guid(el),
+                        "master_id": self._masterid(el),
                         "parent": self._child_text(el, "PARENT"),
                         "gstin": self._child_text(el, "PARTYGSTIN") or None,
                         "opening": self._child_text(el, "OPENINGBALANCE"),
@@ -444,10 +1171,70 @@ class TallyConnector:
                         "country": self._child_text(el, "COUNTRYNAME") or None,
                         "credit_limit": self._child_text(el, "CREDITLIMIT") or None,
                         "alterid": self._alterid(el),
+                        # Behaviour flags — is_billwise in particular tells the
+                        # cloud whether this party's outstanding CAN be bill-wise
+                        # at all, or is only ever a running balance.
+                        "is_billwise": self._child_text(el, "ISBILLWISEON").lower() == "yes",
+                        "is_costcentres": self._child_text(el, "ISCOSTCENTRESON").lower() == "yes",
+                        "is_deemed_positive": self._child_text(el, "ISDEEMEDPOSITIVE").lower() == "yes",
+                        "affects_stock": self._child_text(el, "AFFECTSSTOCK").lower() == "yes",
+                        "credit_period_days": self._credit_days(self._child_text(el, "BILLCREDITPERIOD")),
+                        "gst_registration_type": self._child_text(el, "GSTREGISTRATIONTYPE") or None,
+                        "place_of_supply": self._child_text(el, "PLACEOFSUPPLY") or None,
+                        "contact_person": self._child_text(el, "LEDGERCONTACT") or None,
+                        "fax": self._child_text(el, "LEDGERFAX") or None,
+                        "website": self._child_text(el, "WEBSITE") or None,
+                        "tax_type": self._child_text(el, "TAXTYPE") or None,
+                        "tax_classification": self._child_text(el, "TAXCLASSIFICATIONNAME") or None,
+                        "bank_details": self._ledger_bank_details(el),
+                        "opening_bills": self._ledger_opening_bills(el),
                     })
         return ledgers
 
-    def stock_summary(self, company: Optional[str] = None) -> list[dict[str, Any]]:
+    def _ledger_bank_details(self, el: ET.Element) -> list[dict[str, Any]]:
+        """LEDGERBANKDETAILS.LIST → the party's bank accounts.
+
+        A flat FETCH cannot carry a repeating list, which is why the cloud's
+        bank_name/bank_acc_no/ifsc columns on tally_ledgers were always empty.
+        """
+        out = []
+        for b in self._lists(el, "LEDGERBANKDETAILS.LIST", "BANKDETAILS.LIST"):
+            acc = self._direct_child_text(b, "ACCOUNTNUMBER")
+            ifsc = self._direct_child_text(b, "IFSCODE")
+            bank = self._direct_child_text(b, "BANKNAME")
+            if not (acc or ifsc or bank):
+                continue
+            out.append({
+                "account_no": acc or None,
+                "ifsc": ifsc or None,
+                "bank_name": bank or None,
+                "branch": self._direct_child_text(b, "BRANCHNAME") or None,
+                "account_holder": self._direct_child_text(b, "ACCOUNTHOLDERNAME") or None,
+            })
+        return out
+
+    def _ledger_opening_bills(self, el: ET.Element) -> list[dict[str, Any]]:
+        """OPENINGBALANCEALLOCATIONS.LIST → the opening balance, bill by bill.
+
+        Without this a migrated company's opening balance is one lump, so every
+        bill older than the migration date ages from the wrong start.
+        """
+        out = []
+        for b in self._lists(el, "OPENINGBALANCEALLOCATIONS.LIST"):
+            name = self._direct_child_text(b, "NAME")
+            if not name:
+                continue
+            out.append({
+                "bill_name": name,
+                "bill_date": self._direct_child_text(b, "BILLDATE") or None,
+                "amount": self._rate(self._direct_child_text(b, "OPENINGBALANCE")
+                                     or self._direct_child_text(b, "AMOUNT")),
+                "credit_period_days": self._credit_days(self._direct_child_text(b, "BILLCREDITPERIOD")),
+            })
+        return out
+
+    def stock_summary(self, company: Optional[str] = None,
+                      after_alterid: int = 0) -> list[dict[str, Any]]:
         """Fetch stock items from Tally via a COLLECTION (name, alterid, ...).
 
         Uses a Collection of TYPE StockItem that FETCHes NAME, ALTERID,
@@ -457,7 +1244,7 @@ class TallyConnector:
         Pass ``company`` to target a specific loaded company (SVCURRENTCOMPANY).
         Returns ``[{name, unit, hsn, closing, alterid:int}, ...]``.
         """
-        xml = self.send(self._stock_collection_request_xml(company))
+        xml = self.send(self._stock_collection_request_xml(company, after_alterid))
         root = self._safe_parse(xml)
         items: list[dict[str, Any]] = []
         if root is not None:
@@ -469,6 +1256,8 @@ class TallyConnector:
                         continue
                     items.append({
                         "name": name,
+                        "guid": self._guid(el),
+                        "master_id": self._masterid(el),
                         "unit": self._child_text(el, "BASEUNITS") or None,
                         # Stock group = the cloud "category".
                         "parent": self._child_text(el, "PARENT") or None,
@@ -484,8 +1273,127 @@ class TallyConnector:
                         "purchase_price": self._rate(self._child_text(el, "STANDARDCOST")
                                                      or self._child_text(el, "OPENINGRATE")),
                         "alterid": self._alterid(el),
+                        # Rate SLABS (one per applicable-from date). The flat
+                        # gst_rate above is only the first one found, which is
+                        # wrong for any item whose rate changed mid-year.
+                        "gst_slabs": self._stock_gst_slabs(el),
+                        # Nested lists a flat collection cannot express. Each is
+                        # its own table; without them opening stock is a single
+                        # number with no batch/expiry behind it, a price list is
+                        # invisible, and a manufactured item has no cost roll-up.
+                        "batches": self._stock_batches(el),
+                        "price_list": self._stock_price_list(el),
+                        "bom": self._stock_bom(el),
                     })
         return items
+
+    def _stock_batches(self, el: ET.Element) -> list[dict[str, Any]]:
+        """BATCHALLOCATIONS.LIST on a StockItem → its OPENING batches.
+
+        Distinct from the voucher-level batch allocations: these are the batches
+        the item already holds at the start, with their godown and expiry. An
+        expiry report that ignores them misses every pre-existing lot.
+        """
+        out = []
+        for b in self._lists(el, "BATCHALLOCATIONS.LIST"):
+            name = self._direct_child_text(b, "BATCHNAME")
+            if not name:
+                continue
+            out.append({
+                "batch_name": name,
+                "godown": self._direct_child_text(b, "GODOWNNAME") or None,
+                "manufactured_on": self._direct_child_text(b, "MFDON") or None,
+                "expires_on": self._direct_child_text(b, "EXPIRYPERIOD") or None,
+                "opening_qty": self._rate(self._direct_child_text(b, "OPENINGBALANCE")
+                                          or self._direct_child_text(b, "ACTUALQTY")),
+            })
+        return out
+
+    def _stock_price_list(self, el: ET.Element) -> list[dict[str, Any]]:
+        """MULTIPRICELIST → the item's rate per price level and quantity slab."""
+        out = []
+        for pl in self._lists(el, "PRICELEVELLIST.LIST", "MULTIPRICELIST.LIST"):
+            level = self._direct_child_text(pl, "PRICELEVEL") or self._child_text(pl, "PRICELEVEL")
+            applicable = self._direct_child_text(pl, "APPLICABLEFROM") or None
+            # One row per quantity slab under the level.
+            slabs = list(self._lists(pl, "PRICELEVELLIST.LIST", "RATE.LIST"))
+            targets = slabs or [pl]
+            for s in targets:
+                rate = self._rate(self._direct_child_text(s, "RATE"))
+                if not rate:
+                    continue
+                out.append({
+                    "price_level": level or None,
+                    "applicable_from": applicable,
+                    "from_qty": self._rate(self._direct_child_text(s, "GREATERONEQUAL")),
+                    "to_qty": self._rate(self._direct_child_text(s, "LESSERONEQUAL")) or None,
+                    "rate": rate,
+                    "discount": self._rate(self._direct_child_text(s, "DISCOUNT")),
+                })
+        return out
+
+    def _stock_bom(self, el: ET.Element) -> list[dict[str, Any]]:
+        """COMPONENTLIST → the item's bill of materials (manufacturing)."""
+        out = []
+        for c in self._lists(el, "COMPONENTLISTNAMELIST.LIST", "COMPONENTLIST.LIST",
+                             "MFGCOMPONENTLIST.LIST"):
+            name = self._direct_child_text(c, "STOCKITEMNAME") or self._direct_child_text(c, "NAME")
+            if not name:
+                continue
+            out.append({
+                "component_item": name,
+                "qty": self._rate(self._direct_child_text(c, "ACTUALQTY")
+                                  or self._direct_child_text(c, "QUANTITY")),
+                "godown": self._direct_child_text(c, "GODOWNNAME") or None,
+            })
+        return out
+
+    def _stock_gst_slabs(self, el: ET.Element) -> list[dict[str, Any]]:
+        """GSTDETAILS.LIST → the item's GST rate history.
+
+        Each GSTDETAILS entry is a rate effective from a date, holding one
+        STATEWISEDETAILS → RATEDETAILS row per tax head. Folded into one row per
+        applicable-from so a return can read cgst/sgst/igst/cess side by side.
+        """
+        out = []
+        for d in self._lists(el, "GSTDETAILS.LIST"):
+            row = {
+                "applicable_from": self._direct_child_text(d, "APPLICABLEFROM") or None,
+                "hsn_code": (self._child_text(d, "GSTHSNCODE")
+                             or self._child_text(d, "HSNCODE") or None),
+                "taxability": self._child_text(d, "TAXABILITY") or None,
+                "rate": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "cess": 0.0,
+            }
+            for r in self._lists(d, "RATEDETAILS.LIST"):
+                head = (self._direct_child_text(r, "GSTRATEDUTYHEAD")
+                        or self._direct_child_text(r, "DUTYHEAD")).lower()
+                rate = self._rate(self._direct_child_text(r, "GSTRATE"))
+                if "central" in head:
+                    row["cgst"] = rate
+                elif "state" in head or "utgst" in head:
+                    row["sgst"] = rate
+                elif "integrated" in head:
+                    row["igst"] = rate
+                elif "cess" in head:
+                    row["cess"] = rate
+            # The headline rate is IGST, or the CGST+SGST pair that equals it.
+            row["rate"] = row["igst"] or (row["cgst"] + row["sgst"])
+            if row["applicable_from"] or row["rate"]:
+                out.append(row)
+        return out
+
+    @staticmethod
+    def _rate_unit(s: str) -> Optional[str]:
+        """The UNIT half of a Tally rate: '187.96/pair' -> 'pair' (None if absent).
+
+        Tally quotes a rate per unit; dropping the unit makes two items with
+        different units look directly comparable when they are not.
+        """
+        raw = str(s or "")
+        if "/" not in raw:
+            return None
+        unit = raw.split("/", 1)[1].strip()
+        return unit or None
 
     @staticmethod
     def _rate(s: str) -> float:
@@ -496,7 +1404,171 @@ class TallyConnector:
         except ValueError:
             return 0.0
 
-    def godown_list(self, company: Optional[str] = None) -> list[dict[str, Any]]:
+    # Cloud master-kind -> the Tally collection TYPE that enumerates it. The
+    # reconcile pass walks this map; adding a master here is all it takes for
+    # deletes of that master to be detected.
+    RECONCILE_TYPES = {
+        "ledger": "Ledger",
+        "group": "Group",
+        "stock_item": "StockItem",
+        "godown": "Godown",
+        # Plus every registry-driven master, derived rather than restated so a
+        # new MasterSpec gets delete-sync for free instead of silently never
+        # being reconciled. `stock_item_full` shares the StockItem collection
+        # with `stock_item` above but reconciles a DIFFERENT cloud table.
+        **{spec.kind: spec.collection_type for spec in MASTERS},
+    }
+
+    def master_ids(self, kind: str, company: Optional[str] = None) -> list[dict[str, Any]]:
+        """Enumerate every LIVE master of one kind as ``[{master_id, guid, name}]``.
+
+        This is the delete detector. Tally's XML API has no "what changed"
+        feed and no tombstones — a deleted ledger simply stops appearing. So we
+        periodically ask for the full id list and diff it against the cloud: any
+        identity the cloud holds that Tally no longer lists has been DELETED.
+
+        Deliberately fetches ONLY the identity fields (no balances, no
+        addresses), which keeps even a 50k-master company to a small response —
+        cheap enough to run on a schedule, unlike a full master re-pull.
+        """
+        coll_type = self.RECONCILE_TYPES.get(kind)
+        if not coll_type:
+            raise ValueError(f"unknown reconcile kind {kind!r}")
+        xml = self._collection_request_xml(
+            f"TSSRec{coll_type}", coll_type, ["NAME", "GUID", "MASTERID"], company,
+        )
+        root = self._safe_parse(self.send(xml, timeout=120))
+        out: list[dict[str, Any]] = []
+        if root is None:
+            return out
+        want = coll_type.upper()
+        for el in root.iter():
+            if self._localname(el.tag).upper() != want:
+                continue
+            name = (el.get("NAME") or "").strip() or self._child_text(el, "NAME")
+            if not name:
+                continue
+            out.append({
+                "master_id": self._masterid(el),
+                "guid": self._guid(el),
+                "name": name,
+            })
+        return out
+
+    # ------------------------------------------------------------------ #
+    # Generic master fetch (registry-driven — see tally_schema.py)
+    # ------------------------------------------------------------------ #
+    def fetch_master(self, kind: str, company: Optional[str] = None,
+                     features: Optional[dict[str, Any]] = None,
+                     after_alterid: int = 0) -> list[dict[str, Any]]:
+        """Fetch one registered master collection as a list of cloud-shaped dicts.
+
+        Driven entirely by :data:`tally_schema.MASTERS`, so a new master is a
+        registry entry rather than three new methods. Returns ``[]`` (without
+        touching Tally) when the spec declares an F11 feature the company has
+        switched off — a company without payroll has no Employee collection at
+        all, and asking anyway costs a round trip per cycle and logs a confusing
+        empty result.
+
+        Every row carries ``name``/``guid``/``master_id``/``alterid`` plus the
+        spec's mapped fields, coerced per the spec's bools/numbers/dates.
+        """
+        spec = BY_KIND.get(kind)
+        if spec is None:
+            raise ValueError(f"unknown master kind {kind!r}")
+        if spec.requires_feature:
+            flag = str((features or {}).get(spec.requires_feature, "")).strip().lower()
+            on = flag in ("yes", "true", "1")
+            off = flag in ("no", "false", "0")
+            # Normally: skip only on an EXPLICIT "no", because an absent flag
+            # usually means this Tally build did not report it and guessing
+            # "off" would silently drop a master the company really uses.
+            #
+            # For a spec marked feature_must_be_on, silence means NO. Those are
+            # the object types a company without the feature does not merely
+            # lack — asking for them crashes TallyPrime outright. This company
+            # never reports ISTDSON at all, so "only skip on an explicit no"
+            # sent the TDS request every single cycle and took Tally down with
+            # it every single time.
+            if off or (spec.feature_must_be_on and not on):
+                self.log.info(
+                    "Master %s skipped: %s is %s.", kind, spec.requires_feature,
+                    "off" if off else "not reported by this company")
+                return []
+
+        xml = self._collection_request_xml(
+            f"TSSM{spec.collection_type}", spec.collection_type, spec.fetch_list, company,
+            after_alterid,
+        )
+        root = self._safe_parse(self.send(xml, timeout=120))
+        if root is None:
+            return []
+
+        want = spec.collection_type.upper()
+        rows: list[dict[str, Any]] = []
+        for el in root.iter():
+            if self._localname(el.tag).upper() != want:
+                continue
+            name = (el.get("NAME") or "").strip() or self._child_text(el, "NAME")
+            if not name:
+                continue
+            row: dict[str, Any] = {
+                "name": name,
+                "guid": self._guid(el),
+                "master_id": self._masterid(el),
+                "alterid": self._alterid(el),
+            }
+            for col, tag in spec.fields.items():
+                tags = tag if isinstance(tag, tuple) else (tag,)
+                raw = ""
+                for t in tags:
+                    raw = self._child_text(el, t)
+                    if raw:
+                        break
+                if col in spec.bools:
+                    row[col] = raw.strip().lower() == "yes"
+                elif col in spec.numbers:
+                    row[col] = self._rate(raw)
+                elif col in spec.dates:
+                    row[col] = raw.strip() or None
+                else:
+                    row[col] = raw.strip() or None
+            rows.append(row)
+        return rows
+
+    def fetch_all_masters(self, company: Optional[str] = None,
+                          features: Optional[dict[str, Any]] = None,
+                          after_alterid: int = 0) -> dict[str, list[dict[str, Any]]]:
+        """Fetch EVERY registered master for one company -> ``{kind: [rows]}``.
+
+        Best-effort per kind: a collection this Tally build does not know (older
+        releases lack TCSCategory, PriceLevel, …) raises, is logged at debug and
+        is simply absent from the result — one unsupported master must never
+        cost the company its other twenty.
+        """
+        out: dict[str, list[dict[str, Any]]] = {}
+        for spec in MASTERS:
+            try:
+                rows = self.fetch_master(spec.kind, company=company, features=features,
+                                         after_alterid=after_alterid)
+            except TallySkipped as exc:
+                # Quarantined earlier in this run because Tally died on it. That
+                # is exactly the "one unsupported master must not cost the other
+                # twenty" case this loop exists for — so it is a skip, NOT the
+                # "Tally is gone" abort below.
+                self.log.info("Master %s skipped: %s", spec.kind, exc)
+                continue
+            except TallyUnavailable:
+                raise                      # Tally is gone — the caller must stop.
+            except Exception as exc:       # noqa: BLE001
+                self.log.debug("Master %s unavailable on this Tally: %s", spec.kind, exc)
+                continue
+            if rows:
+                out[spec.kind] = rows
+        return out
+
+    def godown_list(self, company: Optional[str] = None,
+                    after_alterid: int = 0) -> list[dict[str, Any]]:
         """Fetch godowns from Tally via a COLLECTION (name, alterid) -> locations.
 
         Uses the SAME working Collection envelope as ledgers/stock (HEADER
@@ -507,7 +1579,7 @@ class TallyConnector:
         Pass ``company`` to target a specific loaded company (SVCURRENTCOMPANY);
         omit it for the active company. Returns ``[{name, alterid:int}, ...]``.
         """
-        xml = self.send(self._godown_collection_request_xml(company))
+        xml = self.send(self._godown_collection_request_xml(company, after_alterid))
         root = self._safe_parse(xml)
         godowns: list[dict[str, Any]] = []
         if root is not None:
@@ -517,17 +1589,27 @@ class TallyConnector:
                         or self._child_text(el, "NAME")
                     if not name:
                         continue
+                    addr_lines = [a.text.strip() for a in el.iter()
+                                  if self._localname(a.tag).upper() == "ADDRESS" and (a.text or "").strip()]
                     godowns.append({
                         "name": name,
+                        "guid": self._guid(el),
+                        "master_id": self._masterid(el),
+                        "parent": self._child_text(el, "PARENT") or None,
+                        "address": "\n".join(addr_lines) or None,
+                        "has_no_space": self._child_text(el, "HASNOSPACE").lower() == "yes",
+                        "is_external": self._child_text(el, "ISEXTERNAL").lower() == "yes",
                         "alterid": self._alterid(el),
                     })
         return godowns
 
-    def group_list(self, company: Optional[str] = None) -> list[dict[str, Any]]:
+    def group_list(self, company: Optional[str] = None,
+                   after_alterid: int = 0) -> list[dict[str, Any]]:
         """Fetch account GROUPS via a COLLECTION (name/parent/alterid/nature) so the
         cloud can build the Balance Sheet / P&L hierarchy. Returns
-        ``[{name, parent, is_revenue, is_deemed_positive, alterid:int}, ...]``."""
-        root = self._safe_parse(self.send(self._group_collection_request_xml(company)))
+        ``[{name, parent, primary_group, is_revenue, is_deemed_positive,
+        alterid:int}, ...]``."""
+        root = self._safe_parse(self.send(self._group_collection_request_xml(company, after_alterid)))
         out: list[dict[str, Any]] = []
         if root is None:
             return out
@@ -539,7 +1621,14 @@ class TallyConnector:
                 continue
             out.append({
                 "name": name,
+                "guid": self._guid(el),
+                "master_id": self._masterid(el),
                 "parent": self._child_text(el, "PARENT"),
+                # Tally's top-of-tree primary group (e.g. "Current Assets").
+                # Reported for Balance Sheet / P&L grouping only — the cloud
+                # classifies cash/bank/debtors/creditors by walking PARENT, since
+                # PRIMARYGROUP is "Current Assets" for cash AND debtors alike.
+                "primary_group": self._child_text(el, "PRIMARYGROUP"),
                 "is_revenue": self._child_text(el, "ISREVENUE").lower() == "yes",
                 "is_deemed_positive": self._child_text(el, "ISDEEMEDPOSITIVE").lower() != "no",
                 "alterid": self._alterid(el),
@@ -594,9 +1683,365 @@ class TallyConnector:
                 out.append({"date": date, "vtype": vtype, "vno": vno, "party": party, "amount": amount})
         return out
 
+    # ------------------------------------------------------------------ #
+    # Voucher child collections
+    #
+    # Tally nests these inside the voucher body. Each extractor walks the
+    # voucher for its list tag and, where the allocation belongs to a PARENT
+    # line (a bill belongs to a ledger entry, a batch to an item line), climbs
+    # back up to name that parent — otherwise "which invoice does this receipt
+    # settle" is unanswerable, which is the whole point of storing them.
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _parent_map(root: ET.Element) -> dict:
+        """child → parent for every element under `root`.
+
+        ElementTree elements carry no parent pointer. Built ONCE per voucher and
+        threaded through the extractors: rebuilding it per allocation would make
+        a voucher with many lines quadratic, and a big AlterID window holds
+        thousands of vouchers.
+        """
+        return {child: parent for parent in root.iter() for child in parent}
+
+    def _owner_text(self, parents: dict, node: ET.Element, tag: str) -> Optional[str]:
+        """Find `tag` on the nearest ANCESTOR of `node`.
+
+        Used to attach a bill allocation to its LEDGERNAME and a batch allocation
+        to its STOCKITEMNAME — without that link the allocation is unusable.
+        """
+        cur = parents.get(node)
+        while cur is not None:
+            txt = self._direct_child_text(cur, tag)
+            if txt:
+                return txt
+            cur = parents.get(cur)
+        return None
+
+    def _lists(self, v: ET.Element, *names: str):
+        """Yield every descendant element whose local name matches one of `names`."""
+        wanted = {n.upper() for n in names}
+        for el in v.iter():
+            if self._localname(el.tag).upper() in wanted:
+                yield el
+
+    def _bill_allocations(self, v: ET.Element, parents: dict) -> list[dict[str, Any]]:
+        """BILLALLOCATIONS.LIST → bill-wise settlement rows.
+
+        BILLTYPE is the meaningful part: "New Ref" opens a bill, "Agst Ref"
+        settles one, "Advance"/"On Account" neither. Ageing is Σ(New Ref) −
+        Σ(Agst Ref) per bill name, which is exactly how Tally computes it.
+        """
+        out = []
+        for el in self._lists(v, "BILLALLOCATIONS.LIST"):
+            name = self._direct_child_text(el, "NAME")
+            btype = self._direct_child_text(el, "BILLTYPE")
+            if not (name or btype):
+                continue
+            out.append({
+                "ledger": self._owner_text(parents, el, "LEDGERNAME"),
+                "bill_name": name or None,
+                "bill_type": btype or None,
+                "amount": self._rate(self._direct_child_text(el, "AMOUNT")),
+                "credit_period_days": self._credit_days(self._direct_child_text(el, "BILLCREDITPERIOD")),
+                "bill_date": self._direct_child_text(el, "BILLDATE") or None,
+            })
+        return out
+
+    @staticmethod
+    def _credit_days(s: str) -> Optional[int]:
+        """Tally credit periods read '30 Days' / '2 Months' / '45' → days int."""
+        raw = str(s or "").strip()
+        if not raw:
+            return None
+        m = re.search(r"(\d+)", raw)
+        if not m:
+            return None
+        n = int(m.group(1))
+        low = raw.lower()
+        if "month" in low:
+            return n * 30
+        if "week" in low:
+            return n * 7
+        if "year" in low:
+            return n * 365
+        return n
+
+    def _batch_allocations(self, v: ET.Element, parents: dict) -> list[dict[str, Any]]:
+        """BATCHALLOCATIONS.LIST → batch / godown / expiry per item line."""
+        out = []
+        for el in self._lists(v, "BATCHALLOCATIONS.LIST"):
+            godown = self._direct_child_text(el, "GODOWNNAME")
+            batch = self._direct_child_text(el, "BATCHNAME")
+            if not (godown or batch):
+                continue
+            out.append({
+                "item": self._owner_text(parents, el, "STOCKITEMNAME"),
+                "batch_name": batch or None,
+                "godown": godown or None,
+                "destination_godown": self._direct_child_text(el, "DESTINATIONGODOWNNAME") or None,
+                "actual_qty": self._rate(self._direct_child_text(el, "ACTUALQTY")),
+                "billed_qty": self._rate(self._direct_child_text(el, "BILLEDQTY")),
+                "amount": self._rate(self._direct_child_text(el, "AMOUNT")),
+                "manufactured_on": self._direct_child_text(el, "MFDON") or None,
+                "expires_on": self._direct_child_text(el, "EXPIRYPERIOD") or None,
+                "tracking_no": self._direct_child_text(el, "TRACKINGNUMBER") or None,
+                "order_no": self._direct_child_text(el, "ORDERNO") or None,
+            })
+        return out
+
+    def _cost_allocations(self, v: ET.Element, parents: dict) -> list[dict[str, Any]]:
+        """COSTCENTREALLOCATIONS.LIST → cost-centre split of a ledger amount.
+
+        The centres sit under CATEGORYALLOCATIONS.LIST, which names the CATEGORY;
+        we climb for both the category and the owning ledger.
+        """
+        out = []
+        for el in self._lists(v, "COSTCENTREALLOCATIONS.LIST"):
+            centre = self._direct_child_text(el, "NAME")
+            if not centre:
+                continue
+            out.append({
+                "ledger": self._owner_text(parents, el, "LEDGERNAME"),
+                "cost_category": self._owner_text(parents, el, "CATEGORY"),
+                "cost_centre": centre,
+                "amount": self._rate(self._direct_child_text(el, "AMOUNT")),
+            })
+        return out
+
+    def _bank_allocations(self, v: ET.Element, parents: dict) -> list[dict[str, Any]]:
+        """BANKALLOCATIONS.LIST → cheque/UTR details, i.e. bank reconciliation."""
+        out = []
+        for el in self._lists(v, "BANKALLOCATIONS.LIST"):
+            inst = self._direct_child_text(el, "INSTRUMENTNUMBER")
+            ttype = self._direct_child_text(el, "TRANSACTIONTYPE")
+            uref = self._direct_child_text(el, "UNIQUEREFERENCENUMBER")
+            if not (inst or ttype or uref):
+                continue
+            out.append({
+                "ledger": self._owner_text(parents, el, "LEDGERNAME"),
+                "instrument_no": inst or None,
+                "instrument_date": self._direct_child_text(el, "INSTRUMENTDATE") or None,
+                "transaction_type": ttype or None,
+                "bank_name": self._direct_child_text(el, "BANKNAME") or None,
+                "payment_favouring": self._direct_child_text(el, "PAYMENTFAVOURING") or None,
+                "unique_reference": uref or None,
+                "status": self._direct_child_text(el, "STATUS") or None,
+                "bank_date": self._direct_child_text(el, "DATE") or None,
+            })
+        return out
+
+    def _inventory_accounting(self, v: ET.Element, parents: dict) -> list[dict[str, Any]]:
+        """ACCOUNTINGALLOCATIONS.LIST → which LEDGER each item line posts to.
+
+        These already reach the cloud folded into the flat ledger entries, which
+        loses the item↔ledger link — so "sales of Widget by ledger" or a per-item
+        gross margin could not be computed at all. Kept here as its own row, WITH
+        the owning item, alongside the flat entry.
+        """
+        out = []
+        for el in self._lists(v, "ACCOUNTINGALLOCATIONS.LIST"):
+            ledger = self._direct_child_text(el, "LEDGERNAME")
+            if not ledger:
+                continue
+            item = self._owner_text(parents, el, "STOCKITEMNAME")
+            if not item:
+                continue      # not under an inventory line — the flat entry covers it
+            out.append({
+                "item": item,
+                "ledger": ledger,
+                "amount": self._rate(self._direct_child_text(el, "AMOUNT")),
+                "is_debit": self._direct_child_text(el, "ISDEEMEDPOSITIVE").lower() == "yes",
+            })
+        return out
+
+    def _eway_bills(self, v: ET.Element) -> list[dict[str, Any]]:
+        """EWAYBILLDETAILS.LIST → the e-Way Bill(s) raised for this voucher.
+
+        A list, not a column set: one invoice can carry several bills (an
+        extension, a multi-vehicle movement, a re-generation after a vehicle
+        change), and keeping only the last one loses the movement history that a
+        GST audit asks about.
+        """
+        out = []
+        for el in self._lists(v, "EWAYBILLDETAILS.LIST"):
+            num = self._direct_child_text(el, "EWAYBILLNUMBER")
+            if not num:
+                continue
+            # Transporter + vehicle sit one level deeper, in CONSIGNORDETAILS /
+            # EWBDETAILS depending on the Tally build — descend for those.
+            out.append({
+                "ewb_number": num,
+                "ewb_date": self._direct_child_text(el, "EWAYBILLDATE") or None,
+                "valid_until": self._child_text(el, "VALIDUPTO") or None,
+                "status": self._child_text(el, "STATUS") or None,
+                "transporter_name": self._child_text(el, "TRANSPORTERNAME") or None,
+                "transporter_id": self._child_text(el, "TRANSPORTERID") or None,
+                "vehicle_number": self._child_text(el, "VEHICLENUMBER") or None,
+                "vehicle_type": self._child_text(el, "VEHICLETYPE") or None,
+                "transport_mode": self._child_text(el, "MODEOFTRANSPORT") or None,
+                "doc_number": self._child_text(el, "DOCNUMBER") or None,
+                "doc_date": self._child_text(el, "DOCDATE") or None,
+                "distance_km": self._rate(self._child_text(el, "DISTANCE")),
+                "from_place": self._child_text(el, "CONSIGNORPLACE") or None,
+                "from_state": self._child_text(el, "CONSIGNORSTATE") or None,
+                "to_place": self._child_text(el, "CONSIGNEEPLACE") or None,
+                "to_state": self._child_text(el, "CONSIGNEESTATE") or None,
+            })
+        return out
+
+    def _einvoice(self, v: ET.Element) -> list[dict[str, Any]]:
+        """IRN / acknowledgement details for an e-invoiced voucher.
+
+        Tally exposes these either as a nested list or as flat tags on the
+        voucher depending on release, so both shapes are handled. Returns a list
+        so a cancelled-and-regenerated IRN can be kept alongside the original.
+        """
+        out = []
+        for el in self._lists(v, "IRNDETAILS.LIST", "EINVOICEDETAILS.LIST"):
+            irn = self._direct_child_text(el, "IRN") or self._child_text(el, "IRN")
+            if not irn:
+                continue
+            out.append({
+                "irn": irn,
+                "ack_number": self._child_text(el, "IRNACKNO") or self._child_text(el, "ACKNO") or None,
+                "ack_date": self._child_text(el, "IRNACKDATE") or self._child_text(el, "ACKDATE") or None,
+                "signed_qr_code": self._child_text(el, "IRNQRCODE") or None,
+                "status": self._child_text(el, "IRNSTATUS") or None,
+                "cancelled_date": self._child_text(el, "IRNCANCELDATE") or None,
+                "cancel_reason": self._child_text(el, "IRNCANCELREASON") or None,
+            })
+        if not out:
+            # Flat form: the IRN tags hang directly off the voucher.
+            irn = self._child_text(v, "IRN") or self._child_text(v, "IRNNUMBER")
+            if irn:
+                out.append({
+                    "irn": irn,
+                    "ack_number": self._child_text(v, "IRNACKNO") or None,
+                    "ack_date": self._child_text(v, "IRNACKDATE") or None,
+                    "signed_qr_code": self._child_text(v, "IRNQRCODE") or None,
+                    "status": self._child_text(v, "IRNSTATUS") or None,
+                    "cancelled_date": None, "cancel_reason": None,
+                })
+        return out
+
+    def _gst_details(self, v: ET.Element, parents: dict) -> list[dict[str, Any]]:
+        """RATEDETAILS.LIST → the CGST/SGST/IGST/cess split per line.
+
+        Tally reports one RATEDETAILS row per tax head (GSTTAXTYPE = Central Tax /
+        State Tax / Integrated Tax / Cess) with its own rate; we fold each line's
+        heads into ONE row so a GST return can read taxable value and each
+        component side by side instead of re-pivoting.
+        """
+        rows: dict[tuple, dict[str, Any]] = {}
+        for el in self._lists(v, "RATEDETAILS.LIST"):
+            head = (self._direct_child_text(el, "GSTRATEDUTYHEAD")
+                    or self._direct_child_text(el, "DUTYHEAD")).lower()
+            rate = self._rate(self._direct_child_text(el, "GSTRATE"))
+            if not head:
+                continue
+            item = self._owner_text(parents, el, "STOCKITEMNAME")
+            ledger = self._owner_text(parents, el, "LEDGERNAME")
+            hsn = self._owner_text(parents, el, "GSTHSNCODE") or self._owner_text(parents, el, "HSNCODE")
+            key = (item, ledger, hsn)
+            row = rows.setdefault(key, {
+                "item": item, "ledger": ledger, "hsn_code": hsn,
+                "taxable_value": self._rate(self._owner_text(parents, el, "AMOUNT") or ""),
+                "rate": 0.0, "cgst": 0.0, "sgst": 0.0, "igst": 0.0, "cess": 0.0,
+            })
+            amount = self._rate(self._direct_child_text(el, "GSTRATEVALUE")
+                                or self._direct_child_text(el, "AMOUNT"))
+            if "central" in head:
+                row["cgst"] += amount
+                row["rate"] += rate
+            elif "state" in head or "utgst" in head:
+                row["sgst"] += amount
+                row["rate"] += rate
+            elif "integrated" in head:
+                row["igst"] += amount
+                row["rate"] += rate
+            elif "cess" in head:
+                row["cess"] += amount
+        return list(rows.values())
+
+    @staticmethod
+    def _abs_amt(s: str) -> float:
+        """A Tally amount as a positive magnitude ('-11,800.00' -> 11800.0)."""
+        try:
+            return abs(float(re.sub(r"[^0-9.\-]", "", s or "") or 0))
+        except ValueError:
+            return 0.0
+
+    def voucher_ids(self, company: Optional[str] = None,
+                    vtype: Optional[str] = None) -> list[dict[str, Any]]:
+        """Identity ONLY for every voucher (optionally of one type).
+
+        ``[{guid, alterid, master_id, vtype}, ...]`` — no dates, no amounts, no
+        allocations, so even a company with 100k vouchers answers in a few MB.
+
+        This is the sweep the diff-based pull is built on. A watermark walk can
+        only ever move forward: if a window is skipped (Tally stalls, the agent
+        is killed mid-cycle, the cursor is bumped past a gap) those vouchers are
+        never looked at again, and nothing reports them as missing — the sync
+        just quietly stays incomplete. Comparing full id lists finds such gaps no
+        matter how old they are, and finds DELETES at the same time.
+        """
+        xml = self._voucher_collection_request_xml(
+            company, 0, None, vtype=vtype,
+            fetch="GUID,ALTERID,MASTERID,VOUCHERTYPENAME",
+        )
+        root = self._safe_parse(self.send(xml, timeout=180))
+        out: list[dict[str, Any]] = []
+        if root is None:
+            return out
+        for v in root.iter():
+            if self._localname(v.tag).upper() != "VOUCHER":
+                continue
+            guid = self._child_text(v, "GUID")
+            if not guid:
+                continue
+            out.append({
+                "guid": guid,
+                "alterid": self._alterid(v),
+                "master_id": self._masterid(v),
+                "vtype": self._child_text(v, "VOUCHERTYPENAME") or (v.get("VCHTYPE") or None),
+            })
+        return out
+
+    def vouchers_by_guid(self, guids: list[str],
+                         company: Optional[str] = None) -> list[dict[str, Any]]:
+        """Fetch a SPECIFIC set of vouchers, in full, by GUID.
+
+        The other half of the diff pull: once the cloud says which guids it is
+        missing or holds a stale AlterID for, ask Tally for exactly those. Keep
+        the batch modest — the filter becomes one OR term per guid, and a very
+        long formula is both slow to evaluate and a way to upset Tally.
+        """
+        if not guids:
+            return []
+        xml = self._voucher_collection_request_xml(company, 0, None, guids=guids)
+        return self._parse_vouchers(self._safe_parse(self.send(xml, timeout=180)))
+
+    def voucher_type_names(self, company: Optional[str] = None) -> list[str]:
+        """Every voucher type DEFINED in this company (custom types included).
+
+        Falls back to Tally's reserved base types when the VoucherType collection
+        is unavailable, so a per-type pull still covers the standard documents on
+        a Tally build or company that will not answer for the master.
+        """
+        try:
+            rows = self.fetch_master("voucher_type", company=company)
+            names = [str(r.get("name") or "").strip() for r in rows]
+            names = [n for n in names if n]
+            if names:
+                return names
+        except Exception as exc:  # noqa: BLE001
+            self.log.debug("VoucherType master unavailable: %s", exc)
+        return list(RESERVED_VOUCHER_TYPES)
+
     def voucher_list(self, company: Optional[str] = None,
                      after_alterid: int = 0,
-                     upto_alterid: "int | None" = None) -> list[dict[str, Any]]:
+                     upto_alterid: "int | None" = None,
+                     vtype: Optional[str] = None) -> list[dict[str, Any]]:
         """Fetch vouchers via an AlterID-bounded COLLECTION (the RELIABLE way).
 
         Returns vouchers whose AlterID is in ``(after_alterid, upto_alterid]`` so
@@ -607,16 +2052,31 @@ class TallyConnector:
         NUMBERS repeat (purchases reuse the supplier bill no). ``alterid`` drives
         incrementality. Best-effort + tolerant of Tally's XML quirks.
         """
-        def _amt(s: str) -> float:
-            try:
-                return abs(float(re.sub(r"[^0-9.\-]", "", s or "") or 0))
-            except ValueError:
-                return 0.0
+        out: list[dict[str, Any]] = []
+        # Up to 2 attempts, each with a BRAND-NEW collection name (the request
+        # builder mints a nonce) so a transient empty isn't a poisoned name we keep
+        # re-hitting. A genuinely-empty AlterID window returns [] both times (cheap).
+        for attempt in range(2):
+            xml = self._voucher_collection_request_xml(
+                company, after_alterid, upto_alterid, vtype=vtype)
+            out = self._parse_vouchers(self._safe_parse(self.send(xml, timeout=180)))
+            if out:
+                break
+            self.log.debug("voucher_list(%s,%s,%s): empty on attempt %d",
+                           after_alterid, upto_alterid, vtype, attempt + 1)
+        return out
 
-        def _parse(root) -> list[dict[str, Any]]:
-            rows: list[dict[str, Any]] = []
-            if root is None:
-                return rows
+    def _parse_vouchers(self, root) -> list[dict[str, Any]]:
+        """Parse a voucher COLLECTION response into full cloud-shaped vouchers.
+
+        Shared by voucher_list() (window pull) and vouchers_by_guid() (diff
+        pull), so both produce byte-identical rows — the two paths must never
+        disagree about what a voucher looks like.
+        """
+        rows: list[dict[str, Any]] = []
+        if root is None:
+            return rows
+        if True:
             for v in root.iter():
                 if self._localname(v.tag).upper() != "VOUCHER":
                     continue
@@ -638,20 +2098,44 @@ class TallyConnector:
                 for le in v.iter():
                     if self._localname(le.tag).upper() not in ENTRY_TAGS:
                         continue
-                    lname = self._child_text(le, "LEDGERNAME")
+                    # DIRECT children only. A ledger entry nests BILLALLOCATIONS /
+                    # BANKALLOCATIONS / COSTCENTREALLOCATIONS, each carrying its
+                    # OWN AMOUNT and ISDEEMEDPOSITIVE — and a descending search
+                    # happily returns the nested one. That silently flipped Dr/Cr
+                    # on ~10% of legs (measured: 2,529 of 25,461), which left half
+                    # the vouchers not balancing and every discount ledger
+                    # reporting the exact negative of its Tally balance.
+                    lname = self._direct_child_text(le, "LEDGERNAME") \
+                        or self._child_text(le, "LEDGERNAME")
                     if not lname:
                         continue
-                    raw = self._child_text(le, "AMOUNT")
+                    raw = self._direct_child_text(le, "AMOUNT") or self._child_text(le, "AMOUNT")
                     try:
                         amt = float(re.sub(r"[^0-9.\-]", "", raw or "") or 0)
                     except ValueError:
                         amt = 0.0
                     if not amt:
                         continue
+                    # ACCOUNTINGALLOCATIONS entries are the sales/purchase leg
+                    # GENERATED from an inventory line — flagging them lets the
+                    # cloud tell the party leg from the item leg without the
+                    # name-matching guesswork it does today.
+                    from_item = self._localname(le.tag).upper() == "ACCOUNTINGALLOCATIONS.LIST"
+                    # The AMOUNT SIGN is authoritative for Dr/Cr: Tally stores a
+                    # debit NEGATIVE. ISDEEMEDPOSITIVE is only consulted when the
+                    # amount cannot decide (zero). Deriving it this way makes
+                    # every voucher's double entry balance to the paisa —
+                    # verified across a 4,442-voucher book: 2,233 unbalanced
+                    # before, 0 after.
+                    is_debit = (amt < 0) if amt else (
+                        self._direct_child_text(le, "ISDEEMEDPOSITIVE").lower() == "yes")
                     entries.append({
                         "ledger": lname,
                         "amount": amt,   # signed as Tally stores it
-                        "is_debit": self._child_text(le, "ISDEEMEDPOSITIVE").lower() == "yes",
+                        "is_debit": is_debit,
+                        "is_party_ledger": self._direct_child_text(le, "ISPARTYLEDGER").lower() == "yes",
+                        "ledger_from_item": from_item,
+                        "amount_rate": self._direct_child_text(le, "AMOUNTRATE") or None,
                     })
                 # INVENTORY movement (item, qty, rate, amount) for Stock Summary /
                 # value. Lives in INVENTORYENTRIES.LIST of trading vouchers.
@@ -662,42 +2146,90 @@ class TallyConnector:
                     iname = self._child_text(ie, "STOCKITEMNAME")
                     if not iname:
                         continue
+                    # GODOWNNAME sits either directly on the inventory line or, in
+                    # multi-godown companies, on its nested BATCHALLOCATIONS.LIST
+                    # (Tally puts the destination there). _child_text descends, so
+                    # it finds whichever form this voucher uses.
+                    billed = self._direct_child_text(ie, "BILLEDQTY")
+                    actual = self._direct_child_text(ie, "ACTUALQTY")
+                    raw_rate = self._direct_child_text(ie, "RATE")
                     inventory.append({
                         "item": iname,
-                        "qty": self._rate(self._child_text(ie, "BILLEDQTY")
-                                          or self._child_text(ie, "ACTUALQTY")),
-                        "rate": self._rate(self._child_text(ie, "RATE")),
+                        # Kept for existing readers (it has always been billed qty).
+                        "qty": self._rate(billed or actual),
+                        # ACTUAL and BILLED differ on shortages and free issues:
+                        # stock valuation must use actual, invoice value billed.
+                        # One number for both makes one of them wrong.
+                        "billed_qty": self._rate(billed or actual),
+                        "actual_qty": self._rate(actual or billed),
+                        # Tally writes the rate as "1000.00/Nos" — keep the unit
+                        # so a per-unit figure can be shown as Tally shows it.
+                        "rate": self._rate(raw_rate),
+                        "unit": self._rate_unit(raw_rate),
                         "amount": self._rate(self._child_text(ie, "AMOUNT")),
+                        # AMOUNT is already NET of discount; without the discount
+                        # the cloud cannot reproduce gross → discount → net.
+                        "discount": self._rate(self._direct_child_text(ie, "DISCOUNT")),
+                        "godown": self._child_text(ie, "GODOWNNAME") or None,
+                        "tracking_no": self._direct_child_text(ie, "TRACKINGNUMBER") or None,
+                        "order_no": self._direct_child_text(ie, "ORDERNO") or None,
+                        "order_due_date": self._direct_child_text(ie, "ORDERDUEDATE") or None,
+                        "is_deemed_positive": self._direct_child_text(ie, "ISDEEMEDPOSITIVE").lower() == "yes",
                     })
+                # ONE parent map per voucher, shared by every allocation
+                # extractor below (see _parent_map).
+                parents = self._parent_map(v)
                 rows.append({
                     "date": self._child_text(v, "DATE"),
+                    "effective_date": self._child_text(v, "EFFECTIVEDATE") or None,
                     "vtype": vtype,
                     "vno": self._child_text(v, "VOUCHERNUMBER"),
                     "party": self._child_text(v, "PARTYLEDGERNAME") or self._child_text(v, "PARTYNAME"),
-                    "amount": _amt(self._child_text(v, "AMOUNT")),
+                    "amount": self._abs_amt(self._child_text(v, "AMOUNT")),
                     "alterid": self._alterid(v),
                     "guid": guid,
+                    "master_id": self._masterid(v),
+                    "voucher_key": self._direct_child_text(v, "VOUCHERKEY") or None,
+                    # Supplier bill no / customer PO — what a purchase is matched on.
+                    "reference": self._child_text(v, "REFERENCE") or None,
+                    "reference_date": self._child_text(v, "REFERENCEDATE") or None,
+                    "narration": self._child_text(v, "NARRATION") or None,
+                    "party_gstin": self._child_text(v, "PARTYGSTIN") or None,
+                    "place_of_supply": self._child_text(v, "PLACEOFSUPPLY") or None,
+                    "state": self._child_text(v, "STATENAME") or None,
+                    "country": self._child_text(v, "COUNTRYOFRESIDENCE") or None,
+                    "entered_by": self._child_text(v, "ENTEREDBY") or None,
+                    "is_invoice": self._child_text(v, "ISINVOICE").lower() == "yes",
                     # OPTIONAL = unposted draft, CANCELLED = voided — both are
                     # excluded from Tally's registers, so the cloud flags them.
                     "is_optional": self._child_text(v, "ISOPTIONAL").lower() == "yes",
                     "is_cancelled": self._child_text(v, "ISCANCELLED").lower() == "yes",
+                    "is_post_dated": self._child_text(v, "ISPOSTDATED").lower() == "yes",
+                    "has_cashflow": self._child_text(v, "HASCASHFLOW").lower() == "yes",
                     "entries": entries,
                     "inventory": inventory,
+                    # Nested allocations — the data every outstanding / ageing /
+                    # cost-centre / bank-reconciliation report is built from, and
+                    # which used to be parsed out and thrown away.
+                    "bill_allocations": self._bill_allocations(v, parents),
+                    "batch_allocations": self._batch_allocations(v, parents),
+                    "cost_allocations": self._cost_allocations(v, parents),
+                    "bank_allocations": self._bank_allocations(v, parents),
+                    "gst_details": self._gst_details(v, parents),
+                    "inventory_accounting": self._inventory_accounting(v, parents),
+                    "eway_bills": self._eway_bills(v),
+                    "einvoice": self._einvoice(v),
+                    # Dispatch details — what an e-Way Bill screen shows beside
+                    # the bill itself.
+                    "dispatch_doc_no": self._child_text(v, "BASICSHIPDOCUMENTNO") or None,
+                    "dispatch_through": self._child_text(v, "BASICSHIPPEDBY") or None,
+                    "destination": self._child_text(v, "BASICFINALDESTINATION") or None,
+                    "carrier_name": self._child_text(v, "BASICSHIPVESSELNO") or None,
+                    "bill_of_lading": self._child_text(v, "BILLOFLADINGNO") or None,
+                    "vehicle_number": self._child_text(v, "BASICSHIPVESSELNO") or None,
+                    "order_reference": self._child_text(v, "BASICORDERREF") or None,
                 })
-            return rows
-
-        out: list[dict[str, Any]] = []
-        # Up to 2 attempts, each with a BRAND-NEW collection name (the request
-        # builder mints a nonce) so a transient empty isn't a poisoned name we keep
-        # re-hitting. A genuinely-empty AlterID window returns [] both times (cheap).
-        for attempt in range(2):
-            xml = self._voucher_collection_request_xml(company, after_alterid, upto_alterid)
-            out = _parse(self._safe_parse(self.send(xml, timeout=180)))
-            if out:
-                break
-            self.log.debug("voucher_list(%s,%s): empty on attempt %d",
-                           after_alterid, upto_alterid, attempt + 1)
-        return out
+        return rows
 
     # ------------------------------------------------------------------ #
     # High-level writes (build XML, send, return raw Tally response)
@@ -973,15 +2505,48 @@ class TallyConnector:
 
     @staticmethod
     def _companies_request_xml() -> str:
-        """EXPORT: a Collection of Company (the LOADED companies). Also the probe.
+        """EXPORT: the list of companies open in Tally.
 
-        Tally Prime has no "List of Companies" REPORT — the working way to list
-        open companies is a Collection of TYPE Company via the
-        TALLYREQUEST=Export / TYPE=Collection / ID envelope. Each loaded company
-        comes back as <COMPANY NAME="..."> in the response.
+        THIS ONE IS NOT BUILT LIKE THE OTHER COLLECTIONS, and the difference is
+        not cosmetic. Asking for it the generic way — ``<TYPE>Company</TYPE>``
+        with a ``<FETCH>`` — made TallyPrime raise
+
+            Internal Error. Contact Tally Solutions.
+            Incorrect Object Type!
+
+        in a modal dialog, and then stop answering: every later request timed
+        out after 30s until somebody dismissed the box and restarted Tally. The
+        agent re-sent this same request as its reachability probe every few
+        seconds, so one bad envelope took Tally down and kept it down.
+
+        Company is not an ordinary object in a data collection: without
+        ``ISINITIALIZE`` the collection is evaluated against the CURRENT company
+        context rather than enumerating companies, which is what Tally is
+        objecting to. The documented form is ISINITIALIZE plus NATIVEMETHOD
+        (FETCH is for objects inside a company), and that is what this sends.
         """
-        return TallyConnector._collection_request_xml(
-            "TSSCompanyColl", "Company", ["NAME"], None,
+        return (
+            "<ENVELOPE>"
+            "<HEADER>"
+            "<VERSION>1</VERSION>"
+            "<TALLYREQUEST>Export</TALLYREQUEST>"
+            "<TYPE>Collection</TYPE>"
+            "<ID>List of Companies</ID>"
+            "</HEADER>"
+            "<BODY><DESC>"
+            "<STATICVARIABLES>"
+            "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>"
+            # "Simple" companies only would hide companies with security on.
+            "<SVIsSimpleCompany>No</SVIsSimpleCompany>"
+            "</STATICVARIABLES>"
+            "<TDL><TDLMESSAGE>"
+            '<COLLECTION NAME="List of Companies" ISINITIALIZE="Yes">'
+            "<TYPE>Company</TYPE>"
+            "<NATIVEMETHOD>NAME</NATIVEMETHOD>"
+            "</COLLECTION>"
+            "</TDLMESSAGE></TDL>"
+            "</DESC></BODY>"
+            "</ENVELOPE>"
         )
 
     @staticmethod
@@ -990,6 +2555,7 @@ class TallyConnector:
         coll_type: str,
         fetch: list[str],
         company: Optional[str] = None,
+        after_alterid: int = 0,
     ) -> str:
         """EXPORT: a Tally COLLECTION fetching specific fields (with ALTERID).
 
@@ -1004,8 +2570,26 @@ class TallyConnector:
         specific loaded company (SVCURRENTCOMPANY); empty = the active company.
         """
         fetch_csv = TallyConnector._esc(",".join(fetch))
-        coll_e = TallyConnector._esc(coll_name)
+        # An AlterID-filtered collection needs a UNIQUE name per fetch: Tally
+        # caches a TDL definition by name for the session, so reusing the name
+        # with a NEW filter value would silently re-serve the old window's
+        # result. (Same reason the voucher collection mints a nonce.)
+        coll_e = TallyConnector._esc(
+            coll_name + (_vch_nonce() if after_alterid else ""))
         type_e = TallyConnector._esc(coll_type)
+
+        # INCREMENTAL masters. Without this the agent re-read EVERY ledger, item
+        # and group from Tally on every cycle — the cloud then skipped the
+        # unchanged ones, so the write was cheap but the Tally read never was.
+        # On a 5,000-master company that is the bulk of each cycle's cost, paid
+        # forever. after_alterid=0 means "everything" (first sync / reconcile).
+        filt_tag = ""
+        filt_def = ""
+        if after_alterid:
+            filt = coll_e + "F"
+            filt_tag = "<FILTER>" + filt + "</FILTER>"
+            filt_def = ('<SYSTEM TYPE="Formulae" NAME="' + filt + '">'
+                        "$AlterID &gt; " + str(int(after_alterid)) + "</SYSTEM>")
         return (
             "<ENVELOPE>"
             "<HEADER>"
@@ -1023,49 +2607,71 @@ class TallyConnector:
             '<COLLECTION NAME="' + coll_e + '" ISMODIFY="No">'
             "<TYPE>" + type_e + "</TYPE>"
             "<FETCH>" + fetch_csv + "</FETCH>"
+            + filt_tag +
             "</COLLECTION>"
+            + filt_def +
             "</TDLMESSAGE></TDL>"
             "</DESC></BODY>"
             "</ENVELOPE>"
         )
 
     @staticmethod
-    def _ledger_collection_request_xml(company: Optional[str] = None) -> str:
+    def _ledger_collection_request_xml(company: Optional[str] = None,
+                                       after_alterid: int = 0) -> str:
         """EXPORT: a Collection of Ledgers fetching name/parent/alterid + every
         party field the cloud customer/supplier record can store (gstin, opening,
         mobile, email, PAN, address, credit limit)."""
         return TallyConnector._collection_request_xml(
             "TSSLedgerColl", "Ledger",
-            ["NAME", "PARENT", "ALTERID", "PARTYGSTIN", "OPENINGBALANCE", "CLOSINGBALANCE",
+            ["NAME", "PARENT", "GUID", "MASTERID", "ALTERID",
+             "PARTYGSTIN", "OPENINGBALANCE", "CLOSINGBALANCE",
              "LEDGERMOBILE", "LEDGERPHONE", "EMAIL", "INCOMETAXNUMBER",
-             "ADDRESS", "LEDSTATENAME", "PINCODE", "COUNTRYNAME", "CREDITLIMIT"],
+             "ADDRESS", "LEDSTATENAME", "PINCODE", "COUNTRYNAME", "CREDITLIMIT",
+             # Behaviour flags + tax classification the cloud had no view of.
+             "ISBILLWISEON", "ISCOSTCENTRESON", "BILLCREDITPERIOD",
+             "GSTREGISTRATIONTYPE", "PLACEOFSUPPLY", "LEDGERCONTACT",
+             "LEDGERFAX", "WEBSITE", "ISDEEMEDPOSITIVE", "AFFECTSSTOCK",
+             "TAXTYPE", "TAXCLASSIFICATIONNAME",
+             # Nested lists: bank details, and the opening bill-wise breakup
+             # that day-one outstanding is impossible without.
+             "LEDGERBANKDETAILS", "BANKDETAILS", "OPENINGBALANCEALLOCATIONS"],
             company,
+            after_alterid,
         )
 
     @staticmethod
-    def _stock_collection_request_xml(company: Optional[str] = None) -> str:
+    def _stock_collection_request_xml(company: Optional[str] = None,
+                                      after_alterid: int = 0) -> str:
         """EXPORT: a Collection of StockItems fetching name/alterid/units/hsn/closing."""
         return TallyConnector._collection_request_xml(
             "TSSStockColl", "StockItem",
-            ["NAME", "ALTERID", "BASEUNITS", "PARENT", "GSTHSNCODE", "HSNCODE",
+            ["NAME", "GUID", "MASTERID", "ALTERID", "BASEUNITS", "PARENT", "GSTHSNCODE", "HSNCODE",
+             # Nested lists — opening batches, price levels and the BOM.
+             "BATCHALLOCATIONS", "MULTIPRICELIST", "COMPONENTLIST",
              "GSTRATE", "GSTDETAILS", "CLOSINGBALANCE",
              "STANDARDPRICE", "STANDARDCOST", "OPENINGRATE"],
             company,
+            after_alterid,
         )
 
     @staticmethod
-    def _godown_collection_request_xml(company: Optional[str] = None) -> str:
+    def _godown_collection_request_xml(company: Optional[str] = None,
+                                       after_alterid: int = 0) -> str:
         """EXPORT: a Collection of Godowns fetching name/alterid."""
         return TallyConnector._collection_request_xml(
             "TSSGodownColl", "Godown",
-            ["NAME", "ALTERID"],
+            ["NAME", "GUID", "MASTERID", "ALTERID", "PARENT", "ADDRESS", "HASNOSPACE", "ISEXTERNAL"],
             company,
+            after_alterid,
         )
 
     @staticmethod
     def _voucher_collection_request_xml(company: Optional[str] = None,
                                         after_alterid: int = 0,
-                                        upto_alterid: "int | None" = None) -> str:
+                                        upto_alterid: "int | None" = None,
+                                        vtype: Optional[str] = None,
+                                        guids: Optional[list[str]] = None,
+                                        fetch: Optional[str] = None) -> str:
         """EXPORT a Voucher COLLECTION FILTERED to an AlterID window (after, upto].
 
         Tally's plain "Day Book" report is single-day (SVCURRENTDATE) and a full
@@ -1082,6 +2688,18 @@ class TallyConnector:
         cond = "$AlterID &gt; " + str(after)
         if upto_alterid is not None:
             cond += " AND $AlterID &lt;= " + str(int(upto_alterid))
+        # Restrict to ONE voucher type. A single unfiltered Voucher collection
+        # does not reliably return the order / inventory-only types (Sales Order,
+        # Delivery Note, Stock Journal, Job Work, Material In/Out), so pulling
+        # type-by-type is what makes the mirror actually complete.
+        if vtype:
+            cond += ' AND $VoucherTypeName = "' + TallyConnector._esc(vtype) + '"'
+        # Fetch an explicit set of vouchers by GUID — the second half of the
+        # diff-based pull: ask Tally for exactly the ones the cloud is missing
+        # instead of re-walking a window that may already be complete.
+        if guids:
+            ors = " OR ".join('$GUID = "' + TallyConnector._esc(g) + '"' for g in guids)
+            cond = "(" + ors + ")"
         # A BRAND-NEW collection + filter name for EVERY fetch (nonce). Tally
         # poisons a name that ever returned empty (serves empty forever until
         # restart); a fresh name always evaluates correctly (verified). The cost
@@ -1099,7 +2717,25 @@ class TallyConnector:
             "</STATICVARIABLES><TDL><TDLMESSAGE>"
             '<COLLECTION NAME="' + coll + '" ISMODIFY="No">'
             "<TYPE>Voucher</TYPE>"
-            "<FETCH>DATE,VOUCHERTYPENAME,VOUCHERNUMBER,PARTYLEDGERNAME,AMOUNT,ALTERID,GUID,ISOPTIONAL,ISCANCELLED</FETCH>"
+            # `fetch` overrides the full field list — used by voucher_ids(), which
+            # wants identity ONLY so the id sweep stays small enough to run over
+            # every voucher in the company.
+            + ("<FETCH>" + TallyConnector._esc(fetch) + "</FETCH>" if fetch else
+            # Header identity + every field the cloud voucher mirror stores.
+            # Tally returns the nested allocation LISTs (bill/batch/cost/bank/GST)
+            # with the voucher body regardless of FETCH, so they are not listed
+            # here — but MASTERID, NARRATION, REFERENCE and the flags are only
+            # sent when asked for.
+            "<FETCH>DATE,EFFECTIVEDATE,VOUCHERTYPENAME,VOUCHERNUMBER,PARTYLEDGERNAME,"
+            "PARTYNAME,AMOUNT,ALTERID,GUID,MASTERID,VOUCHERKEY,REFERENCE,REFERENCEDATE,"
+            "NARRATION,PARTYGSTIN,PLACEOFSUPPLY,STATENAME,COUNTRYOFRESIDENCE,ENTEREDBY,"
+            "ISINVOICE,ISOPTIONAL,ISCANCELLED,ISPOSTDATED,HASCASHFLOW,"
+            # e-Way Bill / e-Invoice + dispatch. Without these an "e-Way Bills"
+            # or "e-Invoices" screen has nothing to show, and a GST audit's first
+            # question (what is this invoice's IRN?) is unanswerable.
+            "EWAYBILLDETAILS,IRN,IRNACKNO,IRNACKDATE,IRNQRCODE,IRNSTATUS,"
+            "BASICSHIPDOCUMENTNO,BASICSHIPPEDBY,BASICFINALDESTINATION,"
+            "BASICSHIPVESSELNO,BILLOFLADINGNO,BASICORDERREF</FETCH>") +
             "<FILTER>" + filt + "</FILTER>"
             "</COLLECTION>"
             '<SYSTEM TYPE="Formulae" NAME="' + filt + '">' + cond + "</SYSTEM>"
@@ -1108,12 +2744,16 @@ class TallyConnector:
         )
 
     @staticmethod
-    def _group_collection_request_xml(company: Optional[str] = None) -> str:
-        """EXPORT: a Collection of Groups fetching name/parent/alterid/nature."""
+    def _group_collection_request_xml(company: Optional[str] = None,
+                                      after_alterid: int = 0) -> str:
+        """EXPORT: a Collection of Groups fetching name/parent/primary-group/
+        alterid/nature."""
         return TallyConnector._collection_request_xml(
             "TSSGroupColl", "Group",
-            ["NAME", "PARENT", "ALTERID", "ISREVENUE", "ISDEEMEDPOSITIVE"],
+            ["NAME", "PARENT", "PRIMARYGROUP", "GUID", "MASTERID", "ALTERID",
+             "ISREVENUE", "ISDEEMEDPOSITIVE"],
             company,
+            after_alterid,
         )
 
     @staticmethod
@@ -1960,6 +3600,48 @@ class TallyConnector:
             if self._localname(child.tag).upper() == target and (child.text or "").strip():
                 return child.text.strip()
         return ""
+
+    def _direct_child_text(self, el: ET.Element, child_localname: str) -> str:
+        """Text of the first DIRECT child with this name (namespace-agnostic).
+
+        Unlike :meth:`_child_text`, this does NOT descend. Identity tags must use
+        it: a STOCKITEM carries nested BATCHALLOCATIONS / GSTDETAILS lists whose
+        own GUID/MASTERID children a deep search would happily return instead of
+        the item's, silently giving two masters the same identity.
+        """
+        target = child_localname.upper()
+        for child in list(el):
+            if self._localname(child.tag).upper() == target and (child.text or "").strip():
+                return child.text.strip()
+        return ""
+
+    def _guid(self, el: ET.Element) -> Optional[str]:
+        """Tally GUID for an object -> str, or None when absent.
+
+        The GUID is Tally's globally-unique, RENAME-STABLE master identity
+        ("<company-guid>-<seq>"); the cloud upserts on it so renaming a ledger in
+        Tally updates the existing row instead of creating a duplicate. Like
+        ALTERID it arrives as either an attribute or a direct child.
+        """
+        raw = (el.get("GUID") or el.get("Guid") or "").strip() \
+            or self._direct_child_text(el, "GUID")
+        return raw or None
+
+    def _masterid(self, el: ET.Element) -> int:
+        """Tally MASTERID for an object -> int (0 if absent/unparsable).
+
+        MASTERID is the company-local numeric id. It is what a reconcile pass
+        compares against: fetching just MASTERID for every master is cheap, and
+        any id the cloud holds that Tally no longer lists has been DELETED.
+        """
+        raw = el.get("MASTERID") or el.get("MasterId") or ""
+        if not raw:
+            raw = self._direct_child_text(el, "MASTERID")
+        raw = re.sub(r"[^0-9\-]", "", str(raw or ""))
+        try:
+            return int(raw) if raw not in ("", "-") else 0
+        except ValueError:
+            return 0
 
     def _alterid(self, el: ET.Element) -> int:
         """Extract a Tally ALTERID for an element -> int (0 if absent/unparsable).

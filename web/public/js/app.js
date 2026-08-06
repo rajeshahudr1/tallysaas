@@ -22,6 +22,7 @@
     document.addEventListener('DOMContentLoaded', init);
 
     function init() {
+        initSidebarCollapse();
         initSidebarGroups();
         initTableDropdowns();
         initConfirms();
@@ -37,6 +38,7 @@
         initNotifications();
         initPwaInstall();
         initOfflineIndicator();
+        initCompanyInfo();
         // Bootstrap's collapse already toggles aria-expanded on the
         // filter-card header (it is the [data-bs-toggle] element), so the
         // chevron rotation is pure CSS. Nothing to wire here.
@@ -197,17 +199,64 @@
         syncTrigger();
     }
 
-    /* ── Sidebar group collapse / expand ──────────────────────────
+    /* ── Desktop sidebar collapse (topbar ☰) ──────────────────────
+     * Below 992px the hamburger is Bootstrap's offcanvas trigger and we
+     * leave it alone. At ≥992px there is no drawer, so the same button
+     * toggles an icon-only rail instead — matching the reference product,
+     * where ☰ collapses the menu rather than opening one. The choice is
+     * remembered so it survives navigation.
+     * ─────────────────────────────────────────────────────────── */
+    function initSidebarCollapse() {
+        var KEY = 'tcs.sidebar.rail';
+        var btn = document.querySelector('[data-sidebar-toggle]');
+        if (!btn) return;
+
+        var isDesktop = function () { return window.matchMedia('(min-width: 992px)').matches; };
+
+        function apply(collapsed) {
+            document.body.classList.toggle('sidebar-collapsed', collapsed);
+            btn.setAttribute('aria-expanded', String(!collapsed));
+        }
+
+        try { if (isDesktop() && localStorage.getItem(KEY) === '1') apply(true); }
+        catch (e) { /* ignore */ }
+
+        btn.addEventListener('click', function (ev) {
+            ev.preventDefault();
+
+            if (isDesktop()) {
+                var collapsed = !document.body.classList.contains('sidebar-collapsed');
+                apply(collapsed);
+                try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
+                return;
+            }
+
+            // Mobile: open the offcanvas drawer ourselves. The button carries
+            // no data-bs-toggle, so this is the only thing that opens it and
+            // the two behaviours can never both fire on one click.
+            var sel = btn.getAttribute('data-sidebar-toggle');
+            var el  = sel && document.querySelector(sel);
+            if (el && window.bootstrap && window.bootstrap.Offcanvas) {
+                window.bootstrap.Offcanvas.getOrCreateInstance(el).toggle();
+            }
+        });
+
+        // Crossing the breakpoint must not leave the rail class on, or the
+        // offcanvas drawer would render as a 72px stub.
+        window.addEventListener('resize', function () {
+            if (!isDesktop()) document.body.classList.remove('sidebar-collapsed');
+            else { try { apply(localStorage.getItem(KEY) === '1'); } catch (e) { /* ignore */ } }
+        });
+    }
+
+    /* ── Sidebar group collapse / expand (accordion) ──────────────
      * Each labelled menu group has a [data-group] toggle button + a
-     * [data-group-items] list. Clicking toggles the group; the state is
-     * remembered per-group in localStorage so it sticks across pages.
+     * [data-group-items] list. Only ONE group is ever open: opening a
+     * group closes the others. Every group starts collapsed — except the
+     * one holding the current page ([data-group-active]) — so a fresh
+     * login shows a fully collapsed menu.
      * ─────────────────────────────────────────────────────────── */
     function initSidebarGroups() {
-        var KEY = 'tcs.sidebar.collapsed';
-        var collapsed;
-        try { collapsed = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; }
-        catch (e) { collapsed = {}; }
-
         function apply(gid, isCollapsed) {
             document.querySelectorAll('[data-group="' + gid + '"]').forEach(function (btn) {
                 btn.classList.toggle('is-collapsed', isCollapsed);
@@ -218,16 +267,23 @@
             });
         }
 
-        // Restore saved state on load.
-        Object.keys(collapsed).forEach(function (gid) { if (collapsed[gid]) apply(gid, true); });
+        var toggles = [].slice.call(document.querySelectorAll('.sidebar-section-toggle'));
 
-        document.querySelectorAll('.sidebar-section-toggle').forEach(function (btn) {
+        // Collapse everything, then re-open only the active page's group.
+        toggles.forEach(function (btn) {
+            apply(btn.getAttribute('data-group'), !btn.hasAttribute('data-group-active'));
+        });
+
+        toggles.forEach(function (btn) {
             btn.addEventListener('click', function () {
                 var gid = btn.getAttribute('data-group');
                 var nowCollapsed = !btn.classList.contains('is-collapsed');
+                // Accordion: close every other group first.
+                toggles.forEach(function (other) {
+                    var oid = other.getAttribute('data-group');
+                    if (oid !== gid) apply(oid, true);
+                });
                 apply(gid, nowCollapsed);
-                collapsed[gid] = nowCollapsed;
-                try { localStorage.setItem(KEY, JSON.stringify(collapsed)); } catch (e) { /* ignore */ }
             });
         });
     }
@@ -717,6 +773,56 @@
         if (el.hasAttribute('data-counter')) {
             el.dispatchEvent(new Event('input', { bubbles: true }));
         }
+    }
+
+    /* ── Company Information (switcher ⓘ) ─────────────────────────
+     * One modal serves every company row: the clicked button's data-*
+     * attributes are copied into the matching [data-ci] cells. Timestamps
+     * are rendered in the user's locale here rather than server-side so the
+     * panel always reads in local time. */
+    function initCompanyInfo() {
+        var BS = window.bootstrap;
+        var el = document.getElementById('companyInfoModal');
+        if (!BS || !el) return;
+        var modal = BS.Modal.getOrCreateInstance(el);
+
+        function stamp(v) {
+            if (!v) return '—';
+            var d = new Date(v);
+            if (isNaN(d.getTime())) return '—';
+            return d.toLocaleString('en-IN', {
+                day: '2-digit', month: 'short', year: 'numeric',
+                hour: '2-digit', minute: '2-digit',
+            });
+        }
+        function day(v) {
+            if (!v) return '—';
+            var d = new Date(v);
+            if (isNaN(d.getTime())) return '—';
+            return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+        }
+        function put(key, text) {
+            var cell = el.querySelector('[data-ci="' + key + '"]');
+            if (cell) cell.textContent = text || '—';
+        }
+
+        document.addEventListener('click', function (ev) {
+            var btn = ev.target.closest('[data-company-info]');
+            if (!btn) return;
+            // Inside a dropdown item row — don't follow the switch link.
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            put('name',          btn.getAttribute('data-name'));
+            put('booksFrom',     day(btn.getAttribute('data-books-from')));
+            put('financialYear', btn.getAttribute('data-financial-year'));
+            put('lastSync',      btn.getAttribute('data-last-sync'));
+            put('lastPull',      stamp(btn.getAttribute('data-last-pull')));
+            put('lastPush',      stamp(btn.getAttribute('data-last-push')));
+            put('created',       stamp(btn.getAttribute('data-created')));
+            put('status',        btn.getAttribute('data-status'));
+            modal.show();
+        });
     }
 
     /* ── PWA install prompt ───────────────────────────────────── */

@@ -1,0 +1,110 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * ledgers/statement.ejs — one ledger's voucher-wise movement.
+ *
+ * Reached from /cash, /bank and the dashboard Summary tiles. Shows the
+ * period's vouchers with the Opening / Closing pair Tally prints, plus a
+ * voucher-type filter and the period picker.
+ *
+ * Read-only by design: these rows are mirrored FROM Tally, so there is
+ * nothing here to edit — an Edit action would imply we own the data.
+ * ─────────────────────────────────────────────────────────── */
+var _ledger = (typeof ledger !== 'undefined' && ledger) ? ledger : { name: '', parent: '' };
+var _rows   = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _ranges = (typeof ranges !== 'undefined' && ranges) ? ranges : [];
+var _range  = (typeof range !== 'undefined' && range) ? range : { value: '' };
+var _types  = (typeof voucherTypes !== 'undefined' && voucherTypes) ? voucherTypes : [];
+var _type   = (typeof voucherType !== 'undefined' && voucherType) ? voucherType : '';
+var _meta   = (typeof meta !== 'undefined' && meta) ? meta : { total: 0, page: 1, per_page: 20 };
+
+var _from = _meta.total ? ((_meta.page - 1) * _meta.per_page) + 1 : 0;
+var _to   = Math.min(_meta.page * _meta.per_page, _meta.total);
+var _pages = Math.max(1, Math.ceil(_meta.total / (_meta.per_page || 20)));
+
+// Preserve the current filters when moving between pages.
+function _pageHref(p) {
+    var qs = 'range=' + encodeURIComponent(_range.value) + '&page=' + p;
+    if (_type) qs += '&voucher_type=' + encodeURIComponent(_type);
+    return '?' + qs;
+}
+%>
+
+<%- include('../partials/page-head', {
+    title: _ledger.name,
+    breadcrumb: (typeof breadcrumb !== 'undefined' ? breadcrumb : [{ label: _ledger.name }]),
+}) %>
+
+<div class="ledger-head">
+    <div class="ledger-head-meta">
+        <% if (_ledger.parent) { %><span class="pill-badge"><%= _ledger.parent %></span><% } %>
+        <% if (_ledger.gstin) { %><span class="ledger-meta-item">GSTIN: <strong><%= _ledger.gstin %></strong></span><% } %>
+        <% if (_ledger.state) { %><span class="ledger-meta-item"><%= _ledger.state %></span><% } %>
+        <% if (_ledger.bank_name) { %>
+            <span class="ledger-meta-item"><%= _ledger.bank_name %><%= _ledger.bank_acc_no ? ' · ' + _ledger.bank_acc_no : '' %></span>
+        <% } %>
+    </div>
+    <form method="get" class="ledger-head-controls">
+        <select class="kpi-panel-select no-search" name="voucher_type" aria-label="Voucher type"
+                onchange="this.form.submit()">
+            <option value="">All Vouchers</option>
+            <% _types.forEach(function (t) { %>
+                <option value="<%= t %>" <%= t === _type ? 'selected' : '' %>><%= t %></option>
+            <% }); %>
+        </select>
+        <select class="kpi-panel-select no-search" name="range" aria-label="Period"
+                onchange="this.form.submit()">
+            <% _ranges.forEach(function (r) { %>
+                <option value="<%= r.value %>" <%= r.value === _range.value ? 'selected' : '' %>><%= r.label %></option>
+            <% }); %>
+        </select>
+    </form>
+</div>
+
+<div class="card">
+    <% if (!_rows.length) { %>
+        <p class="daybook-empty">No vouchers in this period.</p>
+    <% } else { %>
+        <table class="daybook-table ledger-table">
+            <thead>
+                <tr>
+                    <th>Voucher No</th>
+                    <th>Voucher Type</th>
+                    <th>Date</th>
+                    <th class="is-num">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <td>
+                            <% if (r.href) { %>
+                                <a class="daybook-voucher" href="<%= r.href %>"><%= r.voucher || '(no number)' %></a>
+                            <% } else { %><%= r.voucher || '—' %><% } %>
+                        </td>
+                        <td><%= r.type %></td>
+                        <td><%= r.date %></td>
+                        <td class="is-num"><%= r.amount %> <span class="ledger-dc"><%= r.dc %></span></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    <% } %>
+
+    <div class="ledger-foot ledger-foot--split">
+        <span><%= _from %>-<%= _to %> of <%= _meta.total %></span>
+        <span class="ledger-balances">
+            Opening: <strong><%= (typeof opening !== 'undefined' ? opening : '₹0') %></strong>
+            <span class="ledger-dc"><%= (typeof openingDc !== 'undefined' ? openingDc : '') %></span>
+            &nbsp;&nbsp;
+            Closing: <strong><%= (typeof closing !== 'undefined' ? closing : '₹0') %></strong>
+            <span class="ledger-dc"><%= (typeof closingDc !== 'undefined' ? closingDc : '') %></span>
+        </span>
+        <% if (_pages > 1) { %>
+            <span class="ledger-pager">
+                <% if (_meta.page > 1) { %><a class="daybook-pill" href="<%= _pageHref(_meta.page - 1) %>">Prev</a><% } %>
+                <span class="daybook-pill is-active"><%= _meta.page %> / <%= _pages %></span>
+                <% if (_meta.page < _pages) { %><a class="daybook-pill" href="<%= _pageHref(_meta.page + 1) %>">Next</a><% } %>
+            </span>
+        <% } %>
+    </div>
+</div>

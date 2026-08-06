@@ -1,0 +1,15 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * dashboard/_summary.ejs — the Summary + Need Attention row.
+ *
+ * Rendered BOTH as part of dashboard/index.ejs and on its own by
+ * GET /dashboard/section?section=summary, so it guards its own
+ * locals and never assumes the full page's variables exist.
+ * ─────────────────────────────────────────────────────────── */
+var _summaryPanel   = (typeof summaryPanel   !== 'undefined' && summaryPanel)   ? summaryPanel   : null;
+var _attentionPanel = (typeof attentionPanel !== 'undefined' && attentionPanel) ? attentionPanel : null;
+%>
+<section class="kpi-row" data-dash-section="summary">
+    <% if (_summaryPanel) { %><%- include('../partials/kpi-panel', _summaryPanel) %><% } %>
+    <% if (_attentionPanel) { %><%- include('../partials/kpi-panel', _attentionPanel) %><% } %>
+</section>

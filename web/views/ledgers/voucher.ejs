@@ -1,0 +1,93 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * ledgers/voucher.ejs — one Tally-origin voucher.
+ *
+ * Shows the complete double entry (every ledger, Dr / Cr) and any item
+ * movement. Read-only on purpose: these rows are mirrored FROM Tally, so
+ * there is nothing here we own to edit. A voucher that also exists as a
+ * cloud invoice never reaches this page — the route redirects it to the
+ * editable invoice screen.
+ * ─────────────────────────────────────────────────────────── */
+var _v       = (typeof voucher !== 'undefined' && voucher) ? voucher : {};
+var _entries = (typeof entries !== 'undefined' && entries) ? entries : [];
+var _items   = (typeof items   !== 'undefined' && items)   ? items   : [];
+%>
+
+<%- include('../partials/page-head', {
+    title: (typeof title !== 'undefined' ? title : 'Voucher'),
+    breadcrumb: (typeof breadcrumb !== 'undefined' ? breadcrumb : [{ label: 'Voucher' }]),
+}) %>
+
+<div class="ledger-head">
+    <div class="ledger-head-meta">
+        <% if (_v.party) { %><span class="ledger-head-total"><strong><%= _v.party %></strong></span><% } %>
+        <% if (_v.no)   { %><span class="ledger-meta-item">Voucher No: <strong><%= _v.no %></strong></span><% } %>
+        <% if (_v.type) { %><span class="pill-badge"><%= _v.type %></span><% } %>
+        <% if (_v.date) { %><span class="ledger-meta-item"><%= _v.date %></span><% } %>
+    </div>
+    <span class="ledger-meta-item">Synced from Tally — read only</span>
+</div>
+
+<% if (_items.length) { %>
+<div class="card">
+    <div class="recent-card-head"><h2 class="recent-card-title">Items</h2></div>
+    <table class="daybook-table ledger-table">
+        <thead>
+            <tr>
+                <th>Sr.No</th>
+                <th>Item Name</th>
+                <th>Godown</th>
+                <th class="is-num">Quantity</th>
+                <th class="is-num">Rate</th>
+                <th class="is-num">Amount</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% _items.forEach(function (it) { %>
+                <tr>
+                    <td><%= it.sr %></td>
+                    <td><%= it.name %></td>
+                    <td><%= it.godown || '—' %></td>
+                    <td class="is-num"><%= it.qty %></td>
+                    <td class="is-num"><%= it.rate %></td>
+                    <td class="is-num"><%= it.amount %></td>
+                </tr>
+            <% }); %>
+        </tbody>
+    </table>
+</div>
+<% } %>
+
+<div class="card">
+    <div class="recent-card-head"><h2 class="recent-card-title">Accounting Entries</h2></div>
+    <% if (!_entries.length) { %>
+        <p class="daybook-empty">This voucher has no ledger entries.</p>
+    <% } else { %>
+        <table class="daybook-table ledger-table">
+            <thead>
+                <tr>
+                    <th>Ledger</th>
+                    <th class="is-num">Debit</th>
+                    <th class="is-num">Credit</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% _entries.forEach(function (e) { %>
+                    <tr>
+                        <td><%= e.ledger %></td>
+                        <td class="is-num"><%= e.dc === 'Dr' ? e.amount : '' %></td>
+                        <td class="is-num"><%= e.dc === 'Cr' ? e.amount : '' %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+        <div class="ledger-foot ledger-foot--split">
+            <span>Total</span>
+            <span class="ledger-balances">
+                Debit: <strong><%= _v.totalDebit %></strong>
+                &nbsp;&nbsp;
+                Credit: <strong><%= _v.totalCredit %></strong>
+            </span>
+        </div>
+    <% } %>
+</div>

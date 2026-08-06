@@ -1,0 +1,53 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/kpi-panel.ejs — a titled panel holding a 2×2 grid of
+ * clickable metric tiles. Backs the dashboard's Summary and
+ * Need Attention panels, and is written to be reused by the
+ * Receivables / Top-10 panels that follow.
+ *
+ * Locals:
+ *   title   — panel heading (required)
+ *   tone    — 'default' | 'danger' (danger tints the header red)
+ *   control — raw HTML rendered right of the title (e.g. a <select>)
+ *   tiles   — [{ label, value, sub, href, locked }]
+ *             sub / href / locked are optional; a tile without href
+ *             renders as a non-interactive <div>. `sub` is raw HTML
+ *             so a tile can bold parts of its caption.
+ *
+ * Every local is guarded so a partial render with missing locals
+ * never throws.
+ * ─────────────────────────────────────────────────────────── */
+var _title   = (typeof title   !== 'undefined' && title)   ? title   : '';
+var _tone    = (typeof tone    !== 'undefined' && tone === 'danger') ? 'danger' : 'default';
+var _control = (typeof control !== 'undefined' && control) ? control : '';
+var _tiles   = (typeof tiles   !== 'undefined' && Array.isArray(tiles)) ? tiles : [];
+%>
+<section class="kpi-panel kpi-panel--<%= _tone %>">
+    <div class="kpi-panel-head">
+        <h2 class="kpi-panel-title">
+            <%= _title %>
+            <% if (_tone === 'danger') { %>
+                <i class="fa-solid fa-circle-exclamation kpi-panel-title-icon" aria-hidden="true"></i>
+            <% } %>
+        </h2>
+        <% if (_control) { %><%- _control %><% } %>
+    </div>
+    <div class="kpi-tiles">
+        <% _tiles.forEach(function (t) { %>
+            <% var tag = t.href ? 'a' : 'div'; %>
+            <<%= tag %> class="kpi-tile"<% if (t.href) { %> href="<%= t.href %>"<% } %>>
+                <div class="kpi-tile-label">
+                    <span class="kpi-tile-label-text">
+                        <%= t.label %>
+                        <% if (t.locked) { %><i class="fa-solid fa-lock kpi-tile-lock" aria-hidden="true"></i><% } %>
+                    </span>
+                    <% if (t.href) { %>
+                        <i class="fa-solid fa-chevron-right kpi-tile-chevron" aria-hidden="true"></i>
+                    <% } %>
+                </div>
+                <% if (t.value) { %><div class="kpi-tile-value"><%= t.value %></div><% } %>
+                <% if (t.sub) { %><div class="kpi-tile-sub"><%- t.sub %></div><% } %>
+            </<%= tag %>>
+        <% }); %>
+    </div>
+</section>

@@ -3,6 +3,12 @@
 /**
  * api/jobs/reminderScheduler.js
  *
+ * Two kinds of reminder run here:
+ *   • the licence-wide auto reminder (fixed hour + offset days), and
+ *   • per-party schedules set through "Set Reminder", which OVERRIDE the
+ *     licence offsets for the parties that have one, so a customer is never
+ *     chased twice on the same day.
+ *
  * The AUTOMATIC payment-reminder job. For every licence whose Super-Admin turned
  * ON auto reminders (and at least one channel), at that licence's configured
  * hour, it nudges customers whose OLDEST overdue invoice is exactly one of the
@@ -17,6 +23,7 @@
 
 const db = require('../config/db').db;
 const { overdueCustomers, reminderText, normalizeOffsets } = require('../Helpers/reminders');
+const { dueNow, pickChannel } = require('../Helpers/reminderSchedule');
 const { sendPaymentReminder } = require('../Helpers/mail');
 const { sendWhatsApp }        = require('../Helpers/whatsapp');
 
@@ -58,16 +65,42 @@ async function sendAutoReminders(asOf = new Date()) {
 
         for (const co of companies) {
             const overdue = await overdueCustomers(co.id, asOf);
+
+            // Per-party schedules ("Set Reminder") OVERRIDE the licence-wide
+            // offsets for the parties that have one — otherwise a customer with
+            // a daily schedule would also get chased on the licence's offset
+            // days, i.e. twice.
+            const scheduleRows = await db('customer_reminder_schedules')
+                .where('company_id', co.id).select('*');
+            const scheduleOf = new Map(scheduleRows.map((r) => [Number(r.customer_id), r]));
+
             for (const cust of overdue) {
-                // Only nudge on the EXACT offset day (due+1, +7, +15 …).
-                if (!offsets.includes(cust.days_overdue)) continue;
+                const own = scheduleOf.get(Number(cust.id));
+                if (own) {
+                    if (!dueNow(own, asOf, cust)) { summary.skipped++; continue; }
+                } else if (!offsets.includes(cust.days_overdue)) {
+                    // Licence-wide behaviour: only on the EXACT offset day.
+                    continue;
+                }
                 if (await alreadySentToday(co.id, cust.id, asOf)) { summary.skipped++; continue; }
 
-                // Prefer WhatsApp, fall back to Email — only channels this licence allows.
-                let channel = null, to = null;
-                if (lic.whatsapp_enabled && cust.mobile) { channel = 'whatsapp'; to = cust.mobile; }
-                else if (lic.email_enabled && cust.email) { channel = 'email'; to = cust.email; }
+                // A party's own schedule picks the channel; otherwise prefer
+                // WhatsApp and fall back to Email. Either way the licence's
+                // Super-Admin switches still have the final say.
+                const own2 = scheduleOf.get(Number(cust.id));
+                let channel = own2 ? pickChannel(own2.channel, cust) : null;
+                if (!channel) {
+                    if (cust.mobile) channel = 'whatsapp';
+                    else if (cust.email) channel = 'email';
+                }
+                if (channel === 'whatsapp' && !(lic.whatsapp_enabled && cust.mobile)) {
+                    channel = (lic.email_enabled && cust.email) ? 'email' : null;
+                }
+                if (channel === 'email' && !(lic.email_enabled && cust.email)) {
+                    channel = (lic.whatsapp_enabled && cust.mobile) ? 'whatsapp' : null;
+                }
                 if (!channel) { summary.skipped++; continue; }
+                const to = channel === 'whatsapp' ? cust.mobile : cust.email;
 
                 const text = reminderText({
                     customerName: cust.name, companyName: co.name,
@@ -93,7 +126,9 @@ async function sendAutoReminders(asOf = new Date()) {
 
                 await db('payment_reminders').insert({
                     company_id: co.id, customer_id: cust.id, channel, to_address: to,
-                    amount: cust.outstanding, trigger: 'auto', offset_day: cust.days_overdue, status, error,
+                    amount: cust.outstanding,
+                    trigger: scheduleOf.has(Number(cust.id)) ? 'schedule' : 'auto',
+                    offset_day: cust.days_overdue, status, error,
                 });
             }
         }

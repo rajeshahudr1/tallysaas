@@ -12,7 +12,13 @@
         "dev": "nodemon index.js",
         "migrate": "knex migrate:latest",
         "migrate:rollback": "knex migrate:rollback",
-        "seed": "knex seed:run"
+        "migrate:tenants": "node db/migrate-tenants.js latest",
+        "migrate:tenants:rollback": "node db/migrate-tenants.js rollback",
+        "migrate:tenants:status": "node db/migrate-tenants.js status",
+        "reconcile": "node db/reconcile-tally.js",
+        "verify:sync": "node tests/fullSyncWrite.manual.js",
+        "seed": "knex seed:run",
+        "test": "node --test"
     },
     "dependencies": {
         "argon2": "^0.41",

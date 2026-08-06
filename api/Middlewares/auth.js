@@ -141,7 +141,32 @@ async function authenticateAgent(req, res, next) {
         if (lic.valid_until && String(lic.valid_until).slice(0, 10) < today) {
             return R.errorResponse(res, 'License has expired.', 403);
         }
-        if (payload.machine_id && lic.machine_id && payload.machine_id !== lic.machine_id) {
+        // Per-device revocation. The `agents` table replaced the single
+        // `licenses.machine_id` binding, so the machine check now happens here.
+        //
+        // This is what makes the revoke button real: without it the row would
+        // flip to 'revoked', the UI would say so, and the agent would carry on
+        // syncing with its existing token — the token has a ten-year life and
+        // nothing else would ever look at it again.
+        //
+        // Tokens issued before `agents` existed carry no agent_id. They are
+        // allowed through and fall back to the old licence-level machine check,
+        // so an in-flight upgrade does not knock every agent offline.
+        if (payload.agent_id) {
+            const agent = await masterDb('agents')
+                .where('id', payload.agent_id)
+                .first('id', 'license_id', 'machine_id', 'status');
+            if (!agent) return R.errorResponse(res, 'This device is no longer registered.', 401);
+            if (agent.status !== 'active') {
+                return R.errorResponse(res, 'This device has been disconnected. Sign in again.', 403);
+            }
+            // Guards against a token minted for one licence being replayed
+            // against another's agent row.
+            if (Number(agent.license_id) !== Number(payload.license_id)) {
+                return R.errorResponse(res, 'Invalid agent token.', 401);
+            }
+            req.agentRow = agent;
+        } else if (payload.machine_id && lic.machine_id && payload.machine_id !== lic.machine_id) {
             return R.errorResponse(res, 'License is bound to another machine.', 403);
         }
         req.license = lic;

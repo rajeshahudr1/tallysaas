@@ -32,7 +32,8 @@ async function list(req, res) {
             const tdb = require('../../config/tenantDb').getKnexForLicense(lid);
             const rows = await tdb('companies')
                 .whereNull('deleted_at').where('license_id', lid)
-                .select('id', 'name', 'license_id').orderBy('name', 'asc');
+                .select('id', 'name', 'license_id', 'tally_synced_at', 'tally_dirty')
+                .orderBy('name', 'asc');
             return R.successResponse(res, {
                 data: rows, meta: { total: rows.length, page: 1, per_page: rows.length },
             });
@@ -40,11 +41,19 @@ async function list(req, res) {
 
         // Regular user: companies live in the caller's tenant db (bound by
         // resolveTenant), scoped to their license.
-        const rows = await db('companies')
-            .whereNull('deleted_at')
-            .where('license_id', user.license_id != null ? user.license_id : -1)
-            .select('id', 'name', 'license_id')
-            .orderBy('name', 'asc');
+        const rows = await db('companies as c')
+            .whereNull('c.deleted_at')
+            .where('c.license_id', user.license_id != null ? user.license_id : -1)
+            // Sync state lives in its own table (one row per company) — joined
+            // here so the switcher's "Company Information" panel can show the
+            // real last pull/push without a second round trip.
+            .leftJoin('tally_sync_state as ss', 'ss.company_id', 'c.id')
+            // tally_synced_at / tally_dirty back the switcher's "Synced 4 days
+            // ago" caption — the agent stamps them on every successful pull.
+            .select('c.id', 'c.name', 'c.license_id', 'c.tally_synced_at', 'c.tally_dirty',
+                'c.books_from', 'c.financial_year', 'c.created_at',
+                'ss.last_pull_at', 'ss.last_push_at')
+            .orderBy('c.name', 'asc');
         return R.successResponse(res, {
             data: rows,
             meta: { total: rows.length, page: 1, per_page: rows.length },

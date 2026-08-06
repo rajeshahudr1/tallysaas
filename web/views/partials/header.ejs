@@ -47,14 +47,37 @@ function _relTime(v) {
     var p = function (n) { return String(n).padStart(2, '0'); };
     return p(d.getDate()) + '/' + p(d.getMonth() + 1);
 }
+// Long-form sync caption for the company switcher ("Synced 4 days ago").
+// Never synced → an honest "Not synced yet" rather than a fake timestamp.
+function _syncedLabel(v) {
+    if (!v) return 'Not synced yet';
+    var t = new Date(v).getTime();
+    if (isNaN(t)) return 'Not synced yet';
+    var s = Math.floor((Date.now() - t) / 1000);
+    if (s < 0) s = 0;
+    var unit = function (n, w) { return 'Synced ' + n + ' ' + w + (n === 1 ? '' : 's') + ' ago'; };
+    if (s < 60)    return 'Synced just now';
+    if (s < 3600)  return unit(Math.floor(s / 60), 'minute');
+    if (s < 86400) return unit(Math.floor(s / 3600), 'hour');
+    if (s < 2592000) return unit(Math.floor(s / 86400), 'day');
+    return unit(Math.floor(s / 2592000), 'month');
+}
+// Own vs shared (accountant-access) companies — two sections in the menu,
+// exactly like the reference. A section with no rows is not rendered.
+var _ownCompanies    = _companies.filter(function (c) { return !c.shared; });
+var _sharedCompanies = _companies.filter(function (c) { return !!c.shared; });
 %>
 <header class="topbar">
 
     <!-- Left: hamburger (mobile drawer) + search -->
     <div class="topbar-left">
+        <!-- NOT a data-bs-toggle button: app.js owns both behaviours (desktop
+             = collapse the sidebar to an icon rail, mobile = open the
+             offcanvas drawer through Bootstrap's API). Wiring the data-api
+             here as well made a single click do BOTH. -->
         <button class="topbar-hamburger" type="button"
-                data-bs-toggle="offcanvas" data-bs-target="#sidebarOffcanvas"
-                aria-controls="sidebarOffcanvas" aria-label="Open menu">
+                data-sidebar-toggle="#sidebarOffcanvas"
+                aria-controls="sidebarOffcanvas" aria-label="Toggle menu">
             <i class="fa-solid fa-bars"></i>
         </button>
 
@@ -113,32 +136,70 @@ function _relTime(v) {
             </div>
         <% } %>
 
-        <!-- Company dropdown (everyone) — the active company drives all data -->
+        <!-- Company dropdown (everyone) — the active company drives all data.
+             Two sections: the licence's OWN companies and any shared with this
+             user; each row carries its last-sync caption so the freshness of
+             the data on screen is visible before switching. -->
         <div class="dropdown topbar-company">
-            <button class="topbar-company-btn dropdown-toggle" type="button"
+            <button class="topbar-company-btn topbar-company-btn--stacked dropdown-toggle" type="button"
                     data-bs-toggle="dropdown" aria-expanded="false" title="Company">
                 <i class="fa-solid fa-building"></i>
-                <span class="topbar-company-name"><%= _company ? _company.name : 'No company' %></span>
+                <span class="topbar-company-lines">
+                    <span class="topbar-company-name"><%= _company ? _company.name : 'No company' %></span>
+                    <% if (_company) { %>
+                        <span class="topbar-company-sync"><%= _syncedLabel(_company.syncedAt) %></span>
+                    <% } %>
+                </span>
             </button>
-            <ul class="dropdown-menu dropdown-menu-end">
-                <li><h6 class="dropdown-header">Companies</h6></li>
+            <ul class="dropdown-menu dropdown-menu-end company-menu">
                 <% if (!_companies.length) { %>
                     <li><span class="dropdown-item-text text-muted small"><%= _isSuper ? 'No companies in this license' : 'No companies' %></span></li>
                 <% } %>
-                <% _companies.forEach(function (c) { %>
-                    <% var _isCur = _company && String(c.id) === String(_company.id); %>
-                    <li class="d-flex align-items-center">
-                        <a class="dropdown-item flex-grow-1 <%= _isCur ? 'active' : '' %>" href="/switch-company/<%= c.id %>">
-                            <i class="fa-solid fa-building me-2 text-muted"></i><%= c.name %>
-                            <% if (_isCur) { %><i class="fa-solid fa-check ms-auto text-primary"></i><% } %>
-                        </a>
-                        <!-- Queue an "Open in Tally" command for the agent. -->
-                        <form method="post" action="/open-in-tally/<%= c.id %>" class="m-0 ps-1 pe-2">
-                            <button type="submit" class="btn btn-sm btn-link p-1 text-muted" title="Open in Tally" aria-label="Open <%= c.name %> in Tally">
-                                <i class="fa-solid fa-arrow-up-right-from-square"></i>
-                            </button>
-                        </form>
-                    </li>
+                <%
+                var _sections = [
+                    { title: 'My Companies',     rows: _ownCompanies },
+                    { title: 'Shared Companies', rows: _sharedCompanies },
+                ].filter(function (s) { return s.rows.length; });
+                %>
+                <% _sections.forEach(function (sec) { %>
+                    <li><h6 class="dropdown-header company-menu-head"><%= sec.title %></h6></li>
+                    <% sec.rows.forEach(function (c) { %>
+                        <% var _isCur = _company && String(c.id) === String(_company.id); %>
+                        <li class="company-menu-row <%= _isCur ? 'is-current' : '' %>">
+                            <a class="dropdown-item company-menu-item" href="/switch-company/<%= c.id %>">
+                                <span class="company-menu-lines">
+                                    <span class="company-menu-name"><%= c.name %></span>
+                                    <span class="company-menu-sync <%= c.dirty ? 'is-pending' : '' %>">
+                                        <%= _syncedLabel(c.syncedAt) %><%= c.dirty ? ' · changes pending' : '' %>
+                                    </span>
+                                </span>
+                                <% if (_isCur) { %><i class="fa-solid fa-check company-menu-check"></i><% } %>
+                            </a>
+                            <span class="company-menu-actions">
+                                <!-- Company Information — filled from these data-*
+                                     attributes by app.js (one shared modal). -->
+                                <button type="button" class="btn btn-sm btn-link p-1 text-muted"
+                                        title="Company information" aria-label="Information for <%= c.name %>"
+                                        data-company-info
+                                        data-name="<%= c.name %>"
+                                        data-books-from="<%= c.booksFrom || '' %>"
+                                        data-financial-year="<%= c.financialYear || '' %>"
+                                        data-last-sync="<%= _syncedLabel(c.syncedAt) %>"
+                                        data-last-pull="<%= c.lastPullAt || '' %>"
+                                        data-last-push="<%= c.lastPushAt || '' %>"
+                                        data-created="<%= c.createdAt || '' %>"
+                                        data-status="<%= c.dirty ? 'Changes pending' : (c.syncedAt ? 'Completed' : 'Never synced') %>">
+                                    <i class="fa-solid fa-circle-info"></i>
+                                </button>
+                                <!-- Queue an "Open in Tally" command for the agent. -->
+                                <form method="post" action="/open-in-tally/<%= c.id %>" class="m-0 d-inline">
+                                    <button type="submit" class="btn btn-sm btn-link p-1 text-muted" title="Open in Tally" aria-label="Open <%= c.name %> in Tally">
+                                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                                    </button>
+                                </form>
+                            </span>
+                        </li>
+                    <% }); %>
                 <% }); %>
             </ul>
         </div>
@@ -152,10 +213,6 @@ function _relTime(v) {
             <i class="fa-solid fa-chevron-down ms-1 topbar-switch-caret"></i>
         </button>
 
-        <!-- Install App (hidden until app.js shows it) -->
-        <button class="btn btn-install" id="installAppBtn" type="button" hidden>
-            <i class="fa-solid fa-download me-1"></i>Install App
-        </button>
         <% } %>
 
         <!-- Offline indicator dot (toggled by app.js) -->
@@ -251,6 +308,34 @@ function _relTime(v) {
 
     </div>
 </header>
+
+<!-- ── Company Information ────────────────────────────────────────────
+     One modal for every company row in the switcher; app.js copies the
+     clicked row's data-* attributes into it. Only facts we actually store
+     are listed — the Tally data path is not recorded by the agent, so it
+     is deliberately absent rather than shown blank. -->
+<div class="modal fade" id="companyInfoModal" tabindex="-1" aria-hidden="true" aria-labelledby="companyInfoTitle">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="companyInfoTitle">Company Information</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <dl class="company-info-list">
+                    <div><dt>Name</dt><dd data-ci="name">—</dd></div>
+                    <div><dt>Start From</dt><dd data-ci="booksFrom">—</dd></div>
+                    <div><dt>Financial Year</dt><dd data-ci="financialYear">—</dd></div>
+                    <div><dt>Last Sync</dt><dd data-ci="lastSync">—</dd></div>
+                    <div><dt>Last Pull</dt><dd data-ci="lastPull">—</dd></div>
+                    <div><dt>Last Push</dt><dd data-ci="lastPush">—</dd></div>
+                    <div><dt>Created</dt><dd data-ci="created">—</dd></div>
+                    <div><dt>Sync Status</dt><dd data-ci="status">—</dd></div>
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- ── Mobile switcher popup (opened by the d-lg-none button above) ──────
      Holds the License (super-admin) + Company pickers in a centred modal so

@@ -1,0 +1,140 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * reminders/schedule.ejs — "Set Reminder" for ONE party.
+ *
+ * Channel + hour + frequency, with a live preview of the message that
+ * will go out. A party with a schedule is chased on its own terms; one
+ * without keeps the licence-wide auto reminder.
+ *
+ * Channels are Email and WhatsApp — what the product actually sends.
+ * There is no SMS option (no gateway, no DLT templates, no credits).
+ * ─────────────────────────────────────────────────────────── */
+var _c   = (typeof customer !== 'undefined' && customer) ? customer : { name: '', mobile: '', email: '' };
+var _s   = (typeof schedule !== 'undefined' && schedule) ? schedule : {
+    enabled: false, channel: 'whatsapp', frequency: 'daily', send_hour: 10, weekday: 1, day_of_month: 1,
+};
+var _opt = (typeof options !== 'undefined' && options) ? options : { frequencies: [], channels: [] };
+var _all = (typeof allowed !== 'undefined' && allowed) ? allowed : { email: false, whatsapp: false };
+
+var _FREQ_LABEL = {
+    daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', due_date: 'On Due Date',
+};
+var _CHAN_LABEL = { email: 'Email', whatsapp: 'WhatsApp', both: 'WhatsApp + Email' };
+var _DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Set Reminder',
+    breadcrumb: (typeof breadcrumb !== 'undefined' ? breadcrumb : [{ label: 'Set Reminder' }]),
+}) %>
+
+<div class="ledger-head">
+    <div class="ledger-head-meta">
+        <span class="ledger-head-total"><strong><%= _c.name %></strong></span>
+        <% if (_c.mobile) { %><span class="ledger-meta-item">📱 <%= _c.mobile %></span><% } %>
+        <% if (_c.email)  { %><span class="ledger-meta-item">✉ <%= _c.email %></span><% } %>
+    </div>
+    <a class="daybook-pill" href="/reminders">Back to reminders</a>
+</div>
+
+<% if (!_c.mobile && !_c.email) { %>
+    <div class="card">
+        <p class="daybook-empty">
+            This customer has no mobile number and no email address, so no reminder can reach them.
+            <br>Add a contact detail on the customer first.
+        </p>
+    </div>
+<% } else { %>
+
+<div class="recent-row">
+    <div class="card recent-card">
+        <div class="recent-card-head"><h2 class="recent-card-title">Schedule</h2></div>
+
+        <form method="post" action="/reminders/<%= _c.id %>/schedule" class="rem-form">
+            <label class="rem-row rem-row--toggle">
+                <input type="checkbox" name="enabled" <%= _s.enabled ? 'checked' : '' %>>
+                <span>Send automatic reminders to this party</span>
+            </label>
+
+            <label class="rem-row">
+                <span class="rem-label">Channel</span>
+                <select class="kpi-panel-select no-search" name="channel">
+                    <% (_opt.channels || []).forEach(function (ch) { %>
+                        <option value="<%= ch %>" <%= ch === _s.channel ? 'selected' : '' %>><%= _CHAN_LABEL[ch] || ch %></option>
+                    <% }); %>
+                </select>
+            </label>
+            <% if (!_all.whatsapp || !_all.email) { %>
+                <p class="rem-note">
+                    <% if (!_all.whatsapp && !_all.email) { %>
+                        No channel is enabled for this licence yet — ask your administrator to turn on Email or WhatsApp.
+                    <% } else { %>
+                        Only <%= _all.whatsapp ? 'WhatsApp' : 'Email' %> is enabled for this licence; the other channel will be skipped.
+                    <% } %>
+                </p>
+            <% } %>
+
+            <label class="rem-row">
+                <span class="rem-label">Frequency</span>
+                <select class="kpi-panel-select no-search" name="frequency">
+                    <% (_opt.frequencies || []).forEach(function (f) { %>
+                        <option value="<%= f %>" <%= f === _s.frequency ? 'selected' : '' %>><%= _FREQ_LABEL[f] || f %></option>
+                    <% }); %>
+                </select>
+            </label>
+
+            <label class="rem-row">
+                <span class="rem-label">Time</span>
+                <select class="kpi-panel-select no-search" name="send_hour">
+                    <% for (var h = 0; h < 24; h++) { %>
+                        <option value="<%= h %>" <%= h === _s.send_hour ? 'selected' : '' %>>
+                            <%= String(h).padStart(2, '0') %>:00
+                        </option>
+                    <% } %>
+                </select>
+            </label>
+
+            <label class="rem-row">
+                <span class="rem-label">Day of week <span class="rem-hint">(weekly)</span></span>
+                <select class="kpi-panel-select no-search" name="weekday">
+                    <% _DAYS.forEach(function (d, i) { %>
+                        <option value="<%= i %>" <%= i === _s.weekday ? 'selected' : '' %>><%= d %></option>
+                    <% }); %>
+                </select>
+            </label>
+
+            <label class="rem-row">
+                <span class="rem-label">Day of month <span class="rem-hint">(monthly)</span></span>
+                <select class="kpi-panel-select no-search" name="day_of_month">
+                    <% for (var d = 1; d <= 31; d++) { %>
+                        <option value="<%= d %>" <%= d === _s.day_of_month ? 'selected' : '' %>><%= d %></option>
+                    <% } %>
+                </select>
+            </label>
+            <p class="rem-note">
+                A schedule set here replaces the licence-wide reminder for this party, so nobody is chased twice.
+                A “31st” monthly schedule still runs on the last day of a shorter month.
+            </p>
+
+            <div class="rem-actions">
+                <button type="submit" class="btn btn-gradient">Save Schedule</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="card recent-card">
+        <div class="recent-card-head">
+            <h2 class="recent-card-title">Message Preview</h2>
+            <span class="ledger-meta-item">
+                Outstanding: <strong>₹<%= Number(typeof outstanding !== 'undefined' ? outstanding : 0).toLocaleString('en-IN') %></strong>
+            </span>
+        </div>
+        <div class="rem-preview"><%= (typeof preview !== 'undefined' ? preview : '') %></div>
+        <p class="rem-note">
+            This is the exact text the reminder sends. It is rebuilt from the party's live
+            outstanding each time, so the figure is never stale.
+        </p>
+    </div>
+</div>
+
+<% } %>

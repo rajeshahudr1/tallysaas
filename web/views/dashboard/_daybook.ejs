@@ -1,0 +1,65 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * dashboard/_daybook.ejs — one day's vouchers.
+ *
+ * Today / Yesterday / the date input are all buttons, NOT links: they
+ * re-fetch this fragment alone (dashboard.js) so the browser URL never
+ * changes and no other panel is re-queried.
+ * ─────────────────────────────────────────────────────────── */
+var _dayBook = (typeof dayBook !== 'undefined' && dayBook) ? dayBook : {
+    date: '', today: '', yesterday: '', active: 'today', date_label: '', rows: [],
+};
+if (!_dayBook.date_label) _dayBook.date_label = _dayBook.date || 'Custom Date';
+%>
+<div class="card recent-card" data-dash-section="daybook" data-daybook-date="<%= _dayBook.date %>">
+    <div class="recent-card-head">
+        <h2 class="recent-card-title">Day Book</h2>
+        <div class="daybook-controls">
+            <button type="button" class="daybook-pill <%= _dayBook.active === 'today' ? 'is-active' : '' %>"
+                    data-daybook="<%= _dayBook.today %>">Today</button>
+            <button type="button" class="daybook-pill <%= _dayBook.active === 'yesterday' ? 'is-active' : '' %>"
+                    data-daybook="<%= _dayBook.yesterday %>">Yesterday</button>
+            <!-- Custom day: opens the themed calendar dashboard.js builds. The
+                 native <input type="date"> picker is deliberately not used —
+                 its look is browser-controlled and cannot follow the theme. -->
+            <div class="dp-wrap">
+                <button type="button" class="daybook-pill <%= _dayBook.active === 'custom' ? 'is-active' : '' %>"
+                        data-daybook-custom="<%= _dayBook.date %>" aria-haspopup="dialog" aria-expanded="false">
+                    <i class="fa-regular fa-calendar" aria-hidden="true"></i>
+                    <%= _dayBook.active === 'custom' ? _dayBook.date_label : 'Custom Date' %>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <% if (!_dayBook.rows.length) { %>
+        <p class="daybook-empty">No data available</p>
+    <% } else { %>
+        <div class="daybook-scroll">
+            <table class="daybook-table">
+                <thead>
+                    <tr>
+                        <th>Voucher</th>
+                        <th>Particulars</th>
+                        <th>Type</th>
+                        <th class="is-num">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% _dayBook.rows.forEach(function (r) { %>
+                        <tr>
+                            <td>
+                                <% if (r.href && r.voucher) { %>
+                                    <a class="daybook-voucher" href="<%= r.href %>"><%= r.voucher %></a>
+                                <% } else { %><%= r.voucher || '' %><% } %>
+                            </td>
+                            <td><%= r.particulars %></td>
+                            <td><%= r.type %></td>
+                            <td class="is-num"><%= r.amount %></td>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
