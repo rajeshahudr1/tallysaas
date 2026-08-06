@@ -209,6 +209,8 @@ const TenantCompanyController = require('../Controllers/Tenant/CompanyController
 const RbacController          = require('../Controllers/SuperAdmin/RbacController');
 const ReminderController      = require('../Controllers/SuperAdmin/ReminderController');
 const JournalController       = require('../Controllers/Tenant/JournalController');
+const CollectPaymentController = require('../Controllers/Tenant/CollectPaymentController');
+const PayController            = require('../Controllers/Public/PayController');
 
 // ── DB (for the /health probe) ────────────────────────────────────
 const { ping } = require('../config/db');
@@ -545,6 +547,13 @@ router.get('/ext/invoices',
     authenticateApiToken, extFullAccess, validate(listInvoiceSchema, 'query'), InvoiceController.listSales);
 router.get('/ext/invoices/:id',
     authenticateApiToken, extFullAccess, InvoiceController.get);
+
+// ───────────────────────────────────────────────────────────────────
+// Collect Payments — public payer-facing page. No auth (the 24-byte token
+// IS the credential — see PayController); throttled per-IP inside the
+// controller. Deliberately returns ONLY what a payer needs to see.
+// ───────────────────────────────────────────────────────────────────
+router.get('/pay/:token', PayController.show);
 
 // ───────────────────────────────────────────────────────────────────
 // Locations (protected tenant CRUD)
@@ -1186,6 +1195,32 @@ router.delete(
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('receipts', 'delete'),
     PaymentController.destroy,
 );
+
+// ───────────────────────────────────────────────────────────────────
+// Collect Payments — UPI-first, no gateway (Task 1). Settings live in the
+// `settings` table under key 'collect_payments' (no new columns). Creating
+// a request reads its amount from the invoice; mark-paid is the ONLY way a
+// request becomes 'paid' (human action, atomically also writes the
+// receipt) — see CollectPaymentController's header comment.
+// ───────────────────────────────────────────────────────────────────
+router.get('/collect-payments/settings',
+    authenticate, resolveTenant, resolveCompany, can('collect-payments', 'view'),
+    CollectPaymentController.getSettings);
+router.put('/collect-payments/settings',
+    authenticate, resolveTenant, resolveCompany, can('collect-payments', 'edit'),
+    CollectPaymentController.updateSettings);
+router.get('/collect-payments',
+    authenticate, resolveTenant, resolveCompany, can('collect-payments', 'view'),
+    CollectPaymentController.list);
+router.post('/collect-payments',
+    authenticate, resolveTenant, resolveCompany, can('collect-payments', 'create'),
+    CollectPaymentController.create);
+router.post('/collect-payments/:id/mark-paid',
+    authenticate, resolveTenant, resolveCompany, can('collect-payments', 'edit'),
+    CollectPaymentController.markPaid);
+router.post('/collect-payments/:id/cancel',
+    authenticate, resolveTenant, resolveCompany, can('collect-payments', 'edit'),
+    CollectPaymentController.cancel);
 
 // ───────────────────────────────────────────────────────────────────
 // Dashboard · Inventory · Users · Settings · Tally-Sync · Reports
