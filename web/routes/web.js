@@ -900,7 +900,7 @@ async function buildDashboardModel(req, res, section) {
         const summaryTiles = [
             { label: 'Cash',             value: inrDc(balances.cash),    href: '/cash' },
             { label: 'Bank',             value: inrDc(balances.bank),    href: '/bank' },
-            { label: 'Inventory Amount', value: inr(counts.stock_value), href: '/products', perm: 'inventory' },
+            { label: 'Inventory Amount', value: inr(counts.stock_value), href: '/inventory', perm: 'inventory' },
             { label: 'Payables',         value: inrDc(balances.payables), href: '/payables', perm: 'suppliers' },
         ].filter((t) => (t.perm ? _canMod(t.perm) : true));
 
@@ -917,7 +917,7 @@ async function buildDashboardModel(req, res, section) {
             {
                 label: 'Inactive Stocks',
                 value: grp(attention.inactive_stocks),
-                href:  '/products?inactive=90',
+                href:  '/inventory?inactive=90',
                 perm:  'products',
             },
             {
@@ -1119,6 +1119,22 @@ async function buildDashboardModel(req, res, section) {
             };
         });
 
+        // ── KPI stat cards (Today's Sales, Total Customers/Products/
+        // Companies, Invoice Amount, Payment Received) — rendered as their
+        // own row BELOW the six LiveKeeping panels. Each one carries the
+        // matching real `delta` from the API's `deltas` block (Task 1) so
+        // _trendText() shows a trend only where a genuine previous figure
+        // exists — never a placeholder.
+        const deltas = data.deltas || {};
+        const stats = [
+            { label: "Today's Sales",    value: inr(counts.today_sales),      icon: 'fa-chart-line',           tone: 'blue',   delta: deltas.today_sales || null },
+            { label: 'Total Customers',  value: grp(counts.customers),        icon: 'fa-users',                tone: 'purple', href: '/customers', delta: deltas.customers || null },
+            { label: 'Total Products',   value: grp(counts.products),         icon: 'fa-box',                  tone: 'teal',   href: '/products',  delta: deltas.products || null },
+            { label: 'Total Companies',  value: grp(counts.companies),        icon: 'fa-building',             tone: 'indigo', href: '/companies', delta: deltas.companies || null },
+            { label: 'Invoice Amount',   value: inr(counts.invoice_amount),   icon: 'fa-file-invoice',         tone: 'amber',  href: '/sales-invoices', delta: deltas.invoice_amount || null },
+            { label: 'Payment Received', value: inr(counts.payment_received), icon: 'fa-hand-holding-dollar',  tone: 'green',  href: '/receipts', delta: deltas.payment_received || null },
+        ];
+
         return {
             // Page data (API-driven).
             summaryPanel,
@@ -1129,9 +1145,9 @@ async function buildDashboardModel(req, res, section) {
             receivablesChart,
             top10Tabs,
             dayBook,
-            // stats stays for the customer-portal (statsOnly) branch, which
-            // still renders the classic stat cards. Empty on the main dashboard.
-            stats: [],
+            // Also reused by the customer-portal (statsOnly) branch, which
+            // renders its OWN stats array before this function ever runs.
+            stats,
             salesChart,
             syncChart,
             recentInvoices,

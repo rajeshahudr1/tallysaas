@@ -1,0 +1,60 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * dashboard/_receivables.ejs — the Receivables ageing panel.
+ *
+ * Amounts are FIFO-allocated server-side (api Helpers/receivablesAgeing).
+ * Rendered inside dashboard/index.ejs and on its own by
+ * GET /dashboard/section?section=receivables; carries its own chart-data
+ * island so an AJAX swap can rebuild the doughnut.
+ * ─────────────────────────────────────────────────────────── */
+var _recv = (typeof receivables !== 'undefined' && receivables) ? receivables : {
+    total: '₹0', overdue: '₹0', projection_15: '₹0', projection_60: '₹0', buckets: [],
+};
+var _recvChart = (typeof receivablesChart !== 'undefined' && receivablesChart)
+    ? receivablesChart : { labels: [], data: [], colors: [] };
+%>
+<div class="card chart-card chart-card--recv" data-dash-section="receivables">
+    <div class="chart-card-head">
+        <h2 class="chart-card-title">Receivables</h2>
+        <a href="/receivables" class="recent-card-link">View All</a>
+    </div>
+
+    <div class="recv-total">
+        <span class="sr-figure-label">Total Receivables</span>
+        <span class="sr-figure-value"><%= _recv.total %></span>
+    </div>
+
+    <div class="recv-body">
+        <div class="recv-canvas-wrap">
+            <canvas id="receivablesChart" aria-label="Receivables ageing doughnut chart" role="img"></canvas>
+        </div>
+        <ul class="recv-legend">
+            <% (_recv.buckets || []).forEach(function (b) { %>
+                <li class="recv-legend-row">
+                    <span class="recv-legend-swatch" style="background: <%= b.color %>"></span>
+                    <span class="recv-legend-text">
+                        <span class="recv-legend-band"><%= b.label %></span>
+                        <span class="recv-legend-amount"><%= b.amount %></span>
+                    </span>
+                </li>
+            <% }); %>
+        </ul>
+    </div>
+
+    <div class="sr-footer sr-footer--three">
+        <div class="sr-footer-cell">
+            <div class="sr-footer-label">Total Overdue Amount</div>
+            <div class="sr-footer-value"><%= _recv.overdue %></div>
+        </div>
+        <div class="sr-footer-cell">
+            <div class="sr-footer-label">Projections in 15 Days</div>
+            <div class="sr-footer-value"><%= _recv.projection_15 %></div>
+        </div>
+        <div class="sr-footer-cell">
+            <div class="sr-footer-label">Projections in 60 Days</div>
+            <div class="sr-footer-value"><%= _recv.projection_60 %></div>
+        </div>
+    </div>
+
+    <script type="application/json" data-chart="receivables"><%- JSON.stringify(_recvChart) %></script>
+</div>
