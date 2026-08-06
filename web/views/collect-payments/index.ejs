@@ -75,7 +75,7 @@ function _statusPillClass(s) {
 
             <div class="form-hint mb-3">
                 <i class="fa-solid fa-circle-info me-1 text-primary"></i>
-                Payments go <strong>straight into this UPI account</strong> — Tally Cloud Sync never holds or routes the money.
+                Payments go <strong>straight into this UPI account</strong> — <%= (typeof brand !== 'undefined' && brand) ? brand.name : 'Teloora' %> never holds or routes the money.
                 A request only becomes "Paid" when someone here clicks <strong>Mark as received</strong>.
             </div>
 

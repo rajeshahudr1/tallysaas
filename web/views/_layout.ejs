@@ -8,7 +8,7 @@
  * optional per-page `pageScript`, and PWA service-worker registration).
  *
  * Expected locals (defaults set in index.js so nothing ever crashes):
- *   title             string   — page title (→ "<title> · Tally Cloud Sync")
+ *   title             string   — page title (→ "<title> · Teloora")
  *   activeMenu        string   — sidebar/bottom-nav active key
  *   user, company,    objects  — header identity (see data/mock.js)
  *   companies, notificationCount
@@ -17,9 +17,9 @@
 // Brand (name + logo) — single source of truth, from res.locals.brand
 // (web/config/brand.js). Defensive fallback keeps error pages rendering.
 var _brand = (typeof brand !== 'undefined' && brand) ? brand
-    : { name: 'Tally Cloud Sync', shortName: 'Tally Cloud',
-        tagline: 'Cloud accounting that syncs with Tally.',
-        logo: '/img/logo.svg', iconClass: 'fa-solid fa-cloud', color: '#2563EB' };
+    : { name: 'Teloora', shortName: 'Teloora',
+        tagline: 'Connected Accounting',
+        logo: '/img/logo.svg', iconClass: 'fa-solid fa-diagram-project', color: '#1560E0' };
 var _title      = (typeof title !== 'undefined' && title) ? title : _brand.name;
 var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
 %><!doctype html>

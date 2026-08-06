@@ -15,6 +15,8 @@
  *   • gst-summary → an Output-vs-Input GST block
  */
 
+const BRAND = require('../config/brand');
+
 function esc(s) {
     return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -126,7 +128,7 @@ function wrap(ctx, inner) {
         <div class="title">${esc(ctx.title)}<small>${esc(ctx.generatedAt || '')}</small></div>
       </div>
       ${inner}
-      <div class="foot">Generated from Tally Cloud Sync${ctx.generatedAt ? ' · ' + esc(ctx.generatedAt) : ''}</div>
+      <div class="foot">Generated from ${BRAND.name} · ${BRAND.tagline}${ctx.generatedAt ? ' · ' + esc(ctx.generatedAt) : ''}</div>
     </body></html>`;
 }
 

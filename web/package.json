@@ -1,12 +1,13 @@
 {
-  "name": "tallysaas-web",
+  "name": "teloora-web",
   "version": "1.0.0",
   "private": true,
-  "description": "Tally Cloud Sync SaaS — Phase 1 UI-only web tier (Express + EJS + Bootstrap 5). Renders screens from mock data; the mock layer will later be swapped for an apiClient that calls the REST API.",
+  "description": "Teloora (Connected Accounting) SaaS — Phase 1 UI-only web tier (Express + EJS + Bootstrap 5). Renders screens from mock data; the mock layer will later be swapped for an apiClient that calls the REST API.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
@@ -20,7 +21,7 @@
     "bootstrap",
     "ui"
   ],
-  "author": "Tally Cloud Sync",
+  "author": "Teloora",
   "license": "UNLICENSED",
   "dependencies": {
     "compression": "^1.7.4",

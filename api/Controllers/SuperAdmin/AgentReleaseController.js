@@ -3,7 +3,7 @@
 /**
  * api/Controllers/SuperAdmin/AgentReleaseController.js
  *
- * Super-admin publishing of the Tally Cloud Sync Agent executable
+ * Super-admin publishing of the Teloora Tally Sync Agent executable
  * (Requirement 1). The operator either DROPS a freshly-built TallyCloudSync.exe
  * into AGENT_RELEASE_DIR (env, default api/agent-releases/) and PUBLISHES its
  * version, OR UPLOADS the exe straight from the browser. Either way the single

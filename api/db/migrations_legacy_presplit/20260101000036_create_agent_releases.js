@@ -3,7 +3,7 @@
 /**
  * 20260101000036_create_agent_releases.js
  *
- * agent_releases — the server-side catalogue of published Tally Cloud Sync
+ * agent_releases — the server-side catalogue of published Teloora Tally Sync
  * Agent executables. A super-admin drops a freshly-built
  * TallyCloudSyncAgent.exe into AGENT_RELEASE_DIR (env, default
  * api/agent-releases/) and PUBLISHES its version here; the single row with

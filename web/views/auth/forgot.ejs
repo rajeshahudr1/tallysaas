@@ -12,7 +12,8 @@ var _info  = (typeof info  !== 'undefined') ? info  : null;
 var _email = (typeof email !== 'undefined' && email) ? email : '';
 // Brand — single source of truth (web/config/brand.js via res.locals.brand).
 var _brand = (typeof brand !== 'undefined' && brand) ? brand
-    : { name: 'Tally Cloud Sync', logo: '/img/logo.svg', iconClass: 'fa-solid fa-cloud', color: '#2563EB' };
+    : { name: 'Teloora', shortName: 'Teloora', tagline: 'Connected Accounting',
+        logo: '/img/logo.svg', iconClass: 'fa-solid fa-diagram-project', color: '#1560E0' };
 %><!doctype html>
 <html lang="en">
 <head>
@@ -30,10 +31,9 @@ var _brand = (typeof brand !== 'undefined' && brand) ? brand
             background: linear-gradient(135deg, #2563EB 0%, #6D28D9 100%); }
         .login-card { width: 100%; max-width: 410px; background: #fff; border-radius: 18px;
             box-shadow: 0 20px 60px rgba(16,24,40,.25); padding: 34px 32px; }
-        .login-brand { display: flex; align-items: center; gap: 11px; margin-bottom: 22px; }
-        .login-logo { width: 42px; height: 42px; border-radius: 11px; display: grid; place-items: center;
-            background: linear-gradient(135deg, #2563EB, #6D28D9); color: #fff; font-size: 19px; }
-        .login-brand-text { font-weight: 700; font-size: 18px; color: #111827; }
+        .login-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-bottom: 22px; }
+        .login-brand-logo { height: 40px; }
+        .login-brand-tagline { font-size: 12.5px; color: #6B7280; font-weight: 500; }
         .login-title { font-size: 21px; font-weight: 700; color: #111827; margin: 0 0 4px; }
         .login-sub { color: #6B7280; font-size: 13.5px; margin: 0 0 22px; }
         .login-card .form-label { font-weight: 600; font-size: 13px; color: #374151; }
@@ -52,8 +52,8 @@ var _brand = (typeof brand !== 'undefined' && brand) ? brand
 <body>
     <div class="login-card">
         <div class="login-brand">
-            <span class="login-logo"><i class="<%= _brand.iconClass %>"></i></span>
-            <span class="login-brand-text"><%= _brand.name %></span>
+            <img class="login-brand-logo" src="/img/logo-full.png" alt="<%= _brand.name %>">
+            <span class="login-brand-tagline"><%= _brand.tagline %></span>
         </div>
 
         <% if (_err) { %><div class="login-err"><i class="fa-solid fa-circle-exclamation"></i><span><%= _err %></span></div><% } %>

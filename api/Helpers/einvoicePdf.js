@@ -20,6 +20,7 @@
 
 const QRCode = require('qrcode');
 const { htmlToPdf } = require('./pdf');
+const BRAND = require('../config/brand');
 
 function esc(s) {
     return String(s == null ? '' : s)
@@ -289,7 +290,7 @@ function buildEinvoiceHtml({ ei, inv, items, company, customer, qrDataUrl }) {
       ${inv.notes ? `<div style="margin-top:12px; font-size:10.5px; color:#374151"><b>Notes:</b> ${esc(inv.notes)}</div>` : ''}
 
       <div class="foot">
-        This is a system-generated GST ${esc(subtitle)} · Generated from Tally Cloud Sync
+        This is a system-generated GST ${esc(subtitle)} · Generated from ${BRAND.name} · ${BRAND.tagline}
       </div>
     </body></html>`;
 }

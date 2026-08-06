@@ -4,7 +4,7 @@
 process.env.TZ = process.env.TZ || 'Asia/Kolkata';
 
 /* ─────────────────────────────────────────────────────────────
- * index.js — Express bootstrap for the Tally Cloud Sync web tier
+ * index.js — Express bootstrap for the Teloora web tier
  * (Phase 1, UI-only). See docs/PHASE-1-UI-SPEC.md §8.
  *
  * Responsibilities:
@@ -480,7 +480,7 @@ app.use(async (req, res, next) => {
     }
 
     // Layout / page defaults (overridden per route).
-    res.locals.title      = 'Tally Cloud Sync';
+    res.locals.title      = res.locals.brand ? res.locals.brand.name : 'Teloora';
     res.locals.activeMenu = '';
     res.locals.breadcrumb = [];
     res.locals.pageScript = '';
@@ -532,7 +532,7 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
     const url = `http://localhost:${PORT}`;
     console.log('');
-    console.log('  ☁  Tally Cloud Sync — Web (UI-only)');
+    console.log(`  ☁  ${require('./config/brand').name} — Web (UI-only)`);
     console.log('  ──────────────────────────────────────────');
     console.log(`     URL  : ${url}`);
     console.log(`     Env  : ${ENV}`);

@@ -11,6 +11,8 @@
  * Uses `tally_items` (the synced line items) when present, else `items`.
  */
 
+const BRAND = require('../config/brand');
+
 function esc(s) {
     return String(s == null ? '' : s)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -555,7 +557,7 @@ function wrap(ctx, title, inner) {
         <div class="title">${esc(title)}<small>${esc(ctx.generatedAt || '')}</small></div>
       </div>
       ${inner}
-      <div class="foot">Generated from Tally Cloud Sync${ctx.generatedAt ? ' · ' + esc(ctx.generatedAt) : ''}</div>
+      <div class="foot">Generated from ${BRAND.name} · ${BRAND.tagline}${ctx.generatedAt ? ' · ' + esc(ctx.generatedAt) : ''}</div>
     </body></html>`;
 }
 

@@ -377,8 +377,8 @@
         return !!(card && card.classList.contains('is-disconnected'));
     }
     function warnNotConnected() {
-        var _b = (window.BRAND && window.BRAND.name) ? window.BRAND.name : 'Tally Cloud Sync';
-        toast('Tally agent is not connected — start the ' + _b + ' Agent and keep Tally open, then try again.', false);
+        var _b = (window.BRAND && window.BRAND.name) ? window.BRAND.name : 'Teloora';
+        toast('Tally agent is not connected — start the ' + _b + ' Tally Sync Agent and keep Tally open, then try again.', false);
     }
     /* Clear a button's in-progress loader so a BLOCKED / errored action never
      * leaves a stuck "Please wait…" spinner. Mirrors app.js _unspin (restores the

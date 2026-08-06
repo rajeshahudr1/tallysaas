@@ -1,0 +1,122 @@
+<%#
+  Connected computers.
+
+  The screen someone opens after a laptop goes missing, so it is built around
+  one question — which machines can reach these books, and how do I cut one off?
+  Everything else is secondary.
+
+  Revoked devices are LISTED, not hidden. "This one was disconnected on the 3rd"
+  is the answer they came for; a row that quietly vanishes looks like it was
+  never there.
+-%>
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+  <div>
+    <h5 class="mb-1">Connected computers</h5>
+    <p class="text-muted mb-0 small">
+      Each computer running the sync agent appears here. Disconnect one and it
+      stops syncing until someone signs in on it again.
+    </p>
+  </div>
+  <div class="ms-auto text-end small text-muted">
+    <span class="fw-semibold"><%= online_count %></span> online ·
+    <span class="fw-semibold"><%= active_count %></span> connected
+  </div>
+</div>
+
+<% if (!devices || !devices.length) { %>
+  <%# An empty state that says what to DO, not just that there is nothing. %>
+  <div class="card">
+    <div class="card-body text-center py-5">
+      <i class="fa-regular fa-hard-drive fa-2x text-muted mb-3"></i>
+      <h6 class="mb-1">No computers connected yet</h6>
+      <p class="text-muted small mb-0">
+        Install the <%= (typeof brand !== 'undefined' && brand) ? brand.name : 'Teloora' %> Tally Sync agent on the PC that runs Tally and sign in
+        with your account. It will appear here within a minute.
+      </p>
+    </div>
+  </div>
+<% } else { %>
+  <div class="card">
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Computer</th>
+            <th>Status</th>
+            <th>Last seen</th>
+            <th>Agent</th>
+            <th>Connected</th>
+            <th class="text-end">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+        <% devices.forEach(function (d) { %>
+          <tr class="<%= d.status === 'revoked' ? 'text-muted' : '' %>">
+            <td>
+              <div class="fw-semibold"><%= d.name %></div>
+              <% if (d.connected_by) { %>
+                <div class="small text-muted">by <%= d.connected_by %></div>
+              <% } %>
+            </td>
+            <td>
+              <% if (d.status === 'revoked') { %>
+                <span class="badge bg-secondary">Disconnected</span>
+              <% } else if (d.online) { %>
+                <span class="badge bg-success">Online</span>
+              <% } else { %>
+                <%# Not an error: a back-office PC is switched off most nights. %>
+                <span class="badge bg-warning text-dark">Offline</span>
+              <% } %>
+            </td>
+            <td class="small"><%= d.last_seen_fmt || '—' %></td>
+            <td class="small"><%= d.agent_version || '—' %></td>
+            <td class="small"><%= d.activated_fmt || '—' %></td>
+            <td class="text-end">
+              <% if (d.status === 'active') { %>
+                <button type="button"
+                        class="btn btn-sm btn-outline-danger js-revoke"
+                        data-id="<%= d.id %>" data-name="<%= d.name %>">
+                  Disconnect
+                </button>
+              <% } else { %>
+                <span class="small text-muted"><%= d.revoked_fmt || 'disconnected' %></span>
+              <% } %>
+            </td>
+          </tr>
+        <% }); %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="text-muted small mt-3 mb-0">
+    Disconnecting takes effect immediately — the agent's next request is refused.
+    Nothing already synced is removed.
+  </p>
+<% } %>
+
+<script>
+document.querySelectorAll('.js-revoke').forEach(function (btn) {
+  btn.addEventListener('click', async function () {
+    var id = btn.dataset.id, name = btn.dataset.name || 'this computer';
+    // Naming the machine in the prompt matters: the whole risk here is
+    // disconnecting the wrong one from a list of similar names.
+    if (!confirm('Disconnect ' + name + '?\n\nIt stops syncing until someone signs in on it again.')) return;
+    btn.disabled = true;
+    btn.textContent = 'Disconnecting…';
+    try {
+      var resp = await fetch('/tally-sync/devices/' + id + '/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      var body = await resp.json().catch(function () { return {}; });
+      if (!resp.ok) throw new Error(body.msg || 'Could not disconnect that computer.');
+      location.reload();
+    } catch (e) {
+      alert(e.message);
+      btn.disabled = false;
+      btn.textContent = 'Disconnect';
+    }
+  });
+});
+</script>
