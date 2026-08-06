@@ -188,6 +188,7 @@ const GpsSettingsController    = require('../Controllers/SuperAdmin/GpsSettingsC
 const AgentCommandController  = require('../Controllers/Tenant/AgentCommandController');
 const DashboardController     = require('../Controllers/Tenant/DashboardController');
 const TallyLedgerController   = require('../Controllers/Tenant/TallyLedgerController');
+const GstSearchController     = require('../Controllers/Tenant/GstSearchController');
 const GeoController           = require('../Controllers/Tenant/GeoController');
 const FieldController         = require('../Controllers/Tenant/FieldController');
 const InventoryController     = require('../Controllers/Tenant/InventoryController');
@@ -1288,6 +1289,15 @@ router.get(
     '/tally/vouchers/:guid',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('dashboard', 'view'),
     TallyLedgerController.voucher,
+);
+
+// GST Search — decode a GSTIN offline (state/PAN/entity number) and report
+// whether a live lookup provider (legal/trade name, address, registration
+// status) is configured. See Helpers/gstin.js and GstSearchController.
+router.get(
+    '/gst/verify',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('gst-search', 'view'),
+    GstSearchController.verify,
 );
 
 // SFA — the logged-in salesman's field dashboard (assigned locations + their
