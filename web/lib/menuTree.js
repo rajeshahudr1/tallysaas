@@ -113,7 +113,7 @@ const MENU_TREE = [
     ]},
     { label: null, items: [
         { key: 'gst-search',  label: 'GST Search',  icon: 'fa-magnifying-glass', href: '/gst-search', module: 'gst-search' },
-        { key: 'data-backup', label: 'Data Backup', icon: 'fa-cloud-arrow-up',   href: '#', soon: true, module: 'data-backup' },
+        { key: 'data-backup', label: 'Data Backup', icon: 'fa-cloud-arrow-up',   href: '/data-backup', module: 'data-backup' },
     ]},
 ];
 

@@ -1,0 +1,256 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/data-backup/index.ejs — Data Backup settings + run history.
+ * Route: GET /data-backup  ·  activeMenu: 'data-backup'.
+ *
+ * This screen exists to answer ONE question: "how much can I trust my
+ * backups?" — so the run history is the important half, not the settings
+ * form. A `partial` run (Tally had files open, some could not be read)
+ * must look visibly different from a clean `success` run, and the user
+ * must be able to see WHICH files were skipped — that is the only way to
+ * judge how much to trust what's on disk.
+ *
+ * Locals (routes/web.js GET /data-backup):
+ *   settings { enabled, destination_path, frequency, run_at, keep_copies, updated_at }
+ *   runs     [{ id, started_at, finished_at, status, files_copied,
+ *               files_skipped, bytes_copied, destination, skipped_list, error }]
+ * ─────────────────────────────────────────────────────────── */
+var _s = (typeof settings !== 'undefined' && settings) ? settings : {
+    enabled: false, destination_path: '', frequency: 'daily', run_at: '02:00:00', keep_copies: 7,
+};
+var _runs = (typeof runs !== 'undefined' && Array.isArray(runs)) ? runs : [];
+
+function _runAt(v) {
+    var s = String(v || '02:00:00');
+    return s.length >= 5 ? s.slice(0, 5) : s;
+}
+function _bytes(n) {
+    var b = Number(n) || 0;
+    if (b >= 1073741824) return (b / 1073741824).toFixed(2) + ' GB';
+    if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+    if (b >= 1024) return (b / 1024).toFixed(0) + ' KB';
+    return b + ' B';
+}
+function _dt(v) {
+    if (!v) return '—';
+    var d = new Date(v);
+    if (isNaN(d.getTime())) return String(v);
+    return d.toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function _statusMeta(s) {
+    var v = String(s || '').toLowerCase();
+    if (v === 'success')  return { cls: 'db-status--success', icon: 'fa-circle-check',        label: 'Success' };
+    if (v === 'partial')  return { cls: 'db-status--partial', icon: 'fa-triangle-exclamation', label: 'Partial' };
+    if (v === 'failed')   return { cls: 'db-status--failed',  icon: 'fa-circle-xmark',         label: 'Failed' };
+    if (v === 'running')  return { cls: 'db-status--running', icon: 'fa-spinner fa-spin',      label: 'Running' };
+    return { cls: 'db-status--muted', icon: 'fa-circle-question', label: v || 'Unknown' };
+}
+function _skippedList(r) {
+    var raw = r.skipped_list;
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string' && raw.trim()) {
+        try { var p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch (_) { return []; }
+    }
+    return [];
+}
+%>
+
+<%- include('../partials/page-head', {
+    title: 'Data Backup',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Data Backup' },
+    ],
+    actions: [],
+}) %>
+
+<!-- ── Settings ─────────────────────────────────────────────── -->
+<div class="card db-card">
+    <h2 class="form-section-title">Backup Settings</h2>
+    <p class="db-help">
+        <i class="fa-solid fa-circle-info me-1"></i>
+        The backup runs on the computer where your Tally Sync Agent is installed —
+        <strong>the destination folder below is a path on THAT computer</strong>, not on this server.
+        Choose a local or network folder the agent's machine can write to.
+    </p>
+
+    <form method="post" action="/data-backup/settings" class="db-settings-form">
+        <div class="db-grid">
+            <div class="db-field db-field--toggle">
+                <label class="db-toggle">
+                    <input type="checkbox" name="enabled" value="1" <%= _s.enabled ? 'checked' : '' %>>
+                    <span class="db-toggle-track"><span class="db-toggle-thumb"></span></span>
+                    <span class="db-toggle-label">Automatic backups <%= _s.enabled ? 'On' : 'Off' %></span>
+                </label>
+            </div>
+
+            <div class="db-field db-field--wide">
+                <label for="db-dest">Destination folder <span class="db-req">*</span></label>
+                <input id="db-dest" type="text" name="destination_path" class="form-control"
+                       placeholder="e.g. D:\Backups\TallySaaS or \\NAS\backups\tally"
+                       value="<%= _s.destination_path || '' %>" required>
+                <small class="db-field-help">A folder on the agent's own computer (or a network share it can reach) — not a path on our server.</small>
+            </div>
+
+            <div class="db-field">
+                <label for="db-freq">Frequency</label>
+                <select id="db-freq" name="frequency" class="form-control">
+                    <option value="daily"  <%= _s.frequency === 'daily'  ? 'selected' : '' %>>Daily</option>
+                    <option value="weekly" <%= _s.frequency === 'weekly' ? 'selected' : '' %>>Weekly</option>
+                </select>
+            </div>
+
+            <div class="db-field">
+                <label for="db-time">Run at</label>
+                <input id="db-time" type="time" name="run_at" class="form-control" value="<%= _runAt(_s.run_at) %>">
+            </div>
+
+            <div class="db-field">
+                <label for="db-keep">Copies to keep</label>
+                <input id="db-keep" type="number" min="1" step="1" name="keep_copies" class="form-control" value="<%= _s.keep_copies || 7 %>">
+                <small class="db-field-help">Older copies beyond this count are deleted after a successful run. Never fewer than 1.</small>
+            </div>
+        </div>
+
+        <div class="db-actions">
+            <button type="submit" class="btn btn-gradient"><i class="fa-solid fa-floppy-disk me-1"></i>Save Settings</button>
+            <button type="submit" form="db-run-now-form" class="btn btn-light"><i class="fa-solid fa-cloud-arrow-up me-1"></i>Backup Now</button>
+        </div>
+    </form>
+    <form id="db-run-now-form" method="post" action="/data-backup/run-now" style="display:none"></form>
+</div>
+
+<!-- ── History ──────────────────────────────────────────────── -->
+<div class="card db-card">
+    <h2 class="form-section-title">Backup History <span class="db-count"><%= _runs.length %></span></h2>
+
+    <% if (!_runs.length) { %>
+        <div class="db-empty">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+            <p>No backup runs yet.</p>
+            <p class="db-empty-sub">A backup only runs when the Tally Sync Agent is installed and running on your Tally computer — nothing has failed here, the agent simply hasn't reported a run yet.</p>
+        </div>
+    <% } else { %>
+        <div class="table-wrap">
+            <table class="db-table">
+                <thead>
+                    <tr>
+                        <th>Started</th><th>Finished</th><th>Status</th>
+                        <th>Files</th><th>Skipped</th><th>Data copied</th><th>Destination</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% _runs.forEach(function (r) {
+                        var meta = _statusMeta(r.status);
+                        var skipped = _skippedList(r);
+                        var isPartial = String(r.status || '').toLowerCase() === 'partial';
+                        var rowId = 'db-skip-' + r.id;
+                    %>
+                        <tr>
+                            <td><%= _dt(r.started_at) %></td>
+                            <td><%= _dt(r.finished_at) %></td>
+                            <td>
+                                <span class="db-status <%= meta.cls %>">
+                                    <i class="fa-solid <%= meta.icon %>"></i> <%= meta.label %>
+                                </span>
+                                <% if (r.status === 'failed' && r.error) { %>
+                                    <div class="db-row-note db-row-note--danger"><%= r.error %></div>
+                                <% } %>
+                            </td>
+                            <td><%= Number(r.files_copied || 0).toLocaleString('en-IN') %></td>
+                            <td class="<%= Number(r.files_skipped || 0) > 0 ? 'db-skip-count' : '' %>">
+                                <%= Number(r.files_skipped || 0).toLocaleString('en-IN') %>
+                                <% if (isPartial && skipped.length) { %>
+                                    <button type="button" class="db-skip-toggle" data-target="<%= rowId %>">
+                                        View files <i class="fa-solid fa-chevron-down"></i>
+                                    </button>
+                                <% } %>
+                            </td>
+                            <td><%= _bytes(r.bytes_copied) %></td>
+                            <td class="db-dest-cell" title="<%= r.destination || '' %>"><%= r.destination || '—' %></td>
+                        </tr>
+                        <% if (isPartial && skipped.length) { %>
+                        <tr id="<%= rowId %>" class="db-skip-row" hidden>
+                            <td colspan="7">
+                                <div class="db-skip-panel">
+                                    <div class="db-skip-panel-title">
+                                        <i class="fa-solid fa-triangle-exclamation"></i>
+                                        Files skipped this run — Tally likely had these open. They were NOT backed up:
+                                    </div>
+                                    <ul class="db-skip-files">
+                                        <% skipped.forEach(function (f) { %>
+                                            <li><i class="fa-regular fa-file"></i> <%= typeof f === 'string' ? f : (f.path || f.name || JSON.stringify(f)) %></li>
+                                        <% }); %>
+                                    </ul>
+                                </div>
+                            </td>
+                        </tr>
+                        <% } %>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+</div>
+
+<script>
+document.querySelectorAll('.db-skip-toggle').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var row = document.getElementById(btn.getAttribute('data-target'));
+        if (!row) return;
+        row.hidden = !row.hidden;
+        btn.classList.toggle('is-open', !row.hidden);
+    });
+});
+</script>
+
+<style>
+    .card.db-card { padding:20px; margin-bottom:18px; }
+    .db-help { background:#EFF6FF; border:1px solid #BFDBFE; color:#1D4ED8; border-radius:10px; padding:10px 14px; font-size:13px; margin:0 0 18px; }
+    .db-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:18px 20px; }
+    .db-field { display:flex; flex-direction:column; gap:6px; }
+    .db-field--wide { grid-column:1 / -1; }
+    .db-field label { font-size:12.5px; font-weight:700; color:#374151; }
+    .db-req { color:#DC2626; }
+    .db-field-help { color:#9CA3AF; font-size:12px; }
+    .db-field--toggle { justify-content:center; }
+    .db-toggle { display:inline-flex; align-items:center; gap:10px; cursor:pointer; user-select:none; }
+    .db-toggle input { position:absolute; opacity:0; width:0; height:0; }
+    .db-toggle-track { width:42px; height:24px; border-radius:999px; background:#D1D5DB; position:relative; transition:.15s; flex:0 0 auto; }
+    .db-toggle-thumb { position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:.15s; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+    .db-toggle input:checked + .db-toggle-track { background:#16A34A; }
+    .db-toggle input:checked + .db-toggle-track .db-toggle-thumb { left:21px; }
+    .db-toggle-label { font-weight:700; font-size:13.5px; color:#111827; }
+    .db-actions { display:flex; gap:10px; margin-top:22px; }
+    .form-section-title { margin:0 0 16px; }
+    .db-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .db-empty { text-align:center; padding:34px 12px; color:#9CA3AF; }
+    .db-empty i { font-size:36px; opacity:.5; }
+    .db-empty p { margin:12px 0 0; }
+    .db-empty-sub { font-size:13px; max-width:480px; margin:6px auto 0 !important; }
+    .db-table { width:100%; border-collapse:collapse; }
+    .db-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 14px 12px; border-bottom:1px solid #EEF1F5; }
+    .db-table td { padding:12px 14px; border-bottom:1px solid #F3F4F6; vertical-align:middle; font-size:13.5px; }
+    .db-table tr:last-child td { border-bottom:none; }
+    .db-dest-cell { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#6B7280; }
+    .db-status { display:inline-flex; align-items:center; gap:6px; padding:4px 11px; border-radius:999px; font-size:12.5px; font-weight:700; }
+    .db-status--success { background:rgba(22,163,74,.12); color:#16A34A; }
+    .db-status--partial { background:rgba(217,119,6,.14); color:#B45309; }
+    .db-status--failed  { background:rgba(220,38,38,.12); color:#DC2626; }
+    .db-status--running { background:rgba(37,99,235,.12); color:#2563EB; }
+    .db-status--muted   { background:rgba(107,114,128,.14); color:#6B7280; }
+    .db-row-note { margin-top:4px; font-size:12px; color:#DC2626; }
+    .db-skip-count { font-weight:700; color:#B45309; }
+    .db-skip-toggle { margin-left:8px; border:none; background:none; color:#B45309; font-weight:700; font-size:12px; cursor:pointer; padding:0; }
+    .db-skip-toggle.is-open i { transform:rotate(180deg); }
+    .db-skip-toggle i { transition:.15s; }
+    .db-skip-row td { padding:0; border-bottom:1px solid #F3F4F6; }
+    .db-skip-panel { background:#FFFBEB; border-top:1px solid #FDE68A; border-bottom:1px solid #FDE68A; padding:14px 20px; }
+    .db-skip-panel-title { font-weight:700; color:#B45309; font-size:13px; margin-bottom:8px; }
+    .db-skip-panel-title i { margin-right:6px; }
+    .db-skip-files { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:5px; max-height:220px; overflow-y:auto; }
+    .db-skip-files li { font-size:12.5px; color:#78350F; font-family:'Consolas', monospace; }
+    .db-skip-files li i { margin-right:6px; color:#B45309; }
+    @media (max-width: 900px) { .db-grid { grid-template-columns:1fr 1fr; } }
+    @media (max-width: 600px) { .db-grid { grid-template-columns:1fr; } }
+</style>

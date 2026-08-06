@@ -36,6 +36,7 @@ const PATH_TO_MODULE = {
     'stock-journals': 'stock-journal',
     'physical-stock': 'physical-stock',
     'gst-search': 'gst-search',
+    'data-backup': 'data-backup',
 };
 
 /** Resolve a URL path (or bare segment) to its module slug, or null if unknown. */

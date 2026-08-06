@@ -174,3 +174,10 @@ test('GST Search is live in the menu, not "Soon"', () => {
     assert.strictEqual(byKey['gst-search'].soon, undefined, 'GST Search still soon');
     assert.strictEqual(byKey['gst-search'].href, '/gst-search');
 });
+
+test('Data Backup is live in the menu, not "Soon"', () => {
+    const byKey = {};
+    for (const g of MENU_TREE) for (const it of g.items) byKey[it.key] = it;
+    assert.strictEqual(byKey['data-backup'].soon, undefined, 'Data Backup still soon');
+    assert.strictEqual(byKey['data-backup'].href, '/data-backup');
+});

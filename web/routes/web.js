@@ -5501,6 +5501,65 @@ router.get('/gst-search', (req, res) => {
     });
 });
 
+/* ── Data Backup (GET /data-backup) ──────────────────────────────
+ * The screen this task exists for: not "does a schedule exist" but "can I
+ * trust what's already been copied". Settings + full run history render
+ * together so a customer never has to guess whether last night's run was
+ * clean. A run's status is exactly what the agent reported — the cloud
+ * never upgrades 'partial' to 'success'.
+ */
+router.get('/data-backup', async (req, res, next) => {
+    try {
+        const [settingsRes, runsRes] = await Promise.all([
+            api.get(req, '/backup/settings'),
+            api.get(req, '/backup/runs?per_page=25'),
+        ]);
+        const settings = (settingsRes.body && settingsRes.body.data) || {};
+        const runsBody = (runsRes.body && runsRes.body.data) || {};
+        res.render('data-backup/index', {
+            title: 'Data Backup',
+            activeMenu: 'data-backup',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Data Backup' }],
+            settings,
+            runs: Array.isArray(runsBody.data) ? runsBody.data : [],
+        });
+    } catch (err) { next(err); }
+});
+
+router.post('/data-backup/settings', async (req, res, next) => {
+    try {
+        const body = req.body || {};
+        const payload = {
+            enabled: !!body.enabled,
+            destination_path: body.destination_path,
+            frequency: body.frequency,
+            run_at: body.run_at,
+            keep_copies: body.keep_copies,
+        };
+        const result = await api.put(req, '/backup/settings', payload);
+        if (apiOk(result)) {
+            setFlash(req, 'success', 'Backup settings saved.');
+        } else {
+            setFlash(req, 'error', apiError(result, 'Could not save backup settings.'));
+        }
+        res.redirect('/data-backup');
+    } catch (err) { next(err); }
+});
+
+router.post('/data-backup/run-now', async (req, res, next) => {
+    try {
+        const result = await api.post(req, '/backup/run-now', {});
+        // BackupController.runNow returns body.status:201 on success (a resource
+        // was created — the queued command), not 200, so accept any 2xx here.
+        const bodyStatus = result && result.body && result.body.status;
+        const ok = bodyStatus && bodyStatus >= 200 && bodyStatus < 300;
+        setFlash(req, ok ? 'success' : 'error',
+            (result && result.body && result.body.msg) ||
+            (ok ? 'Backup requested. The agent will run it shortly.' : 'Could not queue a backup right now.'));
+        res.redirect('/data-backup');
+    } catch (err) { next(err); }
+});
+
 /* GET /gst/verify?gstin=… — forwards to the api's GET /gst/verify so the
  * browser never talks to the api directly (same trick as
  * /delivery-notes/order/:id above). Used by the GST Search screen AND by
