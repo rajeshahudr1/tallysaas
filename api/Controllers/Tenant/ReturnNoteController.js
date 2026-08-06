@@ -314,7 +314,7 @@ async function create(req, res) {
                 tax_amount:         totals.tax_amount,
                 round_off:          0,
                 total:              totals.total,
-                status:             'draft_cloud',
+                status:             'pending_tally',
                 tally_voucher_type: VOUCHER_TYPE[kind],
                 tally_optional:     false,
                 approval_status:    'approved',

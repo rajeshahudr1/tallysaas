@@ -542,6 +542,21 @@ function tallyDate(d) {
 }
 
 /**
+ * Whether a credit/debit note row may be pushed to Tally.
+ *
+ * Credit and Debit Notes land in the `invoices` table from TWO directions:
+ * created here in the cloud (tally_guid empty) or pulled FROM Tally
+ * (tally_guid set, by importFromTally). Only the former may ever be pushed
+ * back — pushing a Tally-origin note would create it in Tally a second
+ * time, duplicating it in the customer's books. Kept as a single exported,
+ * pure predicate (rather than inlined at each call site) so the rule lives
+ * in exactly one place and is directly testable.
+ */
+function isPushableReturnNote(row) {
+    return !(row && row.tally_guid) && !!row && row.status === 'pending_tally';
+}
+
+/**
  * GET /api/v1/agent/pending   (authenticateAgent → req.license)
  *
  * Everything under this license that still needs pushing to Tally, shaped for
@@ -701,12 +716,58 @@ async function pending(req, res) {
                 return acc;
             }, {});
         }
+        // ── Vouchers: credit / debit notes (fetched here, ahead of ledMap, so
+        // their companies are included in the ledger-name detection below) ──
+        // These live in the SAME `invoices` table as ordinary sales/purchase
+        // invoices (see ReturnNoteController's header comment), so this is a
+        // sibling query to the invoices one above — NOT a modification of it,
+        // and excludeReturns() (InvoiceController) is untouched: that filter
+        // exists precisely so plain invoice listings skip these rows, while
+        // this query exists precisely to pick them up.
+        //
+        // CRITICAL: a note can arrive from either direction — created here
+        // (tally_guid null) or pulled FROM Tally (tally_guid set, see
+        // importFromTally's Credit Note / Debit Note handling). Only the
+        // former may be pushed BACK to Tally; pushing a Tally-origin note
+        // would duplicate it in the customer's books on the next pull. That
+        // rule lives in isPushableReturnNote (above), a single exported
+        // predicate, defined once and tested once rather than re-derived at
+        // each call site.
+        const returnNoteRows = await db('invoices as i')
+            .whereIn('i.company_id', companyIds).whereNull('i.deleted_at')
+            .whereIn('i.tally_voucher_type', ['Credit Note', 'Debit Note'])
+            .where('i.status', 'pending_tally')
+            .andWhere('i.approval_status', 'approved')
+            .leftJoin('customers as c', 'c.id', 'i.customer_id')
+            .leftJoin('suppliers as s', 'i.supplier_id', 's.id')
+            .limit(50)
+            .select('i.id', 'i.company_id', 'i.type', 'i.tally_voucher_type', 'i.tally_guid', 'i.status',
+                    'i.invoice_no', 'i.invoice_date', 'i.total', 'i.taxable', 'i.cgst', 'i.sgst', 'i.igst',
+                    'c.name as customer', 's.name as supplier')
+            .then((rows) => rows.filter(isPushableReturnNote));
+        const rnIds = returnNoteRows.map((i) => i.id);
+        let itemsByReturnNote = {};
+        if (rnIds.length) {
+            const rnItems = await db('invoice_items as it')
+                .whereIn('it.invoice_id', rnIds)
+                .leftJoin('products as p', 'p.id', 'it.product_id')
+                .select('it.invoice_id', 'it.quantity', 'it.rate', 'it.gst_rate',
+                        'it.description', 'p.name as product_name');
+            itemsByReturnNote = rnItems.reduce((acc, it) => {
+                (acc[it.invoice_id] = acc[it.invoice_id] || []).push({
+                    name: it.product_name || it.description || 'Item',
+                    qty: Number(it.quantity) || 0, rate: Number(it.rate) || 0, gst_rate: Number(it.gst_rate) || 0,
+                });
+                return acc;
+            }, {});
+        }
+
         // Detect each company's REAL Sales/Purchase + GST + Round-off ledger names
         // (from its synced vouchers) so a pushed invoice reproduces Tally's EXACT
         // double-entry — Party + Sales/Purchase + C GST/S GST/I GST + Round Off —
         // not just a 2-line total. Names vary per company ("Local Sales", "C GST").
         const ledMap = {};
-        for (const co of [...new Set(invoices.map((i) => i.company_id))]) {
+        for (const co of [...new Set([...invoices, ...returnNoteRows].map((i) => i.company_id))]) {
             const rows = await db('tally_voucher_entries')
                 .where('company_id', co).select('ledger_name').count('id as c')
                 .groupBy('ledger_name').orderBy('c', 'desc').limit(60);
@@ -787,11 +848,63 @@ async function pending(req, res) {
             .limit(50)
             .select('id', 'company_id', 'voucher_no', 'vch_type', 'journal_date', 'dr_ledger', 'cr_ledger', 'amount', 'narration');
         const journalVouchers = journals.map((j) => ({
-            record_type: 'journal', id: j.id, company_id: j.company_id, voucher_kind: 'journal',
+            // Contra rides the journals table like every other journal-shaped
+            // voucher — voucher_kind stays 'journal' (that is what tells the
+            // agent which Tally voucher builder to use), but record_type flips
+            // to 'contra' for vch_type==='Contra' so the operator's Contra
+            // push-toggle (REC2MOD below) actually applies to it.
+            record_type: j.vch_type === 'Contra' ? 'contra' : 'journal',
+            id: j.id, company_id: j.company_id, voucher_kind: 'journal',
             voucher_no: j.voucher_no, vch_type: j.vch_type || 'Journal', date: tallyDate(j.journal_date),
             dr_ledger: j.dr_ledger, cr_ledger: j.cr_ledger,
             amount: Number(j.amount) || 0, narration: j.narration || '',
         }));
+
+        // ── Vouchers: credit / debit notes (rows fetched earlier, ahead of
+        // ledMap, so their ledger names are detected too) ──
+        const returnNoteVouchers = returnNoteRows.map((i) => {
+            const isCredit = i.tally_voucher_type === 'Credit Note';
+            const isPurch = i.type === 'purchase';
+            const party = isPurch ? i.supplier : i.customer;
+            const total = r2(i.total);
+            const L = ledMap[i.company_id] || {};
+            const its = itemsByReturnNote[i.id] || [];
+            let taxable = Number(i.taxable) || 0;
+            let cgst = Number(i.cgst) || 0, sgst = Number(i.sgst) || 0, igst = Number(i.igst) || 0;
+            if (!taxable && its.length) {
+                taxable = its.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0), 0);
+                const g = its.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.rate) || 0) * (Number(it.gst_rate) || 0) / 100, 0);
+                cgst = sgst = g / 2;
+            }
+            // A note REVERSES the direction of its underlying invoice type: a
+            // Credit Note (against a sales invoice) credits the party and
+            // debits Sales; a Debit Note (against a purchase invoice) debits
+            // the party and credits Purchase — the opposite of what
+            // invoiceVouchers computes above for plain sales/purchase.
+            let ledgers = null;
+            if (party && taxable > 0) {
+                const partyDebit = isPurch;         // credit note(sales): party Cr; debit note(purchase): party Dr
+                const acctDebit  = !partyDebit;
+                ledgers = [
+                    { name: party, amount: total, is_debit: partyDebit },
+                    { name: isPurch ? L.purchase : L.sales, amount: r2(taxable), is_debit: acctDebit },
+                ];
+                if (cgst && L.cgst) ledgers.push({ name: L.cgst, amount: r2(cgst), is_debit: acctDebit });
+                if (sgst && L.sgst) ledgers.push({ name: L.sgst, amount: r2(sgst), is_debit: acctDebit });
+                if (igst && L.igst) ledgers.push({ name: L.igst, amount: r2(igst), is_debit: acctDebit });
+                const roundoff = r2(total - taxable - cgst - sgst - igst);
+                if (roundoff && L.roundoff) {
+                    ledgers.push({ name: L.roundoff, amount: Math.abs(roundoff), is_debit: roundoff < 0 ? partyDebit : acctDebit });
+                }
+            }
+            return {
+                record_type: isCredit ? 'credit_note' : 'debit_note',
+                id: i.id, company_id: i.company_id,
+                voucher_kind: isCredit ? 'credit_note' : 'debit_note',
+                voucher_no: i.invoice_no, date: tallyDate(i.invoice_date),
+                party, amount: total, items: its, ledgers,
+            };
+        });
 
         // Selective AUTO-push filter: drop records whose module the operator did
         // NOT select (pushSel null = ALL → keep everything). record_type → module:
@@ -810,7 +923,7 @@ async function pending(req, res) {
             stock_journal: 'stock-journal', physical_stock: 'physical-stock',
         };
         const keep = (r) => SM.isEnabled(pushSel, REC2MOD[r && r.record_type] || '');
-        const allVouchers = [...invoiceVouchers, ...payVouchers, ...journalVouchers].filter(keep);
+        const allVouchers = [...invoiceVouchers, ...payVouchers, ...journalVouchers, ...returnNoteVouchers].filter(keep);
 
         return R.successResponse(res, {
             companies,
@@ -889,8 +1002,18 @@ async function result(req, res) {
                     tally_voucher_no: r.tally_voucher_no || null,
                     tally_guid: guid, updated_at: now,
                 });
-            } else if (r.record_type === 'journal') {
+            } else if (r.record_type === 'journal' || r.record_type === 'contra') {
+                // Contra rides the journals table (voucher_kind:'journal'); only
+                // record_type differs, so both share this branch.
                 await db('journals').where({ id: r.record_id, company_id: cid }).update({
+                    status: synced ? 'created' : 'failed',
+                    tally_voucher_no: r.tally_voucher_no || null,
+                    tally_guid: guid, updated_at: now,
+                });
+            } else if (r.record_type === 'credit_note' || r.record_type === 'debit_note') {
+                // Credit/Debit notes live in `invoices` — same update shape as
+                // sales_invoice/purchase_invoice above.
+                await db('invoices').where({ id: r.record_id, company_id: cid }).update({
                     status: synced ? 'created' : 'failed',
                     tally_voucher_no: r.tally_voucher_no || null,
                     tally_guid: guid, updated_at: now,
@@ -3091,4 +3214,4 @@ async function recordBackupRun(req, res) {
     }
 }
 
-module.exports = { login, verify, resendOtp, getEnvelopes, heartbeat, offline, pending, result, importFromTally, reconcile, voucherDiff, getCommands, commandResult, getVersion, download, getBackupSettings, recordBackupRun };
+module.exports = { login, verify, resendOtp, getEnvelopes, heartbeat, offline, pending, result, importFromTally, reconcile, voucherDiff, getCommands, commandResult, getVersion, download, getBackupSettings, recordBackupRun, isPushableReturnNote };

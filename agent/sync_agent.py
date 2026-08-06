@@ -977,6 +977,18 @@ def _push_voucher(tally: TallyConnector, v: dict, company: Optional[str] = None)
     elif kind == "payment":
         resp = tally.create_payment(v["party"], v["date"], v.get("amount", 0),
                                     mode=v.get("mode", "Cash"), company=company)
+    elif kind in ("credit_note", "debit_note"):
+        # No items-based fallback here (unlike sales/purchase): without an
+        # exact ledger breakdown we cannot build a correct note, and a
+        # partial voucher in the customer's books is worse than none.
+        if not v.get("ledgers"):
+            res = {"record_type": v["record_type"], "record_id": v["id"],
+                   "company_id": v["company_id"], "status": "failed",
+                   "message": f"{kind}: no ledgers supplied, refusing to build an incomplete voucher"}
+            return res
+        vtype = "Credit Note" if kind == "credit_note" else "Debit Note"
+        resp = tally.create_voucher_from_ledgers(vtype, v["party"], v["date"],
+                                                 v["ledgers"], company=company)
     else:
         # An unrecognised voucher_kind must NEVER be guessed at -- silently
         # treating it as a payment would write the wrong voucher into the
