@@ -107,6 +107,12 @@ const {
     listDeliveryNoteSchema,
 } = require('../Validators/deliveryNote');
 const {
+    createStockJournalSchema,
+    listStockJournalSchema,
+    createPhysicalStockSchema,
+    listPhysicalStockSchema,
+} = require('../Validators/stockVoucher');
+const {
     createReceiptNoteSchema,
     listReceiptNoteSchema,
 } = require('../Validators/receiptNote');
@@ -165,6 +171,8 @@ const QuotationController     = require('../Controllers/Tenant/QuotationControll
 const SalesOrderController    = require('../Controllers/Tenant/SalesOrderController');
 const PurchaseOrderController = require('../Controllers/Tenant/PurchaseOrderController');
 const DeliveryNoteController  = require('../Controllers/Tenant/DeliveryNoteController');
+const StockJournalController  = require('../Controllers/Tenant/StockJournalController');
+const PhysicalStockController = require('../Controllers/Tenant/PhysicalStockController');
 const ReceiptNoteController   = require('../Controllers/Tenant/ReceiptNoteController');
 const ReturnNoteController    = require('../Controllers/Tenant/ReturnNoteController');
 const PaymentController       = require('../Controllers/Tenant/PaymentController');
@@ -949,6 +957,24 @@ router.post('/delivery-notes/:id/convert', authenticate, resolveTenant, resolveC
     can('delivery-notes', 'edit'), DeliveryNoteController.convert);
 router.delete('/delivery-notes/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('delivery-notes', 'delete'), DeliveryNoteController.destroy);
+
+// Stock Journal / Physical Stock — goods vouchers, no ledger/GST/totals; both
+// end here (Task 2 documents no convert step for either).
+router.get('/stock-journals', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('stock-journal', 'view'), validate(listStockJournalSchema, 'query'), StockJournalController.list);
+router.get('/stock-journals/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('stock-journal', 'view'), StockJournalController.get);
+router.post('/stock-journals', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('stock-journal', 'create'), validate(createStockJournalSchema), StockJournalController.create);
+router.delete('/stock-journals/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('stock-journal', 'delete'), StockJournalController.destroy);
+
+router.get('/physical-stock', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('physical-stock', 'view'), validate(listPhysicalStockSchema, 'query'), PhysicalStockController.list);
+router.get('/physical-stock/:voucher_no', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('physical-stock', 'view'), PhysicalStockController.get);
+router.post('/physical-stock', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('physical-stock', 'create'), validate(createPhysicalStockSchema), PhysicalStockController.create);
 
 // Credit Note / Debit Note — ReturnNoteController runs on the SHARED
 // `invoices` table (see that controller's header comment), parameterised on
