@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/api/endpoints.dart';
 import '../core/auth/session.dart';
+import '../data/models/goods_note.dart';
 import '../data/models/return_note.dart';
 import '../data/repositories/journal_repository.dart' show JournalScope;
 import '../features/auth/login_screen.dart';
@@ -48,6 +49,9 @@ import '../features/purchase_orders/purchase_orders_screen.dart';
 import '../features/return_notes/return_note_detail_screen.dart';
 import '../features/return_notes/return_note_form_screen.dart';
 import '../features/return_notes/return_notes_screen.dart';
+import '../features/goods_notes/goods_note_detail_screen.dart';
+import '../features/goods_notes/goods_note_form_screen.dart';
+import '../features/goods_notes/goods_notes_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -527,6 +531,62 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) => JournalDetailScreen(
           scope: JournalScope.contra,
           journalId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Delivery Notes ────────────────────────────
+      GoRoute(
+        path: '/delivery-notes',
+        name: 'delivery-notes',
+        builder: (_, __) => const GoodsNotesScreen(kind: GoodsNoteKind.delivery),
+      ),
+      GoRoute(
+        path: '/delivery-notes/add',
+        name: 'delivery-note-add',
+        builder: (_, __) => const GoodsNoteFormScreen(kind: GoodsNoteKind.delivery),
+      ),
+      GoRoute(
+        path: '/delivery-notes/:id',
+        name: 'delivery-note-view',
+        builder: (_, state) => GoodsNoteDetailScreen(
+          kind: GoodsNoteKind.delivery,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/delivery-notes/:id/edit',
+        name: 'delivery-note-edit',
+        builder: (_, state) => GoodsNoteFormScreen(
+          kind: GoodsNoteKind.delivery,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Receipt Notes ────────────────────────────
+      GoRoute(
+        path: '/receipt-notes',
+        name: 'receipt-notes',
+        builder: (_, __) => const GoodsNotesScreen(kind: GoodsNoteKind.receipt),
+      ),
+      GoRoute(
+        path: '/receipt-notes/add',
+        name: 'receipt-note-add',
+        builder: (_, __) => const GoodsNoteFormScreen(kind: GoodsNoteKind.receipt),
+      ),
+      GoRoute(
+        path: '/receipt-notes/:id',
+        name: 'receipt-note-view',
+        builder: (_, state) => GoodsNoteDetailScreen(
+          kind: GoodsNoteKind.receipt,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/receipt-notes/:id/edit',
+        name: 'receipt-note-edit',
+        builder: (_, state) => GoodsNoteFormScreen(
+          kind: GoodsNoteKind.receipt,
+          noteId: int.parse(state.pathParameters['id']!),
         ),
       ),
 

@@ -224,6 +224,26 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Syncs to Tally as a journal voucher.',
     ],
   ),
+  'delivery-notes': ModuleInfo(
+    'Delivery Notes',
+    'The challan that goes OUT with the goods — proof of what was dispatched, before the sales invoice is raised.',
+    [
+      'Pick the customer, add the items being sent, and set the dispatch date.',
+      'Raise it against a Sales Order so the order can be delivered in parts.',
+      'Convert it into a Sales Invoice once you bill for what was delivered.',
+      'Pending until invoiced; cancel it if the dispatch is called off.',
+    ],
+  ),
+  'receipt-notes': ModuleInfo(
+    'Receipt Notes',
+    'The record of goods COMING IN from a supplier — what actually arrived, before their bill is entered.',
+    [
+      'Pick the supplier, add the items received, and set the received date.',
+      'Raise it against a Purchase Order so a part-delivery is tracked.',
+      'Convert it into a Purchase Invoice when the supplier bills you.',
+      'Pending until invoiced; cancel it if the goods are returned outright.',
+    ],
+  ),
   'contra': ModuleInfo(
     'Contra',
     'Money moving between your OWN accounts — cash to bank, bank to cash, or one bank to another. Nothing is earned or spent.',
