@@ -116,13 +116,13 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'analytics', label: 'Business Analytics', icon: Icons.pie_chart_outline, module: 'reports', route: '/analytics'),
   ]),
   MenuGroup(label: 'My Entries', icon: Icons.check_box_outlined, items: [
-    MenuEntry(key: 'my-vouchers', label: 'My Vouchers', icon: Icons.description_outlined, module: 'field-sales'),
+    MenuEntry(key: 'my-vouchers', label: 'My Vouchers', icon: Icons.description_outlined, module: 'field-sales', route: '/my-vouchers'),
     MenuEntry(key: 'my-quotations', label: 'My Quotations', icon: Icons.edit_document, module: 'quotations', route: '/my-quotations'),
-    MenuEntry(key: 'my-eway', label: 'My eWay Bills', icon: Icons.local_shipping_outlined, module: 'field-sales'),
-    MenuEntry(key: 'my-einvoices', label: 'My eInvoices', icon: Icons.verified_outlined, module: 'field-sales'),
+    MenuEntry(key: 'my-eway', label: 'My eWay Bills', icon: Icons.local_shipping_outlined, module: 'field-sales', route: '/my-eway'),
+    MenuEntry(key: 'my-einvoices', label: 'My eInvoices', icon: Icons.verified_outlined, module: 'field-sales', route: '/my-einvoices'),
     MenuEntry(key: 'my-parties', label: 'My Parties', icon: Icons.contacts_outlined, module: 'field-sales', route: '/my-customers'),
-    MenuEntry(key: 'my-stock', label: 'My Stock Items', icon: Icons.inventory_2_outlined, module: 'field-sales'),
-    MenuEntry(key: 'field-tracking', label: 'Tracking Report', icon: Icons.map_outlined, module: 'field-sales', approverOnly: true),
+    MenuEntry(key: 'my-stock', label: 'My Stock Items', icon: Icons.inventory_2_outlined, module: 'field-sales', route: '/products'),
+    MenuEntry(key: 'field-tracking', label: 'Tracking Report', icon: Icons.map_outlined, module: 'field-sales', route: '/field-tracking', approverOnly: true),
   ]),
   MenuGroup(label: 'Field Sales', icon: Icons.place_outlined, items: [
     MenuEntry(key: 'my-field', label: 'My Dashboard', icon: Icons.place_outlined, module: 'field-sales', route: '/my-field', salesmanOnly: true),

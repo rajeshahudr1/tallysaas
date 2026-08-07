@@ -64,6 +64,8 @@ import '../features/ledgers/ledgers_screen.dart';
 import '../features/collect_payments/collect_payment_new_screen.dart';
 import '../features/collect_payments/collect_payment_settings_screen.dart';
 import '../features/collect_payments/collect_payments_screen.dart';
+import '../features/my_entries/field_tracking_screen.dart';
+import '../features/my_entries/my_vouchers_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -688,6 +690,30 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/collect-payments/settings',
         name: 'collect-payment-settings',
         builder: (_, __) => const CollectPaymentSettingsScreen(),
+      ),
+
+      // ─── My Entries (the signed-in user's own rows) ────────────
+      GoRoute(
+        path: '/my-vouchers',
+        name: 'my-vouchers',
+        builder: (_, __) => const MyVouchersScreen(),
+      ),
+      GoRoute(
+        path: '/my-einvoices',
+        name: 'my-einvoices',
+        builder: (_, __) =>
+            const EInvoicesScreen(mine: true, title: 'My eInvoices'),
+      ),
+      GoRoute(
+        path: '/my-eway',
+        name: 'my-eway',
+        builder: (_, __) =>
+            const EInvoicesScreen(mine: true, title: 'My eWay Bills'),
+      ),
+      GoRoute(
+        path: '/field-tracking',
+        name: 'field-tracking',
+        builder: (_, __) => const FieldTrackingScreen(),
       ),
 
       GoRoute(

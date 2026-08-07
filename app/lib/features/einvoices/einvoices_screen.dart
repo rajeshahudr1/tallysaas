@@ -17,8 +17,13 @@ import '../../shared/widgets/loading_state.dart';
 
 /// e-Invoice (GST IRN) + e-Way Bill — list sales invoices, prepare the IRP
 /// payload, and record the IRN / e-Way (auto when a GSP is wired, else manual).
-final _einvoiceProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
-  final data = await ref.read(apiClientProvider).get('/einvoices');
+/// `mine: true` scopes the list to invoices the signed-in user created — that
+/// is the My Entries menu's "My eInvoices" / "My eWay Bills" (web: `?mine=1`).
+final _einvoiceProvider =
+    FutureProvider.autoDispose.family<Map<String, dynamic>, bool>((ref, mine) async {
+  final data = await ref
+      .read(apiClientProvider)
+      .get('/einvoices', query: mine ? {'mine': '1'} : null);
   return (data is Map) ? data.cast<String, dynamic>() : <String, dynamic>{};
 });
 
@@ -32,24 +37,34 @@ String _fmtDate(dynamic d) {
 }
 
 class EInvoicesScreen extends ConsumerWidget {
-  const EInvoicesScreen({super.key});
+  const EInvoicesScreen({super.key, this.mine = false, this.title});
+
+  /// Scope the list to the signed-in user's own invoices.
+  final bool mine;
+
+  /// Overrides the app-bar title — "My eInvoices" / "My eWay Bills" reuse this
+  /// screen, and the heading is the only thing that differs.
+  final String? title;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(_einvoiceProvider);
+    final async = ref.watch(_einvoiceProvider(mine));
     return Scaffold(
-      appBar: AppBar(title: const Text('e-Invoice & e-Way'), actions: const [ModuleInfoButton('einvoice')]),
+      appBar: AppBar(
+        title: Text(title ?? 'e-Invoice & e-Way'),
+        actions: const [ModuleInfoButton('einvoice')],
+      ),
       body: async.when(
         loading: () => const LoadingState(message: 'Loading…'),
         error: (e, _) => ErrorState(
           e is ApiException ? e.message : 'Could not load.',
-          onRetry: () => ref.invalidate(_einvoiceProvider),
+          onRetry: () => ref.invalidate(_einvoiceProvider(mine)),
         ),
         data: (d) {
           final list = (d['data'] as List?)?.whereType<Map>().map((m) => m.cast<String, dynamic>()).toList() ?? const [];
           final gsp = d['gsp_configured'] == true;
           return RefreshIndicator(
-            onRefresh: () async => ref.invalidate(_einvoiceProvider),
+            onRefresh: () async => ref.invalidate(_einvoiceProvider(mine)),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(AppSpacing.md12, AppSpacing.md12, AppSpacing.md12, AppSpacing.xxl32),
               children: [

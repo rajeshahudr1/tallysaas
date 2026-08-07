@@ -244,6 +244,26 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Pending until invoiced; cancel it if the goods are returned outright.',
     ],
   ),
+  'my-vouchers': ModuleInfo(
+    'My Vouchers',
+    'Everything YOU created in this company — quotations, orders, notes, invoices, receipts, payments and journals in one list, newest first.',
+    [
+      'Only your own entries appear; what other users made is never shown here.',
+      'The tag on each row says which voucher family it belongs to.',
+      'Tap a row to open that voucher wherever the app has a screen for it.',
+    ],
+  ),
+  'field-tracking': ModuleInfo(
+    'Tracking Report',
+    'Where your field staff actually went: the outlet visits logged that day and the GPS pings their phones sent in.',
+    [
+      'Pick a date, and a salesman when you want just one person.',
+      'A visit shows check-in / check-out time and how far from the outlet it was recorded.',
+      'The GPS icon says whether the check-in happened inside the outlet geofence.',
+      'Tap any row to open that spot in your maps app.',
+      'A salesman only ever sees their own rows — the API scopes it regardless of the filter.',
+    ],
+  ),
   'collect-payments': ModuleInfo(
     'Collect Payments',
     'Send a customer a payment link for an unpaid invoice — they pay you directly by UPI, with no gateway in between.',
