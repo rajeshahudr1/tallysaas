@@ -1,27 +1,25 @@
 import 'voucher_item.dart';
 
-/// One quotation (भाव-पत्र) from `GET /api/v1/quotations`, and its line items
-/// from `GET /api/v1/quotations/:id`.
+/// One sales order from `GET /api/v1/sales-orders` (and its lines from
+/// `GET /api/v1/sales-orders/:id`). Mirrors the `sales_orders` /
+/// `sales_order_items` tables; pg returns numerics as strings, so the
+/// coercions are defensive.
 ///
-/// Mirrors the `quotations` / `quotation_items` tables. pg returns numeric and
-/// bigint columns as STRINGS, so every coercion below is defensive.
-///
-/// Two independent statuses ride on a quotation — do not conflate them:
-///   • [quoteStatus]  — the DEAL lifecycle: open / accepted / rejected /
-///     expired ('expired' is DERIVED by the API from `valid_till`).
-///   • [status]       — the Tally-sync lifecycle, the same field every other
-///     voucher carries (draft_cloud / pending_tally / sent_to_tally / …).
-class Quotation {
-  const Quotation({
+/// Two independent statuses ride on an order — do not conflate them:
+///   • [orderStatus] — the DELIVERY lifecycle: pending / partially_delivered /
+///     delivered / cancelled.
+///   • [status]      — the Tally-sync lifecycle every voucher carries.
+class SalesOrder {
+  const SalesOrder({
     required this.id,
-    required this.quotationNo,
+    required this.orderNo,
     this.customerId,
     this.customer,
     this.locationId,
     this.location,
     this.salesPersonId,
-    this.quotationDate,
-    this.validTill,
+    this.orderDate,
+    this.dueOn,
     this.ledgerName,
     this.subtotal,
     this.discount,
@@ -32,7 +30,7 @@ class Quotation {
     this.taxAmount,
     this.roundOff,
     this.total,
-    this.quoteStatus,
+    this.orderStatus,
     this.convertedInvoiceId,
     this.status,
     this.notes,
@@ -41,7 +39,7 @@ class Quotation {
   });
 
   final int id;
-  final String quotationNo;
+  final String orderNo;
 
   final int? customerId;
   final String? customer;
@@ -49,8 +47,10 @@ class Quotation {
   final String? location;
   final int? salesPersonId;
 
-  final String? quotationDate;
-  final String? validTill;
+  final String? orderDate;
+
+  /// When the goods are due to be delivered.
+  final String? dueOn;
   final String? ledgerName;
 
   final num? subtotal;
@@ -63,10 +63,10 @@ class Quotation {
   final num? roundOff;
   final num? total;
 
-  /// Deal lifecycle: open | accepted | rejected | expired.
-  final String? quoteStatus;
+  /// pending | partially_delivered | delivered | cancelled.
+  final String? orderStatus;
 
-  /// Set once the quotation has been converted into a sales invoice.
+  /// Set once the order has been converted into a sales invoice.
   final int? convertedInvoiceId;
 
   /// Tally-sync lifecycle.
@@ -75,21 +75,21 @@ class Quotation {
   final String? notes;
   final String? createdAt;
 
-  /// Only populated by the detail endpoint; the list rows carry no items.
-  final List<QuotationItem> items;
+  /// Only populated by the detail endpoint.
+  final List<VoucherItem> items;
 
   bool get isConverted => convertedInvoiceId != null;
 
-  factory Quotation.fromJson(Map<String, dynamic> j) => Quotation(
+  factory SalesOrder.fromJson(Map<String, dynamic> j) => SalesOrder(
         id: _toInt(j['id']) ?? 0,
-        quotationNo: _s(j['quotation_no']),
+        orderNo: (j['order_no'] ?? '').toString(),
         customerId: _toInt(j['customer_id']),
         customer: _sn(j['customer']),
         locationId: _toInt(j['location_id']),
         location: _sn(j['location']),
         salesPersonId: _toInt(j['sales_person_id']),
-        quotationDate: _sn(j['quotation_date']),
-        validTill: _sn(j['valid_till']),
+        orderDate: _sn(j['order_date']),
+        dueOn: _sn(j['due_on']),
         ledgerName: _sn(j['ledger_name']),
         subtotal: _toNum(j['subtotal']),
         discount: _toNum(j['discount']),
@@ -100,7 +100,7 @@ class Quotation {
         taxAmount: _toNum(j['tax_amount']),
         roundOff: _toNum(j['round_off']),
         total: _toNum(j['total']),
-        quoteStatus: _sn(j['quote_status']),
+        orderStatus: _sn(j['order_status']),
         convertedInvoiceId: _toInt(j['converted_invoice_id']),
         status: _sn(j['status']),
         notes: _sn(j['notes']),
@@ -109,26 +109,21 @@ class Quotation {
       );
 }
 
-/// A quotation line — the shared item shape every item-style voucher uses.
-typedef QuotationItem = VoucherItem;
-
-/// Human label for the DEAL lifecycle (`quote_status`).
-String quoteStatusLabel(String? s) {
+/// Human label for the DELIVERY lifecycle (`order_status`).
+String orderStatusLabel(String? s) {
   switch (s) {
-    case 'open':
-      return 'Open';
-    case 'accepted':
-      return 'Accepted';
-    case 'rejected':
-      return 'Rejected';
-    case 'expired':
-      return 'Expired';
+    case 'pending':
+      return 'Pending';
+    case 'partially_delivered':
+      return 'Partial';
+    case 'delivered':
+      return 'Delivered';
+    case 'cancelled':
+      return 'Cancelled';
     default:
-      return s == null || s.isEmpty ? 'Open' : s;
+      return s == null || s.isEmpty ? 'Pending' : s;
   }
 }
-
-String _s(Object? v) => v == null ? '' : v.toString();
 
 String? _sn(Object? v) {
   if (v == null) return null;

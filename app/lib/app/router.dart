@@ -37,6 +37,9 @@ import '../features/menu/group_hub_screen.dart';
 import '../features/quotations/quotation_detail_screen.dart';
 import '../features/quotations/quotation_form_screen.dart';
 import '../features/quotations/quotations_screen.dart';
+import '../features/sales_orders/sales_order_detail_screen.dart';
+import '../features/sales_orders/sales_order_form_screen.dart';
+import '../features/sales_orders/sales_orders_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -388,6 +391,32 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'quotation-edit',
         builder: (_, state) => QuotationFormScreen(
           quotationId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Sales Orders ──────────────────────────────────────────
+      GoRoute(
+        path: '/sales-orders',
+        name: 'sales-orders',
+        builder: (_, __) => const SalesOrdersScreen(),
+      ),
+      GoRoute(
+        path: '/sales-orders/add',
+        name: 'sales-order-add',
+        builder: (_, __) => const SalesOrderFormScreen(),
+      ),
+      GoRoute(
+        path: '/sales-orders/:id',
+        name: 'sales-order-view',
+        builder: (_, state) => SalesOrderDetailScreen(
+          orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/sales-orders/:id/edit',
+        name: 'sales-order-edit',
+        builder: (_, state) => SalesOrderFormScreen(
+          orderId: int.parse(state.pathParameters['id']!),
         ),
       ),
 

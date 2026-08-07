@@ -32,6 +32,7 @@ class Endpoints {
 
   // ─── Transactions ───────────────────────────────────────────
   static const String quotations       = '/quotations';
+  static const String salesOrders      = '/sales-orders';
   static const String salesInvoices    = '/sales-invoices';
   static const String purchaseInvoices = '/purchase-invoices';
   static const String payments         = '/payments';

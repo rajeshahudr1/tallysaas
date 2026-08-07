@@ -138,6 +138,16 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Share the PDF with the customer; nothing reaches Tally until the invoice is made.',
     ],
   ),
+  'sales-orders': ModuleInfo(
+    'Sales Orders',
+    'A confirmed order from a customer — what they have agreed to buy, and when it must be delivered. Stock is not billed until you invoice it.',
+    [
+      'Pick a customer, add item lines, and set "Due On" — the date the goods are promised.',
+      'Delivery progress shows as Pending → Partial → Delivered; cancel an order that falls through.',
+      'Convert it into a Sales Invoice in one tap — the lines carry over.',
+      'Use it to see committed demand before it becomes a bill.',
+    ],
+  ),
   'sales-invoices': ModuleInfo(
     'Sales Invoices',
     'What you bill your customers. Add line items and GST is computed for you; approved invoices sync to Tally.',
