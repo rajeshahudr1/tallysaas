@@ -80,7 +80,7 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'approvals', label: 'Invoice Approvals', icon: Icons.fact_check_outlined, module: 'sales-invoices', route: '/sales-invoices/approvals', approverOnly: true),
     MenuEntry(key: 'recurring', label: 'Recurring Invoices', icon: Icons.repeat, module: 'recurring-invoices', route: '/recurring-invoices'),
     MenuEntry(key: 'einvoice', label: 'e-Invoice & e-Way', icon: Icons.verified_outlined, module: 'einvoice', route: '/einvoices'),
-    MenuEntry(key: 'einvoice-dash', label: 'e-Invoice Dashboard', icon: Icons.speed_outlined, module: 'einvoice'),
+    MenuEntry(key: 'einvoice-dash', label: 'e-Invoice Dashboard', icon: Icons.speed_outlined, module: 'einvoice', route: '/einvoices/dashboard'),
     MenuEntry(key: 'reminders', label: 'Payment Reminders', icon: Icons.notifications_outlined, module: 'payments', route: '/reminders'),
   ]),
   MenuGroup(label: 'Purchase', icon: Icons.shopping_bag_outlined, items: [
@@ -147,8 +147,8 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'locations', label: 'Locations', icon: Icons.place_outlined, module: 'locations', route: '/locations'),
   ]),
   MenuGroup(label: 'General', icon: Icons.grid_view, items: [
-    MenuEntry(key: 'gst-search', label: 'GST Search', icon: Icons.search, module: 'gst-search'),
-    MenuEntry(key: 'data-backup', label: 'Data Backup', icon: Icons.cloud_upload_outlined, module: 'data-backup'),
+    MenuEntry(key: 'gst-search', label: 'GST Search', icon: Icons.search, module: 'gst-search', route: '/gst-search'),
+    MenuEntry(key: 'data-backup', label: 'Data Backup', icon: Icons.cloud_upload_outlined, module: 'data-backup', route: '/data-backup'),
   ]),
 ];
 

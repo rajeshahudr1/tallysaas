@@ -244,6 +244,25 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Pending until invoiced; cancel it if the goods are returned outright.',
     ],
   ),
+  'gst-search': ModuleInfo(
+    'GST Search',
+    'Check a GSTIN before you trust it — the app decodes the number offline and, when a lookup provider is configured, fetches the registration details.',
+    [
+      'The decode is instant and needs no internet lookup: state, PAN, entity number and check digit come straight out of the 15 characters.',
+      'Legal name, trade name, address and registration status need a lookup provider on your licence.',
+      'Use it before adding a new customer or supplier so their GSTIN is right the first time.',
+    ],
+  ),
+  'data-backup': ModuleInfo(
+    'Data Backup',
+    'Schedules the desktop Agent to copy your Tally data folder, so a machine failure does not take your books with it.',
+    [
+      'The destination is a folder on the AGENT machine — the copying happens there, not in the cloud.',
+      'Set the frequency, the time of day, and how many copies to keep.',
+      '"Back up now" queues the job; the Agent runs it at its next poll.',
+      'Every run is logged here with its status and how many files were copied.',
+    ],
+  ),
   'customer-users': ModuleInfo(
     'Customer Users',
     'Which of your customers can log in to the portal — they see their own invoices and the catalog you scope for them.',

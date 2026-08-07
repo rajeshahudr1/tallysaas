@@ -27,6 +27,20 @@ void main() {
   });
 
   testWidgets('an unbuilt module renders a Soon tag', (tester) async {
+    // GPS Tracking is the one menu item with no app screen — the API exposes it
+    // only under /super-admin. It is adminOnly, hence the edit grant.
+    const user = AppUser(
+      id: 1, name: 'T', email: 't@t.com', role: 'R', roleSlug: 'r',
+      permissions: ['gps-tracking.edit'],
+    );
+    await tester.pumpWidget(_app(user));
+    await tester.pumpAndSettle();
+
+    expect(find.text('GPS Tracking'), findsOneWidget);
+    expect(find.text('Soon'), findsOneWidget);
+  });
+
+  testWidgets('a built module renders a chevron instead of Soon', (tester) async {
     const user = AppUser(
       id: 1, name: 'T', email: 't@t.com', role: 'R', roleSlug: 'r',
       permissions: ['gst-search.view'],
@@ -35,7 +49,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('GST Search'), findsOneWidget);
-    expect(find.text('Soon'), findsOneWidget);
+    expect(find.text('Soon'), findsNothing);
   });
 
   testWidgets('groups sit under the web MAIN / MANAGE / SETTINGS sections',

@@ -70,6 +70,9 @@ import '../features/portals/customer_user_detail_screen.dart';
 import '../features/portals/customer_users_screen.dart';
 import '../features/portals/website_user_form_screen.dart';
 import '../features/portals/website_users_screen.dart';
+import '../features/einvoices/einvoice_dashboard_screen.dart';
+import '../features/tools/data_backup_screen.dart';
+import '../features/tools/gst_search_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -749,6 +752,23 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) => WebsiteUserFormScreen(
           userId: int.parse(state.pathParameters['id']!),
         ),
+      ),
+
+      // ─── Tools + the e-Invoice dashboard ───────────────────────
+      GoRoute(
+        path: '/gst-search',
+        name: 'gst-search',
+        builder: (_, __) => const GstSearchScreen(),
+      ),
+      GoRoute(
+        path: '/data-backup',
+        name: 'data-backup',
+        builder: (_, __) => const DataBackupScreen(),
+      ),
+      GoRoute(
+        path: '/einvoices/dashboard',
+        name: 'einvoice-dashboard',
+        builder: (_, __) => const EInvoiceDashboardScreen(),
       ),
 
       GoRoute(
