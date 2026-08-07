@@ -112,7 +112,11 @@ class _GoodsNoteFormScreenState extends ConsumerState<GoodsNoteFormScreen> {
   LineRow _rowFromItem(VoucherItem it) {
     final r = LineRow()
       ..productId = it.productId
-      ..productName = it.description;
+      ..productName = it.description
+      // Keep the HSN/unit the voucher was saved with — re-picking the product
+      // would overwrite them from the master, which may have changed since.
+      ..hsn = it.hsn
+      ..unit = it.unit;
     r.desc.text = it.description ?? '';
     r.qty.text = (it.quantity ?? 0).toString();
     r.rate.text = (it.rate ?? 0).toString();

@@ -57,6 +57,7 @@ class OptionItem {
     required this.id, required this.name,
     this.locationId, this.locationName,
     this.stock, this.rate, this.gstRate,
+    this.hsn, this.unit,
   });
   final int id;
   final String name;
@@ -68,6 +69,12 @@ class OptionItem {
   final double? stock;
   final double? rate;
   final double? gstRate;
+
+  /// Present on product options — the HSN/SAC code and unit of measure. Invoice
+  /// lines carry both to the API (the web does the same), so a voucher records
+  /// what was actually sold, not just its id.
+  final String? hsn;
+  final String? unit;
 
   /// Present on customer options — the customer's own location (id + label), so
   /// picking a customer AUTO-fills the invoice's Location field (mirrors the web).
@@ -82,12 +89,20 @@ class OptionItem {
         stock: _toDouble(j['opening_stock']),
         rate: _toDouble(j['rate'] ?? j['sales_price']),
         gstRate: _toDouble(j['gst_rate']),
+        hsn: _str(j['hsn'] ?? j['hsn_code']),
+        unit: _str(j['unit']),
       );
 
   @override
   bool operator ==(Object other) => other is OptionItem && other.id == id;
   @override
   int get hashCode => id;
+}
+
+String? _str(Object? v) {
+  if (v == null) return null;
+  final s = v.toString().trim();
+  return s.isEmpty ? null : s;
 }
 
 double? _toDouble(Object? v) {
