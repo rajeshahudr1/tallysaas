@@ -461,15 +461,21 @@ async function updateCredentials(req, res) {
             .where('id', req.params.id).whereNull('deleted_at').first();
         if (!lic) return R.errorResponse(res, NOT_FOUND, 404);
 
-        // The license-admin = company-admin user under this license (company_id NULL).
-        const admin = await db('users as u')
-            .leftJoin('roles as r', 'r.id', 'u.role_id')
-            .where('u.license_id', lic.id)
-            .whereNull('u.deleted_at')
-            .where('r.slug', 'company-admin')
-            .whereNull('u.company_id')
-            .orderBy('u.id', 'asc')
-            .select('u.id', 'u.email')
+        // The license-admin = the first company-admin user under this license.
+        //
+        // Matched on users.role_slug, NOT a join to `roles`: roles are a TENANT
+        // table and this query runs on the MASTER db, so the join threw
+        // "relation roles does not exist" and every call 500'd. The slug is
+        // denormalised onto users precisely so master-side lookups work.
+        //
+        // No company_id filter either — an admin gets a company_id as soon as
+        // one is provisioned, so requiring NULL found nobody on a live licence.
+        const admin = await db('users')
+            .where('license_id', lic.id)
+            .whereNull('deleted_at')
+            .where('role_slug', 'company-admin')
+            .orderBy('id', 'asc')
+            .select('id', 'email')
             .first();
         if (!admin) {
             return R.errorResponse(res, 'This license has no admin login to update.', 404);
