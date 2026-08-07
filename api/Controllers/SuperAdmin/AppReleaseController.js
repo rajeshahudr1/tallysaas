@@ -17,6 +17,8 @@
 
 const fs     = require('node:fs');
 const path   = require('node:path');
+// Release filenames carry the product name — from the ONE brand file.
+const brand  = require('../../config/brand');
 const crypto = require('node:crypto');
 const multer = require('multer');
 const R      = require('../../Helpers/response');
@@ -32,11 +34,11 @@ function sha256File(filePath) {
     } catch (e) { return null; }
 }
 
-/** "1.2.0" → "TallyCloudSync-1.2.0.apk" (sanitised + basename-guarded). */
+/** "1.2.0" → "Teloora-1.2.0.apk" (sanitised + basename-guarded). */
 function releaseFileNameForVersion(version) {
     const safeVer = String(version || '').replace(/[^A-Za-z0-9._-]/g, '').replace(/^\.+/, '');
     if (!safeVer) return null;
-    return path.basename(`TallyCloudSync-${safeVer}.apk`);
+    return path.basename(`${brand.shortName}-${safeVer}.apk`);
 }
 
 /** Clear every is_current row and insert this file as the single current one. */

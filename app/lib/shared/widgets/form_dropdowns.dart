@@ -81,6 +81,55 @@ class FkDropdown extends ConsumerWidget {
   }
 }
 
+/// A dropdown whose VALUE is the option's NAME, not its id — for API fields
+/// that store a label rather than a foreign key (the quotation's Tally
+/// "Ledger Type", for one). Same live `optionsProvider` source as [FkDropdown].
+class NameDropdown extends ConsumerWidget {
+  const NameDropdown({
+    super.key,
+    required this.label,
+    required this.endpoint,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String endpoint;
+  final String? value;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(optionsProvider(endpoint));
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: AppSpacing.sm8),
+          child: Text(label, style: theme.textTheme.titleSmall),
+        ),
+        async.when(
+          loading: () => const _DropdownShell(child: Text('Loading…')),
+          error: (e, _) => _DropdownShell(
+            child: Text('Could not load $label',
+                style: const TextStyle(color: AppColors.danger)),
+          ),
+          data: (List<OptionItem> opts) => DropdownButtonFormField<String>(
+            value: opts.any((o) => o.name == value) ? value : null,
+            isExpanded: true,
+            hint: Text('Select ${label.toLowerCase()}'),
+            items: opts
+                .map((o) => DropdownMenuItem(value: o.name, child: Text(o.name)))
+                .toList(),
+            onChanged: onChanged,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /// A SEARCHABLE FK picker — same data source as [FkDropdown] but opens a
 /// bottom-sheet with a search box + filtered list, so a long list (200+
 /// products) is usable. Mirrors the web's line-item product autocomplete.

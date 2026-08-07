@@ -9,6 +9,7 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/empty_state.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/form_dropdowns.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
 
@@ -136,7 +137,11 @@ class _UserFormSheetState extends ConsumerState<_UserFormSheet> {
   final _name = TextEditingController();
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _mobile = TextEditingController();
   int? _roleId;
+  // A user tied to a location sees only that location's data; none = the whole
+  // company. Same meaning as the web's Location field.
+  int? _locationId;
   String _status = 'Active';
   bool _busy = false;
 
@@ -145,6 +150,7 @@ class _UserFormSheetState extends ConsumerState<_UserFormSheet> {
     _name.dispose();
     _email.dispose();
     _password.dispose();
+    _mobile.dispose();
     super.dispose();
   }
 
@@ -162,6 +168,8 @@ class _UserFormSheetState extends ConsumerState<_UserFormSheet> {
         'email': _email.text.trim(),
         'role_id': _roleId,
         'password': _password.text,
+        if (_mobile.text.trim().isNotEmpty) 'mobile': _mobile.text.trim(),
+        if (_locationId != null) 'location_id': _locationId,
         'status': _status,
       });
       if (!mounted) return;
@@ -210,6 +218,20 @@ class _UserFormSheetState extends ConsumerState<_UserFormSheet> {
             const SizedBox(height: AppSpacing.md12),
             AppTextField(controller: _password, label: 'Password *', obscure: true, prefixIcon: Icons.lock_outline,
                 validator: (v) => (v == null || v.length < 8) ? 'Min 8 characters' : null),
+            const SizedBox(height: AppSpacing.md12),
+            AppTextField(
+              controller: _mobile,
+              label: 'Mobile',
+              keyboardType: TextInputType.phone,
+              prefixIcon: Icons.phone_outlined,
+            ),
+            const SizedBox(height: AppSpacing.md12),
+            FkDropdown(
+              label: 'Location',
+              endpoint: '/locations',
+              value: _locationId,
+              onChanged: (v) => setState(() => _locationId = v),
+            ),
             const SizedBox(height: AppSpacing.md12),
             Text('Role *', style: Theme.of(context).textTheme.titleSmall),
             const SizedBox(height: AppSpacing.sm8),

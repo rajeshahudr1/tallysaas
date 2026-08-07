@@ -23,6 +23,13 @@ class LineRow {
   /// (mirrors the server rule) and the "In stock: N" helper text.
   double? stock;
   String? productName;
+
+  /// Captured from the picked product and sent with the line — the API accepts
+  /// both, and the web sends them, so a saved voucher keeps the HSN/unit it was
+  /// billed under even if the product master changes later.
+  String? hsn;
+  String? unit;
+
   final desc = TextEditingController();
   final qty = TextEditingController();
   final rate = TextEditingController();
@@ -57,6 +64,8 @@ class LineRow {
     return {
       if (productId != null) 'product_id': productId,
       if (desc.text.trim().isNotEmpty) 'description': desc.text.trim(),
+      if (hsn != null && hsn!.isNotEmpty) 'hsn': hsn,
+      if (unit != null && unit!.isNotEmpty) 'unit': unit,
       'quantity': q,
       'rate': r,
       'discount_pct': double.tryParse(disc.text.trim()) ?? 0,
@@ -137,6 +146,8 @@ class LineItemCard extends StatelessWidget {
               onItem: (o) {
                 row.stock = o?.stock;
                 row.productName = o?.name;
+                row.hsn = o?.hsn;
+                row.unit = o?.unit;
                 if (o?.rate != null) row.rate.text = o!.rate!.toString();
                 if (o?.gstRate != null) row.gst.text = o!.gstRate!.toString();
                 // Clamp a pre-typed qty to the fresh stock.

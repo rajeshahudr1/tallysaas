@@ -4,6 +4,10 @@ import 'package:go_router/go_router.dart';
 
 import '../core/api/endpoints.dart';
 import '../core/auth/session.dart';
+import '../data/models/goods_note.dart';
+import '../data/models/tally_ledger.dart';
+import '../data/models/return_note.dart';
+import '../data/repositories/journal_repository.dart' show JournalScope;
 import '../features/auth/login_screen.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/categories/categories_screen.dart';
@@ -33,6 +37,43 @@ import '../features/locations/location_detail_screen.dart';
 import '../features/locations/location_form_screen.dart';
 import '../features/locations/locations_screen.dart';
 import '../features/masters/masters_hub_screen.dart';
+import '../features/menu/group_hub_screen.dart';
+import '../features/quotations/quotation_detail_screen.dart';
+import '../features/quotations/quotation_form_screen.dart';
+import '../features/quotations/quotations_screen.dart';
+import '../features/sales_orders/sales_order_detail_screen.dart';
+import '../features/sales_orders/sales_order_form_screen.dart';
+import '../features/sales_orders/sales_orders_screen.dart';
+import '../features/purchase_orders/purchase_order_detail_screen.dart';
+import '../features/purchase_orders/purchase_order_form_screen.dart';
+import '../features/purchase_orders/purchase_orders_screen.dart';
+import '../features/return_notes/return_note_detail_screen.dart';
+import '../features/return_notes/return_note_form_screen.dart';
+import '../features/return_notes/return_notes_screen.dart';
+import '../features/goods_notes/goods_note_detail_screen.dart';
+import '../features/goods_notes/goods_note_form_screen.dart';
+import '../features/goods_notes/goods_notes_screen.dart';
+import '../features/stock_vouchers/physical_stock_detail_screen.dart';
+import '../features/stock_vouchers/physical_stock_form_screen.dart';
+import '../features/stock_vouchers/physical_stock_screen.dart';
+import '../features/stock_vouchers/stock_journal_detail_screen.dart';
+import '../features/stock_vouchers/stock_journal_form_screen.dart';
+import '../features/stock_vouchers/stock_journals_screen.dart';
+import '../features/ledgers/ledger_statement_screen.dart';
+import '../features/ledgers/ledgers_screen.dart';
+import '../features/collect_payments/collect_payment_new_screen.dart';
+import '../features/collect_payments/collect_payment_settings_screen.dart';
+import '../features/collect_payments/collect_payments_screen.dart';
+import '../features/my_entries/field_tracking_screen.dart';
+import '../features/my_entries/my_vouchers_screen.dart';
+import '../features/portals/customer_user_detail_screen.dart';
+import '../features/portals/customer_users_screen.dart';
+import '../features/portals/website_user_form_screen.dart';
+import '../features/portals/website_users_screen.dart';
+import '../features/einvoices/einvoice_dashboard_screen.dart';
+import '../features/tools/data_backup_screen.dart';
+import '../features/tools/gst_search_screen.dart';
+import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
 import '../features/payments/vouchers_screen.dart';
@@ -148,33 +189,49 @@ final routerProvider = Provider<GoRouter>((ref) {
           ]),
           StatefulShellBranch(routes: [
             GoRoute(
-              path: '/masters',
-              name: 'masters',
-              builder: (_, __) => const MastersHubScreen(),
+              path: '/sales',
+              name: 'sales-hub',
+              builder: (_, __) => const GroupHubScreen(groupLabel: 'Sales'),
             ),
           ]),
           StatefulShellBranch(routes: [
             GoRoute(
-              path: '/transactions',
-              name: 'transactions',
-              builder: (_, __) => const TransactionsHubScreen(),
+              path: '/purchase',
+              name: 'purchase-hub',
+              builder: (_, __) => const GroupHubScreen(groupLabel: 'Purchase'),
             ),
           ]),
           StatefulShellBranch(routes: [
             GoRoute(
-              path: '/reports',
-              name: 'reports',
-              builder: (_, __) => const ReportsScreen(),
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/profile',
-              name: 'profile',
-              builder: (_, __) => const ProfileScreen(),
+              path: '/more',
+              name: 'more',
+              builder: (_, __) => const MoreMenuScreen(),
             ),
           ]),
         ],
+      ),
+
+      // The old tabs live on as pushed routes so existing links + deep links
+      // keep working; they are reached from More (Profile, Reports) now.
+      GoRoute(
+        path: '/profile',
+        name: 'profile',
+        builder: (_, __) => const ProfileScreen(),
+      ),
+      GoRoute(
+        path: '/reports',
+        name: 'reports',
+        builder: (_, __) => const ReportsScreen(),
+      ),
+      GoRoute(
+        path: '/masters',
+        name: 'masters',
+        builder: (_, __) => const MastersHubScreen(),
+      ),
+      GoRoute(
+        path: '/transactions',
+        name: 'transactions',
+        builder: (_, __) => const TransactionsHubScreen(),
       ),
 
       // ─── Side trips (pushed full-screen over the active tab) ────
@@ -338,6 +395,382 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
 
       // ─── Transactions (side trips off the Transactions hub) ─────
+      // ─── Quotations ────────────────────────────────────────────
+      // Declared '/add' BEFORE ':id' so the literal wins over the param.
+      GoRoute(
+        path: '/quotations',
+        name: 'quotations',
+        builder: (_, __) => const QuotationsScreen(),
+      ),
+      GoRoute(
+        path: '/my-quotations',
+        name: 'my-quotations',
+        builder: (_, __) => const QuotationsScreen(mine: true),
+      ),
+      GoRoute(
+        path: '/quotations/add',
+        name: 'quotation-add',
+        builder: (_, __) => const QuotationFormScreen(),
+      ),
+      GoRoute(
+        path: '/quotations/:id',
+        name: 'quotation-view',
+        builder: (_, state) => QuotationDetailScreen(
+          quotationId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/quotations/:id/edit',
+        name: 'quotation-edit',
+        builder: (_, state) => QuotationFormScreen(
+          quotationId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Sales Orders ──────────────────────────────────────────
+      GoRoute(
+        path: '/sales-orders',
+        name: 'sales-orders',
+        builder: (_, __) => const SalesOrdersScreen(),
+      ),
+      GoRoute(
+        path: '/sales-orders/add',
+        name: 'sales-order-add',
+        builder: (_, __) => const SalesOrderFormScreen(),
+      ),
+      GoRoute(
+        path: '/sales-orders/:id',
+        name: 'sales-order-view',
+        builder: (_, state) => SalesOrderDetailScreen(
+          orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/sales-orders/:id/edit',
+        name: 'sales-order-edit',
+        builder: (_, state) => SalesOrderFormScreen(
+          orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Purchase Orders ───────────────────────────────────────
+      GoRoute(
+        path: '/purchase-orders',
+        name: 'purchase-orders',
+        builder: (_, __) => const PurchaseOrdersScreen(),
+      ),
+      GoRoute(
+        path: '/purchase-orders/add',
+        name: 'purchase-order-add',
+        builder: (_, __) => const PurchaseOrderFormScreen(),
+      ),
+      GoRoute(
+        path: '/purchase-orders/:id',
+        name: 'purchase-order-view',
+        builder: (_, state) => PurchaseOrderDetailScreen(
+          orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/purchase-orders/:id/edit',
+        name: 'purchase-order-edit',
+        builder: (_, state) => PurchaseOrderFormScreen(
+          orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Credit Notes ─────────────────────────────
+      GoRoute(
+        path: '/credit-notes',
+        name: 'credit-notes',
+        builder: (_, __) => const ReturnNotesScreen(kind: ReturnNoteKind.credit),
+      ),
+      GoRoute(
+        path: '/credit-notes/add',
+        name: 'credit-note-add',
+        builder: (_, __) => const ReturnNoteFormScreen(kind: ReturnNoteKind.credit),
+      ),
+      GoRoute(
+        path: '/credit-notes/:id',
+        name: 'credit-note-view',
+        builder: (_, state) => ReturnNoteDetailScreen(
+          kind: ReturnNoteKind.credit,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/credit-notes/:id/edit',
+        name: 'credit-note-edit',
+        builder: (_, state) => ReturnNoteFormScreen(
+          kind: ReturnNoteKind.credit,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Debit Notes ─────────────────────────────
+      GoRoute(
+        path: '/debit-notes',
+        name: 'debit-notes',
+        builder: (_, __) => const ReturnNotesScreen(kind: ReturnNoteKind.debit),
+      ),
+      GoRoute(
+        path: '/debit-notes/add',
+        name: 'debit-note-add',
+        builder: (_, __) => const ReturnNoteFormScreen(kind: ReturnNoteKind.debit),
+      ),
+      GoRoute(
+        path: '/debit-notes/:id',
+        name: 'debit-note-view',
+        builder: (_, state) => ReturnNoteDetailScreen(
+          kind: ReturnNoteKind.debit,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/debit-notes/:id/edit',
+        name: 'debit-note-edit',
+        builder: (_, state) => ReturnNoteFormScreen(
+          kind: ReturnNoteKind.debit,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Contra (cash⇄bank transfers; same handlers as Journals) ─
+      GoRoute(
+        path: '/contra',
+        name: 'contra',
+        builder: (_, __) => const JournalsScreen(scope: JournalScope.contra),
+      ),
+      GoRoute(
+        path: '/contra/add',
+        name: 'contra-add',
+        builder: (_, __) => const JournalFormScreen(scope: JournalScope.contra),
+      ),
+      GoRoute(
+        path: '/contra/:id',
+        name: 'contra-view',
+        builder: (_, state) => JournalDetailScreen(
+          scope: JournalScope.contra,
+          journalId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Delivery Notes ────────────────────────────
+      GoRoute(
+        path: '/delivery-notes',
+        name: 'delivery-notes',
+        builder: (_, __) => const GoodsNotesScreen(kind: GoodsNoteKind.delivery),
+      ),
+      GoRoute(
+        path: '/delivery-notes/add',
+        name: 'delivery-note-add',
+        builder: (_, __) => const GoodsNoteFormScreen(kind: GoodsNoteKind.delivery),
+      ),
+      GoRoute(
+        path: '/delivery-notes/:id',
+        name: 'delivery-note-view',
+        builder: (_, state) => GoodsNoteDetailScreen(
+          kind: GoodsNoteKind.delivery,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/delivery-notes/:id/edit',
+        name: 'delivery-note-edit',
+        builder: (_, state) => GoodsNoteFormScreen(
+          kind: GoodsNoteKind.delivery,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Receipt Notes ────────────────────────────
+      GoRoute(
+        path: '/receipt-notes',
+        name: 'receipt-notes',
+        builder: (_, __) => const GoodsNotesScreen(kind: GoodsNoteKind.receipt),
+      ),
+      GoRoute(
+        path: '/receipt-notes/add',
+        name: 'receipt-note-add',
+        builder: (_, __) => const GoodsNoteFormScreen(kind: GoodsNoteKind.receipt),
+      ),
+      GoRoute(
+        path: '/receipt-notes/:id',
+        name: 'receipt-note-view',
+        builder: (_, state) => GoodsNoteDetailScreen(
+          kind: GoodsNoteKind.receipt,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/receipt-notes/:id/edit',
+        name: 'receipt-note-edit',
+        builder: (_, state) => GoodsNoteFormScreen(
+          kind: GoodsNoteKind.receipt,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Stock vouchers (goods only: no party, ledger or GST) ───
+      GoRoute(
+        path: '/stock-journals',
+        name: 'stock-journals',
+        builder: (_, __) => const StockJournalsScreen(),
+      ),
+      GoRoute(
+        path: '/stock-journals/add',
+        name: 'stock-journal-add',
+        builder: (_, __) => const StockJournalFormScreen(),
+      ),
+      GoRoute(
+        path: '/stock-journals/:id',
+        name: 'stock-journal-view',
+        builder: (_, state) => StockJournalDetailScreen(
+          journalId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/physical-stock',
+        name: 'physical-stock',
+        builder: (_, __) => const PhysicalStockScreen(),
+      ),
+      GoRoute(
+        path: '/physical-stock/add',
+        name: 'physical-stock-add',
+        builder: (_, __) => const PhysicalStockFormScreen(),
+      ),
+      // A sheet is addressed by its voucher NUMBER — the API groups the counted
+      // lines by it, so there is no numeric id to route on.
+      GoRoute(
+        path: '/physical-stock/:voucherNo',
+        name: 'physical-stock-view',
+        builder: (_, state) => PhysicalStockDetailScreen(
+          voucherNo: state.pathParameters['voucherNo']!,
+        ),
+      ),
+
+      // ─── Cash / Bank / Payables / Receivables ──────────────────
+      // All four are the same endpoint with a different `group`; balances are
+      // period-derived, so a statement carries the range that produced it.
+      GoRoute(
+        path: '/cash',
+        name: 'cash',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.cash),
+      ),
+      GoRoute(
+        path: '/bank',
+        name: 'bank-ledgers',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.bank),
+      ),
+      GoRoute(
+        path: '/payables',
+        name: 'payables',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.payables),
+      ),
+      GoRoute(
+        path: '/receivables',
+        name: 'receivables',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.receivables),
+      ),
+      GoRoute(
+        path: '/ledgers/:name',
+        name: 'ledger-statement',
+        builder: (_, state) => LedgerStatementScreen(
+          ledgerName: state.pathParameters['name']!,
+          from: state.uri.queryParameters['from'] ?? '',
+          to: state.uri.queryParameters['to'] ?? '',
+        ),
+      ),
+
+      // ─── Collect Payments (UPI links; no gateway) ──────────────
+      GoRoute(
+        path: '/collect-payments',
+        name: 'collect-payments',
+        builder: (_, __) => const CollectPaymentsScreen(),
+      ),
+      GoRoute(
+        path: '/collect-payments/add',
+        name: 'collect-payment-add',
+        builder: (_, __) => const CollectPaymentNewScreen(),
+      ),
+      GoRoute(
+        path: '/collect-payments/settings',
+        name: 'collect-payment-settings',
+        builder: (_, __) => const CollectPaymentSettingsScreen(),
+      ),
+
+      // ─── My Entries (the signed-in user's own rows) ────────────
+      GoRoute(
+        path: '/my-vouchers',
+        name: 'my-vouchers',
+        builder: (_, __) => const MyVouchersScreen(),
+      ),
+      GoRoute(
+        path: '/my-einvoices',
+        name: 'my-einvoices',
+        builder: (_, __) =>
+            const EInvoicesScreen(mine: true, title: 'My eInvoices'),
+      ),
+      GoRoute(
+        path: '/my-eway',
+        name: 'my-eway',
+        builder: (_, __) =>
+            const EInvoicesScreen(mine: true, title: 'My eWay Bills'),
+      ),
+      GoRoute(
+        path: '/field-tracking',
+        name: 'field-tracking',
+        builder: (_, __) => const FieldTrackingScreen(),
+      ),
+
+      // ─── Portals (customer logins + third-party API users) ─────
+      GoRoute(
+        path: '/customer-users',
+        name: 'customer-users',
+        builder: (_, __) => const CustomerUsersScreen(),
+      ),
+      GoRoute(
+        path: '/customer-users/:id',
+        name: 'customer-user-view',
+        builder: (_, state) => CustomerUserDetailScreen(
+          customerId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/website-users',
+        name: 'website-users',
+        builder: (_, __) => const WebsiteUsersScreen(),
+      ),
+      GoRoute(
+        path: '/website-users/add',
+        name: 'website-user-add',
+        builder: (_, __) => const WebsiteUserFormScreen(),
+      ),
+      GoRoute(
+        path: '/website-users/:id/edit',
+        name: 'website-user-edit',
+        builder: (_, state) => WebsiteUserFormScreen(
+          userId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Tools + the e-Invoice dashboard ───────────────────────
+      GoRoute(
+        path: '/gst-search',
+        name: 'gst-search',
+        builder: (_, __) => const GstSearchScreen(),
+      ),
+      GoRoute(
+        path: '/data-backup',
+        name: 'data-backup',
+        builder: (_, __) => const DataBackupScreen(),
+      ),
+      GoRoute(
+        path: '/einvoices/dashboard',
+        name: 'einvoice-dashboard',
+        builder: (_, __) => const EInvoiceDashboardScreen(),
+      ),
+
       GoRoute(
         path: '/sales-invoices',
         name: 'sales-invoices',

@@ -18,6 +18,22 @@ class AppConfig {
   /// [apiBase] to form the Dio base URL.
   static const String apiPrefix = '/api/v1';
 
+  /// The WEB app's public base URL — used only to build the customer-facing
+  /// payment link (`<webBase>/pay/<token>`), which is served by the web app,
+  /// not the API. Blank means "unknown": the Collect Payments screen then
+  /// shares the raw token instead of guessing a wrong URL. Override per build
+  /// with `--dart-define=WEB_BASE=https://app.example.com`.
+  static const String webBase = String.fromEnvironment('WEB_BASE', defaultValue: '');
+
+  /// The public payment link for [token], or null when [webBase] is unset.
+  static String? payLink(String? token) {
+    if (token == null || token.isEmpty || webBase.isEmpty) return null;
+    final base = webBase.endsWith('/')
+        ? webBase.substring(0, webBase.length - 1)
+        : webBase;
+    return '$base/pay/$token';
+  }
+
   /// Asset paths — referenced by widgets that need the brand logo.
   static const String logoAsset = 'assets/images/logo.png';
 

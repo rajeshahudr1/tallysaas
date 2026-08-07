@@ -4,7 +4,7 @@
  * api/Controllers/SuperAdmin/AgentReleaseController.js
  *
  * Super-admin publishing of the Teloora Tally Sync Agent executable
- * (Requirement 1). The operator either DROPS a freshly-built TallyCloudSync.exe
+ * (Requirement 1). The operator either DROPS a freshly-built agent exe
  * into AGENT_RELEASE_DIR (env, default api/agent-releases/) and PUBLISHES its
  * version, OR UPLOADS the exe straight from the browser. Either way the single
  * agent_releases row with is_current=true is the latest the agents auto-update
@@ -20,6 +20,8 @@
 
 const fs       = require('node:fs');
 const path     = require('node:path');
+// Release filenames carry the product name — from the ONE brand file.
+const brand    = require('../../config/brand');
 const crypto   = require('node:crypto');
 const multer   = require('multer');
 const R        = require('../../Helpers/response');
@@ -46,7 +48,7 @@ function sha256File(filePath) {
 
 /**
  * Build a SAFE release filename from the posted version, e.g. version "1.2.0"
- * → "TallyCloudSync-1.2.0.exe". The version is sanitised to a strict whitelist
+ * → "Teloora-1.2.0.exe". The version is sanitised to a strict whitelist
  * ([A-Za-z0-9._-]) and passed through path.basename, so the result can NEVER
  * contain a directory separator or "../" — it always lands inside releaseDir().
  * Re-uploading the SAME version overwrites THAT version's file (intended
@@ -55,7 +57,7 @@ function sha256File(filePath) {
 function releaseFileNameForVersion(version) {
     const safeVer = String(version || '').replace(/[^A-Za-z0-9._-]/g, '').replace(/^\.+/, '');
     if (!safeVer) return null;
-    return path.basename(`TallyCloudSync-${safeVer}.exe`);
+    return path.basename(`${brand.shortName}-${safeVer}.exe`);
 }
 
 /**
@@ -162,11 +164,11 @@ const uploadMiddleware = multer({
 
 /**
  * POST /super-admin/agent-release/upload   (multipart/form-data)
- * Fields: file=<TallyCloudSync exe>, version, notes?, mandatory?
+ * Fields: file=<agent exe>, version, notes?, mandatory?
  *
  * Receives the built agent exe straight from the browser, saves it into the
  * release dir under a SAFE name derived from the posted version
- * (TallyCloudSync-<version>.exe — sanitised, path.basename-guarded), then runs
+ * (<brand>-<version>.exe — sanitised, path.basename-guarded), then runs
  * the SAME publish core (sha256 + size + single is_current row). On ANY failure
  * after the file is written, the partial file is removed. Returns
  * { release, release_dir }.

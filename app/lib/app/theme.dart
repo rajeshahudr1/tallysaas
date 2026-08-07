@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../core/brand.dart';
+
 /// Design tokens shared by the Material `ThemeData` AND any widget that needs
 /// status colours / brand tints outside the theme system (status pills, charts,
 /// the auth gradient). Mirrors the TallySaaS web brand (`#2563EB` / `#6D28D9`)
@@ -10,11 +12,29 @@ import 'package:flutter/material.dart';
 class AppColors {
   AppColors._();
 
+  /// '#RRGGBB' or 'RRGGBB' → an opaque Color. The brand hexes live in
+  /// core/brand.dart (shared with web/api/agent), so they arrive as strings.
+  static Color fromHex(String hex) {
+    final h = hex.replaceFirst('#', '');
+    return Color(int.parse('FF$h', radix: 16));
+  }
+
   // ─── Brand ──────────────────────────────────────────────────
-  static const Color primary     = Color(0xFF2563EB); // brand blue
-  static const Color primaryDeep = Color(0xFF1D4ED8); // pressed / deep blue
-  static const Color secondary   = Color(0xFF6D28D9); // brand violet
-  static const Color sidebar     = Color(0xFF111827); // dark nav surface
+  // These MUST equal the hexes in core/brand.dart — test/theme_brand_test.dart
+  // pins them, so changing Brand without changing these fails the suite. They
+  // stay `const` (rather than `fromHex(Brand.…)`) because half the app builds
+  // them into `const` widgets.
+  static const Color primary     = Color(0xFF1560E0); // Brand.blueHex
+  static const Color primaryDeep = Color(0xFF0F49AE); // pressed / deep blue
+  static const Color secondary   = Color(0xFF17265E); // Brand.navyHex — wordmark
+  static const Color sidebar     = Color(0xFF17265E); // navy headings/wordmark
+
+  /// Navigation surface — the web moved to a WHITE nav with a light border;
+  /// the app's bottom bar matches it. Navy is now type-only.
+  static const Color navSurface  = Color(0xFFFFFFFF);
+
+  /// Pale blue tint behind the ACTIVE nav item / selected chip.
+  static const Color primaryTint = Color(0x1A1560E0); // primary @ 10%
 
   // ─── Surfaces (light) ───────────────────────────────────────
   static const Color scaffoldBg  = Color(0xFFF8FAFC);
@@ -27,10 +47,10 @@ class AppColors {
   static const Color text3       = Color(0xFF9CA3AF); // hints / disabled
 
   // ─── Status (drives status_colors.dart + StatusPill) ────────
-  static const Color success     = Color(0xFF16A34A); // active / success
+  static const Color success     = Color(0xFF45B649); // Brand.greenHex
   static const Color danger      = Color(0xFFDC2626); // danger / inactive
   static const Color warn        = Color(0xFFD97706); // blocked / pending
-  static const Color info        = Color(0xFF2563EB); // sent / info
+  static const Color info        = Color(0xFF1560E0); // Brand.blueHex — sent / info
   static const Color muted       = Color(0xFF6B7280); // neutral / unknown
 }
 
@@ -54,6 +74,28 @@ class AppRadius {
   static const double md12  = 12;
   static const double lg16  = 16;
   static const double pill999 = 999;
+}
+
+/// Brand gradients — the blue→green run on primary actions, and the pale
+/// blue→mint wash behind a screen's header. Both derive from [Brand], so the
+/// app matches the web's gradient buttons and page headers exactly.
+class AppGradients {
+  AppGradients._();
+
+  static final LinearGradient brand = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [AppColors.fromHex(Brand.blueHex), AppColors.fromHex(Brand.greenHex)],
+  );
+
+  static final LinearGradient header = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [
+      AppColors.fromHex(Brand.blueHex).withOpacity(0.06),
+      AppColors.fromHex(Brand.greenHex).withOpacity(0.10),
+    ],
+  );
 }
 
 /// Material 3 themes. The whole palette is derived from
@@ -145,13 +187,17 @@ class AppTheme {
       ),
 
       // ─── Cards — soft 1px border, no harsh shadow ───────────
+      // `surfaceTintColor: transparent` on every elevated surface: Material 3
+      // otherwise blends the seed colour into cards, sheets and the nav bar,
+      // which turns the product's white surfaces a pale blue.
       cardTheme: CardTheme(
         color: cardBg,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
           side: BorderSide(color: border, width: 1),
-          borderRadius: BorderRadius.circular(AppRadius.md12),
+          borderRadius: BorderRadius.circular(AppRadius.lg16),
         ),
       ),
 
@@ -227,8 +273,9 @@ class AppTheme {
 
       // ─── Bottom navigation — brand-blue selected ────────────
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: cardBg,
-        indicatorColor: AppColors.primary.withOpacity(0.12),
+        backgroundColor: brightness == Brightness.light ? AppColors.navSurface : cardBg,
+        surfaceTintColor: Colors.transparent,
+        indicatorColor: AppColors.primaryTint,
         elevation: 0,
         labelTextStyle: MaterialStateProperty.resolveWith((states) {
           final selected = states.contains(MaterialState.selected);
@@ -245,8 +292,35 @@ class AppTheme {
           );
         }),
       ),
-      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+      // The shell's bar is a BottomAppBar (it carries the Create notch), so it
+      // needs its own tint-free treatment.
+      bottomAppBarTheme: BottomAppBarTheme(
+        color: brightness == Brightness.light ? AppColors.navSurface : cardBg,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+
+      // Bottom sheets — the Create grid and every filter sheet.
+      bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: cardBg,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+
+      dialogTheme: DialogTheme(
+        backgroundColor: cardBg,
+        surfaceTintColor: Colors.transparent,
+      ),
+
+      // The Create action is a PRIMARY action — brand blue, white glyph, not
+      // Material 3's pale secondary-container default.
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+      ),
+
+      bottomNavigationBarTheme: BottomNavigationBarThemeData(
+        backgroundColor: brightness == Brightness.light ? AppColors.navSurface : cardBg,
         selectedItemColor: AppColors.primary,
         unselectedItemColor: text2,
         type: BottomNavigationBarType.fixed,

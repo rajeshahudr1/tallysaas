@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../app/theme.dart';
+
 /// Short, plain-English "how this module works" blurbs shown behind the ⓘ info
 /// icon on each module's list screen (AppBar). Keep in sync with the web copy
 /// (web/config/moduleInfo.js) — same keys, same wording.
@@ -125,6 +127,47 @@ const Map<String, ModuleInfo> kModuleInfo = {
   ),
 
   // ── Transactions ─────────────────────────────────────────────────────────
+  'quotations': ModuleInfo(
+    'Quotations',
+    'The price offer you send a customer BEFORE the sale — no stock moves and nothing is billed until it is accepted and converted.',
+    [
+      'Pick a customer, add item lines with rate + GST; totals compute on the server.',
+      'A quote is Open until the customer answers — then mark it Accepted or Rejected.',
+      'Past its "Valid till" date it shows as Expired automatically.',
+      'Convert an accepted quote into a real Sales Invoice in one tap — the lines carry over.',
+      'Share the PDF with the customer; nothing reaches Tally until the invoice is made.',
+    ],
+  ),
+  'sales-orders': ModuleInfo(
+    'Sales Orders',
+    'A confirmed order from a customer — what they have agreed to buy, and when it must be delivered. Stock is not billed until you invoice it.',
+    [
+      'Pick a customer, add item lines, and set "Due On" — the date the goods are promised.',
+      'Delivery progress shows as Pending → Partial → Delivered; cancel an order that falls through.',
+      'Convert it into a Sales Invoice in one tap — the lines carry over.',
+      'Use it to see committed demand before it becomes a bill.',
+    ],
+  ),
+  'credit-notes': ModuleInfo(
+    'Credit Notes',
+    'A sales RETURN — goods (or value) coming back from a customer, reducing what they owe you.',
+    [
+      'Raise it against the original sales invoice so the reversal is traceable.',
+      'Add the returned lines with quantity and rate; GST is reversed on the same items.',
+      'It reduces what that customer owes you.',
+      'Syncs to Tally as a Credit Note voucher.',
+    ],
+  ),
+  'debit-notes': ModuleInfo(
+    'Debit Notes',
+    'A purchase RETURN — goods (or value) going back to a supplier, reducing what you owe them.',
+    [
+      'Raise it against the original supplier bill; record their bill number for reference.',
+      'Add the returned lines with quantity and rate; GST is reversed on the same items.',
+      'It reduces your payable to that supplier.',
+      'Syncs to Tally as a Debit Note voucher.',
+    ],
+  ),
   'sales-invoices': ModuleInfo(
     'Sales Invoices',
     'What you bill your customers. Add line items and GST is computed for you; approved invoices sync to Tally.',
@@ -133,6 +176,16 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'A salesman\'s invoice is Submitted for Approval; a company-admin approves → it counts + syncs to Tally.',
       'The Sales Register shows month-wise totals; drill into a month for its vouchers.',
       'Generate its e-Invoice / e-Way Bill, print/PDF, or record a Receipt against it.',
+    ],
+  ),
+  'purchase-orders': ModuleInfo(
+    'Purchase Orders',
+    'What YOU have ordered from a supplier — the commitment you send them before their bill arrives.',
+    [
+      'Pick a supplier, add item lines, and set "Due On" — when the goods are expected.',
+      'Progress shows as Pending → Partial → Delivered; cancel an order that is called off.',
+      'Convert it into a Purchase Invoice once the supplier bills you — the lines carry over.',
+      'Nothing hits stock or your payable until the invoice is made.',
     ],
   ),
   'purchase-invoices': ModuleInfo(
@@ -169,6 +222,154 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'A double-entry: equal debit and credit across two ledgers.',
       'Use for corrections and non-cash accounting entries.',
       'Syncs to Tally as a journal voucher.',
+    ],
+  ),
+  'delivery-notes': ModuleInfo(
+    'Delivery Notes',
+    'The challan that goes OUT with the goods — proof of what was dispatched, before the sales invoice is raised.',
+    [
+      'Pick the customer, add the items being sent, and set the dispatch date.',
+      'Raise it against a Sales Order so the order can be delivered in parts.',
+      'Convert it into a Sales Invoice once you bill for what was delivered.',
+      'Pending until invoiced; cancel it if the dispatch is called off.',
+    ],
+  ),
+  'receipt-notes': ModuleInfo(
+    'Receipt Notes',
+    'The record of goods COMING IN from a supplier — what actually arrived, before their bill is entered.',
+    [
+      'Pick the supplier, add the items received, and set the received date.',
+      'Raise it against a Purchase Order so a part-delivery is tracked.',
+      'Convert it into a Purchase Invoice when the supplier bills you.',
+      'Pending until invoiced; cancel it if the goods are returned outright.',
+    ],
+  ),
+  'gst-search': ModuleInfo(
+    'GST Search',
+    'Check a GSTIN before you trust it — the app decodes the number offline and, when a lookup provider is configured, fetches the registration details.',
+    [
+      'The decode is instant and needs no internet lookup: state, PAN, entity number and check digit come straight out of the 15 characters.',
+      'Legal name, trade name, address and registration status need a lookup provider on your licence.',
+      'Use it before adding a new customer or supplier so their GSTIN is right the first time.',
+    ],
+  ),
+  'data-backup': ModuleInfo(
+    'Data Backup',
+    'Schedules the desktop Agent to copy your Tally data folder, so a machine failure does not take your books with it.',
+    [
+      'The destination is a folder on the AGENT machine — the copying happens there, not in the cloud.',
+      'Set the frequency, the time of day, and how many copies to keep.',
+      '"Back up now" queues the job; the Agent runs it at its next poll.',
+      'Every run is logged here with its status and how many files were copied.',
+    ],
+  ),
+  'customer-users': ModuleInfo(
+    'Customer Users',
+    'Which of your customers can log in to the portal — they see their own invoices and the catalog you scope for them.',
+    [
+      'Give a customer a login email, password and role to switch their portal on.',
+      'Leave the password blank when editing to keep the current one.',
+      'The catalog decides which categories they see and at what price — a category can carry a discount OR an addition, never both.',
+      'Set the login to Inactive or Blocked to cut off access without deleting anything.',
+    ],
+  ),
+  'website-users': ModuleInfo(
+    'Website Users',
+    'Third-party API consumers — your website or app ordering through the API with its own token and pricing.',
+    [
+      'Each one is created with a login and an api_token used for API calls.',
+      'The token is shown ONCE, on create and on regenerate — copy it then.',
+      'Cash / online extra % uplift the prices this consumer is quoted.',
+      'Regenerating a token stops the old one working immediately.',
+    ],
+  ),
+  'my-vouchers': ModuleInfo(
+    'My Vouchers',
+    'Everything YOU created in this company — quotations, orders, notes, invoices, receipts, payments and journals in one list, newest first.',
+    [
+      'Only your own entries appear; what other users made is never shown here.',
+      'The tag on each row says which voucher family it belongs to.',
+      'Tap a row to open that voucher wherever the app has a screen for it.',
+    ],
+  ),
+  'field-tracking': ModuleInfo(
+    'Tracking Report',
+    'Where your field staff actually went: the outlet visits logged that day and the GPS pings their phones sent in.',
+    [
+      'Pick a date, and a salesman when you want just one person.',
+      'A visit shows check-in / check-out time and how far from the outlet it was recorded.',
+      'The GPS icon says whether the check-in happened inside the outlet geofence.',
+      'Tap any row to open that spot in your maps app.',
+      'A salesman only ever sees their own rows — the API scopes it regardless of the filter.',
+    ],
+  ),
+  'collect-payments': ModuleInfo(
+    'Collect Payments',
+    'Send a customer a payment link for an unpaid invoice — they pay you directly by UPI, with no gateway in between.',
+    [
+      'Pick an outstanding invoice; the amount is taken from the bill itself.',
+      'Share the link — the customer sees your UPI QR and ID on a public page.',
+      'When the money lands, tap "Mark paid" — that records the Receipt too.',
+      'Cancel a request to stop its link working; nothing is written to the books.',
+      'Set your UPI ID under settings first, or the link has nothing to pay into.',
+    ],
+  ),
+  'cash-bank': ModuleInfo(
+    'Cash & Bank',
+    'Your cash and bank ledgers with their live balances for a period — replayed from the vouchers synced out of Tally.',
+    [
+      'Each row is one ledger; the amount is its closing balance and Dr/Cr says which side it sits on.',
+      'Change the date range and every balance is recomputed for that period.',
+      'Tap a ledger to see its statement: opening, every voucher that moved it, and closing.',
+      'Read-only — money moves through Receipts, Payments and Contra vouchers.',
+    ],
+  ),
+  'receivables': ModuleInfo(
+    'Receivables',
+    'What your customers still owe you — the debtor ledgers with their outstanding balances.',
+    [
+      'Each row is a customer ledger; the balance is what is still to be collected.',
+      'Tap one to see every invoice and receipt that built that balance.',
+      'Record a Receipt to bring a balance down.',
+    ],
+  ),
+  'payables': ModuleInfo(
+    'Payables',
+    'What you still owe your suppliers — the creditor ledgers with their outstanding balances.',
+    [
+      'Each row is a supplier ledger; the balance is what is still to be paid.',
+      'Tap one to see every purchase bill and payment behind that balance.',
+      'Record a Payment to bring a balance down.',
+    ],
+  ),
+  'contra': ModuleInfo(
+    'Contra',
+    'Money moving between your OWN accounts — cash to bank, bank to cash, or one bank to another. Nothing is earned or spent.',
+    [
+      'Pick the account money goes TO (Dr) and the one it comes FROM (Cr), then the amount.',
+      'A cash deposit into the bank and an ATM withdrawal are both contra entries.',
+      'It never touches a customer or supplier balance — only your own accounts.',
+      'Syncs to Tally as a Contra voucher.',
+    ],
+  ),
+  'stock-journal': ModuleInfo(
+    'Stock Journals',
+    'Moves stock WITHOUT a sale or purchase — godown-to-godown transfers, and manufacturing that consumes items to produce another.',
+    [
+      'Source lines take quantity OUT; destination lines put quantity IN.',
+      'No party, no ledger, no GST — this voucher is quantities only.',
+      'Use it to shift stock between godowns or to record production.',
+      'Syncs to Tally as a Stock Journal voucher.',
+    ],
+  ),
+  'physical-stock': ModuleInfo(
+    'Physical Stock',
+    'Your counted stock — what is ACTUALLY on the shelf, recorded as a sheet so the books can be corrected to reality.',
+    [
+      'Add each item with the quantity you counted; a count of 0 is valid and meaningful.',
+      'One sheet is one count; the lines are grouped under its voucher number.',
+      'Sheets are never edited — if a count was wrong, record a new sheet.',
+      'Syncs to Tally as a Physical Stock voucher.',
     ],
   ),
   'inventory': ModuleInfo(
@@ -257,7 +458,7 @@ Future<void> showModuleInfo(BuildContext context, String infoKey) {
     context: context,
     builder: (ctx) => AlertDialog(
       title: Row(children: [
-        const Icon(Icons.info_outline, color: Color(0xFF2563EB), size: 22),
+        const Icon(Icons.info_outline, color: AppColors.primary, size: 22),
         const SizedBox(width: 8),
         Expanded(child: Text(info.title, style: theme.textTheme.titleMedium)),
       ]),
@@ -278,7 +479,7 @@ Future<void> showModuleInfo(BuildContext context, String infoKey) {
                     children: [
                       const Padding(
                         padding: EdgeInsets.only(top: 3, right: 8),
-                        child: Icon(Icons.check, size: 15, color: Color(0xFF16A34A)),
+                        child: Icon(Icons.check, size: 15, color: AppColors.success),
                       ),
                       Expanded(child: Text(p, style: theme.textTheme.bodySmall)),
                     ],
