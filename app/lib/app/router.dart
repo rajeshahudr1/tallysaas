@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../core/api/endpoints.dart';
 import '../core/auth/session.dart';
+import '../data/models/return_note.dart';
 import '../features/auth/login_screen.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/categories/categories_screen.dart';
@@ -43,6 +44,9 @@ import '../features/sales_orders/sales_orders_screen.dart';
 import '../features/purchase_orders/purchase_order_detail_screen.dart';
 import '../features/purchase_orders/purchase_order_form_screen.dart';
 import '../features/purchase_orders/purchase_orders_screen.dart';
+import '../features/return_notes/return_note_detail_screen.dart';
+import '../features/return_notes/return_note_form_screen.dart';
+import '../features/return_notes/return_notes_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -446,6 +450,62 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'purchase-order-edit',
         builder: (_, state) => PurchaseOrderFormScreen(
           orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Credit Notes ─────────────────────────────
+      GoRoute(
+        path: '/credit-notes',
+        name: 'credit-notes',
+        builder: (_, __) => const ReturnNotesScreen(kind: ReturnNoteKind.credit),
+      ),
+      GoRoute(
+        path: '/credit-notes/add',
+        name: 'credit-note-add',
+        builder: (_, __) => const ReturnNoteFormScreen(kind: ReturnNoteKind.credit),
+      ),
+      GoRoute(
+        path: '/credit-notes/:id',
+        name: 'credit-note-view',
+        builder: (_, state) => ReturnNoteDetailScreen(
+          kind: ReturnNoteKind.credit,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/credit-notes/:id/edit',
+        name: 'credit-note-edit',
+        builder: (_, state) => ReturnNoteFormScreen(
+          kind: ReturnNoteKind.credit,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Debit Notes ─────────────────────────────
+      GoRoute(
+        path: '/debit-notes',
+        name: 'debit-notes',
+        builder: (_, __) => const ReturnNotesScreen(kind: ReturnNoteKind.debit),
+      ),
+      GoRoute(
+        path: '/debit-notes/add',
+        name: 'debit-note-add',
+        builder: (_, __) => const ReturnNoteFormScreen(kind: ReturnNoteKind.debit),
+      ),
+      GoRoute(
+        path: '/debit-notes/:id',
+        name: 'debit-note-view',
+        builder: (_, state) => ReturnNoteDetailScreen(
+          kind: ReturnNoteKind.debit,
+          noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/debit-notes/:id/edit',
+        name: 'debit-note-edit',
+        builder: (_, state) => ReturnNoteFormScreen(
+          kind: ReturnNoteKind.debit,
+          noteId: int.parse(state.pathParameters['id']!),
         ),
       ),
 

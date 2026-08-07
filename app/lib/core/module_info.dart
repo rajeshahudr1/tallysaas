@@ -148,6 +148,26 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Use it to see committed demand before it becomes a bill.',
     ],
   ),
+  'credit-notes': ModuleInfo(
+    'Credit Notes',
+    'A sales RETURN — goods (or value) coming back from a customer, reducing what they owe you.',
+    [
+      'Raise it against the original sales invoice so the reversal is traceable.',
+      'Add the returned lines with quantity and rate; GST is reversed on the same items.',
+      'It reduces what that customer owes you.',
+      'Syncs to Tally as a Credit Note voucher.',
+    ],
+  ),
+  'debit-notes': ModuleInfo(
+    'Debit Notes',
+    'A purchase RETURN — goods (or value) going back to a supplier, reducing what you owe them.',
+    [
+      'Raise it against the original supplier bill; record their bill number for reference.',
+      'Add the returned lines with quantity and rate; GST is reversed on the same items.',
+      'It reduces your payable to that supplier.',
+      'Syncs to Tally as a Debit Note voucher.',
+    ],
+  ),
   'sales-invoices': ModuleInfo(
     'Sales Invoices',
     'What you bill your customers. Add line items and GST is computed for you; approved invoices sync to Tally.',

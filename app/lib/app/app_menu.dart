@@ -62,8 +62,8 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'new-journal', label: 'Journal', icon: Icons.menu_book_outlined, module: 'journals', route: '/journals/add', create: true),
     MenuEntry(key: 'new-contra', label: 'Contra', icon: Icons.swap_horiz, module: 'contra', create: true),
     MenuEntry(key: 'new-po', label: 'Purchase Order', icon: Icons.local_shipping_outlined, module: 'purchase-orders', route: '/purchase-orders/add', create: true),
-    MenuEntry(key: 'new-credit-note', label: 'Credit Note', icon: Icons.remove_circle_outline, module: 'credit-notes', create: true),
-    MenuEntry(key: 'new-debit-note', label: 'Debit Note', icon: Icons.add_circle_outline, module: 'debit-notes', create: true),
+    MenuEntry(key: 'new-credit-note', label: 'Credit Note', icon: Icons.remove_circle_outline, module: 'credit-notes', route: '/credit-notes/add', create: true),
+    MenuEntry(key: 'new-debit-note', label: 'Debit Note', icon: Icons.add_circle_outline, module: 'debit-notes', route: '/debit-notes/add', create: true),
     MenuEntry(key: 'new-stock-jrnl', label: 'Stock Journal', icon: Icons.inventory_outlined, module: 'stock-journal', create: true),
     MenuEntry(key: 'new-phys-stock', label: 'Physical Stock', icon: Icons.checklist_outlined, module: 'physical-stock', create: true),
     MenuEntry(key: 'new-recpt-note', label: 'Receipt Note', icon: Icons.move_to_inbox_outlined, module: 'receipt-notes', create: true),
@@ -72,7 +72,7 @@ const List<MenuGroup> kAppMenu = [
   MenuGroup(label: 'Sales', icon: Icons.trending_up, items: [
     MenuEntry(key: 'quotations', label: 'Quotations', icon: Icons.description_outlined, module: 'quotations', route: '/quotations'),
     MenuEntry(key: 'sales-inv', label: 'Sales', icon: Icons.receipt_long_outlined, module: 'sales-invoices', route: '/sales-invoices'),
-    MenuEntry(key: 'credit-notes', label: 'Credit Note', icon: Icons.remove_circle_outline, module: 'credit-notes'),
+    MenuEntry(key: 'credit-notes', label: 'Credit Note', icon: Icons.remove_circle_outline, module: 'credit-notes', route: '/credit-notes'),
     MenuEntry(key: 'receipts', label: 'Receipt', icon: Icons.receipt_outlined, module: 'receipts', route: '/receipts'),
     MenuEntry(key: 'receivables', label: 'Receivables', icon: Icons.volunteer_activism_outlined, module: 'receivables', route: '/reports/receivables'),
     MenuEntry(key: 'sales-orders', label: 'Sales Order', icon: Icons.shopping_cart_outlined, module: 'sales-orders', route: '/sales-orders'),
@@ -85,7 +85,7 @@ const List<MenuGroup> kAppMenu = [
   ]),
   MenuGroup(label: 'Purchase', icon: Icons.shopping_bag_outlined, items: [
     MenuEntry(key: 'purchase-inv', label: 'Purchase', icon: Icons.download_outlined, module: 'purchase-invoices', route: '/purchase-invoices'),
-    MenuEntry(key: 'debit-notes', label: 'Debit Note', icon: Icons.add_circle_outline, module: 'debit-notes'),
+    MenuEntry(key: 'debit-notes', label: 'Debit Note', icon: Icons.add_circle_outline, module: 'debit-notes', route: '/debit-notes'),
     MenuEntry(key: 'payments', label: 'Payment', icon: Icons.payments_outlined, module: 'payments', route: '/payments'),
     MenuEntry(key: 'payables', label: 'Payables', icon: Icons.account_balance_wallet_outlined, module: 'payables', route: '/reports/payables'),
     MenuEntry(key: 'purch-orders', label: 'Purchase Order', icon: Icons.local_shipping_outlined, module: 'purchase-orders', route: '/purchase-orders'),
