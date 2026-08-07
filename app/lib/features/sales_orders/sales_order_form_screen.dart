@@ -10,6 +10,7 @@ import '../../core/utils/formatters.dart';
 import '../../data/models/voucher_item.dart';
 import '../../data/repositories/sales_order_repository.dart';
 import '../../shared/widgets/app_button.dart';
+import '../../shared/widgets/brand_primitives.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/form_dropdowns.dart';
@@ -243,6 +244,14 @@ class _SalesOrderFormScreenState extends ConsumerState<SalesOrderFormScreen> {
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg16),
         children: [
+          // The same gradient header the web leads its voucher forms with.
+          GradientHeader(
+            title: title,
+            subtitle: _isEdit
+                ? 'Update the details of this sales order'
+                : 'Fill in the details to create a new sales order',
+          ),
+          const SizedBox(height: AppSpacing.lg16),
           // Party — the customer scoping mirrors the API (a salesman sees only
           // their assigned customers; a portal login is locked to themselves).
           if (!isCustomerUser)

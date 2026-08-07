@@ -10,6 +10,7 @@ import '../../core/utils/formatters.dart';
 import '../../data/models/voucher_item.dart';
 import '../../data/repositories/purchase_order_repository.dart';
 import '../../shared/widgets/app_button.dart';
+import '../../shared/widgets/brand_primitives.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/form_dropdowns.dart';
@@ -235,6 +236,14 @@ class _PurchaseOrderFormScreenState extends ConsumerState<PurchaseOrderFormScree
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg16),
         children: [
+          // The same gradient header the web leads its voucher forms with.
+          GradientHeader(
+            title: title,
+            subtitle: _isEdit
+                ? 'Update the details of this purchase order'
+                : 'Fill in the details to create a new purchase order',
+          ),
+          const SizedBox(height: AppSpacing.lg16),
           // Party — purchase orders are always raised against a supplier; the
           // customer-portal role never reaches this screen (no purchase-orders
           // grant), so there is no locked-party case here.

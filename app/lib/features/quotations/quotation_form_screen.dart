@@ -10,6 +10,7 @@ import '../../core/utils/formatters.dart';
 import '../../data/models/quotation.dart';
 import '../../data/repositories/quotation_repository.dart';
 import '../../shared/widgets/app_button.dart';
+import '../../shared/widgets/brand_primitives.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/form_dropdowns.dart';
@@ -243,6 +244,14 @@ class _QuotationFormScreenState extends ConsumerState<QuotationFormScreen> {
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg16),
         children: [
+          // The same gradient header the web leads its voucher forms with.
+          GradientHeader(
+            title: title,
+            subtitle: _isEdit
+                ? 'Update the details of this quotation'
+                : 'Fill in the details to create a new quotation',
+          ),
+          const SizedBox(height: AppSpacing.lg16),
           // Party — the customer scoping mirrors the API (a salesman sees only
           // their assigned customers; a portal login is locked to themselves).
           if (!isCustomerUser)

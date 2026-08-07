@@ -11,6 +11,7 @@ import '../../data/models/goods_note.dart';
 import '../../data/models/voucher_item.dart';
 import '../../data/repositories/goods_note_repository.dart';
 import '../../shared/widgets/app_button.dart';
+import '../../shared/widgets/brand_primitives.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/form_dropdowns.dart';
@@ -239,6 +240,14 @@ class _GoodsNoteFormScreenState extends ConsumerState<GoodsNoteFormScreen> {
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg16),
         children: [
+          // The same gradient header the web leads its voucher forms with.
+          GradientHeader(
+            title: title,
+            subtitle: _isEdit
+                ? 'Update the details of this ${_kind.singular.toLowerCase()}'
+                : 'Fill in the details to create a new ${_kind.singular.toLowerCase()}',
+          ),
+          const SizedBox(height: AppSpacing.lg16),
           SearchableFkDropdown(
             label: '${_kind.partyLabel} *',
             endpoint: _kind.partyEndpoint,

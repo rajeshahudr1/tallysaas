@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../app/theme.dart';
 
-/// Visual intent for [AppButton]. `primary` is the solid brand-blue CTA
-/// (white foreground, from the theme); `light` is a soft tinted button
-/// used for secondary actions on a busy screen.
+/// Visual intent for [AppButton]. `primary` is the brand GRADIENT CTA (white
+/// foreground) — the same blue→green run the web puts on its primary buttons;
+/// `light` is a soft tinted button used for secondary actions on a busy screen.
 enum AppButtonVariant { primary, light }
 
 /// Single button widget with a built-in loading state and optional
@@ -74,12 +74,43 @@ class AppButton extends StatelessWidget {
           )
         : null; // primary falls back to the themed ElevatedButton style.
 
-    final btn = ElevatedButton(
-      style: style,
-      onPressed: disabled ? null : onPressed,
-      child: child,
+    if (isLight) {
+      final btn = ElevatedButton(
+        style: style,
+        onPressed: disabled ? null : onPressed,
+        child: child,
+      );
+      return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
+    }
+
+    // Primary: the brand gradient. A gradient can't come from ButtonStyle, so
+    // the fill is painted behind a transparent button rather than by the theme.
+    final btn = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: AppGradients.brand,
+        borderRadius: BorderRadius.circular(AppRadius.sm8),
+      ),
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.transparent,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: Colors.transparent,
+          disabledForegroundColor: Colors.white70,
+          shadowColor: Colors.transparent,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.sm8),
+          ),
+        ),
+        onPressed: disabled ? null : onPressed,
+        child: child,
+      ),
     );
 
-    return fullWidth ? SizedBox(width: double.infinity, child: btn) : btn;
+    return Opacity(
+      opacity: disabled ? 0.6 : 1,
+      child: fullWidth ? SizedBox(width: double.infinity, child: btn) : btn,
+    );
   }
 }
