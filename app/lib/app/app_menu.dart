@@ -53,7 +53,7 @@ class MenuGroup {
 
 const List<MenuGroup> kAppMenu = [
   MenuGroup(label: 'Create Vouchers', icon: Icons.add_circle_outline, items: [
-    MenuEntry(key: 'new-quotation', label: 'Quotation', icon: Icons.description_outlined, module: 'quotations', create: true),
+    MenuEntry(key: 'new-quotation', label: 'Quotation', icon: Icons.description_outlined, module: 'quotations', route: '/quotations/add', create: true),
     MenuEntry(key: 'new-sales-inv', label: 'Sales Invoice', icon: Icons.receipt_long_outlined, module: 'sales-invoices', route: '/sales-invoices/add', create: true),
     MenuEntry(key: 'new-receipt', label: 'Receipt', icon: Icons.receipt_outlined, module: 'receipts', route: '/receipts/add', create: true),
     MenuEntry(key: 'new-payment', label: 'Payment', icon: Icons.payments_outlined, module: 'payments', route: '/payments/add', create: true),
@@ -70,6 +70,7 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'new-dely-note', label: 'Delivery Note', icon: Icons.local_shipping_outlined, module: 'delivery-notes', create: true),
   ]),
   MenuGroup(label: 'Sales', icon: Icons.trending_up, items: [
+    MenuEntry(key: 'quotations', label: 'Quotations', icon: Icons.description_outlined, module: 'quotations', route: '/quotations'),
     MenuEntry(key: 'sales-inv', label: 'Sales', icon: Icons.receipt_long_outlined, module: 'sales-invoices', route: '/sales-invoices'),
     MenuEntry(key: 'credit-notes', label: 'Credit Note', icon: Icons.remove_circle_outline, module: 'credit-notes'),
     MenuEntry(key: 'receipts', label: 'Receipt', icon: Icons.receipt_outlined, module: 'receipts', route: '/receipts'),
@@ -116,7 +117,7 @@ const List<MenuGroup> kAppMenu = [
   ]),
   MenuGroup(label: 'My Entries', icon: Icons.check_box_outlined, items: [
     MenuEntry(key: 'my-vouchers', label: 'My Vouchers', icon: Icons.description_outlined, module: 'field-sales'),
-    MenuEntry(key: 'my-quotations', label: 'My Quotations', icon: Icons.edit_document, module: 'quotations'),
+    MenuEntry(key: 'my-quotations', label: 'My Quotations', icon: Icons.edit_document, module: 'quotations', route: '/my-quotations'),
     MenuEntry(key: 'my-eway', label: 'My eWay Bills', icon: Icons.local_shipping_outlined, module: 'field-sales'),
     MenuEntry(key: 'my-einvoices', label: 'My eInvoices', icon: Icons.verified_outlined, module: 'field-sales'),
     MenuEntry(key: 'my-parties', label: 'My Parties', icon: Icons.contacts_outlined, module: 'field-sales', route: '/my-customers'),

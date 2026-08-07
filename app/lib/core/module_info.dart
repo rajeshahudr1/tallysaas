@@ -127,6 +127,17 @@ const Map<String, ModuleInfo> kModuleInfo = {
   ),
 
   // ── Transactions ─────────────────────────────────────────────────────────
+  'quotations': ModuleInfo(
+    'Quotations',
+    'The price offer you send a customer BEFORE the sale — no stock moves and nothing is billed until it is accepted and converted.',
+    [
+      'Pick a customer, add item lines with rate + GST; totals compute on the server.',
+      'A quote is Open until the customer answers — then mark it Accepted or Rejected.',
+      'Past its "Valid till" date it shows as Expired automatically.',
+      'Convert an accepted quote into a real Sales Invoice in one tap — the lines carry over.',
+      'Share the PDF with the customer; nothing reaches Tally until the invoice is made.',
+    ],
+  ),
   'sales-invoices': ModuleInfo(
     'Sales Invoices',
     'What you bill your customers. Add line items and GST is computed for you; approved invoices sync to Tally.',

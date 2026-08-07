@@ -34,6 +34,9 @@ import '../features/locations/location_form_screen.dart';
 import '../features/locations/locations_screen.dart';
 import '../features/masters/masters_hub_screen.dart';
 import '../features/menu/group_hub_screen.dart';
+import '../features/quotations/quotation_detail_screen.dart';
+import '../features/quotations/quotation_form_screen.dart';
+import '../features/quotations/quotations_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -356,6 +359,38 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
 
       // ─── Transactions (side trips off the Transactions hub) ─────
+      // ─── Quotations ────────────────────────────────────────────
+      // Declared '/add' BEFORE ':id' so the literal wins over the param.
+      GoRoute(
+        path: '/quotations',
+        name: 'quotations',
+        builder: (_, __) => const QuotationsScreen(),
+      ),
+      GoRoute(
+        path: '/my-quotations',
+        name: 'my-quotations',
+        builder: (_, __) => const QuotationsScreen(mine: true),
+      ),
+      GoRoute(
+        path: '/quotations/add',
+        name: 'quotation-add',
+        builder: (_, __) => const QuotationFormScreen(),
+      ),
+      GoRoute(
+        path: '/quotations/:id',
+        name: 'quotation-view',
+        builder: (_, state) => QuotationDetailScreen(
+          quotationId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/quotations/:id/edit',
+        name: 'quotation-edit',
+        builder: (_, state) => QuotationFormScreen(
+          quotationId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
       GoRoute(
         path: '/sales-invoices',
         name: 'sales-invoices',
