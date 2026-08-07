@@ -244,6 +244,26 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Pending until invoiced; cancel it if the goods are returned outright.',
     ],
   ),
+  'customer-users': ModuleInfo(
+    'Customer Users',
+    'Which of your customers can log in to the portal — they see their own invoices and the catalog you scope for them.',
+    [
+      'Give a customer a login email, password and role to switch their portal on.',
+      'Leave the password blank when editing to keep the current one.',
+      'The catalog decides which categories they see and at what price — a category can carry a discount OR an addition, never both.',
+      'Set the login to Inactive or Blocked to cut off access without deleting anything.',
+    ],
+  ),
+  'website-users': ModuleInfo(
+    'Website Users',
+    'Third-party API consumers — your website or app ordering through the API with its own token and pricing.',
+    [
+      'Each one is created with a login and an api_token used for API calls.',
+      'The token is shown ONCE, on create and on regenerate — copy it then.',
+      'Cash / online extra % uplift the prices this consumer is quoted.',
+      'Regenerating a token stops the old one working immediately.',
+    ],
+  ),
   'my-vouchers': ModuleInfo(
     'My Vouchers',
     'Everything YOU created in this company — quotations, orders, notes, invoices, receipts, payments and journals in one list, newest first.',

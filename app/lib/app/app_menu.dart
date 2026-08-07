@@ -127,11 +127,11 @@ const List<MenuGroup> kAppMenu = [
   MenuGroup(label: 'Field Sales', icon: Icons.place_outlined, items: [
     MenuEntry(key: 'my-field', label: 'My Dashboard', icon: Icons.place_outlined, module: 'field-sales', route: '/my-field', salesmanOnly: true),
     MenuEntry(key: 'sales', label: 'Sales Persons', icon: Icons.badge_outlined, module: 'sales-persons', route: '/sales-persons'),
-    MenuEntry(key: 'gps-settings', label: 'GPS Tracking', icon: Icons.my_location, module: 'gps-tracking', adminOnly: true),
+    MenuEntry(key: 'gps-settings', label: 'GPS Tracking', icon: Icons.my_location, module: 'gps-tracking', adminOnly: true), // super-admin only (web)
   ]),
   MenuGroup(label: 'Portals', icon: Icons.public, items: [
-    MenuEntry(key: 'customer-users', label: 'Customer Users', icon: Icons.lock_person_outlined, module: 'customer-users'),
-    MenuEntry(key: 'website-users', label: 'Website Users', icon: Icons.public, module: 'website-users'),
+    MenuEntry(key: 'customer-users', label: 'Customer Users', icon: Icons.lock_person_outlined, module: 'customer-users', route: '/customer-users'),
+    MenuEntry(key: 'website-users', label: 'Website Users', icon: Icons.public, module: 'website-users', route: '/website-users'),
   ]),
   MenuGroup(label: 'Tally Sync', icon: Icons.sync, items: [
     MenuEntry(key: 'sync-dash', label: 'Sync Dashboard', icon: Icons.sync, module: 'tally-sync', route: '/sync', adminOnly: true),

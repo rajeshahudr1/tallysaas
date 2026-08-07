@@ -66,6 +66,10 @@ import '../features/collect_payments/collect_payment_settings_screen.dart';
 import '../features/collect_payments/collect_payments_screen.dart';
 import '../features/my_entries/field_tracking_screen.dart';
 import '../features/my_entries/my_vouchers_screen.dart';
+import '../features/portals/customer_user_detail_screen.dart';
+import '../features/portals/customer_users_screen.dart';
+import '../features/portals/website_user_form_screen.dart';
+import '../features/portals/website_users_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -714,6 +718,37 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/field-tracking',
         name: 'field-tracking',
         builder: (_, __) => const FieldTrackingScreen(),
+      ),
+
+      // ─── Portals (customer logins + third-party API users) ─────
+      GoRoute(
+        path: '/customer-users',
+        name: 'customer-users',
+        builder: (_, __) => const CustomerUsersScreen(),
+      ),
+      GoRoute(
+        path: '/customer-users/:id',
+        name: 'customer-user-view',
+        builder: (_, state) => CustomerUserDetailScreen(
+          customerId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/website-users',
+        name: 'website-users',
+        builder: (_, __) => const WebsiteUsersScreen(),
+      ),
+      GoRoute(
+        path: '/website-users/add',
+        name: 'website-user-add',
+        builder: (_, __) => const WebsiteUserFormScreen(),
+      ),
+      GoRoute(
+        path: '/website-users/:id/edit',
+        name: 'website-user-edit',
+        builder: (_, state) => WebsiteUserFormScreen(
+          userId: int.parse(state.pathParameters['id']!),
+        ),
       ),
 
       GoRoute(
