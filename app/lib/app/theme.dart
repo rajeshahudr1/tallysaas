@@ -187,8 +187,12 @@ class AppTheme {
       ),
 
       // ─── Cards — soft 1px border, no harsh shadow ───────────
+      // `surfaceTintColor: transparent` on every elevated surface: Material 3
+      // otherwise blends the seed colour into cards, sheets and the nav bar,
+      // which turns the product's white surfaces a pale blue.
       cardTheme: CardTheme(
         color: cardBg,
+        surfaceTintColor: Colors.transparent,
         elevation: 0,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
@@ -270,6 +274,7 @@ class AppTheme {
       // ─── Bottom navigation — brand-blue selected ────────────
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: brightness == Brightness.light ? AppColors.navSurface : cardBg,
+        surfaceTintColor: Colors.transparent,
         indicatorColor: AppColors.primaryTint,
         elevation: 0,
         labelTextStyle: MaterialStateProperty.resolveWith((states) {
@@ -287,6 +292,33 @@ class AppTheme {
           );
         }),
       ),
+      // The shell's bar is a BottomAppBar (it carries the Create notch), so it
+      // needs its own tint-free treatment.
+      bottomAppBarTheme: BottomAppBarTheme(
+        color: brightness == Brightness.light ? AppColors.navSurface : cardBg,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+
+      // Bottom sheets — the Create grid and every filter sheet.
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: cardBg,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+      ),
+
+      dialogTheme: DialogTheme(
+        backgroundColor: cardBg,
+        surfaceTintColor: Colors.transparent,
+      ),
+
+      // The Create action is a PRIMARY action — brand blue, white glyph, not
+      // Material 3's pale secondary-container default.
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+      ),
+
       bottomNavigationBarTheme: BottomNavigationBarThemeData(
         backgroundColor: brightness == Brightness.light ? AppColors.navSurface : cardBg,
         selectedItemColor: AppColors.primary,

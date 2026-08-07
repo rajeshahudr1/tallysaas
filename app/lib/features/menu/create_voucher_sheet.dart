@@ -78,6 +78,8 @@ class _CreateTile extends StatelessWidget {
     final enabled = entry.route != null;
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.md12),
+      // A parked pointer must not leave one tile looking selected.
+      hoverColor: Colors.transparent,
       onTap: () {
         Navigator.pop(context);
         if (enabled) {

@@ -53,11 +53,24 @@ class AppShell extends ConsumerWidget {
 
     return Scaffold(
       body: navigationShell,
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'app-shell-create',
-        onPressed: () => showCreateVoucherSheet(context, ref),
-        tooltip: 'Create',
-        child: const Icon(Icons.add),
+      // The Create action carries the brand gradient — it is THE primary action
+      // in the product, so it gets the same treatment as the web's gradient
+      // buttons rather than a flat fill.
+      floatingActionButton: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: AppGradients.brand,
+        ),
+        child: FloatingActionButton(
+          heroTag: 'app-shell-create',
+          onPressed: () => showCreateVoucherSheet(context, ref),
+          tooltip: 'Create',
+          backgroundColor: Colors.transparent,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          highlightElevation: 0,
+          child: const Icon(Icons.add),
+        ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: BottomAppBar(
@@ -86,6 +99,12 @@ class AppShell extends ConsumerWidget {
     final color = selected ? AppColors.primary : AppColors.text2;
     return Expanded(
       child: InkWell(
+        // The selected tab is shown by COLOUR. Material's focus/hover fills on
+        // top of that read as a stray grey rectangle — visible on web and
+        // desktop, where a pointer parks over the last tab tapped.
+        focusColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        hoverColor: Colors.transparent,
         onTap: () => navigationShell.goBranch(branch, initialLocation: selected),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
