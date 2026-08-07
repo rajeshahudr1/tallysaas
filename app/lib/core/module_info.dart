@@ -254,6 +254,26 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Syncs to Tally as a Contra voucher.',
     ],
   ),
+  'stock-journal': ModuleInfo(
+    'Stock Journals',
+    'Moves stock WITHOUT a sale or purchase — godown-to-godown transfers, and manufacturing that consumes items to produce another.',
+    [
+      'Source lines take quantity OUT; destination lines put quantity IN.',
+      'No party, no ledger, no GST — this voucher is quantities only.',
+      'Use it to shift stock between godowns or to record production.',
+      'Syncs to Tally as a Stock Journal voucher.',
+    ],
+  ),
+  'physical-stock': ModuleInfo(
+    'Physical Stock',
+    'Your counted stock — what is ACTUALLY on the shelf, recorded as a sheet so the books can be corrected to reality.',
+    [
+      'Add each item with the quantity you counted; a count of 0 is valid and meaningful.',
+      'One sheet is one count; the lines are grouped under its voucher number.',
+      'Sheets are never edited — if a count was wrong, record a new sheet.',
+      'Syncs to Tally as a Physical Stock voucher.',
+    ],
+  ),
   'inventory': ModuleInfo(
     'Inventory',
     'Your live stock position per product: opening + purchased − sold = current stock, with its value.',

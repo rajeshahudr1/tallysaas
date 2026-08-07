@@ -52,6 +52,12 @@ import '../features/return_notes/return_notes_screen.dart';
 import '../features/goods_notes/goods_note_detail_screen.dart';
 import '../features/goods_notes/goods_note_form_screen.dart';
 import '../features/goods_notes/goods_notes_screen.dart';
+import '../features/stock_vouchers/physical_stock_detail_screen.dart';
+import '../features/stock_vouchers/physical_stock_form_screen.dart';
+import '../features/stock_vouchers/physical_stock_screen.dart';
+import '../features/stock_vouchers/stock_journal_detail_screen.dart';
+import '../features/stock_vouchers/stock_journal_form_screen.dart';
+import '../features/stock_vouchers/stock_journals_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -587,6 +593,44 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) => GoodsNoteFormScreen(
           kind: GoodsNoteKind.receipt,
           noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Stock vouchers (goods only: no party, ledger or GST) ───
+      GoRoute(
+        path: '/stock-journals',
+        name: 'stock-journals',
+        builder: (_, __) => const StockJournalsScreen(),
+      ),
+      GoRoute(
+        path: '/stock-journals/add',
+        name: 'stock-journal-add',
+        builder: (_, __) => const StockJournalFormScreen(),
+      ),
+      GoRoute(
+        path: '/stock-journals/:id',
+        name: 'stock-journal-view',
+        builder: (_, state) => StockJournalDetailScreen(
+          journalId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/physical-stock',
+        name: 'physical-stock',
+        builder: (_, __) => const PhysicalStockScreen(),
+      ),
+      GoRoute(
+        path: '/physical-stock/add',
+        name: 'physical-stock-add',
+        builder: (_, __) => const PhysicalStockFormScreen(),
+      ),
+      // A sheet is addressed by its voucher NUMBER — the API groups the counted
+      // lines by it, so there is no numeric id to route on.
+      GoRoute(
+        path: '/physical-stock/:voucherNo',
+        name: 'physical-stock-view',
+        builder: (_, state) => PhysicalStockDetailScreen(
+          voucherNo: state.pathParameters['voucherNo']!,
         ),
       ),
 
