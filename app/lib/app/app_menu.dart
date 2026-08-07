@@ -60,7 +60,7 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'new-sales-order', label: 'Sales Order', icon: Icons.shopping_cart_outlined, module: 'sales-orders', route: '/sales-orders/add', create: true),
     MenuEntry(key: 'new-purchase', label: 'Purchase Invoice', icon: Icons.download_outlined, module: 'purchase-invoices', route: '/purchase-invoices/add', create: true),
     MenuEntry(key: 'new-journal', label: 'Journal', icon: Icons.menu_book_outlined, module: 'journals', route: '/journals/add', create: true),
-    MenuEntry(key: 'new-contra', label: 'Contra', icon: Icons.swap_horiz, module: 'contra', create: true),
+    MenuEntry(key: 'new-contra', label: 'Contra', icon: Icons.swap_horiz, module: 'contra', route: '/contra/add', create: true),
     MenuEntry(key: 'new-po', label: 'Purchase Order', icon: Icons.local_shipping_outlined, module: 'purchase-orders', route: '/purchase-orders/add', create: true),
     MenuEntry(key: 'new-credit-note', label: 'Credit Note', icon: Icons.remove_circle_outline, module: 'credit-notes', route: '/credit-notes/add', create: true),
     MenuEntry(key: 'new-debit-note', label: 'Debit Note', icon: Icons.add_circle_outline, module: 'debit-notes', route: '/debit-notes/add', create: true),
@@ -97,7 +97,7 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'bank-ledgers', label: 'Bank', icon: Icons.account_balance_outlined, module: 'cash-bank'),
     MenuEntry(key: 'bank', label: 'Bank Reconciliation', icon: Icons.balance_outlined, module: 'bank-reconciliation', route: '/bank-reconciliation'),
     MenuEntry(key: 'journals', label: 'Journals', icon: Icons.menu_book_outlined, module: 'journals', route: '/journals'),
-    MenuEntry(key: 'contra', label: 'Contra', icon: Icons.swap_horiz, module: 'contra'),
+    MenuEntry(key: 'contra', label: 'Contra', icon: Icons.swap_horiz, module: 'contra', route: '/contra'),
     MenuEntry(key: 'collect-payments', label: 'Collect Payments', icon: Icons.credit_card, module: 'collect-payments'),
   ]),
   MenuGroup(label: 'Customers', icon: Icons.contacts_outlined, items: [

@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/api/endpoints.dart';
 import '../core/auth/session.dart';
 import '../data/models/return_note.dart';
+import '../data/repositories/journal_repository.dart' show JournalScope;
 import '../features/auth/login_screen.dart';
 import '../features/auth/forgot_password_screen.dart';
 import '../features/categories/categories_screen.dart';
@@ -506,6 +507,26 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, state) => ReturnNoteFormScreen(
           kind: ReturnNoteKind.debit,
           noteId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Contra (cash⇄bank transfers; same handlers as Journals) ─
+      GoRoute(
+        path: '/contra',
+        name: 'contra',
+        builder: (_, __) => const JournalsScreen(scope: JournalScope.contra),
+      ),
+      GoRoute(
+        path: '/contra/add',
+        name: 'contra-add',
+        builder: (_, __) => const JournalFormScreen(scope: JournalScope.contra),
+      ),
+      GoRoute(
+        path: '/contra/:id',
+        name: 'contra-view',
+        builder: (_, state) => JournalDetailScreen(
+          scope: JournalScope.contra,
+          journalId: int.parse(state.pathParameters['id']!),
         ),
       ),
 

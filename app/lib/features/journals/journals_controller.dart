@@ -72,7 +72,7 @@ class JournalsController extends StateNotifier<JournalsState> {
     } on ApiException catch (e) {
       if (mounted) state = JournalsError(e.message);
     } catch (_) {
-      if (mounted) state = const JournalsError('Could not load journals. Pull to retry.');
+      if (mounted) state = const JournalsError('Could not load vouchers. Pull to retry.');
     }
   }
 
@@ -97,7 +97,7 @@ class JournalsController extends StateNotifier<JournalsState> {
   }
 }
 
-final journalsControllerProvider =
-    StateNotifierProvider.autoDispose<JournalsController, JournalsState>((ref) {
-  return JournalsController(ref.watch(journalRepositoryProvider));
+final journalsControllerProvider = StateNotifierProvider.autoDispose
+    .family<JournalsController, JournalsState, JournalScope>((ref, scope) {
+  return JournalsController(ref.watch(journalRepositoryProvider(scope)));
 });

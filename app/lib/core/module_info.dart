@@ -224,6 +224,16 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Syncs to Tally as a journal voucher.',
     ],
   ),
+  'contra': ModuleInfo(
+    'Contra',
+    'Money moving between your OWN accounts — cash to bank, bank to cash, or one bank to another. Nothing is earned or spent.',
+    [
+      'Pick the account money goes TO (Dr) and the one it comes FROM (Cr), then the amount.',
+      'A cash deposit into the bank and an ATM withdrawal are both contra entries.',
+      'It never touches a customer or supplier balance — only your own accounts.',
+      'Syncs to Tally as a Contra voucher.',
+    ],
+  ),
   'inventory': ModuleInfo(
     'Inventory',
     'Your live stock position per product: opening + purchased − sold = current stock, with its value.',

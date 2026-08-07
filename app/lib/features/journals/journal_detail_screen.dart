@@ -8,23 +8,30 @@ import '../../data/repositories/journal_repository.dart';
 import '../../shared/widgets/detail_view.dart';
 import '../../shared/widgets/status_pill.dart';
 
-/// Journal detail (View) via the shared [DetailScaffold] — NO Edit (journals
-/// aren't edited), Delete gated by `journals.delete`.
+/// Journal / Contra detail (View) via the shared [DetailScaffold] — NO Edit
+/// (these vouchers aren't edited), Delete gated by `<module>.delete`. The
+/// [scope] picks which endpoint + permission slug applies.
 class JournalDetailScreen extends ConsumerWidget {
-  const JournalDetailScreen({super.key, required this.journalId});
+  const JournalDetailScreen({
+    super.key,
+    required this.journalId,
+    this.scope = JournalScope.journals,
+  });
   final int journalId;
+  final JournalScope scope;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final repo = ref.read(journalRepositoryProvider);
+    final repo = ref.read(journalRepositoryProvider(scope));
+    final noun = scope.singular.toLowerCase();
     return DetailScaffold<Journal>(
-      title: 'Journal',
-      module: 'journals',
+      title: scope.singular,
+      module: scope.module,
       load: () => repo.get(journalId),
       onDelete: () => repo.delete(journalId),
-      deleteTitle: 'Delete journal?',
-      deleteMessage: 'This journal voucher will be removed. You can re-sync it from Tally later.',
-      deletedMessage: 'Journal deleted.',
+      deleteTitle: 'Delete $noun?',
+      deleteMessage: 'This $noun voucher will be removed. You can re-sync it from Tally later.',
+      deletedMessage: '${scope.singular} deleted.',
       bodyBuilder: (context, j) => [
         DetailHeader(
           j.voucherNo,
