@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/api/endpoints.dart';
 import '../core/auth/session.dart';
 import '../data/models/goods_note.dart';
+import '../data/models/tally_ledger.dart';
 import '../data/models/return_note.dart';
 import '../data/repositories/journal_repository.dart' show JournalScope;
 import '../features/auth/login_screen.dart';
@@ -58,6 +59,8 @@ import '../features/stock_vouchers/physical_stock_screen.dart';
 import '../features/stock_vouchers/stock_journal_detail_screen.dart';
 import '../features/stock_vouchers/stock_journal_form_screen.dart';
 import '../features/stock_vouchers/stock_journals_screen.dart';
+import '../features/ledgers/ledger_statement_screen.dart';
+import '../features/ledgers/ledgers_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -631,6 +634,39 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'physical-stock-view',
         builder: (_, state) => PhysicalStockDetailScreen(
           voucherNo: state.pathParameters['voucherNo']!,
+        ),
+      ),
+
+      // ─── Cash / Bank / Payables / Receivables ──────────────────
+      // All four are the same endpoint with a different `group`; balances are
+      // period-derived, so a statement carries the range that produced it.
+      GoRoute(
+        path: '/cash',
+        name: 'cash',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.cash),
+      ),
+      GoRoute(
+        path: '/bank',
+        name: 'bank-ledgers',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.bank),
+      ),
+      GoRoute(
+        path: '/payables',
+        name: 'payables',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.payables),
+      ),
+      GoRoute(
+        path: '/receivables',
+        name: 'receivables',
+        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.receivables),
+      ),
+      GoRoute(
+        path: '/ledgers/:name',
+        name: 'ledger-statement',
+        builder: (_, state) => LedgerStatementScreen(
+          ledgerName: state.pathParameters['name']!,
+          from: state.uri.queryParameters['from'] ?? '',
+          to: state.uri.queryParameters['to'] ?? '',
         ),
       ),
 

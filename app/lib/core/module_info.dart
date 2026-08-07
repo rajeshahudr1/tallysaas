@@ -244,6 +244,34 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Pending until invoiced; cancel it if the goods are returned outright.',
     ],
   ),
+  'cash-bank': ModuleInfo(
+    'Cash & Bank',
+    'Your cash and bank ledgers with their live balances for a period — replayed from the vouchers synced out of Tally.',
+    [
+      'Each row is one ledger; the amount is its closing balance and Dr/Cr says which side it sits on.',
+      'Change the date range and every balance is recomputed for that period.',
+      'Tap a ledger to see its statement: opening, every voucher that moved it, and closing.',
+      'Read-only — money moves through Receipts, Payments and Contra vouchers.',
+    ],
+  ),
+  'receivables': ModuleInfo(
+    'Receivables',
+    'What your customers still owe you — the debtor ledgers with their outstanding balances.',
+    [
+      'Each row is a customer ledger; the balance is what is still to be collected.',
+      'Tap one to see every invoice and receipt that built that balance.',
+      'Record a Receipt to bring a balance down.',
+    ],
+  ),
+  'payables': ModuleInfo(
+    'Payables',
+    'What you still owe your suppliers — the creditor ledgers with their outstanding balances.',
+    [
+      'Each row is a supplier ledger; the balance is what is still to be paid.',
+      'Tap one to see every purchase bill and payment behind that balance.',
+      'Record a Payment to bring a balance down.',
+    ],
+  ),
   'contra': ModuleInfo(
     'Contra',
     'Money moving between your OWN accounts — cash to bank, bank to cash, or one bank to another. Nothing is earned or spent.',
