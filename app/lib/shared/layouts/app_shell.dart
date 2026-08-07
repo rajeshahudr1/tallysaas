@@ -2,34 +2,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../app/theme.dart';
 import '../../core/auth/session.dart';
 import '../../core/gps/gps_tracker.dart';
 import '../../core/update/app_update.dart';
+import '../../features/menu/create_voucher_sheet.dart';
 
-/// Bottom-nav scaffold wrapping the five primary tabs (Dashboard, Masters,
-/// Txns, Reports, Profile). Each tab keeps its own navigation stack via
-/// `StatefulShellRoute.indexedStack`.
+/// Bottom-nav scaffold wrapping the four primary tabs (Dashboard, Sales,
+/// Purchase, More) with the Create (+) action docked in the middle. Each tab
+/// keeps its own navigation stack via `StatefulShellRoute.indexedStack`.
 ///
-/// RBAC: the Masters / Txns / Reports tabs are shown ONLY when the signed-in
-/// role can see at least one module in that group (same idea as the web sidebar
-/// dropping empty groups). Dashboard + Profile are always shown. Because the
-/// shell's branches are fixed (0–4), we keep a branch index on each VISIBLE tab
-/// and map the NavigationBar's (filtered) index back to the real branch.
+/// The app now carries every web module, so the tabs are BROWSING entry points
+/// rather than one-tab-per-module: Sales and Purchase render their menu group,
+/// More renders the rest, and the centre + opens the voucher-create sheet.
+/// RBAC lives inside those screens (they filter by the same module slugs the
+/// web sidebar uses), so the bar itself is fixed and never re-indexes.
 class AppShell extends ConsumerWidget {
   const AppShell({super.key, required this.navigationShell});
 
   /// Provided by `StatefulShellRoute.indexedStack` — gives us
   /// `currentIndex` + `goBranch(i)` to switch tabs without losing state.
   final StatefulNavigationShell navigationShell;
-
-  // Branch index → the permission modules that unlock that tab.
-  static const _masters = [
-    'companies', 'customers', 'suppliers', 'products',
-    'categories', 'locations', 'sales-persons',
-  ];
-  static const _txns = [
-    'sales-invoices', 'purchase-invoices', 'payments', 'receipts', 'journals',
-  ];
 
   // Fires the cloud app-update check ONCE per app run (not on every rebuild).
   static bool _updateChecked = false;
@@ -40,7 +33,6 @@ class AppShell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
-    bool show(bool gate) => user == null || gate;
 
     // One-shot cloud app-update prompt once the shell is up (post-login).
     if (!_updateChecked) {
@@ -59,74 +51,60 @@ class AppShell extends ConsumerWidget {
       });
     }
 
-    // Each visible tab carries its REAL branch index (0–4).
-    final tabs = <({int branch, NavigationDestination dest})>[
-      (
-        branch: 0,
-        dest: const NavigationDestination(
-          icon: Icon(Icons.dashboard_outlined),
-          selectedIcon: Icon(Icons.dashboard),
-          label: 'Dashboard',
-        ),
-      ),
-      // Customer-portal login: the Masters tab carries their scoped Products /
-      // Categories and the Txns tab their invoices — being the LINKED customer
-      // is the entitlement (mirrors the web + API), so both tabs stay visible
-      // even when the role has no master grants.
-      if (show((user?.canAny(_masters) ?? false) || (user?.isCustomerUser ?? false)))
-        (
-          branch: 1,
-          dest: const NavigationDestination(
-            icon: Icon(Icons.inventory_2_outlined),
-            selectedIcon: Icon(Icons.inventory_2),
-            label: 'Masters',
-          ),
-        ),
-      if (show((user?.canAny(_txns) ?? false) || (user?.isCustomerUser ?? false)))
-        (
-          branch: 2,
-          dest: const NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long),
-            label: 'Txns',
-          ),
-        ),
-      if (show(user?.canModule('reports') ?? false))
-        (
-          branch: 3,
-          dest: const NavigationDestination(
-            icon: Icon(Icons.bar_chart_outlined),
-            selectedIcon: Icon(Icons.bar_chart),
-            label: 'Reports',
-          ),
-        ),
-      (
-        branch: 4,
-        dest: const NavigationDestination(
-          icon: Icon(Icons.person_outline),
-          selectedIcon: Icon(Icons.person),
-          label: 'Profile',
-        ),
-      ),
-    ];
-
-    // Map the active branch to its position among the VISIBLE tabs (fallback to
-    // Dashboard if the active branch is hidden for this role).
-    var selected = tabs.indexWhere((t) => t.branch == navigationShell.currentIndex);
-    if (selected < 0) selected = 0;
-
     return Scaffold(
       body: navigationShell,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: selected,
-        onDestinationSelected: (i) {
-          final branch = tabs[i].branch;
-          navigationShell.goBranch(
-            branch,
-            initialLocation: branch == navigationShell.currentIndex,
-          );
-        },
-        destinations: [for (final t in tabs) t.dest],
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'app-shell-create',
+        onPressed: () => showCreateVoucherSheet(context, ref),
+        tooltip: 'Create',
+        child: const Icon(Icons.add),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      bottomNavigationBar: BottomAppBar(
+        color: AppColors.navSurface,
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 6,
+        padding: EdgeInsets.zero,
+        child: Row(
+          children: [
+            _tab(0, Icons.dashboard_outlined, Icons.dashboard, 'Dashboard'),
+            _tab(1, Icons.trending_up_outlined, Icons.trending_up, 'Sales'),
+            const SizedBox(width: 56), // the notch under the Create button
+            _tab(2, Icons.shopping_bag_outlined, Icons.shopping_bag, 'Purchase'),
+            _tab(3, Icons.menu, Icons.menu_open, 'More'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// One bottom-bar destination. All four tabs are always visible: Dashboard
+  /// and More are universal, and Sales / Purchase render their own "no modules
+  /// for your role" state when the role has nothing in that group.
+  Widget _tab(int branch, IconData icon, IconData active, String label) {
+    final selected = navigationShell.currentIndex == branch;
+    final color = selected ? AppColors.primary : AppColors.text2;
+    return Expanded(
+      child: InkWell(
+        onTap: () => navigationShell.goBranch(branch, initialLocation: selected),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(selected ? active : icon, size: 22, color: color),
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

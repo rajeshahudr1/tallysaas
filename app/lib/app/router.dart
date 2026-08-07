@@ -33,6 +33,8 @@ import '../features/locations/location_detail_screen.dart';
 import '../features/locations/location_form_screen.dart';
 import '../features/locations/locations_screen.dart';
 import '../features/masters/masters_hub_screen.dart';
+import '../features/menu/group_hub_screen.dart';
+import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
 import '../features/payments/vouchers_screen.dart';
@@ -148,33 +150,49 @@ final routerProvider = Provider<GoRouter>((ref) {
           ]),
           StatefulShellBranch(routes: [
             GoRoute(
-              path: '/masters',
-              name: 'masters',
-              builder: (_, __) => const MastersHubScreen(),
+              path: '/sales',
+              name: 'sales-hub',
+              builder: (_, __) => const GroupHubScreen(groupLabel: 'Sales'),
             ),
           ]),
           StatefulShellBranch(routes: [
             GoRoute(
-              path: '/transactions',
-              name: 'transactions',
-              builder: (_, __) => const TransactionsHubScreen(),
+              path: '/purchase',
+              name: 'purchase-hub',
+              builder: (_, __) => const GroupHubScreen(groupLabel: 'Purchase'),
             ),
           ]),
           StatefulShellBranch(routes: [
             GoRoute(
-              path: '/reports',
-              name: 'reports',
-              builder: (_, __) => const ReportsScreen(),
-            ),
-          ]),
-          StatefulShellBranch(routes: [
-            GoRoute(
-              path: '/profile',
-              name: 'profile',
-              builder: (_, __) => const ProfileScreen(),
+              path: '/more',
+              name: 'more',
+              builder: (_, __) => const MoreMenuScreen(),
             ),
           ]),
         ],
+      ),
+
+      // The old tabs live on as pushed routes so existing links + deep links
+      // keep working; they are reached from More (Profile, Reports) now.
+      GoRoute(
+        path: '/profile',
+        name: 'profile',
+        builder: (_, __) => const ProfileScreen(),
+      ),
+      GoRoute(
+        path: '/reports',
+        name: 'reports',
+        builder: (_, __) => const ReportsScreen(),
+      ),
+      GoRoute(
+        path: '/masters',
+        name: 'masters',
+        builder: (_, __) => const MastersHubScreen(),
+      ),
+      GoRoute(
+        path: '/transactions',
+        name: 'transactions',
+        builder: (_, __) => const TransactionsHubScreen(),
       ),
 
       // ─── Side trips (pushed full-screen over the active tab) ────
