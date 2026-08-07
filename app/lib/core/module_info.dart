@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../app/theme.dart';
+
 /// Short, plain-English "how this module works" blurbs shown behind the ⓘ info
 /// icon on each module's list screen (AppBar). Keep in sync with the web copy
 /// (web/config/moduleInfo.js) — same keys, same wording.
@@ -257,7 +259,7 @@ Future<void> showModuleInfo(BuildContext context, String infoKey) {
     context: context,
     builder: (ctx) => AlertDialog(
       title: Row(children: [
-        const Icon(Icons.info_outline, color: Color(0xFF2563EB), size: 22),
+        const Icon(Icons.info_outline, color: AppColors.primary, size: 22),
         const SizedBox(width: 8),
         Expanded(child: Text(info.title, style: theme.textTheme.titleMedium)),
       ]),
@@ -278,7 +280,7 @@ Future<void> showModuleInfo(BuildContext context, String infoKey) {
                     children: [
                       const Padding(
                         padding: EdgeInsets.only(top: 3, right: 8),
-                        child: Icon(Icons.check, size: 15, color: Color(0xFF16A34A)),
+                        child: Icon(Icons.check, size: 15, color: AppColors.success),
                       ),
                       Expanded(child: Text(p, style: theme.textTheme.bodySmall)),
                     ],
