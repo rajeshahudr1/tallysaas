@@ -158,6 +158,16 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Generate its e-Invoice / e-Way Bill, print/PDF, or record a Receipt against it.',
     ],
   ),
+  'purchase-orders': ModuleInfo(
+    'Purchase Orders',
+    'What YOU have ordered from a supplier — the commitment you send them before their bill arrives.',
+    [
+      'Pick a supplier, add item lines, and set "Due On" — when the goods are expected.',
+      'Progress shows as Pending → Partial → Delivered; cancel an order that is called off.',
+      'Convert it into a Purchase Invoice once the supplier bills you — the lines carry over.',
+      'Nothing hits stock or your payable until the invoice is made.',
+    ],
+  ),
   'purchase-invoices': ModuleInfo(
     'Purchase Invoices',
     'What your suppliers bill you (incoming bills). Mirrors sales invoices but on the buying side.',

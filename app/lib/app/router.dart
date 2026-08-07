@@ -40,6 +40,9 @@ import '../features/quotations/quotations_screen.dart';
 import '../features/sales_orders/sales_order_detail_screen.dart';
 import '../features/sales_orders/sales_order_form_screen.dart';
 import '../features/sales_orders/sales_orders_screen.dart';
+import '../features/purchase_orders/purchase_order_detail_screen.dart';
+import '../features/purchase_orders/purchase_order_form_screen.dart';
+import '../features/purchase_orders/purchase_orders_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -416,6 +419,32 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/sales-orders/:id/edit',
         name: 'sales-order-edit',
         builder: (_, state) => SalesOrderFormScreen(
+          orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+
+      // ─── Purchase Orders ───────────────────────────────────────
+      GoRoute(
+        path: '/purchase-orders',
+        name: 'purchase-orders',
+        builder: (_, __) => const PurchaseOrdersScreen(),
+      ),
+      GoRoute(
+        path: '/purchase-orders/add',
+        name: 'purchase-order-add',
+        builder: (_, __) => const PurchaseOrderFormScreen(),
+      ),
+      GoRoute(
+        path: '/purchase-orders/:id',
+        name: 'purchase-order-view',
+        builder: (_, state) => PurchaseOrderDetailScreen(
+          orderId: int.parse(state.pathParameters['id']!),
+        ),
+      ),
+      GoRoute(
+        path: '/purchase-orders/:id/edit',
+        name: 'purchase-order-edit',
+        builder: (_, state) => PurchaseOrderFormScreen(
           orderId: int.parse(state.pathParameters['id']!),
         ),
       ),
