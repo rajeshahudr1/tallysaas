@@ -148,14 +148,26 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
         _section('Address'),
         _row('Shipping', c.shippingAddress),
         _row('Billing', c.billingAddress),
+        _row('City', c.city),
+        _row('State', c.state),
+        _row('Pincode', c.pincode),
+        _row('Country', c.country),
 
         _section('GST & Tax'),
         _row('GST Number', c.gstNumber),
         _row('PAN Number', c.panNumber),
+        _row('GST Registration', c.gstRegistrationType),
+        _row('Ledger Group', c.ledgerGroup),
 
         _section('Other Details'),
         _row('Credit Limit', c.creditLimit == null ? null : Fmt.inr(c.creditLimit)),
-        _row('Opening Balance', c.openingBalance == null ? null : Fmt.inr(c.openingBalance)),
+        // The side matters: a Dr opening is money owed TO you, Cr is the other way.
+        _row(
+          'Opening Balance',
+          c.openingBalance == null
+              ? null
+              : '${Fmt.inr(c.openingBalance)}${c.openingBalanceType == null ? '' : ' ${c.openingBalanceType}'}',
+        ),
         _row('Notes', c.notes),
         _row('Internal Remarks', c.internalRemarks),
 

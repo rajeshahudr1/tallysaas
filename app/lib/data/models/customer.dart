@@ -24,6 +24,13 @@ class Customer {
     this.notes,
     this.internalRemarks,
     this.isTallyLedger,
+    this.ledgerGroup,
+    this.openingBalanceType,
+    this.gstRegistrationType,
+    this.country,
+    this.state,
+    this.city,
+    this.pincode,
     this.status,
     this.customFields = const {},
     this.createdAt,
@@ -48,6 +55,21 @@ class Customer {
   final String? notes;
   final String? internalRemarks;
   final bool? isTallyLedger;
+
+  /// Tally party-ledger fields the web form has always carried.
+  final String? ledgerGroup;
+
+  /// Which side the opening balance sits on: 'Cr' or 'Dr'.
+  final String? openingBalanceType;
+
+  /// GST registration type (Regular, Composition, Unregistered…).
+  final String? gstRegistrationType;
+
+  final String? country;
+  final String? state;
+  final String? city;
+  final String? pincode;
+
   final String? status;        // Active | Inactive | Blocked
   final Map<String, dynamic> customFields;
   final String? createdAt;
@@ -72,6 +94,13 @@ class Customer {
         notes: _sn(j['notes']),
         internalRemarks: _sn(j['internal_remarks']),
         isTallyLedger: _toBool(j['is_tally_ledger']),
+        ledgerGroup: _sn(j['ledger_group']),
+        openingBalanceType: _sn(j['opening_balance_type']),
+        gstRegistrationType: _sn(j['gst_registration_type']),
+        country: _sn(j['country']),
+        state: _sn(j['state']),
+        city: _sn(j['city']),
+        pincode: _sn(j['pincode']),
         status: _sn(j['status']),
         customFields: _toMap(j['custom_fields']),
         createdAt: _sn(j['created_at']),

@@ -11,6 +11,7 @@ import '../../data/repositories/options_repository.dart';
 import '../../shared/widgets/app_button.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/error_state.dart';
+import '../../shared/widgets/form_dropdowns.dart';
 import '../../shared/widgets/loading_state.dart';
 
 /// Add / Edit Customer — mirrors the web `customers/form.ejs` field-for-field
@@ -44,8 +45,17 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   final _credit = TextEditingController();
   final _notes = TextEditingController();
   final _remarks = TextEditingController();
+  final _city = TextEditingController();
+  final _pincode = TextEditingController();
 
   String _status = 'Active';
+  // Tally party-ledger fields. `country` drives whether `state` is restricted
+  // to the GST state list — the API allow-lists it only when country is India.
+  String _country = 'India';
+  String? _state;
+  String? _gstRegType;
+  String? _ledgerGroup;
+  String _openingType = 'Cr';
   int? _locationId;
   int? _salesPersonId;
   int? _groupId;
@@ -66,7 +76,8 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   @override
   void dispose() {
     for (final c in [_name, _mobile, _altMobile, _email, _gst, _pan, _shipping,
-                     _billing, _opening, _credit, _notes, _remarks]) {
+                     _billing, _opening, _credit, _notes, _remarks,
+                     _city, _pincode]) {
       c.dispose();
     }
     for (final r in _customFields) {
@@ -92,6 +103,13 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       _notes.text = c.notes ?? '';
       _remarks.text = c.internalRemarks ?? '';
       _status = c.status ?? 'Active';
+      _country = c.country ?? 'India';
+      _state = c.state;
+      _gstRegType = c.gstRegistrationType;
+      _ledgerGroup = c.ledgerGroup;
+      _openingType = c.openingBalanceType ?? 'Cr';
+      _city.text = c.city ?? '';
+      _pincode.text = c.pincode ?? '';
       _locationId = c.locationId;
       _salesPersonId = c.salesPersonId;
       _groupId = c.customerGroupId;
@@ -137,6 +155,15 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       if (_remarks.text.trim().isNotEmpty) 'internal_remarks': _remarks.text.trim(),
       'status': _status,
       'is_tally_ledger': _isTallyLedger,
+      if (_country.isNotEmpty) 'country': _country,
+      if (_state != null && _state!.isNotEmpty) 'state': _state,
+      if (_city.text.trim().isNotEmpty) 'city': _city.text.trim(),
+      if (_pincode.text.trim().isNotEmpty) 'pincode': _pincode.text.trim(),
+      if (_gstRegType != null && _gstRegType!.isNotEmpty)
+        'gst_registration_type': _gstRegType,
+      if (_ledgerGroup != null && _ledgerGroup!.isNotEmpty)
+        'ledger_group': _ledgerGroup,
+      'opening_balance_type': _openingType,
       if (_locationId != null) 'location_id': _locationId,
       if (_salesPersonId != null) 'sales_person_id': _salesPersonId,
       if (_groupId != null) 'customer_group_id': _groupId,
@@ -265,12 +292,69 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
             }),
           ),
           AppTextField(controller: _billing, label: 'Billing Address', maxLines: 3),
+          gap,
+          Row(
+            children: [
+              Expanded(child: AppTextField(controller: _city, label: 'City')),
+              const SizedBox(width: AppSpacing.md12),
+              Expanded(child: AppTextField(
+                controller: _pincode, label: 'Pincode',
+                keyboardType: TextInputType.number,
+              )),
+            ],
+          ),
+          gap,
+          // Only India vs "somewhere else" matters here: the GST state list —
+          // and the CGST/SGST split it drives — applies to India alone.
+          DropdownButtonFormField<String>(
+            value: _country == 'India' ? 'India' : 'Other',
+            decoration: const InputDecoration(labelText: 'Country'),
+            items: const [
+              DropdownMenuItem(value: 'India', child: Text('India')),
+              DropdownMenuItem(value: 'Other', child: Text('Other')),
+            ],
+            onChanged: (v) => setState(() {
+              _country = v == 'India' ? 'India' : '';
+              // A non-India country means the GST state list no longer applies
+              // — drop a stale pick rather than sending one the API rejects.
+              if (_country != 'India') _state = null;
+            }),
+          ),
+          gap,
+          if (_country == 'India')
+            ConfigDropdown(
+              label: 'State',
+              configKey: 'gst_states',
+              value: _state,
+              onChanged: (v) => setState(() => _state = v),
+            )
+          else
+            AppTextField(
+              controller: TextEditingController(text: _state ?? ''),
+              label: 'State',
+              onChanged: (v) => _state = v,
+            ),
 
           // ════ GST & Tax Details ════
           const _SectionTitle('GST & Tax Details'),
           AppTextField(controller: _gst, label: 'GST Number', hint: '24ABCDE1234F1Z5'),
           gap,
           AppTextField(controller: _pan, label: 'PAN Number', hint: 'ABCDE1234F'),
+          gap,
+          ConfigDropdown(
+            label: 'GST Registration Type',
+            configKey: 'gst_registration_types',
+            value: _gstRegType,
+            onChanged: (v) => setState(() => _gstRegType = v),
+          ),
+          gap,
+          // The Tally group this party's ledger is filed under.
+          NameDropdown(
+            label: 'Ledger Group',
+            endpoint: '/tally/ledger-groups',
+            value: _ledgerGroup,
+            onChanged: (v) => setState(() => _ledgerGroup = v),
+          ),
 
           // ════ Other Details ════
           const _SectionTitle('Other Details'),
@@ -286,6 +370,15 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
                 keyboardType: TextInputType.number,
               )),
             ],
+          ),
+          gap,
+          // Which side that opening balance sits on — a receivable (Dr) reads
+          // very differently from money held on account (Cr).
+          ConfigDropdown(
+            label: 'Opening Balance Type',
+            configKey: 'balance_types',
+            value: _openingType,
+            onChanged: (v) => setState(() => _openingType = v ?? 'Cr'),
           ),
           gap,
           AppTextField(controller: _notes, label: 'Notes', maxLines: 3),

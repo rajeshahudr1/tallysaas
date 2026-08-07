@@ -8,7 +8,7 @@
  *   releaseDir()         — absolute path of the folder that holds the published
  *                          exe files. From env AGENT_RELEASE_DIR, defaulting to
  *                          <api>/agent-releases. A super-admin drops the freshly
- *                          built TallyCloudSyncAgent.exe here, then publishes its
+ *                          built the agent exe here, then publishes its
  *                          version (POST /super-admin/agent-release).
  *   currentRelease(db)   — the single agent_releases row with is_current=true,
  *                          or null. The published latest the agents update to.

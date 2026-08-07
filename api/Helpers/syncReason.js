@@ -18,9 +18,12 @@
  */
 
 // Shown anywhere the user might need to bounce the local agent.
+// The agent exe basename follows the product name (see the brand file).
+const brand = require('../config/brand');
+
 const RESTART_HELP =
     'To restart sync: close the agent window and double-click ' +
-    'TallyCloudSyncAgent.exe again (it re-activates from config.ini and ' +
+    `${brand.shortName}Agent.exe again (it re-activates from config.ini and ` +
     'resumes). The cloud keeps retrying failed records every 60s automatically.';
 
 // Generic restart sentence reused inside a couple of fixes.

@@ -5,7 +5,7 @@
  *
  * agent_releases — the server-side catalogue of published Teloora Tally Sync
  * Agent executables. A super-admin drops a freshly-built
- * TallyCloudSyncAgent.exe into AGENT_RELEASE_DIR (env, default
+ * the agent exe into AGENT_RELEASE_DIR (env, default
  * api/agent-releases/) and PUBLISHES its version here; the single row with
  * is_current=true is the latest the agents auto-update to. The exe FILE lives
  * on disk (streamed by GET /agent/download); this table only holds the

@@ -25,6 +25,8 @@
  * Keys are snake_case to match the request/response field style elsewhere.
  */
 
+const { GST_STATES, GST_REGISTRATION_TYPES } = require('../config/gstStates');
+
 // Supplier classification buckets (Tally "groups" under Sundry Creditors).
 const SUPPLIER_GROUPS = ['Raw Material', 'Packaging', 'Services', 'Transport'];
 
@@ -53,6 +55,16 @@ const JOURNAL_VCH_TYPES = ['Journal', 'Contra', 'Credit Note', 'Debit Note'];
 // The master-record status lifecycle the create/update validators accept.
 const STATUSES = ['Active', 'Inactive', 'Blocked'];
 
+// GST state / registration lists. These are DERIVED from config/gstStates.js —
+// the same module Validators/customer.js allow-lists against — so the options a
+// client is offered can never drift from what the API will accept. The web
+// imports that module directly; the app cannot, which is exactly the case this
+// file exists for (see the header note).
+const GST_STATES_NAMES = GST_STATES.map((s) => s.name);
+
+// Opening-balance side on a party ledger — matches Validators/customer.js.
+const BALANCE_TYPES = ['Cr', 'Dr'];
+
 /**
  * The full options map served by `GET /config/options`. A plain object of
  * `key → string[]`; the controller can return all of it or a requested subset.
@@ -67,6 +79,9 @@ const OPTIONS = {
     units:              UNITS,
     financial_years:    FINANCIAL_YEARS,
     statuses:           STATUSES,
+    gst_states:         GST_STATES_NAMES,
+    gst_registration_types: GST_REGISTRATION_TYPES,
+    balance_types:      BALANCE_TYPES,
 };
 
 module.exports = {
@@ -80,4 +95,6 @@ module.exports = {
     UNITS,
     FINANCIAL_YEARS,
     STATUSES,
+    GST_STATES_NAMES,
+    BALANCE_TYPES,
 };
