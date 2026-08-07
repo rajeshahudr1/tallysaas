@@ -61,6 +61,9 @@ import '../features/stock_vouchers/stock_journal_form_screen.dart';
 import '../features/stock_vouchers/stock_journals_screen.dart';
 import '../features/ledgers/ledger_statement_screen.dart';
 import '../features/ledgers/ledgers_screen.dart';
+import '../features/collect_payments/collect_payment_new_screen.dart';
+import '../features/collect_payments/collect_payment_settings_screen.dart';
+import '../features/collect_payments/collect_payments_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
 import '../features/payments/voucher_form_screen.dart';
@@ -668,6 +671,23 @@ final routerProvider = Provider<GoRouter>((ref) {
           from: state.uri.queryParameters['from'] ?? '',
           to: state.uri.queryParameters['to'] ?? '',
         ),
+      ),
+
+      // ─── Collect Payments (UPI links; no gateway) ──────────────
+      GoRoute(
+        path: '/collect-payments',
+        name: 'collect-payments',
+        builder: (_, __) => const CollectPaymentsScreen(),
+      ),
+      GoRoute(
+        path: '/collect-payments/add',
+        name: 'collect-payment-add',
+        builder: (_, __) => const CollectPaymentNewScreen(),
+      ),
+      GoRoute(
+        path: '/collect-payments/settings',
+        name: 'collect-payment-settings',
+        builder: (_, __) => const CollectPaymentSettingsScreen(),
       ),
 
       GoRoute(

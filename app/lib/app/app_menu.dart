@@ -98,7 +98,7 @@ const List<MenuGroup> kAppMenu = [
     MenuEntry(key: 'bank', label: 'Bank Reconciliation', icon: Icons.balance_outlined, module: 'bank-reconciliation', route: '/bank-reconciliation'),
     MenuEntry(key: 'journals', label: 'Journals', icon: Icons.menu_book_outlined, module: 'journals', route: '/journals'),
     MenuEntry(key: 'contra', label: 'Contra', icon: Icons.swap_horiz, module: 'contra', route: '/contra'),
-    MenuEntry(key: 'collect-payments', label: 'Collect Payments', icon: Icons.credit_card, module: 'collect-payments'),
+    MenuEntry(key: 'collect-payments', label: 'Collect Payments', icon: Icons.credit_card, module: 'collect-payments', route: '/collect-payments'),
   ]),
   MenuGroup(label: 'Customers', icon: Icons.contacts_outlined, items: [
     MenuEntry(key: 'customers', label: 'Customers', icon: Icons.people_outline, module: 'customers', route: '/customers'),

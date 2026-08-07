@@ -244,6 +244,17 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Pending until invoiced; cancel it if the goods are returned outright.',
     ],
   ),
+  'collect-payments': ModuleInfo(
+    'Collect Payments',
+    'Send a customer a payment link for an unpaid invoice — they pay you directly by UPI, with no gateway in between.',
+    [
+      'Pick an outstanding invoice; the amount is taken from the bill itself.',
+      'Share the link — the customer sees your UPI QR and ID on a public page.',
+      'When the money lands, tap "Mark paid" — that records the Receipt too.',
+      'Cancel a request to stop its link working; nothing is written to the books.',
+      'Set your UPI ID under settings first, or the link has nothing to pay into.',
+    ],
+  ),
   'cash-bank': ModuleInfo(
     'Cash & Bank',
     'Your cash and bank ledgers with their live balances for a period — replayed from the vouchers synced out of Tally.',
