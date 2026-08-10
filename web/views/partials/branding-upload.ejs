@@ -2,10 +2,17 @@
 /* ─────────────────────────────────────────────────────────────
  * partials/branding-upload.ejs — one company image (logo / signature).
  *
- * Its OWN form, deliberately: the Settings page posts urlencoded, and a file
- * needs multipart. Nesting it inside the settings form would also be invalid
- * HTML — the browser drops the inner form and the upload button silently
- * submits the whole settings page instead.
+ * NO <form> ANYWHERE IN HERE, and that is the whole design. This partial is
+ * included from INSIDE the Settings page's own <form>, and a nested form is not
+ * merely ignored by the HTML parser — its </form> is what CLOSES THE OUTER ONE.
+ * Everything after this include therefore fell outside the settings form,
+ * including the Save Settings button at the bottom of the page. A submit button
+ * with no form does nothing at all: no request, no error, no reload. Settings
+ * could not be saved and the page gave no clue why.
+ *
+ * So the upload posts with fetch + FormData (multipart, which the settings
+ * form's urlencoded post could not carry anyway) and reloads on success, which
+ * shows the server's flash exactly as the old form post did.
  *
  * Locals:
  *   kind  'logo' | 'signature'
@@ -24,18 +31,18 @@ var _hint = (typeof hint !== 'undefined' && hint) ? hint : '';
         </div>
     <% } %>
 
-    <form method="post" action="/settings/branding/<%= _kind %>" enctype="multipart/form-data" class="brand-up-form">
-        <input type="file" class="form-control form-control-sm" name="image" accept="image/*" required>
-        <button type="submit" class="brand-up-btn"><%= _url ? 'Replace' : 'Upload' %></button>
-    </form>
+    <div class="brand-up-form">
+        <input type="file" class="form-control form-control-sm" accept="image/*"
+               data-brand-file="<%= _kind %>">
+        <button type="button" class="brand-up-btn" data-brand-upload="<%= _kind %>">
+            <%= _url ? 'Replace' : 'Upload' %>
+        </button>
+    </div>
 
     <% if (_url) { %>
         <%# Removing is destructive and one click away from Replace, so it
             confirms rather than trusting the aim. %>
-        <form method="post" action="/settings/branding/<%= _kind %>/remove" class="brand-up-remove"
-              onsubmit="return confirm('Remove the current <%= _kind %>?');">
-            <button type="submit" class="brand-up-link">Remove</button>
-        </form>
+        <button type="button" class="brand-up-link" data-brand-remove="<%= _kind %>">Remove</button>
     <% } %>
 
     <div class="form-hint"><%= _hint %> Max 5 MB.</div>
@@ -49,7 +56,52 @@ var _hint = (typeof hint !== 'undefined' && hint) ? hint : '';
     .brand-up-btn { padding:7px 14px; border:none; border-radius:8px; font-size:.82rem; cursor:pointer;
                     color:#fff; white-space:nowrap;
                     background:linear-gradient(90deg, var(--brand-a, #2563eb), var(--brand-b, #16a34a)); }
-    .brand-up-remove { margin:0; }
     .brand-up-link { border:none; background:none; padding:0; font-size:.8rem; color:#dc2626; cursor:pointer; }
     .brand-up-link:hover { text-decoration:underline; }
 </style>
+
+<script>
+/* Delegated on document, and wired ONCE: this partial is included more than
+   once per page (logo + signature), so a per-include listener would fire twice
+   and upload twice. */
+(function () {
+    if (window.__brandUpWired) return;
+    window.__brandUpWired = true;
+
+    function post(url, body, btn, label) {
+        btn.disabled = true;
+        btn.textContent = label;
+        fetch(url, { method: 'POST', body: body, credentials: 'same-origin' })
+            // Both routes redirect to /settings with a flash; reloading shows it
+            // exactly as the old form post did.
+            .then(function () { window.location.href = '/settings#branding'; })
+            .catch(function () {
+                btn.disabled = false;
+                btn.textContent = 'Try again';
+            });
+    }
+
+    document.addEventListener('click', function (ev) {
+        var up = ev.target.closest('[data-brand-upload]');
+        if (up) {
+            var kind = up.getAttribute('data-brand-upload');
+            var input = document.querySelector('[data-brand-file="' + kind + '"]');
+            if (!input || !input.files || !input.files.length) {
+                alert('Choose an image first.');
+                return;
+            }
+            var fd = new FormData();
+            fd.append('image', input.files[0]);      // the field name the route reads
+            post('/settings/branding/' + kind, fd, up, 'Uploading...');
+            return;
+        }
+
+        var rm = ev.target.closest('[data-brand-remove]');
+        if (rm) {
+            var k = rm.getAttribute('data-brand-remove');
+            if (!confirm('Remove the current ' + k + '?')) return;
+            post('/settings/branding/' + k + '/remove', new FormData(), rm, 'Removing...');
+        }
+    });
+})();
+</script>

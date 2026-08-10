@@ -62,6 +62,14 @@ var _infoId  = 'modinfo-' + _infoKey.replace(/[^a-z0-9]/gi, '');
                     <i class="fa-solid fa-circle-info"></i>
                 </button>
             <% } %>
+            <%# Masthead artwork, anchored to the TITLE. It used to be a
+                background-image on .page-head pinned at "right 220px" — a guess
+                at how wide the action buttons would be. Any page whose buttons
+                ran wider (Settings: Reset + Save Settings) had the artwork
+                sitting on top of them. Beside the title it cannot collide with
+                anything, on any page, at any button count. Decorative only,
+                hence aria-hidden. %>
+            <span class="page-title-mark" aria-hidden="true"></span>
         </h1>
         <% if (_subtitle) { %><p class="page-subtitle"><%= _subtitle %></p><% } %>
         <% if (_breadcrumb.length) { %>

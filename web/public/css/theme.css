@@ -657,19 +657,46 @@ a { text-decoration: none; }
 .page-title { font-size: 24px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.2px; }
 .page-subtitle { font-size: 14px; color: var(--text-muted); margin: 0; }
 
-/* Masthead artwork. A background image rather than an <img>, so no view has to
-   change and it can never intercept a click. The gradient IS a background-image
-   too, so both are layered in ONE declaration — setting background-image alone
-   here would have wiped the mint wash off every masthead. Dropped below 1200px
-   (no spare width beside the actions) and on print. */
-.page-head, .voucher-head {
+/* Masthead artwork, BESIDE THE TITLE (see .page-title-mark below).
+   It used to be a background-image on the banner itself, pinned at
+   "right 220px center" — a fixed guess at how much room the action buttons
+   would need. Settings has two wide buttons (Reset + Save Settings) and the
+   artwork landed on top of them; every page with wider-than-usual actions had
+   the same collision, and no single offset can be right for all of them.
+   Anchored to the title it is laid out by flow, so it cannot overlap anything.
+   Decorative, drawn as a background so it can never intercept a click. */
+.page-title-mark {
+    display: inline-block;
+    width: 46px;
+    height: 32px;
+    margin-left: 10px;
+    vertical-align: middle;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 150' fill='none'%3E%3Cpath d='M96 26h56l24 24v70a8 8 0 0 1-8 8H96a8 8 0 0 1-8-8V34a8 8 0 0 1 8-8z' fill='%23FFFFFF' stroke='%23C9DCF7' stroke-width='2.5'/%3E%3Cpath d='M152 26l24 24h-24V26z' fill='%23E4EEFC'/%3E%3Crect x='102' y='60' width='44' height='4' rx='2' fill='%23D7E4F8'/%3E%3Crect x='102' y='72' width='60' height='4' rx='2' fill='%23D7E4F8'/%3E%3Crect x='102' y='84' width='34' height='4' rx='2' fill='%23D7E4F8'/%3E%3Ccircle cx='160' cy='106' r='19' fill='%231560E0'/%3E%3Cpath d='M74 62c14-12 30-10 36-4-2 12-14 22-28 22-6 0-10-2-12-4 0-6 1-10 4-14z' fill='%2345B649' opacity='.55'/%3E%3Cpath d='M60 86c10-14 26-16 34-12-1 13-12 24-26 25-5 0-9-1-11-3 0-4 1-7 3-10z' fill='%231560E0' opacity='.35'/%3E%3C/svg%3E");
+}
+/* Narrow screens give the title the full width it can get, and print does not
+   want decoration at all. */
+@media (max-width: 575.98px) {
+    .page-title-mark { display: none; }
+}
+@media print {
+    .page-title-mark { display: none; }
+}
+
+/* The voucher masthead keeps its own right-anchored artwork: its layout is a
+   fixed masthead bar, not a title + variable action row. */
+.voucher-head {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 150' fill='none'%3E%3Cpath d='M96 26h56l24 24v70a8 8 0 0 1-8 8H96a8 8 0 0 1-8-8V34a8 8 0 0 1 8-8z' fill='%23FFFFFF' stroke='%23C9DCF7' stroke-width='2.5'/%3E%3Cpath d='M152 26l24 24h-24V26z' fill='%23E4EEFC'/%3E%3Crect x='102' y='60' width='44' height='4' rx='2' fill='%23D7E4F8'/%3E%3Crect x='102' y='72' width='60' height='4' rx='2' fill='%23D7E4F8'/%3E%3Crect x='102' y='84' width='34' height='4' rx='2' fill='%23D7E4F8'/%3E%3Ccircle cx='160' cy='106' r='19' fill='%231560E0'/%3E%3Cpath d='M74 62c14-12 30-10 36-4-2 12-14 22-28 22-6 0-10-2-12-4 0-6 1-10 4-14z' fill='%2345B649' opacity='.55'/%3E%3Cpath d='M60 86c10-14 26-16 34-12-1 13-12 24-26 25-5 0-9-1-11-3 0-4 1-7 3-10z' fill='%231560E0' opacity='.35'/%3E%3C/svg%3E"), linear-gradient(100deg, #FFFFFF 0%, #F5FBF8 52%, #E9F6EF 100%);
     background-repeat: no-repeat, no-repeat;
     background-position: right 220px center, 0 0;
     background-size: auto 82%, cover;
 }
+/* Only .voucher-head still carries artwork in its background; .page-head's
+   moved next to the title, where narrow screens hide it via .page-title-mark. */
 @media (max-width: 1199.98px) {
-    .page-head, .voucher-head { background-image: linear-gradient(100deg, #FFFFFF 0%, #F5FBF8 52%, #E9F6EF 100%); }
+    .voucher-head { background-image: linear-gradient(100deg, #FFFFFF 0%, #F5FBF8 52%, #E9F6EF 100%); }
 }
 @media print {
     .page-head, .voucher-head { background-image: none; }

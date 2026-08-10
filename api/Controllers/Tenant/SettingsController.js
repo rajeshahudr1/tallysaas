@@ -191,7 +191,15 @@ async function update(req, res) {
         // LICENSE (they control the agent), not in the per-company `settings`
         // table. Build a licenses patch (last spelling wins for aliased keys) and
         // a cleaned settings object that excludes the sync keys so they are NOT
-        // also stored as company settings. Both halves are part of the same txn.
+        // also stored as company settings.
+        //
+        // The two halves live in DIFFERENT DATABASES and so cannot share one
+        // transaction: `db` is a per-request proxy onto the license's tenant
+        // knex, while `licenses` is a master control-plane table. Writing the
+        // flags through the tenant transaction threw "relation licenses does not
+        // exist" and the whole save returned a 500 — and because the form's
+        // switches always post (a hidden companion makes an unchecked box submit
+        // too), that was EVERY save, not an edge case.
         const licensePatch  = {};
         const settingsClean = {};
         if (settingsPatchIn) {
@@ -241,15 +249,6 @@ async function update(req, res) {
                     .update({ ...companyPatch, updated_at: new Date() });
             }
 
-            // SYNC flags → the licenses row (license-scoped). The agent reads these
-            // back (heartbeat / version), so the Settings form is now the editor.
-            if (hasLicense) {
-                await trx('licenses')
-                    .where('id', licenseId)
-                    .whereNull('deleted_at')
-                    .update({ ...licensePatch, updated_at: new Date() });
-            }
-
             if (hasSettings && req.companyId) {
                 const now = new Date();
                 for (const key of Object.keys(settingsClean)) {
@@ -270,6 +269,19 @@ async function update(req, res) {
                 }
             }
         });
+
+        // SYNC flags → the licenses row, on the MASTER connection. The agent
+        // reads these back (heartbeat / version), so the Settings form is now
+        // their editor. Written after the tenant transaction commits: two
+        // databases cannot share one, and of the two orders this is the safer —
+        // a failure here leaves the profile saved and reports the error, rather
+        // than flipping the customer's agent for a save that then rolled back.
+        if (hasLicense) {
+            await masterDb('licenses')
+                .where('id', licenseId)
+                .whereNull('deleted_at')
+                .update({ ...licensePatch, updated_at: new Date() });
+        }
 
         return R.successResponse(res, { updated: true }, 'Settings saved.');
     } catch (err) {

@@ -59,7 +59,10 @@ var settingsTabs = [
     { id: 'tally',   label: 'Tally Sync',    icon: 'fa-rotate'                          },
     { id: 'invoice', label: 'Invoice & Tax', icon: 'fa-file-invoice'                    },
     { id: 'notify',  label: 'Notifications', icon: 'fa-bell'                            },
-    { id: 'brand',   label: 'Branding',      icon: 'fa-palette'                         },
+    // Branding is hidden for now. Its PANE is still rendered (and still works)
+    // so nothing already uploaded is orphaned and re-showing it is one line —
+    // only the tab that reaches it is gone.
+    // { id: 'brand',   label: 'Branding',      icon: 'fa-palette'                      },
 ];
 
 /* Every voucher family that can carry its own numbering series. `on` is the
