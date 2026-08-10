@@ -72,3 +72,4 @@ docs/
 # (app/test and agent/tests are still tracked — those folders never ship.)
 api/tests/
 web/tests/
+/web/data

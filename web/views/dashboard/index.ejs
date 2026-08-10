@@ -4,7 +4,7 @@
  *
  * Composes the dashboard screen entirely from theme.css component
  * classes + the shared partials, driven by the locals the route
- * (routes/web.js → GET /) injects from data/mock.js:
+ * (routes/web.js → GET /) injects from the api:
  *
  *   title, activeMenu, breadcrumb   (header/sidebar — via _layout)
  *   summaryPanel   { title, tone, control, tiles[] }  — Summary panel
@@ -206,37 +206,12 @@ function _syncPillClass(v) {
     <%- include('_daybook') %>
 </section>
 
-<!-- ── 5. KPI stat cards — Today's Sales / Total Customers / Total
-     Products / Total Companies / Invoice Amount / Payment Received.
-     Below the six LiveKeeping panels (Task 2); each trend comes ONLY
-     from a real `delta` the route attached to that stat (Task 1's
-     _trendText rule) — no delta, no trend, ever. ── -->
-<% if (_stats.length) { %>
-<section class="stat-grid">
-    <% _stats.forEach(function (s) { %>
-        <% var d = s.delta; var trendText = _trendText(d); %>
-        <% if (s.href) { %><a href="<%= s.href %>" class="stat-card-link"><% } %>
-        <article class="stat-card stat-card--<%= s.tone %> <%= s.href ? 'stat-card--clickable' : '' %>">
-            <div class="stat-card-top">
-                <span class="stat-icon"><i class="fa-solid <%= s.icon %>"></i></span>
-                <% if (d && trendText) { %>
-                    <span class="stat-trend <%= d.dir === 'down' ? 'is-down' : '' %>">
-                        <i class="fa-solid <%= d.dir === 'down' ? 'fa-arrow-trend-down' : 'fa-arrow-trend-up' %>"></i>
-                        <%= trendText %>
-                    </span>
-                <% } %>
-            </div>
-            <div>
-                <div class="stat-label"><%= s.label %></div>
-                <div class="stat-value"><%= s.value %></div>
-            </div>
-        </article>
-        <% if (s.href) { %></a><% } %>
-    <% }); %>
-</section>
-<% } %>
+<!-- The KPI stat-card row that used to sit here (Today's Sales / Total
+     Customers / Products / Companies / Invoice Amount / Payment Received)
+     was removed — the LiveKeeping panels above already carry those figures.
+     `stats` is now the customer portal's alone (the _statsOnly branch). -->
 
-<!-- ── 6. Recent row (Recent Invoices + Recent Sync Activity) ── -->
+<!-- ── 5. Recent row (Recent Invoices + Recent Sync Activity) ── -->
 <section class="recent-row">
 
     <!-- Recent Invoices — rendered through the shared Table component -->

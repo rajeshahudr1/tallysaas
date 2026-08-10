@@ -3,22 +3,23 @@
 /* ─────────────────────────────────────────────────────────────
  * routes/web.js — the 3 page routes for the Phase-1 UI.
  *
- * This Router is the ONLY place that reads data/mock.js. Each handler
- * pulls exactly what its view needs and passes it as render locals.
- * Header/identity locals (user, company, companies, notificationCount)
- * are injected globally in index.js, so handlers only add the
- * page-specific locals (title, activeMenu, breadcrumb, data).
+ * Each handler pulls exactly what its view needs from the api and passes it
+ * as render locals. Header/identity locals (user, company, companies,
+ * notificationCount) are injected globally in index.js, so handlers only add
+ * the page-specific locals (title, activeMenu, breadcrumb, data).
  *
- * SWAP TO API LATER: make a handler `async` and replace the `mock.*`
- * reads with `await apiClient.*` calls. The render local NAMES stay the
- * same, so the EJS views/partials never change.
+ * Option lists come from ONE of two places, never a local copy:
+ *   • the api's /config/options    → fetchConfig()  (states, units, GST rates…)
+ *   • the api's list endpoints     → fetchNames() / fetchOptions()
+ * The only exception is config/options.js — purely presentational filter
+ * labels no endpoint owns. See that file for why data/mock.js is gone.
  * ─────────────────────────────────────────────────────────── */
 
 const express  = require('express');
 const router   = express.Router();
 const multer   = require('multer');
 const FormData = require('form-data');
-const mock     = require('../data/mock');
+const OPTS     = require('../config/options');
 // Product name for release filenames — the ONE brand file.
 const brand    = require('../config/brand');
 const api      = require('../Helpers/apiClient');
@@ -437,6 +438,24 @@ async function fetchOptions(req, basePath) {
     }));
 }
 
+/* Plain NAME strings for the filter-bar selects that render string options
+ * (customerNames, supplierNames, locationNames, salesPersons) rather than
+ * id+name pairs. These used to come from data/mock.js, so live installs were
+ * offering fake parties ("Amit Enterprises") that matched nothing.
+ *
+ * Never throws: a filter dropdown is not worth 500-ing a page over, so an api
+ * error degrades to an empty list. */
+async function fetchNames(req, basePath) {
+    try {
+        const { body } = await api.get(req, `${basePath}?per_page=100`);
+        const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+        return rows.map((r) => r.name).filter(Boolean);
+    } catch (err) {
+        console.error(`fetchNames(${basePath}) failed:`, err.message);
+        return [];
+    }
+}
+
 /* Tally party-eligible ledger groups (Sundry Debtors / Sundry Creditors
  * ancestry) as plain group-name strings for the customer form's "Ledger
  * Group" field. `customers.ledger_group` stores the NAME (free text on the
@@ -668,9 +687,13 @@ async function applySalesPersonCustomers(req, id, b) {
  *
  * Unlike LIST endpoints, /config/options returns body.data as a FLAT
  * key->string[] map (so read body.data[snake_key] directly, NOT
- * body.data.data). Per requested key: use the api array when present, else
- * fall back to the matching mock.<camelCase> array (resilience if the api is
- * briefly unreachable). */
+ * body.data.data).
+ *
+ * An unavailable key yields an EMPTY array. It used to fall back to a
+ * hardcoded copy in data/mock.js — a second source of truth that had already
+ * drifted from the api's (6 states there vs the api's full GST list). A blank
+ * dropdown makes an api outage obvious; a stale one hides it and lets someone
+ * save a value the api never offered. */
 const CONFIG_KEY_TO_LOCAL = {
     supplier_groups: 'supplierGroups',
     customer_groups: 'customerGroups',
@@ -679,6 +702,7 @@ const CONFIG_KEY_TO_LOCAL = {
     gst_rates:       'gstRates',
     units:           'units',
     financial_years: 'financialYears',
+    gst_states:      'states',
 };
 async function fetchConfig(req, keys) {
     const wanted = Array.isArray(keys) ? keys : [keys];
@@ -688,7 +712,7 @@ async function fetchConfig(req, keys) {
     for (const key of wanted) {
         const local = CONFIG_KEY_TO_LOCAL[key];
         if (!local) continue;
-        out[local] = (ok && Array.isArray(body.data[key])) ? body.data[key] : mock[local];
+        out[local] = (ok && Array.isArray(body.data[key])) ? body.data[key] : [];
     }
     return out;
 }
@@ -993,7 +1017,7 @@ async function buildDashboardModel(req, res, section) {
         const recSync = Array.isArray(data.recent_sync) ? data.recent_sync : [];
 
         // Number helpers: Indian-grouped integers for display strings, so
-        // the API numbers render exactly like the pre-formatted mock values.
+        // the API numbers render exactly like the pre-formatted values the view expects.
         const num = (v) => Number(v || 0);
         const grp = (v) => num(v).toLocaleString('en-IN');
         const inr = (v) => '₹' + grp(v);
@@ -1255,21 +1279,10 @@ async function buildDashboardModel(req, res, section) {
             };
         });
 
-        // ── KPI stat cards (Today's Sales, Total Customers/Products/
-        // Companies, Invoice Amount, Payment Received) — rendered as their
-        // own row BELOW the six LiveKeeping panels. Each one carries the
-        // matching real `delta` from the API's `deltas` block (Task 1) so
-        // _trendText() shows a trend only where a genuine previous figure
-        // exists — never a placeholder.
-        const deltas = data.deltas || {};
-        const stats = [
-            { label: "Today's Sales",    value: inr(counts.today_sales),      icon: 'fa-chart-line',           tone: 'blue',   delta: deltas.today_sales || null },
-            { label: 'Total Customers',  value: grp(counts.customers),        icon: 'fa-users',                tone: 'purple', href: '/customers', delta: deltas.customers || null },
-            { label: 'Total Products',   value: grp(counts.products),         icon: 'fa-box',                  tone: 'teal',   href: '/products',  delta: deltas.products || null },
-            { label: 'Total Companies',  value: grp(counts.companies),        icon: 'fa-building',             tone: 'indigo', href: '/companies', delta: deltas.companies || null },
-            { label: 'Invoice Amount',   value: inr(counts.invoice_amount),   icon: 'fa-file-invoice',         tone: 'amber',  href: '/sales-invoices', delta: deltas.invoice_amount || null },
-            { label: 'Payment Received', value: inr(counts.payment_received), icon: 'fa-hand-holding-dollar',  tone: 'green',  href: '/receipts', delta: deltas.payment_received || null },
-        ];
+        // The KPI stat-card row (Today's Sales, Total Customers/Products/
+        // Companies, Invoice Amount, Payment Received) was removed: every one
+        // of those figures already appears in the LiveKeeping panels above it.
+        // `stats` now belongs to the customer portal (statsOnly) branch alone.
 
         return {
             // Page data (API-driven).
@@ -1281,9 +1294,6 @@ async function buildDashboardModel(req, res, section) {
             receivablesChart,
             top10Tabs,
             dayBook,
-            // Also reused by the customer-portal (statsOnly) branch, which
-            // renders its OWN stats array before this function ever runs.
-            stats,
             salesChart,
             syncChart,
             recentInvoices,
@@ -1858,20 +1868,28 @@ router.get('/locations', async (req, res, next) => {
 });
 
 /* ── MASTERS · Add Location (GET /locations/add) ────────────── */
-router.get('/locations/add', (req, res) => {
-    res.render('locations/form', {
-        title: 'Add Location',
-        activeMenu: 'locations',
-        breadcrumb: [
-            { label: 'Dashboard', href: '/' },
-            { label: 'Locations', href: '/locations' },
-            { label: 'Add Location' },
-        ],
+// async now: the state + manager option lists come from the api (they used to
+// be hardcoded arrays in data/mock.js).
+router.get('/locations/add', async (req, res, next) => {
+    try {
+        const [config, salesPersons] = await Promise.all([
+            fetchConfig(req, ['gst_states']),
+            fetchNames(req, '/sales-persons'),
+        ]);
+        res.render('locations/form', {
+            title: 'Add Location',
+            activeMenu: 'locations',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Locations', href: '/locations' },
+                { label: 'Add Location' },
+            ],
 
-        // Form option sources.
-        states:       mock.states,
-        salesPersons: mock.salesPersons,
-    });
+            // Form option sources.
+            states: config.states,
+            salesPersons,
+        });
+    } catch (err) { next(err); }
 });
 
 /* ── POST /locations — create via api (no FK; state/manager are text) ── */
@@ -3129,7 +3147,7 @@ router.get('/sales-invoices', async (req, res, next) => {
                 invoiceRows, invoicesTotal: meta.total, grandTotal: meta.grand_total || 0,
                 page: meta.page, perPage: meta.per_page,
                 monthMode: false, approvalTab: approval, monthValue: '',
-                customerNames: mock.customerNames, locationNames: mock.locationNames, invoiceStatuses: mock.invoiceStatuses,
+                customerNames: await fetchNames(req, '/customers'), locationNames: await fetchNames(req, '/locations'), invoiceStatuses: OPTS.INVOICE_STATUSES,
             });
         }
         // Tally Sales-Register: month-wise summary of the APPROVED (real) sales.
@@ -3196,9 +3214,9 @@ router.get('/sales-invoices', async (req, res, next) => {
         approvalTab:    String(req.query.approval || 'approved'),
 
         // Filter option sources.
-        customerNames:  mock.customerNames,
-        locationNames:  mock.locationNames,
-        invoiceStatuses: mock.invoiceStatuses,
+        customerNames:  await fetchNames(req, '/customers'),
+        locationNames:  await fetchNames(req, '/locations'),
+        invoiceStatuses: OPTS.INVOICE_STATUSES,
     });
   } catch (err) { next(err); }
 });
@@ -5405,8 +5423,8 @@ router.get('/purchase-invoices', async (req, res, next) => {
                 purchaseRows, purchasesTotal: meta.total, grandTotal: meta.grand_total || 0,
                 page: meta.page, perPage: meta.per_page,
                 monthMode: false, monthValue: '',
-                supplierNames: mock.supplierNames, locationNames: mock.locationNames,
-                invoiceStatuses: mock.invoiceStatuses,
+                supplierNames: await fetchNames(req, '/suppliers'), locationNames: await fetchNames(req, '/locations'),
+                invoiceStatuses: OPTS.INVOICE_STATUSES,
             });
         }
         const { rows: monthRows, meta: mMeta } = await apiList(req, '/purchase-invoices/monthly');
@@ -5457,9 +5475,9 @@ router.get('/purchase-invoices', async (req, res, next) => {
         monthLabel,
         monthValue:      month,
 
-        supplierNames:   mock.supplierNames,
-        locationNames:   mock.locationNames,
-        invoiceStatuses: mock.invoiceStatuses,
+        supplierNames:   await fetchNames(req, '/suppliers'),
+        locationNames:   await fetchNames(req, '/locations'),
+        invoiceStatuses: OPTS.INVOICE_STATUSES,
     });
   } catch (err) { next(err); }
 });
@@ -5627,9 +5645,9 @@ router.get('/payments', async (req, res, next) => {
         monthLabel,
         monthValue:      month,
 
-        supplierNames:   mock.supplierNames,
+        supplierNames:   await fetchNames(req, '/suppliers'),
         ...config,
-        invoiceStatuses: mock.invoiceStatuses,
+        invoiceStatuses: OPTS.INVOICE_STATUSES,
     });
   } catch (err) { next(err); }
 });
@@ -5649,7 +5667,7 @@ router.get('/payments/add', async (req, res, next) => {
             ],
             supplierOptions,                 // FK (id+name) for the Supplier select
             ...config,
-            nextPaymentNo: mock.nextPaymentNo,
+            nextPaymentNo: '',
         });
     } catch (err) { next(err); }
 });
@@ -5724,9 +5742,9 @@ router.get('/receipts', async (req, res, next) => {
         monthLabel,
         monthValue:      month,
 
-        customerNames:   mock.customerNames,
+        customerNames:   await fetchNames(req, '/customers'),
         ...config,
-        invoiceStatuses: mock.invoiceStatuses,
+        invoiceStatuses: OPTS.INVOICE_STATUSES,
     });
   } catch (err) { next(err); }
 });
@@ -5746,7 +5764,7 @@ router.get('/receipts/add', async (req, res, next) => {
             ],
             customerOptions,                 // FK (id+name) for the Customer select
             ...config,
-            nextReceiptNo: mock.nextReceiptNo,
+            nextReceiptNo: '',
         });
     } catch (err) { next(err); }
 });
@@ -5790,7 +5808,7 @@ router.get('/inventory', async (req, res, next) => {
         const stats    = payload.stats || {};
 
         // Indian-grouped currency (e.g. 4820000 → ₹48,20,000) for the value
-        // stat card; matches the pre-formatted mock string.
+        // stat card; matches the pre-formatted string the view expects.
         const inr = (v) => '₹' + Number(v || 0).toLocaleString('en-IN');
 
         // Map api rows → the view's expected table keys. No per-row location
@@ -5827,7 +5845,7 @@ router.get('/inventory', async (req, res, next) => {
         }));
 
         // 4 summary cards — same {label,value,icon,tone} keys/icons/tones as
-        // mock.inventoryStats; values come from the api `stats` block.
+        // Values come from the api `stats` block.
         const inventoryStats = [
             { label: 'Total Stock Value', value: inr(stats.stock_value),            icon: 'fa-warehouse',            tone: 'indigo' },
             { label: 'Total SKUs',        value: String(stats.total_skus || 0),     icon: 'fa-box',                  tone: 'blue'   },
@@ -6409,10 +6427,10 @@ router.get('/sync-logs', async (req, res, next) => {
             // "Common fixes / How to restart" help panel content.
             restartHelp: RESTART_HELP,
 
-            // Filter dropdown option sources (still mock — api doesn't provide them).
-            syncModuleNames: mock.syncModuleNames,
-            syncDirections:  mock.syncDirections,
-            syncLogStatuses: mock.syncLogStatuses,
+            // Filter dropdown option sources — presentational labels (config/options.js).
+            syncModuleNames: OPTS.SYNC_MODULE_NAMES,
+            syncDirections:  OPTS.SYNC_DIRECTIONS,
+            syncLogStatuses: OPTS.SYNC_LOG_STATUSES,
 
             // Log-detail popup behaviour (opens the modal on the per-row view btn).
             pageScript: '<script src="/js/sync-logs.js" defer></script>',
@@ -7122,7 +7140,7 @@ router.get('/reports/sales-register', async (req, res, next) => {
             status:     txStatusLabel(r.status),
         }));
 
-        // Summary object → the 4 stat-cards (icon/tone copied from mock.reportSalesSummary).
+        // Summary object → the 4 stat-cards (icon/tone defined inline).
         const s   = payload.summary || {};
         const inr = (v) => '₹' + (Number(v) || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 });
         const summary = [
@@ -7142,9 +7160,9 @@ router.get('/reports/sales-register', async (req, res, next) => {
             ],
             rows,
             summary,
-            // Filter option lists the api doesn't provide — keep mock.
-            customerNames: mock.customerNames,
-            locationNames: mock.locationNames,
+            // Filter option sources — this org's real customers/locations.
+            customerNames: await fetchNames(req, '/customers'),
+            locationNames: await fetchNames(req, '/locations'),
         });
     } catch (err) { next(err); }
 });
@@ -7176,8 +7194,8 @@ router.get('/users', async (req, res, next) => {
             page:       meta.page || 1,
             perPage:    meta.per_page || 10,
 
-            // Role filter option source (still mock — the api doesn't provide it).
-            roles:      mock.roles,
+            // Role filter option source — the licence's real roles from the api.
+            roles:      await fetchNames(req, '/roles'),
         });
     } catch (err) { next(err); }
 });
@@ -8102,8 +8120,8 @@ router.get('/settings', async (req, res, next) => {
  * WIRED TO THE REAL API. Calls GET /api/v1/customers (Bearer + company
  * scope ride the session via apiClient), then maps the api rows to the
  * shape customers/list.ejs already expects (gst_number → gst, ISO date
- * → dd/mm/yyyy). Filter dropdowns stay on mock for now (cosmetic) until
- * those masters are wired too. On any api error the page renders empty
+ * → dd/mm/yyyy). Filter dropdowns read the org's real masters via
+ * fetchNames()/fetchConfig(). On any api error the page renders empty
  * with a flash-free fallback. */
 router.get('/customers', async (req, res, next) => {
     try {
@@ -8660,7 +8678,7 @@ router.get('/locations/:id/edit', async (req, res, next) => {
         res.render('locations/form', {
             title: 'Edit Location', activeMenu: 'locations',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Locations', href: '/locations' }, { label: 'Edit Location' }],
-            record, states: mock.states, salesPersons: mock.salesPersons,
+            record, states: (await fetchConfig(req, ['gst_states'])).states, salesPersons: await fetchNames(req, '/sales-persons'),
         });
     } catch (err) { next(err); }
 });

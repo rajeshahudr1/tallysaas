@@ -185,19 +185,44 @@
     }
 
     function openDatePicker(anchor, isoValue, onApply) {
-        var wrap = anchor.closest('.dp-wrap') || anchor.parentNode;
-        var existing = wrap.querySelector('.dp');
-        if (existing) { closeDatePicker(existing); return; }   // second click closes
+        // Second click on the same button closes; a click on a different one
+        // swaps the popup over to it.
+        if (openDp) {
+            var wasSame = openDp._anchor === anchor;
+            closeDatePicker(openDp);
+            if (wasSame) return;
+        }
 
         var selected = fromIso(isoValue);
         var view = new Date(selected.getFullYear(), selected.getMonth(), 1);
         var today = new Date();
 
+        // Parented to <body>, NOT to the button's card: the Day Book card is
+        // `overflow: hidden`, which would clip a popup positioned inside it.
+        // Fixed coordinates are recomputed from the button on every scroll.
         var dp = document.createElement('div');
         dp.className = 'dp';
         dp.setAttribute('role', 'dialog');
-        wrap.appendChild(dp);
+        dp._anchor = anchor;
+        document.body.appendChild(dp);
+        openDp = dp;
         anchor.setAttribute('aria-expanded', 'true');
+
+        function place() {
+            var r = anchor.getBoundingClientRect();
+            var w = dp.offsetWidth, h = dp.offsetHeight, gap = 8, edge = 8;
+
+            // Right-aligned to the button, then pulled back inside the viewport.
+            var left = Math.min(Math.max(edge, r.right - w), window.innerWidth - w - edge);
+            // Below the button; flips above when there is no room underneath.
+            var top = r.bottom + gap;
+            if (top + h > window.innerHeight - edge) {
+                top = (r.top - gap - h >= edge) ? r.top - gap - h
+                                                : Math.max(edge, window.innerHeight - h - edge);
+            }
+            dp.style.left = Math.round(left) + 'px';
+            dp.style.top = Math.round(top) + 'px';
+        }
 
         function draw() {
             var first = new Date(view.getFullYear(), view.getMonth(), 1);
@@ -236,9 +261,11 @@
               +     '<button type="button" class="dp-btn dp-btn--apply" data-dp-apply>Apply</button>'
               +   '</span>'
               + '</div>';
+
+            place();
         }
 
-        function closeAll() { closeDatePicker(dp); anchor.setAttribute('aria-expanded', 'false'); }
+        function closeAll() { closeDatePicker(dp); }
 
         dp.addEventListener('click', function (ev) {
             // Stop here: ‹ › and the day cells call draw(), which REPLACES the
@@ -265,23 +292,34 @@
 
         // Dismiss on outside click / Escape. Registered on the next tick so the
         // click that opened the popup does not immediately close it.
-        function onDocClick(ev) { if (!dp.contains(ev.target) && ev.target !== anchor) closeAll(); }
+        function onDocClick(ev) { if (!dp.contains(ev.target) && !anchor.contains(ev.target)) closeAll(); }
         function onKey(ev) { if (ev.key === 'Escape') closeAll(); }
+        // The popup is fixed-positioned, so it does not travel with the page:
+        // follow the button on scroll (capture — the scroller may be an inner
+        // element) and on resize.
         setTimeout(function () {
             document.addEventListener('click', onDocClick);
             document.addEventListener('keydown', onKey);
         }, 0);
+        window.addEventListener('scroll', place, true);
+        window.addEventListener('resize', place);
         dp._cleanup = function () {
             document.removeEventListener('click', onDocClick);
             document.removeEventListener('keydown', onKey);
+            window.removeEventListener('scroll', place, true);
+            window.removeEventListener('resize', place);
         };
 
         draw();
     }
 
+    var openDp = null;   // the one calendar that may be open at a time
+
     function closeDatePicker(dp) {
         if (dp._cleanup) dp._cleanup();
+        if (dp._anchor) dp._anchor.setAttribute('aria-expanded', 'false');
         dp.remove();
+        if (openDp === dp) openDp = null;
     }
 
     /* ── Top 10 tab strip ─────────────────────────────────────────

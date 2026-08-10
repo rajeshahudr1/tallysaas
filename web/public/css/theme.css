@@ -1468,9 +1468,12 @@ a.top10-item:hover .top10-name { text-decoration: underline; }
    <input type="date"> picker is browser-styled and cannot follow the theme,
    so dashboard.js builds this instead. */
 .dp-wrap { position: relative; }
+/* Fixed, and parented to <body> by dashboard.js — an absolutely positioned
+   popup inside the Day Book card is clipped by that card's `overflow: hidden`.
+   left/top are written by the script from the button's rect. */
 .dp {
-    position: absolute; top: calc(100% + 8px); right: 0; z-index: 1050;
-    width: 268px; padding: 12px;
+    position: fixed; top: 0; left: 0; z-index: 1050;
+    width: 268px; max-width: calc(100vw - 16px); padding: 12px;
     background: var(--card); border: 1px solid var(--border);
     border-radius: 12px; box-shadow: 0 12px 32px rgba(16,24,40,.16);
 }

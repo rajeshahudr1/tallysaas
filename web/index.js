@@ -12,11 +12,9 @@ process.env.TZ = process.env.TZ || 'Asia/Kolkata';
  *   • Static asset serving from /public (css, js, img, icons, PWA).
  *   • Sensible middleware: morgan (dev logs), compression, helmet.
  *   • res.locals defaults (user/company/companies/notificationCount…)
- *     pulled from the mock layer so every render has header data.
+ *     read from the SESSION + the api, so every render has header data.
  *   • Mount the page routes (routes/web.js).
  *   • A friendly 404 handler + a clean startup banner.
- *
- * NO backend / DB / auth in this phase — pages render from mock data.
  * ─────────────────────────────────────────────────────────── */
 
 // dotenv is optional in this UI-only phase (only PORT matters). Load it
@@ -31,9 +29,21 @@ const morgan       = require('morgan');
 const compression  = require('compression');
 const helmet       = require('helmet');
 
-const mock = require('./data/mock');
 const api  = require('./Helpers/apiClient');
 const { moduleForPath: rbacModuleForPath } = require('./config/rbacPaths');
+
+// Header placeholder for a request with no session yet (the login page renders
+// the same layout). Was `mock.user` from data/mock.js — a 52 KB demo-data file
+// that is gitignored, so the require crashed the server on deploy while working
+// locally. Only this one object was ever used from it.
+const ANON_USER = {
+    name: 'Guest',
+    role: '',
+    role_slug: '',
+    sales_person_id: null,
+    avatar: '/img/avatar.svg',
+    initials: '?',
+};
 
 // Header initials fallback (e.g. "Rajesh Admin" → "RA").
 function initialsOf(name) {
@@ -211,8 +221,8 @@ if (process.env.SESSION_DEBUG === '1') {
 
 /* ── Global view locals ─────────────────────────────────────────
  * Header/identity data comes from the SESSION once logged in (the
- * signed-in user from the api); before login it falls back to the mock
- * values so the standalone login page still renders. Page routes
+ * signed-in user from the api); before login it falls back to
+ * ANON_USER so the standalone login page still renders. Page routes
  * override title/activeMenu/breadcrumb as needed.
  * ─────────────────────────────────────────────────────────── */
 app.use(async (req, res, next) => {
@@ -297,7 +307,7 @@ app.use(async (req, res, next) => {
             initials: initialsOf(u.name),
         };
     } else {
-        res.locals.user = mock.user;
+        res.locals.user = ANON_USER;
     }
     // Super-admin flag — drives the cross-tenant "Licenses" sidebar item and
     // the super-admin route guard. Derived from the session user's role slug.
@@ -556,11 +566,11 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
     const url = `http://localhost:${PORT}`;
     console.log('');
-    console.log(`  ☁  ${require('./config/brand').name} — Web (UI-only)`);
+    console.log(`  ☁  ${require('./config/brand').name} — Web`);
     console.log('  ──────────────────────────────────────────');
     console.log(`     URL  : ${url}`);
     console.log(`     Env  : ${ENV}`);
-    console.log('     Data : mock (data/mock.js)');
+    console.log(`     API  : ${process.env.API_URL || 'http://localhost:4500/api/v1'}`);
     console.log('  ──────────────────────────────────────────');
     console.log('');
 });

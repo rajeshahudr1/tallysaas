@@ -15,6 +15,7 @@
 
 const nodemailer = require('nodemailer');
 const BRAND = require('../config/brand');
+const L     = require('./emailLayout');
 
 const HOST      = (process.env.MAIL_HOST || '').trim();
 const PORT      = parseInt(process.env.MAIL_PORT || '587', 10);
@@ -61,18 +62,15 @@ async function sendPasswordResetCode(to, code, name) {
         `This code expires in 15 minutes.\n\n` +
         `If you didn't request a password reset, you can safely ignore this email.\n\n` +
         `— ${BRAND.name}`;
-    const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;padding:24px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2937">
-      <div style="max-width:460px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(16,24,40,.12)">
-        <div style="background:${BRAND.colors.gradient};padding:20px 24px;color:#fff;font-weight:700;font-size:17px">${BRAND.name} · ${BRAND.tagline}</div>
-        <div style="padding:26px 24px">
-          <p style="margin:0 0 6px;font-size:15px">Hi ${name || 'there'},</p>
-          <p style="margin:0 0 18px;color:#6b7280;font-size:13.5px">Use this code to reset your password. It expires in <b>15 minutes</b>.</p>
-          <div style="font-size:32px;font-weight:800;letter-spacing:8px;color:#111827;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;text-align:center;padding:16px 0">${code}</div>
-          <p style="margin:18px 0 0;color:#9ca3af;font-size:12px">If you didn't request this, you can safely ignore this email.</p>
-        </div>
-      </div>
-    </body></html>`;
-    return sendMail({ to, subject, html, text });
+    const html = L.wrap({
+        title: 'Reset your password',
+        body: `<p style="margin:0 0 6px">Hi ${name || 'there'},</p>
+               <p style="margin:0 0 18px">Enter this code to set a new password. It expires in <b>15 minutes</b>.</p>
+               ${L.codeBlock(code)}
+               ${L.note("Didn't request this? You can safely ignore this email — your password stays unchanged.")}`,
+        footer: `Questions? Reply to this email or write to <a href="mailto:${BRAND.supportEmail}" style="color:${L.COLORS.muted}">${BRAND.supportEmail}</a>.`,
+    });
+    return sendMail({ to, subject, html, text, attachments: L.logoAttachment() });
 }
 
 /**
@@ -92,18 +90,15 @@ async function sendAgentLoginCode(to, code, name, machineName) {
         `It expires in 10 minutes.\n\n` +
         `If you did not start this, do NOT share the code. Change your password.\n\n` +
         `— ${BRAND.name}`;
-    const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;padding:24px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2937">
-      <div style="max-width:460px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(16,24,40,.12)">
-        <div style="background:${BRAND.colors.gradient};padding:20px 24px;color:#fff;font-weight:700;font-size:17px">${BRAND.name} · ${BRAND.tagline}</div>
-        <div style="padding:26px 24px">
-          <p style="margin:0 0 6px;font-size:15px">Hi ${name || 'there'},</p>
-          <p style="margin:0 0 18px;color:#6b7280;font-size:13.5px">Use this code to connect this computer${where ? `<b>${where}</b>` : ''} to your account. It expires in <b>10 minutes</b>.</p>
-          <div style="font-size:32px;font-weight:800;letter-spacing:8px;color:#111827;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;text-align:center;padding:16px 0">${code}</div>
-          <p style="margin:18px 0 0;color:#9ca3af;font-size:12px">If you did not start this, do not share this code — change your password instead.</p>
-        </div>
-      </div>
-    </body></html>`;
-    return sendMail({ to, subject, html, text });
+    const html = L.wrap({
+        title: 'Connect this computer',
+        body: `<p style="margin:0 0 6px">Hi ${name || 'there'},</p>
+               <p style="margin:0 0 18px">Enter this code in the ${BRAND.name} agent to connect this computer${where ? `<b>${where}</b>` : ''} to your account. It expires in <b>10 minutes</b>.</p>
+               ${L.codeBlock(code)}
+               ${L.note('If you did not start this, do <b>not</b> share the code — change your password instead. This code lets a computer read your books.')}`,
+        footer: `Questions? Reply to this email or write to <a href="mailto:${BRAND.supportEmail}" style="color:${L.COLORS.muted}">${BRAND.supportEmail}</a>.`,
+    });
+    return sendMail({ to, subject, html, text, attachments: L.logoAttachment() });
 }
 
 /** Branded "you've been invited as an Accountant" email — sent in the BACKGROUND
@@ -123,47 +118,53 @@ async function sendAccountantInvite(to, { name, companyName, email, password } =
         `  Email:    ${email}\n` +
         `  Password: ${password}\n\n` +
         `Please change your password after signing in.\n\n— ${BRAND.name}`;
-    const btn = loginUrl
-        ? `<a href="${loginUrl}" style="display:inline-block;margin:6px 0 4px;background:${BRAND.colors.gradient};color:#fff;text-decoration:none;font-weight:700;padding:11px 22px;border-radius:10px">Sign in</a>`
-        : '';
-    const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;padding:24px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2937">
-      <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(16,24,40,.12)">
-        <div style="background:${BRAND.colors.gradient};padding:20px 24px;color:#fff;font-weight:700;font-size:17px">${BRAND.name} · ${BRAND.tagline}</div>
-        <div style="padding:26px 24px">
-          <p style="margin:0 0 6px;font-size:15px">Hi ${name || 'there'},</p>
-          <p style="margin:0 0 16px;color:#6b7280;font-size:13.5px"><b>${company}</b> has shared their books with you. You have <b>read-only</b> access — you can <b>view &amp; export</b> reports, ledgers, invoices and outstanding, but cannot change anything.</p>
-          <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;padding:14px 16px;margin:0 0 16px;font-size:14px">
-            <div style="margin-bottom:6px"><span style="color:#9ca3af">Email:</span> <b>${email}</b></div>
-            <div><span style="color:#9ca3af">Password:</span> <b>${password}</b></div>
-          </div>
-          ${btn}
-          <p style="margin:18px 0 0;color:#9ca3af;font-size:12px">Please change your password after signing in. If you didn't expect this, you can ignore this email.</p>
-        </div>
-      </div>
-    </body></html>`;
-    return sendMail({ to, subject, html, text });
+    const html = L.wrap({
+        title: `${company} shared their books with you`,
+        body: `<p style="margin:0 0 6px">Hi ${name || 'there'},</p>
+               <p style="margin:0 0 16px">You have <b>read-only</b> access — view and export their reports, ledgers, invoices and outstanding. Nothing you do can change their data.</p>
+               ${L.panel(
+                   `<div style="margin-bottom:4px"><span style="color:${L.COLORS.muted}">Email</span><br><b>${email}</b></div>
+                    <div><span style="color:${L.COLORS.muted}">Password</span><br><b style="font-family:Consolas,Menlo,'Courier New',monospace">${password}</b></div>`
+               )}
+               ${L.button('Sign in', loginUrl)}
+               ${L.note("Please change your password after signing in. If you weren't expecting this, you can ignore this email.")}`,
+        footer: `Questions? Reply to this email or write to <a href="mailto:${BRAND.supportEmail}" style="color:${L.COLORS.muted}">${BRAND.supportEmail}</a>.`,
+    });
+    return sendMail({ to, subject, html, text, attachments: L.logoAttachment() });
 }
 
 /** Branded payment-reminder email to an overdue customer. `text` is the shared
  * plain-text body (from reminders.reminderText); the HTML is a nicer version. */
 async function sendPaymentReminder(to, { customerName, companyName, outstanding, oldestDue, overdueCount, text } = {}) {
     const money = '₹' + Number(outstanding || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const due = oldestDue ? new Date(oldestDue).toLocaleDateString('en-IN') : '';
+    // "11 Jun 2026", not en-IN's "11/6/2026". A dunning email is read by people
+    // who also get d/m and m/d dates all day; a spelled month cannot be misread
+    // as a different date, and the recipient is being asked to act on this one.
+    const due = oldestDue
+        ? new Date(oldestDue).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+        : '';
     const brand = companyName || BRAND.name;
     const subject = `Payment reminder — ${brand}`;
-    const html = `<!doctype html><html><body style="margin:0;background:#f3f4f6;padding:24px;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2937">
-      <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 8px 30px rgba(16,24,40,.12)">
-        <div style="background:linear-gradient(135deg,#2563EB,#6D28D9);padding:20px 24px;color:#fff;font-weight:700;font-size:17px">${brand}</div>
-        <div style="padding:26px 24px">
-          <p style="margin:0 0 6px;font-size:15px">Dear ${customerName || 'Customer'},</p>
-          <p style="margin:0 0 14px;color:#6b7280;font-size:13.5px">This is a gentle payment reminder. Your account currently shows an outstanding balance of:</p>
-          <div style="font-size:26px;font-weight:800;color:#111827;background:#f8fafc;border:1px solid #e5e7eb;border-radius:12px;text-align:center;padding:16px 0">${money}</div>
-          ${overdueCount ? `<p style="margin:14px 0 0;color:#6b7280;font-size:13px">${overdueCount} overdue invoice(s)${due ? ` &middot; oldest due ${due}` : ''}</p>` : ''}
-          <p style="margin:16px 0 0;color:#6b7280;font-size:13.5px">Kindly arrange the payment at your earliest convenience.</p>
-          <p style="margin:14px 0 0;color:#9ca3af;font-size:12px">If you have already paid, please ignore this email.</p>
-        </div>
-      </div>
-    </body></html>`;
+    // NO Teloora logo here, and no logo attachment: this email is sent BY our
+    // customer's business TO their customer. Our branding on it would put a
+    // stranger's name on their dunning letter. The business's own name is the
+    // header; we appear only in the small "sent via" line, which also explains
+    // the unfamiliar sending domain to the recipient.
+    const html = L.wrap({
+        heading: brand,
+        title: 'Payment reminder',
+        body: `<p style="margin:0 0 6px">Dear ${customerName || 'Customer'},</p>
+               <p style="margin:0 0 14px">This is a gentle reminder that your account shows an outstanding balance of:</p>
+               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:2px 0 4px">
+                 <tr><td align="center" style="background:${L.COLORS.panel};border:1px solid ${L.COLORS.hair};border-radius:12px;padding:18px 12px">
+                   <div style="font:800 28px/1.2 Segoe UI,Helvetica,Arial,sans-serif;color:${L.COLORS.ink}">${money}</div>
+                   ${overdueCount ? `<div style="margin-top:6px;font:400 13px/1.5 Segoe UI,Helvetica,Arial,sans-serif;color:${L.COLORS.muted}">${overdueCount} overdue invoice${overdueCount === 1 ? '' : 's'}${due ? ` &middot; oldest due ${due}` : ''}</div>` : ''}
+                 </td></tr>
+               </table>
+               <p style="margin:16px 0 0">Kindly arrange the payment at your earliest convenience.</p>
+               ${L.note('If you have already paid, please ignore this email.')}`,
+        footer: `Sent by ${brand} via ${BRAND.name}`,
+    });
     return sendMail({ to, subject, html, text });
 }
 

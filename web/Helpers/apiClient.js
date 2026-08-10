@@ -5,7 +5,7 @@
  *
  * Thin wrapper around Node 20+'s built-in fetch() that forwards
  * web/ → api/ calls. This is the BFF (backend-for-frontend) seam: EJS
- * route handlers call these helpers instead of reading data/mock.js, so
+ * route handlers call these helpers to reach the api, so
  * the SAME REST API also serves a future mobile app.
  *
  * Reads per-request auth from the session (set at login):
