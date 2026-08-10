@@ -11,7 +11,7 @@ class AppConfig {
   /// `flutter build apk --dart-define=API_BASE=https://...`.
   static const String apiBase = String.fromEnvironment(
     'API_BASE',
-    defaultValue: 'http://10.0.2.2:4500', // Android emulator → host machine
+    defaultValue: 'https://tallysaasapi.teloora.com', // live API
   );
 
   /// REST path prefix the Node API exposes (`/api/v1/...`). Combined with
@@ -23,7 +23,10 @@ class AppConfig {
   /// not the API. Blank means "unknown": the Collect Payments screen then
   /// shares the raw token instead of guessing a wrong URL. Override per build
   /// with `--dart-define=WEB_BASE=https://app.example.com`.
-  static const String webBase = String.fromEnvironment('WEB_BASE', defaultValue: '');
+  static const String webBase = String.fromEnvironment(
+    'WEB_BASE',
+    defaultValue: 'https://teloora.com',
+  );
 
   /// The public payment link for [token], or null when [webBase] is unset.
   static String? payLink(String? token) {
@@ -52,4 +55,8 @@ class AppConfig {
   static const String kCompanyId = 'tcs.auth.companyId';
   static const String kUserCache = 'tcs.auth.user';
   static const String kThemeKey  = 'tcs.theme';
+
+  /// Email remembered by the sign-in form's "Remember me" checkbox (address
+  /// only — the password is never stored).
+  static const String kRememberEmail = 'tcs.auth.rememberEmail';
 }

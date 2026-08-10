@@ -32,6 +32,23 @@ class AppPrefs {
       await _p.setString(AppConfig.kThemeKey, v);
     }
   }
+
+  // ─── Sign-in "Remember me" ─────────────────────────────────
+  /// The email the sign-in form prefills, or null when the user did not tick
+  /// "Remember me". Mirrors the web login's remember checkbox — it remembers
+  /// the ADDRESS only, never the password.
+  String? getRememberedEmail() {
+    final v = _p.getString(AppConfig.kRememberEmail);
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  Future<void> setRememberedEmail(String? email) async {
+    if (email == null || email.trim().isEmpty) {
+      await _p.remove(AppConfig.kRememberEmail);
+    } else {
+      await _p.setString(AppConfig.kRememberEmail, email.trim());
+    }
+  }
 }
 
 /// Holds the singleton `SharedPreferences`. Wired in `main()` after

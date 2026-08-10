@@ -30,6 +30,11 @@ class Brand {
   /// The single logo asset (splash / login). Replace the file to swap the logo.
   static const String logoAsset = 'assets/images/logo.svg';
 
+  /// The full lock-up (mark + wordmark + tagline) — the same PNG the web
+  /// sign-in / forgot pages show on their mobile breakpoint
+  /// (web/public/img/logo-full.png). Keep the two files in step.
+  static const String logoFullAsset = 'assets/images/logo-full.png';
+
   /// The launcher / app icon asset.
   static const String iconAsset = 'assets/icon/app_icon.png';
 

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
@@ -12,19 +11,23 @@ import '../../shared/layouts/auth_shell.dart';
 import '../../shared/widgets/app_button.dart';
 import '../../shared/widgets/app_text_field.dart';
 
-/// Public forgot-password flow (one screen, two steps):
-///   1. enter email   → POST /auth/forgot-password (emails a 6-digit code)
-///   2. enter code +   → POST /auth/reset-password  → back to /login
-///      new password
+/// Public forgot-password flow — a port of the WEB page
+/// (web/views/auth/forgot.ejs), which is driven by the same three steps:
 ///
-/// Mirrors the web sign-in chrome (brand lockup on the gradient card) and uses
-/// the same shared field/button widgets as LoginScreen.
+///   email → POST /auth/forgot-password  (emails a 6-digit code)
+///   code  → POST /auth/reset-password   (verify code + set a new password)
+///   done  → a confirmation panel with a "Go to sign in" button
+///
+/// Same copy, same red error / green info banners, same brand lock-up.
 class ForgotPasswordScreen extends ConsumerStatefulWidget {
   const ForgotPasswordScreen({super.key});
 
   @override
   ConsumerState<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
 }
+
+/// The web's `step` local, one-for-one.
+enum _Step { email, code, done }
 
 class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
   final _emailKey = GlobalKey<FormState>();
@@ -35,8 +38,9 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
 
   bool _obscure = true;
   bool _busy = false;
-  bool _codeSent = false;
+  _Step _step = _Step.email;
   String? _error;
+  String? _info;
 
   @override
   void dispose() {
@@ -46,19 +50,13 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     super.dispose();
   }
 
-  void _snack(String m) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(m)));
-  }
-
   Future<void> _sendCode() async {
     if (_busy) return;
     if (!(_emailKey.currentState?.validate() ?? false)) return;
     setState(() {
       _busy = true;
       _error = null;
+      _info = null;
     });
     try {
       await ref.read(apiClientProvider).post(
@@ -66,8 +64,10 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
         body: {'email': _emailCtl.text.trim()},
       );
       if (!mounted) return;
-      setState(() => _codeSent = true);
-      _snack('If that email is registered, a 6-digit code has been sent.');
+      setState(() {
+        _step = _Step.code;
+        _info = 'If that email is registered, a 6-digit code has been sent.';
+      });
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } catch (_) {
@@ -83,6 +83,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _info = null;
     });
     try {
       await ref.read(apiClientProvider).post(
@@ -94,8 +95,9 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
         },
       );
       if (!mounted) return;
-      _snack('Password reset. Please sign in.');
-      context.go('/login');
+      // The web lands on its own confirmation step rather than bouncing
+      // straight back to /login — do the same so the outcome is unmistakable.
+      setState(() => _step = _Step.done);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } catch (_) {
@@ -107,138 +109,189 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return AuthShell(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Brand lockup — same as the sign-in screen.
-          Row(
-            children: [
-              SvgPicture.asset(Brand.logoAsset, width: 44, height: 44),
-              const SizedBox(width: AppSpacing.md12),
-              const Text(
-                Brand.name,
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.text1),
-              ),
-            ],
+          // Brand lock-up — the same PNG as the sign-in screen.
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.xl24),
+              child: Image.asset(Brand.logoFullAsset, width: 200, fit: BoxFit.contain),
+            ),
           ),
-          const SizedBox(height: AppSpacing.xl24),
-          Text(_codeSent ? 'Enter code' : 'Forgot password', style: theme.textTheme.titleLarge),
-          const SizedBox(height: AppSpacing.xs4),
-          Text(
-            _codeSent
-                ? 'Enter the 6-digit code we emailed and choose a new password.'
-                : "Enter your account email and we'll send you a reset code.",
-            style: theme.textTheme.bodySmall,
-          ),
-          const SizedBox(height: AppSpacing.xl24),
 
           if (_error != null) ...[
-            _ErrorBanner(_error!),
-            const SizedBox(height: AppSpacing.md12),
+            _Banner(_error!, tone: _BannerTone.error),
+            const SizedBox(height: AppSpacing.lg16),
+          ],
+          if (_info != null) ...[
+            _Banner(_info!, tone: _BannerTone.info),
+            const SizedBox(height: AppSpacing.lg16),
           ],
 
-          if (!_codeSent)
-            Form(
-              key: _emailKey,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AppTextField(
-                    label: 'Email',
-                    controller: _emailCtl,
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.done,
-                    prefixIcon: Icons.mail_outline,
-                    validator: Validators.email,
-                    hint: 'you@company.com',
-                    onSubmitted: (_) => _sendCode(),
-                  ),
-                  const SizedBox(height: AppSpacing.lg16),
-                  AppButton(label: 'Send code', loading: _busy, onPressed: _sendCode),
-                ],
-              ),
-            )
-          else
-            Form(
-              key: _resetKey,
-              autovalidateMode: AutovalidateMode.onUserInteraction,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AppTextField(
-                    label: '6-digit code',
-                    controller: _codeCtl,
-                    keyboardType: TextInputType.number,
-                    textInputAction: TextInputAction.next,
-                    prefixIcon: Icons.pin_outlined,
-                    validator: (v) => (v == null || v.trim().length != 6) ? 'Enter the 6-digit code.' : null,
-                  ),
-                  const SizedBox(height: AppSpacing.md12),
-                  AppTextField(
-                    label: 'New password',
-                    controller: _pwCtl,
-                    obscure: _obscure,
-                    textInputAction: TextInputAction.done,
-                    prefixIcon: Icons.lock_outline,
-                    validator: (v) => Validators.minLen(v, 6, 'Password'),
-                    onSubmitted: (_) => _resetPassword(),
-                  ),
-                  const SizedBox(height: AppSpacing.sm8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton.icon(
-                      onPressed: _busy ? null : () => setState(() => _obscure = !_obscure),
-                      icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off, size: 18),
-                      label: Text(_obscure ? 'Show password' : 'Hide password'),
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.md12),
-                  AppButton(label: 'Reset password', loading: _busy, onPressed: _resetPassword),
-                  const SizedBox(height: AppSpacing.sm8),
-                  TextButton(
-                    onPressed: _busy ? null : () => setState(() {
-                          _codeSent = false;
-                          _error = null;
-                        }),
-                    child: const Text('Use a different email'),
-                  ),
-                ],
-              ),
-            ),
+          switch (_step) {
+            _Step.done => _doneStep(),
+            _Step.code => _codeStep(),
+            _Step.email => _emailStep(),
+          },
 
           const SizedBox(height: AppSpacing.sm8),
-          TextButton(
+          TextButton.icon(
             onPressed: _busy ? null : () => context.go('/login'),
-            child: const Text('Back to sign in'),
+            icon: const Icon(Icons.arrow_back, size: 16),
+            label: const Text('Back to sign in'),
           ),
         ],
       ),
     );
   }
+
+  Widget _title(String title, String sub) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title,
+              style: const TextStyle(
+                  fontSize: 21, fontWeight: FontWeight.w700, color: AppColors.text1)),
+          const SizedBox(height: AppSpacing.xs4),
+          Text(sub, style: const TextStyle(fontSize: 13.5, color: AppColors.text2)),
+          const SizedBox(height: AppSpacing.xl24),
+        ],
+      );
+
+  Widget _emailStep() => Form(
+        key: _emailKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _title('Forgot password',
+                "Enter your account email and we'll send you a reset code."),
+            AppTextField(
+              label: 'Email',
+              controller: _emailCtl,
+              keyboardType: TextInputType.emailAddress,
+              textInputAction: TextInputAction.done,
+              prefixIcon: Icons.mail_outline,
+              validator: Validators.email,
+              hint: 'you@company.com',
+              onSubmitted: (_) => _sendCode(),
+            ),
+            const SizedBox(height: AppSpacing.lg16),
+            AppButton(
+              label: 'Send code',
+              icon: Icons.send_outlined,
+              loading: _busy,
+              onPressed: _sendCode,
+            ),
+          ],
+        ),
+      );
+
+  Widget _codeStep() => Form(
+        key: _resetKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _title('Enter code',
+                'Enter the 6-digit code we emailed and choose a new password.'),
+            AppTextField(
+              label: '6-digit code',
+              controller: _codeCtl,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.next,
+              prefixIcon: Icons.pin_outlined,
+              hint: '123456',
+              validator: (v) => (v == null || v.trim().length != 6)
+                  ? 'Enter the 6-digit code.'
+                  : null,
+            ),
+            const SizedBox(height: AppSpacing.md12),
+            AppTextField(
+              label: 'New password',
+              controller: _pwCtl,
+              obscure: _obscure,
+              textInputAction: TextInputAction.done,
+              prefixIcon: Icons.lock_outline,
+              hint: '••••••••',
+              validator: (v) => Validators.minLen(v, 6, 'Password'),
+              onSubmitted: (_) => _resetPassword(),
+              suffix: IconButton(
+                onPressed: _busy ? null : () => setState(() => _obscure = !_obscure),
+                icon: Icon(
+                  _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                  size: 20,
+                  color: AppColors.text3,
+                ),
+                tooltip: _obscure ? 'Show password' : 'Hide password',
+              ),
+            ),
+            const SizedBox(height: AppSpacing.lg16),
+            AppButton(
+              label: 'Reset password',
+              icon: Icons.key_outlined,
+              loading: _busy,
+              onPressed: _resetPassword,
+            ),
+            const SizedBox(height: AppSpacing.sm8),
+            TextButton(
+              onPressed: _busy
+                  ? null
+                  : () => setState(() {
+                        _step = _Step.email;
+                        _error = null;
+                        _info = null;
+                      }),
+              child: const Text('Use a different email'),
+            ),
+          ],
+        ),
+      );
+
+  Widget _doneStep() => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _title('Password reset',
+              'Your password has been updated. You can sign in now.'),
+          AppButton(
+            label: 'Go to sign in',
+            icon: Icons.login,
+            onPressed: () => context.go('/login'),
+          ),
+        ],
+      );
 }
 
-/// Soft red inline banner (same look as the sign-in screen's).
-class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner(this.message);
+enum _BannerTone { error, info }
+
+/// The web's `.login-err` (red) / `.login-info` (green) strips.
+class _Banner extends StatelessWidget {
+  const _Banner(this.message, {required this.tone});
   final String message;
+  final _BannerTone tone;
 
   @override
   Widget build(BuildContext context) {
+    final isError = tone == _BannerTone.error;
+    final fg = isError ? const Color(0xFFB91C1C) : const Color(0xFF065F46);
+    final bg = isError ? const Color(0xFFFEE2E2) : const Color(0xFFECFDF5);
+    final bd = isError ? const Color(0xFFFECACA) : const Color(0xFFA7F3D0);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md12, vertical: AppSpacing.sm8),
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.danger.withOpacity(0.12),
-        border: Border.all(color: AppColors.danger.withOpacity(0.35)),
-        borderRadius: BorderRadius.circular(AppRadius.sm8),
+        color: bg,
+        border: Border.all(color: bd),
+        borderRadius: BorderRadius.circular(AppRadius.sm8 + 2),
       ),
       child: Row(
         children: [
-          const Icon(Icons.error_outline, size: 18, color: AppColors.danger),
+          Icon(isError ? Icons.error_outline : Icons.check_circle_outline,
+              size: 18, color: fg),
           const SizedBox(width: AppSpacing.sm8),
-          Expanded(child: Text(message, style: const TextStyle(color: AppColors.danger, fontSize: 13))),
+          Expanded(
+            child: Text(message, style: TextStyle(color: fg, fontSize: 13)),
+          ),
         ],
       ),
     );

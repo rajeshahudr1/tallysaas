@@ -5,7 +5,7 @@ name: tallysaas_app
 # already-installed devices (Play Store identity, app data, permissions).
 description: Teloora — Connected Accounting companion mobile app
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.0.2+3
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
