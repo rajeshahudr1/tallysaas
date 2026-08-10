@@ -111,6 +111,12 @@ class _Api:
 class PullOrderTests(unittest.TestCase):
 
     def setUp(self):
+        # Outstandings is now read every OUTSTANDINGS_EVERY cycles (see
+        # test_outstandings_does_not_starve_vouchers), and the counter is
+        # module-level. Without this every test after the first would run a
+        # cycle that legitimately skips the report and fail for the wrong reason.
+        sync_agent._outstandings_counter.clear()
+        self.addCleanup(sync_agent._outstandings_counter.clear)
         self.order = []
         self.tally = _Tally(self.order)
         self.api = _Api(self.order)

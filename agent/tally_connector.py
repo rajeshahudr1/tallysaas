@@ -112,6 +112,29 @@ _POISON_FILE: Optional[str] = None
 _TALLY_IDENTITY: str = ""
 
 
+# Did the PREVIOUS request get an answer? The quarantine below blames a request
+# for killing TallyPrime, and that verdict is only sound when Tally was alive
+# when the request went out.
+#
+# It was not always sound. TallyPrime's error box is MODAL: once one bad request
+# raises it, the XML server behind it answers nobody, and every later request
+# fails identically — a dead Tally looks exactly like a request that just killed
+# it. Live, that convicted an innocent: TSSMTDSCategory raised the box at
+# 12:27:00, the Balance Sheet report ran into the corpse 69 seconds later, and
+# "Data Balance Sheet" was written to the skip store permanently. The company's
+# balance sheet then stopped syncing for a fault that was never its own.
+#
+# So a kill only counts when the request before it was answered. Being wrong the
+# other way is cheap — a genuine offender that happens to follow another failure
+# is convicted on its next attempt instead, which costs one more crash we
+# already survive. Being wrong THIS way silently drops real data forever.
+#
+# Starts FALSE: a process that has just launched has no evidence Tally is alive,
+# and the commonest reason its very first request fails is that Tally is not
+# running at all. Nothing may be convicted until something has been answered.
+_LAST_REQUEST_ANSWERED: bool = False
+
+
 def _identity_of(response: str) -> str:
     """The product identity carried in every response HEADER, or "".
 
@@ -462,6 +485,7 @@ class TallyConnector:
 
     def _send_once(self, xml: str, timeout: "int | None" = None) -> str:
         """One POST attempt — the transport half of :meth:`send`."""
+        global _LAST_REQUEST_ANSWERED
         label = self._req_label(xml)
         self._last_label = label
         if self._is_poison(label):
@@ -499,6 +523,8 @@ class TallyConnector:
                 timeout=timeout or TIMEOUT,
             )
         except (requests.ConnectionError, requests.Timeout) as exc:
+            tally_was_alive = _LAST_REQUEST_ANSWERED
+            _LAST_REQUEST_ANSWERED = False
             # A RemoteDisconnected here means Tally dropped the connection while
             # SERVING this request — i.e. it crashed on it. Naming the request is
             # what turns "Tally is down" into "Tally dies on THIS report".
@@ -507,7 +533,8 @@ class TallyConnector:
             # or Tally stopped answering because its modal error box is up. See
             # _is_fragile for why a timeout counts only for these requests.
             hung = isinstance(exc, requests.Timeout) and self._is_fragile(label)
-            if (_killed_tally(exc) or hung) and not self._is_essential(label):
+            if (_killed_tally(exc) or hung) and not self._is_essential(label) \
+                    and tally_was_alive:
                 # QUARANTINE IT. Tally did not merely fail to answer — it died
                 # mid-answer, which is what an object type it does not support
                 # looks like from this side ("Internal Error … Incorrect Object
@@ -538,6 +565,11 @@ class TallyConnector:
                 + " (request: " + label + ")."
                 + " Is Tally running with the XML port enabled?"
             ) from exc
+
+        # Tally answered. Whatever it said, the process is alive and serving —
+        # which is what the quarantine above needs to know about the request
+        # that comes NEXT (see _LAST_REQUEST_ANSWERED).
+        _LAST_REQUEST_ANSWERED = True
 
         if resp.status_code >= 400:
             self.log.error("Tally HTTP %s on [%s]: %s", resp.status_code, label,
@@ -1141,10 +1173,16 @@ class TallyConnector:
     #   • dates are 'd-Mmm-yy', NOT Tally's usual YYYYMMDD;
     #   • BILLFIXED is a wrapper around date+ref only — the amounts are its
     #     SIBLINGS, so a regex scoped to the BILLFIXED element finds no money.
+    # How often :meth:`outstandings` reports progress, in parties. Small enough
+    # that a slow Tally still prints a line every minute or two, large enough
+    # that a fast one does not fill the log.
+    OUTSTANDING_PROGRESS_EVERY = 100
+
     def outstandings(self, company: Optional[str] = None,
                      ledgers: Optional[list[str]] = None,
                      from_date: Optional[str] = None,
-                     to_date: Optional[str] = None) -> dict[str, Any]:
+                     to_date: Optional[str] = None,
+                     on_progress: Optional[Any] = None) -> dict[str, Any]:
         """Tally's OWN bill-wise outstanding, per party.
 
         The cloud already DERIVES outstanding from the mirrored bill allocations
@@ -1158,12 +1196,28 @@ class TallyConnector:
         passes the parties worth asking about (typically the debtor/creditor
         ledgers). Returns ``{rows, total, parties, failed}`` where each row is
         ``{party, bill, bill_date, due_date, opening, amount, overdue_days}``.
+
+        ``on_progress(done, total)`` is called every
+        :data:`OUTSTANDING_PROGRESS_EVERY` parties and once at the end. It
+        exists because this loop is otherwise SILENT: _send_once logs a distinct
+        request label once per run, every party here carries the same label, and
+        so a thousand round trips print one line and then nothing. On a large
+        company that reads as a hung agent — it was reported as one.
         """
         rows: list[dict[str, Any]] = []
         failed: list[str] = []
-        for name in (ledgers or []):
-            if not str(name or "").strip():
-                continue
+        names = [n for n in (ledgers or []) if str(n or "").strip()]
+        total_parties = len(names)
+
+        def _tick(done: int) -> None:
+            if not on_progress:
+                return
+            try:
+                on_progress(done, total_parties)
+            except Exception:             # noqa: BLE001 — progress never fails a sync
+                pass
+
+        for i, name in enumerate(names, start=1):
             try:
                 xml = self._ledger_outstanding_xml(name, company, from_date, to_date)
                 rows.extend(self._parse_bills(xml, party=name))
@@ -1172,6 +1226,11 @@ class TallyConnector:
             except Exception as exc:      # noqa: BLE001 — one unreadable party
                 self.log.debug("Outstanding for %r failed: %s", name, exc)
                 failed.append(str(name))  # must not cost the other parties
+            if i % self.OUTSTANDING_PROGRESS_EVERY == 0:
+                _tick(i)
+        if total_parties and total_parties % self.OUTSTANDING_PROGRESS_EVERY:
+            _tick(total_parties)          # the tail, so the last line reads N/N
+
         total = round(sum(abs(float(r["amount"])) for r in rows), 2)
         return {"rows": rows, "total": total,
                 "parties": len({r["party"] for r in rows}), "failed": failed}

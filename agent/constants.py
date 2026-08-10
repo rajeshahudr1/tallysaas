@@ -38,12 +38,39 @@ BRAND_NAME_AGENT = f"{BRAND_NAME} Agent"
 # --------------------------------------------------------------------------- #
 # Server URL (baked + hidden)
 # --------------------------------------------------------------------------- #
-# PRODUCTION: set your domain here before building the distributable exe; this
-# is the ONLY place. e.g. "https://app.yourdomain.com/api/v1".
-# LIVE build (current): pointed at the production cloud API.
-# For LOCAL TESTING, swap back to the dev machine's LAN IP:
-#   LOCAL = "http://192.168.4.10:4500/api/v1"
-API_BASE_URL = "http://192.168.29.242:4500/api/v1"
+# Both the API base and the agent-UI page are baked in, and they must ALWAYS
+# describe the same tier — a live exe talking to a local UI (or the reverse) is
+# a broken build that still starts, so the two are defined as ONE pair per
+# target and selected together. They were separate constants once, and exactly
+# that mismatch shipped: an exe with the live API and a LAN dev UI URL.
+#
+# Do NOT hand-edit BUILD_TARGET. Choose it at build time:
+#     python build_exe.py --gui --local     (dev machine on the LAN)
+#     python build_exe.py --gui --live      (production)
+# build_exe.py stamps the line below, prints the pair it baked, and the exe
+# shows the same pair in its About/log line.
+#
+# LIVE is HTTPS on purpose: the agent carries the licence key, the agent token
+# and the customer's whole Tally dataset over this URL, and the cloud host's
+# port 4500 is firewalled off anyway — the TLS vhost is the only way in.
+BUILD_TARGET = "live"
+_TARGETS = {
+    "live": {
+        "api": "https://tallysaasapi.teloora.com/api/v1",
+        "ui":  "https://teloora.com/agent-app",
+    },
+    "local": {
+        "api": "http://192.168.4.19:4500/api/v1",
+        "ui":  "http://192.168.4.19:4600/agent-app",
+    },
+}
+
+if BUILD_TARGET not in _TARGETS:
+    raise RuntimeError(
+        f"constants.BUILD_TARGET is {BUILD_TARGET!r}; expected one of {sorted(_TARGETS)}."
+    )
+
+API_BASE_URL = _TARGETS[BUILD_TARGET]["api"]
 
 
 # --------------------------------------------------------------------------- #
@@ -86,7 +113,10 @@ PUBLISHER_CN = "Dukansetu"
 # Baked, like API_BASE_URL, and for the same reason: a customer repointing their
 # agent at another server is not a feature. The bridge derives its CORS
 # allow-list from this value, so the two can never disagree.
-AGENT_UI_URL = "http://192.168.29.242:4600/agent-app"
+#
+# This is the WEB tier, never the api host, and it comes from the same
+# BUILD_TARGET pair as API_BASE_URL so the two always describe one environment.
+AGENT_UI_URL = _TARGETS[BUILD_TARGET]["ui"]
 
 
 # --------------------------------------------------------------------------- #

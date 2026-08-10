@@ -74,7 +74,7 @@ def _version_tuple(v: str) -> tuple:
         parts.append(int(m.group(0)) if m else 0)
     return tuple(parts) if parts else (0,)
 _DEFAULT_LOG_LEVEL = "INFO"
-_DEFAULT_AGENT_VERSION = "1.0.12"
+_DEFAULT_AGENT_VERSION = "1.0.17"
 # Auto-update (Requirement 2). auto_update: master on/off for self-update (the
 # CLOUD per-license toggle overrides this when the version endpoint provides it).
 # update_check_cycles: check for a new exe once at startup, then every N loop

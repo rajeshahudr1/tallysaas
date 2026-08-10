@@ -64,11 +64,14 @@ Notes
 
 from __future__ import annotations
 
+import importlib
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import constants
 
 from brand import NAME as _BRAND_NAME
 from brand import CONSOLE_EXE_NAME as _CONSOLE_EXE, GUI_EXE_NAME as _GUI_EXE, PUBLISHER as _PUBLISHER
@@ -145,6 +148,74 @@ def _write_version_resource(here: Path, app_name: str) -> Path | None:
     except OSError as exc:
         print(f"[build] could not write version resource ({exc}); Properties will be blank")
         return None
+
+
+def _lan_ip() -> str | None:
+    """This machine's LAN address, as another device on the network sees it.
+
+    Opening a UDP socket toward a public address makes the OS pick the outbound
+    interface; nothing is actually sent. ``socket.gethostbyname(hostname)``
+    would be simpler and wrong — on Windows it often answers 127.0.0.1.
+    """
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        return ip if ip and not ip.startswith("127.") else None
+    except OSError:
+        return None
+    finally:
+        s.close()
+
+
+def _stamp_target(target: str, local_host: str | None = None) -> bool:
+    """Stamp ``constants.BUILD_TARGET`` so the exe bakes that tier's URLs.
+
+    The API base and the agent-UI page are one pair per target (see
+    constants._TARGETS), so this single line decides both. Stamping beats
+    hand-editing: a build is then never one forgotten edit away from an exe
+    that talks to production while loading a LAN dev UI.
+
+    For ``local`` the host is refreshed too — to ``local_host`` when given, else
+    to this machine's current LAN IP. A dev box's address moves with DHCP, and a
+    stale one produces an exe that installs cleanly and then cannot reach
+    anything, which reads as "the agent is broken" rather than "the IP changed".
+
+    Returns True when the file now holds ``target``.
+    """
+    here = Path(__file__).resolve().parent
+    consts = here / "constants.py"
+    try:
+        text = consts.read_text(encoding="utf-8")
+        new, n = re.subn(r'(?m)^(BUILD_TARGET\s*=\s*").*?(")\s*$',
+                         r"\g<1>" + target + r"\g<2>", text)
+        if not n:
+            print("Could not find BUILD_TARGET in constants.py — not stamped.")
+            return False
+
+        if target == "local":
+            host = local_host or _lan_ip()
+            if host:
+                before = new
+                new = re.sub(r'(?m)^(\s*"api":\s*")http://[^/"]+(/api/v1",)\s*$',
+                             r"\g<1>http://" + host + r":4500\g<2>", new)
+                new = re.sub(r'(?m)^(\s*"ui":\s*+")http://[^/"]+(/agent-app",)\s*$',
+                             r"\g<1>http://" + host + r":4600\g<2>", new)
+                if new != before:
+                    print(f"[build] local host -> {host}"
+                          f"{'' if local_host else '  (auto-detected LAN IP)'}")
+            else:
+                print("[build] WARNING: could not detect a LAN IP — keeping the "
+                      "local host already in constants.py. Pass --local-host <ip> "
+                      "if the agent cannot reach this machine.")
+
+        if new != text:
+            consts.write_text(new, encoding="utf-8")
+        return True
+    except OSError as exc:
+        print(f"Could not stamp constants.py: {exc}")
+        return False
 
 
 def _stamp_version(version: str) -> bool:
@@ -713,6 +784,12 @@ def main(argv: list[str] | None = None) -> int:
         python build_exe.py --gui            Build the WINDOWED GUI exe.
         python build_exe.py --both           Build BOTH exes.
         python build_exe.py --version 1.0.1  Stamp v1.0.1 into config, then build.
+        python build_exe.py --gui --local    Bake the LAN dev api + agent UI.
+        python build_exe.py --gui --live     Bake the production api + agent UI.
+
+    ``--live`` / ``--local`` set constants.BUILD_TARGET, which picks BOTH the
+    api base and the agent-UI page as one pair — they can never disagree.
+    Passing neither keeps whatever constants.py already holds.
 
     ``--gui`` produces ``dist/Teloora.exe`` (the self-installing tkinter
     app, no console window); the default still produces
@@ -750,6 +827,29 @@ def main(argv: list[str] | None = None) -> int:
             i += 2
             continue
         i += 1
+
+    # ── Which tier's URLs get baked in (constants.BUILD_TARGET) ──
+    # Omitting both flags keeps whatever constants.py already says, so a plain
+    # rebuild never silently changes where the exe points.
+    if "--live" in args and "--local" in args:
+        print("Pass --live OR --local, not both.")
+        return 1
+    target = "live" if "--live" in args else ("local" if "--local" in args else None)
+    local_host = None
+    if "--local-host" in args:
+        j = args.index("--local-host")
+        if j + 1 < len(args):
+            local_host = args[j + 1].strip()
+            target = target or "local"
+    if target and not _stamp_target(target, local_host):
+        return 1
+    try:
+        importlib.reload(constants)          # re-read after stamping
+    except Exception:                        # pragma: no cover - import guard
+        pass
+    print(f"[build] target = {constants.BUILD_TARGET}")
+    print(f"[build]   api  = {constants.API_BASE_URL}")
+    print(f"[build]   ui   = {constants.AGENT_UI_URL}")
 
     # A RELEASE must not carry a dev URL. Dev builds may (that is what they are
     # for), so the gate is on the release flags, not on every build.

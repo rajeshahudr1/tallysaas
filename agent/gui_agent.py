@@ -3242,9 +3242,18 @@ class DashboardView:
                 # first cycle, Connected + logs) instead of a UAC prompt to
                 # (re)start the Windows service.
                 self._fallback_paused = False
+                # Say what actually happened, not what was about to be tried.
+                # _start_inprocess_fallback is a NO-OP when a cycle is already
+                # running, so announcing first meant every extra click printed
+                # "syncing in-process" while doing nothing at all — which reads
+                # as an agent that ignores the button.
+                if self.controller.is_running():
+                    self._activity("[..] Sync Now: a cycle is already running; "
+                                   "it will finish on its own.")
+                    return
+                self._start_inprocess_fallback()
                 self._activity("[..] Sync Now: service is down - syncing "
                                "in-process from the app.")
-                self._start_inprocess_fallback()
                 return
             try:
                 path = sync_agent.sync_now_path(self.cfg)
@@ -3418,8 +3427,13 @@ class DashboardView:
         """
         if not self.service_mode:
             return
+        # While the IN-PROCESS fallback is syncing, the logger tap is already
+        # streaming those lines live — and that same syncer appends them to this
+        # very file, so rendering both printed EVERY line twice (once bare from
+        # the tap, once with its 'gui-agent:' file prefix). Keep reading the file
+        # so the offset stays current; just do not draw it.
         try:
-            self._read_log_appended()
+            self._read_log_appended(draw=not self._fallback_active)
         except Exception:
             pass
         try:
@@ -3427,8 +3441,12 @@ class DashboardView:
         except Exception:
             pass
 
-    def _read_log_appended(self) -> None:
-        """Read newly appended log bytes and append complete lines to Activity."""
+    def _read_log_appended(self, draw: bool = True) -> None:
+        """Read newly appended log bytes and append complete lines to Activity.
+
+        ``draw=False`` consumes the bytes without rendering them — used while
+        another source is already showing the same lines (see the caller).
+        """
         path = self._logtail_path
         try:
             size = os.path.getsize(path)
@@ -3466,7 +3484,7 @@ class DashboardView:
             parts = data.splitlines()
             self._logtail_buf = parts[-1] if parts else ""
             lines = parts[:-1]
-        if not lines:
+        if not lines or not draw:
             return
         for line in lines:
             self._activity(line, scroll=False)

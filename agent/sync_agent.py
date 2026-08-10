@@ -1687,44 +1687,16 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             if VERBOSE:
                 echo(f"  [x] '{cname}': cloud import failed ({exc})")
 
-        # ── Tally's OWN bill-wise outstanding — the independent check on the
-        #    cloud's derived ageing. Read HERE, after the masters are safely in
-        #    the cloud, because it is a per-ledger report: one request per party,
-        #    which on a large company is the longest thing the cycle does. It
-        #    used to run before the import and hold everything else hostage.
-        #
-        #    Its own upload is a SECOND, outstandings-only import. The server
-        #    replaces a side only when rows for that side arrived, so a post
-        #    carrying nothing else cannot disturb the masters already stored
-        #    (see AgentController.importFromTally). ──
-        try:
-            parties = tally.party_ledger_names(company=cname)
-            outstandings = (tally.outstandings(company=cname, ledgers=parties)
-                            if parties else {})
-            if outstandings.get("failed"):
-                logger.warning("Pull[%s]: outstanding unreadable for %d ledger(s): %s",
-                               cname, len(outstandings["failed"]),
-                               ", ".join(outstandings["failed"][:5]))
-            rows = (outstandings or {}).get("rows") or []
-            if rows:
-                api.import_from_tally(token, [], [], company_name=cname,
-                                      outstandings=outstandings)
-                logger.info("Pull[%s]: %d outstanding bill(s) uploaded.",
-                            cname, len(rows))
-        # TallySkipped FIRST: it subclasses TallyUnavailable, so the re-raise
-        # below would catch it too — and did, live. The masters had just
-        # uploaded when a quarantined outstandings report threw all the way out
-        # of this function and ended the cycle with a traceback. A request we
-        # deliberately did not send is the healthy case, not a failure.
-        except TallySkipped as _sexc:
-            logger.info("Pull[%s]: outstandings skipped: %s", cname, _sexc)
-        except TallyUnavailable:
-            raise
-        except Exception as _oexc:                          # noqa: BLE001
-            logger.warning("Pull[%s]: outstandings failed: %s", cname, _oexc)
-
         # ── Vouchers: chunked, AlterID-INCREMENTAL backfill (separate from the
         #    masters import above). Best-effort - never aborts the pull. ──
+        #
+        #    RUNS BEFORE OUTSTANDINGS, and that order is the whole point. The
+        #    outstanding report is per-party — one Tally round trip per ledger —
+        #    so on a company with thousands of parties it can outlast the sync
+        #    interval on its own. While it ran first, every cycle was spent
+        #    there and this block was never reached: a live customer had 3,585
+        #    ledgers mirrored and not one voucher, with an empty voucher
+        #    watermark to prove the pull had never once completed.
         try:
             # Per-TYPE, diff-driven pull. Covers all 24 Tally voucher types
             # (orders, delivery/receipt notes, stock journals, job work, payroll)
@@ -1737,6 +1709,52 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             raise
         except Exception as exc:
             logger.warning("Voucher pull[%s] failed: %s", cname, exc)
+
+        # ── Tally's OWN bill-wise outstanding — the independent check on the
+        #    cloud's derived ageing. Read LAST, and only every Nth cycle: it is
+        #    a per-ledger report (one request per party), by far the longest
+        #    thing a cycle does, and outstanding balances do not move faster
+        #    than the masters and vouchers that produce them.
+        #
+        #    Its own upload is a SECOND, outstandings-only import. The server
+        #    replaces a side only when rows for that side arrived, so a post
+        #    carrying nothing else cannot disturb the masters already stored
+        #    (see AgentController.importFromTally). ──
+        try:
+            if _outstandings_due(cname):
+                parties = tally.party_ledger_names(company=cname)
+                # Progress, because silence here reads as a hang: the breadcrumb
+                # in _send_once logs a distinct label once per run, and every
+                # party carries the SAME label — so thousands of requests print
+                # one line and then nothing for as long as they take.
+                def _progress(done: int, total: int) -> None:
+                    logger.info("Pull[%s]: outstanding %d/%d parties read.",
+                                cname, done, total)
+
+                outstandings = (tally.outstandings(company=cname, ledgers=parties,
+                                                   on_progress=_progress)
+                                if parties else {})
+                if outstandings.get("failed"):
+                    logger.warning("Pull[%s]: outstanding unreadable for %d ledger(s): %s",
+                                   cname, len(outstandings["failed"]),
+                                   ", ".join(outstandings["failed"][:5]))
+                rows = (outstandings or {}).get("rows") or []
+                if rows:
+                    api.import_from_tally(token, [], [], company_name=cname,
+                                          outstandings=outstandings)
+                    logger.info("Pull[%s]: %d outstanding bill(s) uploaded.",
+                                cname, len(rows))
+        # TallySkipped FIRST: it subclasses TallyUnavailable, so the re-raise
+        # below would catch it too — and did, live. The masters had just
+        # uploaded when a quarantined outstandings report threw all the way out
+        # of this function and ended the cycle with a traceback. A request we
+        # deliberately did not send is the healthy case, not a failure.
+        except TallySkipped as _sexc:
+            logger.info("Pull[%s]: outstandings skipped: %s", cname, _sexc)
+        except TallyUnavailable:
+            raise
+        except Exception as _oexc:                          # noqa: BLE001
+            logger.warning("Pull[%s]: outstandings failed: %s", cname, _oexc)
 
         # ── DELETE detection. Periodic, not every cycle: it re-reads every
         #    master id, which is cheap but not free. Best-effort. ──
@@ -1771,6 +1789,31 @@ _reconcile_counter: dict[str, int] = {}
 # same reasoning, as RECONCILE_EVERY above.
 VOUCHER_SWEEP_EVERY = 12
 _voucher_sweep_counter: dict[str, int] = {}
+
+# ── Outstanding cadence ──────────────────────────────────────────────────────
+# Same trade as RECONCILE_EVERY and VOUCHER_SWEEP_EVERY, for the most expensive
+# scan of the three. Tally has no "every party's bills in one call" export, so
+# the report costs ONE round trip per party; on the company this was found on
+# that outlasted the whole sync interval, every cycle, forever — and because it
+# ran first, nothing after it (vouchers included) ever got a turn.
+#
+# Outstanding is DERIVED from bills the masters/voucher passes already mirror
+# every cycle, and the cloud computes its own figure from those. This report is
+# the independent second opinion on that figure; a second opinion is worth a
+# round trip per party occasionally, not once a minute.
+OUTSTANDINGS_EVERY = 12
+_outstandings_counter: dict[str, int] = {}
+
+
+def _outstandings_due(cname: str) -> bool:
+    """True when this cycle should read the per-party outstanding report.
+
+    First cycle of a run always qualifies (n starts at 0), so a fresh install
+    or a restart still gets the figure immediately rather than waiting.
+    """
+    n = _outstandings_counter.get(cname, 0)
+    _outstandings_counter[cname] = n + 1
+    return n % OUTSTANDINGS_EVERY == 0
 
 
 def _pull_voucher_changes(cfg, logger, api, tally, token: str, cname: str) -> int:

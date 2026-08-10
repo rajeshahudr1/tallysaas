@@ -52,6 +52,13 @@ class PoisonOnTimeoutTests(unittest.TestCase):
     def setUp(self):
         TC._POISON.clear()
         self.addCleanup(TC._POISON.clear)
+        # A kill is only blamed on a request when Tally answered the one before
+        # it (see test_no_blame_when_tally_already_dead). These cases are all
+        # "Tally was fine, then this request took it down", so start from a
+        # healthy Tally — the flag is module-level and another test may have
+        # left it false.
+        TC._LAST_REQUEST_ANSWERED = True
+        self.addCleanup(setattr, TC, "_LAST_REQUEST_ANSWERED", True)
 
     def _connector(self, exc):
         c = TC.TallyConnector(url="http://localhost:9000")

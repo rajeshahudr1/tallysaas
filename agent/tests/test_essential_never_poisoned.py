@@ -54,6 +54,12 @@ class EssentialRequestTests(unittest.TestCase):
     def setUp(self):
         TC._POISON.clear()
         self.addCleanup(TC._POISON.clear)
+        # These cases are all "Tally was serving, then this request took it
+        # down". A kill is only blamed on a request when the one before it was
+        # answered (see test_no_blame_when_tally_already_dead), and the flag
+        # starts false for a fresh process — so say Tally was alive.
+        TC._LAST_REQUEST_ANSWERED = True
+        self.addCleanup(setattr, TC, "_LAST_REQUEST_ANSWERED", False)
 
     def _connector(self, exc=DROPPED):
         c = TC.TallyConnector(url="http://localhost:9000")
