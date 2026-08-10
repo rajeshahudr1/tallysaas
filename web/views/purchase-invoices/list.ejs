@@ -63,6 +63,15 @@ var sortOptions = ['Date', 'Bill No', 'Supplier', 'Total', 'Status'];
     ],
 }) %>
 
+<%# ── Register view switcher. Only on the cross-period Bill view — inside a
+     month drill-down the tabs would jump the user out of that month. ── %>
+<% if (typeof monthMode === 'undefined' || !monthMode) { %>
+<%- include('../partials/register-tabs', {
+    basePath: '/purchase-invoices', active: 'bill', hasStock: true,
+    mode: 'gross', showMode: true, query: '',
+}) %>
+<% } %>
+
 <% if (typeof monthMode !== 'undefined' && monthMode) { %>
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
     <a href="/purchase-invoices" style="display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:7px 14px;color:#334155;text-decoration:none;font-weight:600;font-size:13px">
@@ -93,7 +102,7 @@ var sortOptions = ['Date', 'Bill No', 'Supplier', 'Total', 'Status'];
         <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
         <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _cnt %></div>
     </div>
-    <div style="background:linear-gradient(135deg,#0ea5e9,#2563EB);color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
+    <div style="background:linear-gradient(135deg,#0ea5e9,var(--primary));color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
         <div style="font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.4px">Total (Purchase)</div>
         <div style="font-size:20px;font-weight:700;margin-top:2px">₹ <%= _inrG(_gt) %></div>
     </div>

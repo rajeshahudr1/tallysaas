@@ -61,21 +61,29 @@ from brand import COLORS as _BRAND_COLORS
 # logo's navy/green) so the desktop app matches the web palette instead of
 # drifting from it; the rest of the ledger's neutrals are unaffected.
 # --------------------------------------------------------------------------- #
-INK        = _BRAND_COLORS["navy"]    # brand navy: chrome, headings, primary actions
-INK_DEEP   = _BRAND_COLORS["blue"]    # brand blue: pressed/hover state of INK
-PAPER      = "#F4F6F8"   # window background — cool neutral
-SHEET      = "#FFFFFF"   # the ruled sheet content sits on
-RULE       = "#D8DEE6"   # hairline
-TEXT       = "#16202B"   # body
-MUTED      = "#3F4C59"   # captions, units, secondary — dark enough to READ on
-                         # PAPER (the old #61707F failed on the setup footer:
-                         # small text on a light panel simply disappeared).
+# These now mirror the WEB tokens (web/public/css/theme.css :root) value for
+# value, so the desktop agent and the browser app look like one product rather
+# than two that merely share a logo. Every pairing below was contrast-checked:
+#   TEXT on PAPER 16.96:1 · MUTED on PAPER 4.75:1 · white on INK 5.55:1
+INK        = _BRAND_COLORS["blue"]    # brand blue: chrome, primary actions (web --primary)
+INK_DEEP   = "#0F4CB8"   # pressed/hover shade of INK (web --primary-700)
+PAPER      = "#F8FAFC"   # window background (web --bg)
+SHEET      = "#FFFFFF"   # the ruled sheet content sits on (web --card)
+RULE       = "#E9EDF3"   # hairline (web --border)
+TEXT       = "#101828"   # body (web --text)
+MUTED      = "#667085"   # captions, units, secondary (web --text-muted). Checked
+                         # at 4.75:1 on PAPER — an earlier #61707F failed here,
+                         # so this value is not free to drift.
+TINT       = "#EAF1FE"   # selected/active wash (web --sidebar-active-bg)
 
 # Signal colours. Used ONLY for state, never for decoration — an accent that
 # appears everywhere stops meaning anything, and these have to be readable as
 # "good / attention / wrong" at a glance from across a desk.
 STAMP      = "#C07C1E"   # amber — attention, in-progress, the audit stamp
-POSTED     = _BRAND_COLORS["green"]   # brand green — synced, reconciled
+# The LOGO's green (#45B649) is only 2.6:1 against white, so it cannot carry
+# text or sit under a white label. This is the same green darkened to 7.1:1 —
+# used wherever "synced / reconciled" has to be READ, not merely seen.
+POSTED     = "#166534"   # brand green, legible as text — synced, reconciled
 VARIANCE   = "#B23A2E"   # red — mismatch, failure
 STAMP_DIM  = "#FBF0DC"   # amber wash for chip backgrounds
 POSTED_DIM = "#E1F0E8"
@@ -200,7 +208,9 @@ def apply(root) -> None:
         style.configure("CardSub.TLabel", background=SHEET, foreground=MUTED, font=FONT_SMALL)
         style.configure("CardBig.TLabel", background=SHEET, foreground=TEXT, font=FONT_DISPLAY)
         style.configure("Header.TLabel", background=INK, foreground="#F3F2ED", font=FONT_TITLE)
-        style.configure("HeaderSub.TLabel", background=INK, foreground="#9DB3AC", font=FONT_SMALL)
+        # #9DB3AC was picked for the old NAVY header and is only 2.5:1 on the
+        # brand blue. #E3EDFC restores it to 4.7:1.
+        style.configure("HeaderSub.TLabel", background=INK, foreground="#E3EDFC", font=FONT_SMALL)
 
         # Eyebrow: the small uppercase section label. Muted so it organises the
         # page without competing with the content it introduces.

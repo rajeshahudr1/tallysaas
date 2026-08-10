@@ -56,9 +56,14 @@ var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
 
     <!-- App theme (single source of custom styling). ?v bust = force fresh
          CSS past any stale service-worker cache after an update. -->
-    <link rel="stylesheet" href="/css/theme.css?v=8">
+    <link rel="stylesheet" href="/css/theme.css?v=33">
+    <!-- Brand colours → CSS vars (web/config/brand.js). Must come after theme.css. -->
+    <%- include('partials/brand-vars') %>
 </head>
 <body class="app">
+
+    <%# Line-icon symbols. Must precede any <use> that references them. %>
+    <%- include('partials/icon-sprite') %>
 
     <!-- ── Desktop sidebar (fixed left) ───────────────────────── -->
     <aside class="sidebar d-none d-lg-flex" id="appSidebar">
@@ -83,7 +88,7 @@ var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
              Hidden for Super Admin (tenant notifications aren't theirs). -->
         <% if (typeof isSuperAdmin === 'undefined' || !isSuperAdmin) { %>
         <a href="/sync-dashboard" class="offcanvas-notif d-flex align-items-center gap-2 mx-3 mb-1 px-2 py-2 rounded text-decoration-none"
-           style="color:#CBD5E1;">
+           style="color: var(--sidebar-text);">
             <i class="fa-solid fa-bell"></i>
             <span>Notifications</span>
             <% if (typeof notificationCount !== 'undefined' && Number(notificationCount) > 0) { %>

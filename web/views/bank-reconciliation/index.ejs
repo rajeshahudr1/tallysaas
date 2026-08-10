@@ -218,7 +218,7 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
     .bk-stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin-bottom:18px; }
     .bk-stat { display:flex; align-items:center; gap:14px; background:#fff; border:1px solid var(--border,#EEF1F5); border-radius:14px; padding:16px 18px; box-shadow:0 1px 2px rgba(16,24,40,.04); }
     .bk-stat-ic { flex:0 0 auto; width:42px; height:42px; border-radius:11px; display:grid; place-items:center; font-size:17px; }
-    .bk-ic-blue { background:rgba(37,99,235,.12); color:#2563EB; }
+    .bk-ic-blue { background:rgba(37,99,235,.12); color:var(--primary); }
     .bk-ic-green { background:rgba(22,163,74,.12); color:#16A34A; }
     .bk-ic-amber { background:rgba(180,83,9,.12); color:#B45309; }
     .bk-ic-red { background:rgba(220,38,38,.12); color:#DC2626; }
@@ -226,7 +226,7 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
     .bk-lbl { font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; white-space:nowrap; }
     .bk-val { font-size:21px; font-weight:800; color:#111827; line-height:1.1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .bk-green { color:#16A34A; } .bk-red { color:#DC2626; } .bk-amber { color:#B45309; }
-    .bk-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .bk-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:var(--primary); font-size:12px; font-weight:700; vertical-align:middle; }
     .bk-empty { text-align:center; padding:40px 12px; color:#9CA3AF; } .bk-empty i { font-size:40px; opacity:.45; } .bk-empty p { margin:14px 0 0; line-height:1.6; }
     .bk-empty-actions { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:18px; }
     .bk-table { width:100%; border-collapse:collapse; }
@@ -238,7 +238,7 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
     .bk-pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; }
     .bk-p-matched { background:rgba(22,163,74,.12); color:#16A34A; } .bk-p-unmatched { background:rgba(180,83,9,.12); color:#B45309; } .bk-p-ignored { background:rgba(107,114,128,.14); color:#6B7280; }
     .bk-icon-btn { border:1px solid var(--border); background:#fff; color:#4B5563; width:31px; height:31px; border-radius:8px; cursor:pointer; margin-left:3px; }
-    .bk-icon-btn:hover { background:#F8FAFC; } .bk-match { color:#2563EB; border-color:#BFDBFE; } .bk-del { color:#DC2626; border-color:#FECACA; }
+    .bk-icon-btn:hover { background:#F8FAFC; } .bk-match { color:var(--primary); border-color:#BFDBFE; } .bk-del { color:#DC2626; border-color:#FECACA; }
     .bk-overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:2000; }
     .bk-overlay.open { display:flex; }
     .bk-modal { background:#fff; border-radius:16px; padding:24px; max-width:640px; width:92%; box-shadow:0 24px 70px rgba(0,0,0,.25); max-height:88vh; overflow:auto; }

@@ -164,7 +164,7 @@ const BankController = require('../Controllers/Tenant/BankController');
 const { importBankSchema } = require('../Validators/bank');
 const EInvoiceController = require('../Controllers/Tenant/EInvoiceController');
 const ProductImageController = require('../Controllers/Tenant/ProductImageController');
-const { productImagesMiddleware } = require('../Helpers/uploads');
+const { productImagesMiddleware, brandingImageMiddleware } = require('../Helpers/uploads');
 const ProductController       = require('../Controllers/Tenant/ProductController');
 const CustomerGroupController = require('../Controllers/Tenant/CustomerGroupController');
 const InvoiceController       = require('../Controllers/Tenant/InvoiceController');
@@ -210,6 +210,11 @@ const RbacController          = require('../Controllers/SuperAdmin/RbacControlle
 const ReminderController      = require('../Controllers/SuperAdmin/ReminderController');
 const JournalController       = require('../Controllers/Tenant/JournalController');
 const CollectPaymentController = require('../Controllers/Tenant/CollectPaymentController');
+const RegisterController = require('../Controllers/Tenant/RegisterController');
+const PartyItemsController = require('../Controllers/Tenant/PartyItemsController');
+const StockGroupingController = require('../Controllers/Tenant/StockGroupingController');
+const CostCentreController = require('../Controllers/Tenant/CostCentreController');
+const PartyActivityController = require('../Controllers/Tenant/PartyActivityController');
 const PayController            = require('../Controllers/Public/PayController');
 
 // ── DB (for the /health probe) ────────────────────────────────────
@@ -890,6 +895,15 @@ router.get(
     InvoiceController.monthlySales,
 );
 
+// Grouped register — ?by=ledger|ledger_group|voucher_type|stock_item|
+// stock_group|stock_category & ?mode=gross|net. Declared BEFORE /:id so
+// "grouped" is never parsed as an invoice id.
+router.get(
+    '/sales-invoices/grouped',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('view'),
+    InvoiceController.groupedSales,
+);
+
 router.get(
     '/sales-invoices/:id',
     authenticate, resolveTenant, resolveCompany, resolveLocation, canOwnInvoice('view'),
@@ -964,6 +978,23 @@ router.post('/quotations/:id/convert', authenticate, resolveTenant, resolveCompa
 router.delete('/quotations/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('quotations', 'delete'), QuotationController.destroy);
 
+/* ── Grouped registers (LiveKeeping parity) ──────────────────────
+ * `GET /<module>/grouped?by=…&mode=gross|net` regroups the period's
+ * vouchers by Ledger / Ledger Group / Voucher Type / Stock Item / Stock
+ * Group / Stock Category. Sales + purchase INVOICES keep their own handler
+ * in InvoiceController (they also consult the Tally register snapshot);
+ * every other family shares Helpers/voucherRegister via RegisterController.
+ *
+ * Declared as ONE block BEFORE each family's `/:id` route so "grouped" is
+ * never parsed as a voucher id.
+ */
+for (const mod of ['credit-notes', 'debit-notes', 'sales-orders', 'purchase-orders',
+    'delivery-notes', 'receipt-notes', 'receipts', 'payments']) {
+    router.get(`/${mod}/grouped`,
+        authenticate, resolveTenant, resolveCompany, resolveLocation,
+        can(mod, 'view'), RegisterController.grouped(mod));
+}
+
 router.get('/sales-orders', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('sales-orders', 'view'), validate(listSalesOrderSchema, 'query'), SalesOrderController.list);
 router.get('/sales-orders/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
@@ -1002,6 +1033,10 @@ router.get('/stock-journals/:id', authenticate, resolveTenant, resolveCompany, r
     can('stock-journal', 'view'), StockJournalController.get);
 router.post('/stock-journals', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('stock-journal', 'create'), validate(createStockJournalSchema), StockJournalController.create);
+// Same guards and schema as create — an edit rewrites the same lines and moves
+// the same stock, so it is the 'edit' permission and the create validator.
+router.put('/stock-journals/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('stock-journal', 'edit'), validate(createStockJournalSchema), StockJournalController.update);
 router.delete('/stock-journals/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('stock-journal', 'delete'), StockJournalController.destroy);
 
@@ -1099,6 +1134,14 @@ router.get(
     InvoiceController.monthlyPurchase,
 );
 
+// Grouped register — same contract as /sales-invoices/grouped. Declared
+// BEFORE /:id so "grouped" is never parsed as an invoice id.
+router.get(
+    '/purchase-invoices/grouped',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
+    InvoiceController.groupedPurchase,
+);
+
 router.get(
     '/purchase-invoices/:id',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'view'),
@@ -1116,6 +1159,15 @@ router.post(
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'create'),
     validate(createPurchaseInvoiceSchema),
     InvoiceController.createPurchase,
+);
+
+// Edit a received bill. Same guards + validator as create; the sales PUT next
+// to it uses updateDraft, which is scoped to type:'sales' and cannot serve this.
+router.put(
+    '/purchase-invoices/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('purchase-invoices', 'edit'),
+    validate(createPurchaseInvoiceSchema),
+    InvoiceController.updatePurchase,
 );
 
 router.delete(
@@ -1276,6 +1328,87 @@ router.get(
     DashboardController.receivablesBills,
 );
 
+// Receivables PARTY list — one row per customer (Outstanding / Overdue /
+// Credit Days / Avg Pay Days), and the open bills behind one party.
+router.get(
+    '/receivables/parties',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('receivables', 'view'),
+    DashboardController.receivablesParties,
+);
+
+router.get(
+    '/receivables/parties/:id/bills',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('receivables', 'view'),
+    DashboardController.receivablesPartyBills,
+);
+
+// Party follow-up trail. Read/write is gated on the party side being asked
+// for, so a role with customers but not suppliers cannot see supplier notes.
+const canParty = (action) => (req, res, next) =>
+    can(req.params.type === 'supplier' ? 'suppliers' : 'customers', action)(req, res, next);
+
+router.get(
+    '/parties/:type/:id/activities',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canParty('view'),
+    PartyActivityController.list,
+);
+router.post(
+    '/parties/:type/:id/activities',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, canParty('edit'),
+    PartyActivityController.create,
+);
+
+// Cost-centre reports over the synced allocation rows.
+router.get(
+    '/cost-centres/summary',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
+    CostCentreController.summary,
+);
+router.get(
+    '/cost-centres/breakup',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('reports', 'view'),
+    CostCentreController.breakup,
+);
+
+// Items screen grouped views — closing stock rolled up by Stock Group,
+// Stock Category or Godown instead of item by item.
+router.get(
+    '/items/grouped',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('products', 'view'),
+    StockGroupingController.grouped,
+);
+
+// Items Sold / Items Purchased for one party — what a customer took from us,
+// or what we took from a supplier, rolled up per stock item. Permission
+// follows the side being asked for.
+router.get(
+    '/customers/:id/items',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
+    (req, _res, next) => { req.query.direction = 'sold'; next(); },
+    PartyItemsController.partyItems,
+);
+
+router.get(
+    '/suppliers/:id/items',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('suppliers', 'view'),
+    (req, _res, next) => { req.query.direction = 'purchased'; next(); },
+    PartyItemsController.partyItems,
+);
+
+// Payables PARTY list — the same screen with the sides swapped: open purchase
+// bills settled by payments to suppliers.
+router.get(
+    '/payables/parties',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payables', 'view'),
+    DashboardController.payablesParties,
+);
+
+router.get(
+    '/payables/parties/:id/bills',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payables', 'view'),
+    DashboardController.payablesPartyBills,
+);
+
 // Tally chart-of-accounts listing — the drill-down target for the dashboard's
 // CASH / BANK / PAYABLES tiles (?group=cash|bank|payables).
 router.get(
@@ -1309,6 +1442,21 @@ router.get(
     '/tally/ledger-groups',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'view'),
     TallyLedgerController.ledgerGroupOptions,
+);
+
+// Tally price levels + their rate cards, for the voucher forms' Price Level
+// picker. Gated on quotations (the first form to use it) rather than a module
+// of their own — a price level is not a screen, it is a field on a voucher.
+router.get(
+    '/tally/price-levels',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('quotations', 'view'),
+    TallyLedgerController.priceLevelOptions,
+);
+
+router.get(
+    '/tally/price-list',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('quotations', 'view'),
+    TallyLedgerController.priceListRates,
 );
 
 // Country/State/City lookups for the customer address form's cascading
@@ -1434,6 +1582,10 @@ router.get('/account/reminders',
     authenticate, resolveTenant, resolveCompany, can('customers', 'view'), ReminderTenantController.overdue);
 router.post('/account/reminders/:id/send',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'edit'), ReminderTenantController.send);
+// Chase several parties in one go. Same edit gate as a single send — it is
+// the same action, repeated.
+router.post('/account/reminders/send-bulk',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('customers', 'edit'), ReminderTenantController.sendBulk);
 // Per-party reminder schedule ("Set Reminder"): reading it is view-gated,
 // changing it is edit-gated — same split as sending.
 router.get('/account/reminders/:id/schedule',
@@ -1505,6 +1657,19 @@ router.put(
     '/settings',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('settings', 'edit'),
     SettingsController.update,
+);
+// Company logo + authorised signature. Multipart, one image per request.
+// Same edit gate as the rest of Settings — it is the same screen.
+router.post(
+    '/settings/branding/:kind',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('settings', 'edit'),
+    brandingImageMiddleware,
+    SettingsController.uploadBranding,
+);
+router.delete(
+    '/settings/branding/:kind',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('settings', 'edit'),
+    SettingsController.removeBranding,
 );
 
 // Connected computers. Licence-level, so no company/location scope — a device
@@ -1634,6 +1799,24 @@ router.post(
     validate(createJournalSchema),
     JournalController.create,
 );
+// Fetch one journal. The contra side already had this (contra IS a journal with
+// vch_type pinned) but /journals never exposed it, so nothing could load a
+// single voucher to show or edit it.
+router.get(
+    '/journals/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'view'),
+    JournalController.get,
+);
+
+// Edit a journal voucher. Permissioned like its POST/DELETE siblings, which
+// sit under 'payments' rather than a module of their own.
+router.put(
+    '/journals/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'edit'),
+    validate(createJournalSchema),
+    JournalController.update,
+);
+
 router.delete(
     '/journals/:id',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('payments', 'delete'),
@@ -1668,6 +1851,15 @@ router.post(
     validate(createJournalSchema),
     JournalController.create,
 );
+// Contra edit — forceContraType keeps vch_type pinned, same as create.
+router.put(
+    '/contra/:id',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('contra', 'edit'),
+    forceContraType,
+    validate(createJournalSchema),
+    JournalController.update,
+);
+
 router.delete(
     '/contra/:id',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('contra', 'delete'),

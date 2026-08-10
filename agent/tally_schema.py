@@ -254,11 +254,16 @@ MASTERS: tuple[MasterSpec, ...] = (
         numbers=frozenset({"rate"}),
         requires_feature="ISTCSON", feature_must_be_on=True,
     ),
-    # ── Payroll. All gated on the F11 payroll flag: a company without payroll
-    #    has none of these collections. ──
+    # ── Payroll. All gated on the F11 payroll flag, and the gate is as strict
+    #    as the TDS one above for the same measured reason: probed against a
+    #    live TallyPrime EDU, EmployeeGroup, Employee and PayHead each hung for
+    #    SIX MINUTES and then took Tally down with the "Incorrect Object Type!"
+    #    box. They were gated but not feature_must_be_on, so an unreported flag
+    #    meant "send it anyway" — the exact reasoning that had TDS crashing a
+    #    customer's Tally once a minute. Silence means NO here too. ──
     MasterSpec(
         kind="employee_group", collection_type="EmployeeGroup", table="tally_employee_groups",
-        fields={"parent": "PARENT"}, requires_feature="ISPAYROLLON",
+        fields={"parent": "PARENT"}, requires_feature="ISPAYROLLON", feature_must_be_on=True,
     ),
     MasterSpec(
         kind="employee", collection_type="Employee", table="tally_employees",
@@ -276,13 +281,13 @@ MASTERS: tuple[MasterSpec, ...] = (
             "esi_number": "ESINUMBER",
         },
         dates=frozenset({"date_of_joining", "date_of_release"}),
-        requires_feature="ISPAYROLLON",
+        requires_feature="ISPAYROLLON", feature_must_be_on=True,
     ),
     MasterSpec(
         kind="attendance_type", collection_type="AttendanceType", table="tally_attendance_types",
         fields={"parent": "PARENT", "attendance_period": "ATTENDANCEPERIOD",
                 "production_type": "ATTENDANCETYPE"},
-        requires_feature="ISPAYROLLON",
+        requires_feature="ISPAYROLLON", feature_must_be_on=True,
     ),
     MasterSpec(
         kind="pay_head", collection_type="PayHead", table="tally_pay_heads",
@@ -290,7 +295,7 @@ MASTERS: tuple[MasterSpec, ...] = (
                 "calculation_type": "CALCTYPE", "calculation_period": "CALCPERIOD",
                 "affects_net_salary": "AFFECTSNETSALARY"},
         bools=frozenset({"affects_net_salary"}),
-        requires_feature="ISPAYROLLON",
+        requires_feature="ISPAYROLLON", feature_must_be_on=True,
     ),
 )
 

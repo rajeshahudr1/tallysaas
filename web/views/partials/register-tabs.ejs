@@ -1,0 +1,124 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/register-tabs.ejs — the voucher register's view switcher.
+ *
+ * LiveKeeping parity: the same period's vouchers regrouped several
+ * ways. Month + Bill are the two drill-down views the register already
+ * had; the rest come from the api's /…/grouped endpoint.
+ *
+ * Locals:
+ *   basePath  '/sales-invoices'          — every tab links here
+ *   active    'month' | 'bill' | <group key>
+ *   hasStock  true when this voucher kind carries inventory (Sales /
+ *             Purchase / Credit Note / Debit Note). Receipts and
+ *             Payments have no stock, so their Stock tabs are dropped —
+ *             exactly as LiveKeeping drops them.
+ *   mode      'gross' | 'net'  (omit `showMode` to hide the toggle)
+ *   showMode  boolean
+ *   query     extra querystring to preserve (e.g. 'date_from=…&date_to=…')
+ * ─────────────────────────────────────────────────────────── */
+var _base   = (typeof basePath !== 'undefined' && basePath) ? basePath : '';
+var _active = (typeof active !== 'undefined' && active) ? active : 'month';
+var _hasStock = (typeof hasStock !== 'undefined') ? !!hasStock : true;
+var _mode   = (typeof mode !== 'undefined' && mode === 'net') ? 'net' : 'gross';
+var _showMode = (typeof showMode !== 'undefined') ? !!showMode : true;
+var _extra  = (typeof query !== 'undefined' && query) ? String(query) : '';
+
+// Primary tabs stay visible; the rest collapse into "More", mirroring the
+// LiveKeeping layout so a wide register never wraps onto two lines.
+var PRIMARY = [
+    { k: 'month',  label: 'Month',  href: _base },
+    { k: 'bill',   label: 'Bill',   href: _base + '?view=bill' },
+    { k: 'ledger', label: 'Ledger', href: _base + '?by=ledger' },
+];
+var MORE = [
+    { k: 'stock_item',     label: 'Stock Item',     stock: true },
+    { k: 'voucher_type',   label: 'Voucher Type',   stock: false },
+    { k: 'ledger_group',   label: 'Ledger Group',   stock: false },
+    { k: 'stock_group',    label: 'Stock Group',    stock: true },
+    { k: 'stock_category', label: 'Stock Category', stock: true },
+].filter(function (t) { return _hasStock || !t.stock; });
+
+// Every tab carries the current mode + the caller's date range, so switching
+// view never silently resets the period the user is looking at.
+function _url(href, key) {
+    var q = [];
+    if (href.indexOf('?') === -1) { if (key) q.push('by=' + key); }
+    if (_showMode && _mode === 'net') q.push('mode=net');
+    if (_extra) q.push(_extra);
+    if (!q.length) return href;
+    return href + (href.indexOf('?') === -1 ? '?' : '&') + q.join('&');
+}
+function _groupUrl(k) {
+    var q = ['by=' + k];
+    if (_showMode && _mode === 'net') q.push('mode=net');
+    if (_extra) q.push(_extra);
+    return _base + '?' + q.join('&');
+}
+// Gross/Net keeps whatever view is open — only the basis changes.
+function _modeUrl(m) {
+    var q = [];
+    if (_active === 'bill') q.push('view=bill');
+    else if (_active !== 'month') q.push('by=' + _active);
+    if (m === 'net') q.push('mode=net');
+    if (_extra) q.push(_extra);
+    return _base + (q.length ? '?' + q.join('&') : '');
+}
+var _moreActive = MORE.some(function (t) { return t.k === _active; });
+%>
+
+<div class="reg-tabbar">
+    <% if (_showMode) { %>
+    <%# Gross = returns excluded (the register's default basis).
+        Net   = Credit/Debit Notes included and subtracted. %>
+    <div class="reg-mode" role="group" aria-label="Amount basis">
+        <a href="<%= _modeUrl('gross') %>" class="reg-mode-btn <%= _mode === 'gross' ? 'is-active' : '' %>">Gross</a>
+        <a href="<%= _modeUrl('net') %>"   class="reg-mode-btn <%= _mode === 'net'   ? 'is-active' : '' %>">Net</a>
+    </div>
+    <% } %>
+
+    <div class="reg-tabs">
+        <% PRIMARY.forEach(function (t) { %>
+            <a href="<%= t.k === 'ledger' ? _groupUrl('ledger') : _url(t.href) %>"
+               class="reg-tab <%= _active === t.k ? 'is-active' : '' %>"><%= t.label %></a>
+        <% }); %>
+        <% if (MORE.length) { %>
+        <div class="reg-more">
+            <button type="button" class="reg-tab reg-more-btn <%= _moreActive ? 'is-active' : '' %>"
+                    aria-haspopup="true" aria-expanded="false"
+                    onclick="this.parentNode.classList.toggle('is-open');this.setAttribute('aria-expanded',this.parentNode.classList.contains('is-open'))">
+                <%= _moreActive ? (MORE.filter(function(t){return t.k===_active;})[0] || {}).label : 'More' %>
+                <i class="fa-solid fa-chevron-down"></i>
+            </button>
+            <ul class="reg-more-menu">
+                <% MORE.forEach(function (t) { %>
+                    <li><a href="<%= _groupUrl(t.k) %>" class="<%= _active === t.k ? 'is-active' : '' %>"><%= t.label %></a></li>
+                <% }); %>
+            </ul>
+        </div>
+        <% } %>
+    </div>
+</div>
+
+<style>
+    .reg-tabbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+    .reg-mode { display:inline-flex; background:#f1f5f9; border-radius:8px; padding:3px; }
+    .reg-mode-btn { padding:6px 16px; border-radius:6px; font-size:12.5px; font-weight:600;
+        color:#64748b; text-decoration:none; }
+    .reg-mode-btn.is-active { background:#fff; color:#111; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+    .reg-tabs { display:inline-flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .reg-tab { display:inline-flex; align-items:center; gap:6px; padding:7px 15px; border-radius:8px;
+        border:1px solid #e2e8f0; background:#fff; color:#475569; font-size:12.5px; font-weight:600;
+        text-decoration:none; cursor:pointer; }
+    .reg-tab:hover { border-color:#cbd5e1; color:var(--primary); }
+    .reg-tab.is-active { background:var(--primary); border-color:var(--primary); color:#fff; }
+    .reg-more { position:relative; display:inline-block; }
+    .reg-more-menu { display:none; position:absolute; z-index:30; top:calc(100% + 4px); left:0;
+        min-width:180px; margin:0; padding:6px; list-style:none; background:#fff;
+        border:1px solid #e2e8f0; border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.10); }
+    .reg-more.is-open .reg-more-menu { display:block; }
+    .reg-more-menu a { display:block; padding:8px 12px; border-radius:6px; font-size:13px;
+        color:#334155; text-decoration:none; }
+    .reg-more-menu a:hover { background:#f1f5f9; color:var(--primary); }
+    .reg-more-menu a.is-active { background:var(--primary); color:#fff; }
+</style>

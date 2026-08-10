@@ -184,6 +184,73 @@ async function create(req, res) {
     }
 }
 
+/**
+ * PUT /journals/:id and PUT /contra/:id — edit a journal / contra voucher.
+ *
+ * voucher_no is deliberately NOT editable: it is auto-numbered per company on
+ * create and other records refer to it. Everything the user actually types
+ * (date, both ledgers, amount, narration) can be corrected.
+ */
+async function update(req, res) {
+    try {
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND, 404);
+        const b = req.body;
+
+        const existing = await db('journals')
+            .where({ id, company_id: req.companyId }).whereNull('deleted_at').first();
+        if (!existing) return R.errorResponse(res, NOT_FOUND, 404);
+
+        // Same Contra guard as create: both sides must be cash/bank. Skipped
+        // when the tenant has no synced tally_groups yet, exactly as create
+        // does — otherwise a fresh tenant could create a Contra but not fix it.
+        const vchType = b.vch_type || existing.vch_type || 'Journal';
+        if (vchType === 'Contra') {
+            const groupsSynced = await db('tally_groups').where('company_id', req.companyId)
+                .whereNull('deleted_at').first();
+            if (groupsSynced) {
+                for (const [field, label] of [['dr_ledger', 'To (Dr)'], ['cr_ledger', 'From (Cr)']]) {
+                    const value = b[field] != null ? b[field] : existing[field];
+                    const ok = await isCashOrBankLedger(value, req.companyId);
+                    if (ok === false) {
+                        return R.errorResponse(res, `${label} ledger "${value}" is not a cash or bank ledger — Contra needs both sides to be cash/bank.`, 422);
+                    }
+                }
+            }
+        }
+
+        const now = new Date();
+        const patch = {
+            journal_date: b.journal_date || existing.journal_date,
+            dr_ledger:    b.dr_ledger != null ? b.dr_ledger : existing.dr_ledger,
+            cr_ledger:    b.cr_ledger != null ? b.cr_ledger : existing.cr_ledger,
+            amount:       b.amount != null ? b.amount : existing.amount,
+            narration:    b.narration != null ? b.narration : existing.narration,
+            updated_at:   now,
+        };
+        await db('journals').where({ id, company_id: req.companyId }).update(patch);
+        const row = await db('journals').where({ id, company_id: req.companyId }).first();
+
+        // HISTORY (best-effort): before/after so the change itself is auditable.
+        await recordHistory(db, {
+            company_id:  req.companyId,
+            module:      vchType === 'Contra' ? 'contra' : 'journals',
+            record_type: 'journal',
+            record_id:   id,
+            action:      'updated',
+            source:      'cloud',
+            before:      existing,
+            after:       row,
+            changed_by:  req.user ? req.user.sub : null,
+        });
+
+        return R.successResponse(res, row, `${vchType === 'Contra' ? 'Contra' : 'Journal'} updated.`);
+    } catch (err) {
+        console.error('journals.update error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 async function destroy(req, res) {
     try {
         const id = Number(req.params.id);
@@ -212,4 +279,4 @@ async function destroy(req, res) {
     }
 }
 
-module.exports = { list, get, monthly, create, destroy, isCashOrBankLedger };
+module.exports = { list, get, monthly, create, update, destroy, isCashOrBankLedger };

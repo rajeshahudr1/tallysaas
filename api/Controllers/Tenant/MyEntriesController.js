@@ -54,6 +54,7 @@ const VOUCHER_SOURCES = [
                     'quotations.id as id', 'quotations.quotation_no as voucher_no',
                     'quotations.quotation_date as date', 'customers.name as party',
                     'quotations.total as amount', 'quotations.quote_status as status',
+                    'quotations.updated_at as modified_at',
                 );
         },
     },
@@ -70,6 +71,7 @@ const VOUCHER_SOURCES = [
                     'sales_orders.id as id', 'sales_orders.order_no as voucher_no',
                     'sales_orders.order_date as date', 'customers.name as party',
                     'sales_orders.total as amount', 'sales_orders.order_status as status',
+                    'sales_orders.updated_at as modified_at',
                 );
         },
     },
@@ -86,6 +88,7 @@ const VOUCHER_SOURCES = [
                     'purchase_orders.id as id', 'purchase_orders.order_no as voucher_no',
                     'purchase_orders.order_date as date', 'suppliers.name as party',
                     'purchase_orders.total as amount', 'purchase_orders.order_status as status',
+                    'purchase_orders.updated_at as modified_at',
                 );
         },
     },
@@ -102,6 +105,7 @@ const VOUCHER_SOURCES = [
                     'delivery_notes.id as id', 'delivery_notes.note_no as voucher_no',
                     'delivery_notes.note_date as date', 'customers.name as party',
                     'delivery_notes.total as amount', 'delivery_notes.delivery_status as status',
+                    'delivery_notes.updated_at as modified_at',
                 );
         },
     },
@@ -118,6 +122,7 @@ const VOUCHER_SOURCES = [
                     'receipt_notes.id as id', 'receipt_notes.note_no as voucher_no',
                     'receipt_notes.note_date as date', 'suppliers.name as party',
                     'receipt_notes.total as amount', 'receipt_notes.receipt_status as status',
+                    'receipt_notes.updated_at as modified_at',
                 );
         },
     },
@@ -139,6 +144,7 @@ const VOUCHER_SOURCES = [
                     'invoices.invoice_date as date',
                     db.raw('coalesce(customers.name, suppliers.name) as party'),
                     'invoices.total as amount', 'invoices.status as status',
+                    'invoices.updated_at as modified_at',
                 );
         },
     },
@@ -159,6 +165,7 @@ const VOUCHER_SOURCES = [
                     'payments.payment_date as date',
                     db.raw('coalesce(suppliers.name, customers.name) as party'),
                     'payments.amount as amount', 'payments.status as status',
+                    'payments.updated_at as modified_at',
                 );
         },
     },
@@ -175,6 +182,7 @@ const VOUCHER_SOURCES = [
                     'journals.journal_date as date',
                     db.raw("(journals.dr_ledger || ' / ' || journals.cr_ledger) as party"),
                     'journals.amount as amount', 'journals.status as status',
+                    'journals.updated_at as modified_at',
                 );
         },
     },
@@ -201,14 +209,62 @@ async function list(req, res) {
 
         // Wrap the UNION ALL as a subquery so we can count / order / paginate
         // over the combined result set in one place.
-        const totalRow = await db.count('* as c').from(unioned.as('u')).first();
+        //
+        // `state` collapses each family's own status vocabulary into the two
+        // things this screen is actually asked: has it reached Tally yet, or
+        // is it still on its way. Every family words that differently
+        // (pending_tally / draft_cloud / pending / open …), so the filter
+        // works on the collapsed value rather than on eight raw spellings.
+        const stateExpr = `case
+            when lower(u.status) in ('created','synced','completed','closed','converted','approved') then 'completed'
+            when lower(u.status) in ('failed','rejected','cancelled') then 'failed'
+            else 'pending' end`;
+
+        // Both filters run AFTER the union: two of the sources emit two kinds
+        // each (invoices → sales/purchase, payments → receipt/payment), so
+        // there is no one-source-per-kind mapping to filter on beforehand.
+        const kind = String(req.query.kind || '').trim();
+        const scoped = () => {
+            const qb = db.from(unioned.as('u'));
+            if (kind) qb.where('u.kind', kind);
+            const state = String(req.query.state || '').trim().toLowerCase();
+            if (state === 'pending' || state === 'completed' || state === 'failed') {
+                qb.whereRaw(`${stateExpr} = ?`, [state]);
+            }
+            return qb;
+        };
+
+        const totalRow = await scoped().count('* as c').first();
         const total = Number(totalRow ? totalRow.c : 0);
 
-        const rows = await db.select('*').from(unioned.as('u'))
+        const rows = await scoped()
+            .select('*', db.raw(`${stateExpr} as state`))
             .orderBy('date', 'desc').orderBy('id', 'desc')
             .limit(perPage).offset((page - 1) * perPage);
 
-        return R.successResponse(res, { data: rows, meta: { total, page, per_page: perPage } });
+        return R.successResponse(res, {
+            data: rows,
+            meta: {
+                total, page, per_page: perPage,
+                kind: kind || null,
+                state: String(req.query.state || '') || null,
+                // The families this screen can filter by, for the UI's
+                // dropdown. Spelled out rather than derived from
+                // VOUCHER_SOURCES because two sources each emit two kinds.
+                kinds: [
+                    { kind: 'quotation',        label: 'Quotation' },
+                    { kind: 'sales_order',      label: 'Sales Order' },
+                    { kind: 'purchase_order',   label: 'Purchase Order' },
+                    { kind: 'delivery_note',    label: 'Delivery Note' },
+                    { kind: 'receipt_note',     label: 'Receipt Note' },
+                    { kind: 'sales_invoice',    label: 'Sales Invoice' },
+                    { kind: 'purchase_invoice', label: 'Purchase Invoice' },
+                    { kind: 'receipt_voucher',  label: 'Receipt' },
+                    { kind: 'payment_voucher',  label: 'Payment' },
+                    { kind: 'journal',          label: 'Journal' },
+                ],
+            },
+        });
     } catch (err) {
         console.error('myEntries.list error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);

@@ -31,10 +31,13 @@ import threading
 from constants import BRAND_NAME   # single source of truth for the brand name
 
 
-# Service identity. _svc_name_ is the SCM key (STRUCTURAL — never rebrand it, it
-# would orphan an installed service); the display name + description are what the
-# operator sees in services.msc and follow the brand.
-SERVICE_NAME = "TallyCloudSync"
+# Service identity. _svc_name_ is the SCM key, derived from brand.SLUG like the
+# exe / install dir / registry key, so the whole Windows identity rebrands from
+# one place. Changing the slug does NOT rename an already-registered service —
+# the old one must be removed first (see gui_agent.INSTALLED_EXE_NAME).
+from brand import SLUG as _SLUG
+
+SERVICE_NAME = _SLUG
 SERVICE_DISPLAY_NAME = BRAND_NAME
 SERVICE_DESCRIPTION = f"Background sync between TallyPrime and {BRAND_NAME}."
 
@@ -96,7 +99,7 @@ except Exception:  # pragma: no cover - dev box without pywin32.
     _ServiceBase = object  # type: ignore
 
 
-class TallyCloudSyncService(_ServiceBase):
+class TelooraService(_ServiceBase):
     """The background sync service. Loads config from the install dir + runs the
     shared :func:`sync_agent.run_sync_loop` headless until stopped."""
 
@@ -183,12 +186,8 @@ class TallyCloudSyncService(_ServiceBase):
         # itself here. Never let a rename failure stop the service.
         try:
             version = (getattr(cfg, "agent_version", "") or "").strip()
-            win32serviceutil.ChangeServiceConfig(
-                None,
-                SERVICE_NAME,
-                displayName=_versioned_display_name(version),
-                description=_versioned_description(version),
-            )
+            set_service_display_name(_versioned_display_name(version),
+                                     _versioned_description(version))
             logger.info("Service: display name set to '%s'.",
                         _versioned_display_name(version))
         except Exception as exc:
@@ -218,14 +217,14 @@ def _service_binary(exe_path: "str | None" = None) -> "tuple[str, str]":
 
     * ``exe_path`` given (an absolute, STABLE installed-exe path): register the
       service to exactly THAT exe with ``--run-service``. This is the production
-      path - the GUI install flow passes ``<install_dir>\\TallyCloudSync.exe`` so
+      path - the GUI install flow passes ``<install_dir>\\Teloora.exe`` so
       the binPath is the install-dir exe regardless of where the launcher /
       release / temp exe that ran ``install-service`` lives. The service then
       reads ``<install_dir>\\config.ini`` (the token) and writes logs +
       ``.status.json`` into ``<install_dir>`` (its own folder).
     * Frozen, no ``exe_path`` : ``(<this exe>, "--run-service")`` - fall back to
       the running exe (the legacy behaviour) so a manual elevated
-      ``TallyCloudSync.exe install-service`` from the install dir still works.
+      ``Teloora.exe install-service`` from the install dir still works.
     * Source : ``(python.exe, '"<gui_agent.py>" --run-service')`` so the service
       can still be registered while developing.
     """
@@ -239,6 +238,53 @@ def _service_binary(exe_path: "str | None" = None) -> "tuple[str, str]":
     return exe, '"%s" --run-service' % gui
 
 
+def set_service_display_name(display_name: str, description: str = "") -> None:
+    """Rename the service in services.msc WITHOUT touching anything else.
+
+    NOT win32serviceutil.ChangeServiceConfig. That wrapper rebuilds the command
+    line on every call — ``exeName = LocatePythonServiceExe(exeName)`` then
+    ``_GetCommandLine(exeName, exeArgs)`` — so calling it to change a NAME
+    silently rewrote the binary path with no arguments. The service does this
+    rename on every start, which meant it deleted its own ``--run-service``
+    every time it ran: Windows then launched the exe bare on the next start, the
+    exe opened the GUI instead of talking to the SCM, and the service sat in
+    START_PENDING for ever. It also quietly undid the repair an update had just
+    applied.
+
+    ``lpBinaryPathName=None`` is Windows' documented "leave it as it is", and
+    SERVICE_NO_CHANGE says the same for the type/start/error fields.
+
+    Best-effort: a cosmetic name is never worth failing a service start over.
+    """
+    if not _HAVE_PYWIN32:
+        return
+    NO_CHANGE = win32service.SERVICE_NO_CHANGE
+    hscm = hs = None
+    try:
+        hscm = win32service.OpenSCManager(None, None,
+                                          win32service.SC_MANAGER_ALL_ACCESS)
+        hs = win32service.OpenService(hscm, SERVICE_NAME,
+                                      win32service.SERVICE_ALL_ACCESS)
+        win32service.ChangeServiceConfig(
+            hs, NO_CHANGE, NO_CHANGE, NO_CHANGE,
+            None,          # lpBinaryPathName — None means DO NOT TOUCH
+            None, 0, None, None, None,
+            display_name,
+        )
+        if description:
+            win32service.ChangeServiceConfig2(
+                hs, win32service.SERVICE_CONFIG_DESCRIPTION, description)
+    except Exception:                                       # noqa: BLE001
+        pass
+    finally:
+        for h in (hs, hscm):
+            try:
+                if h:
+                    win32service.CloseServiceHandle(h)
+            except Exception:                               # noqa: BLE001
+                pass
+
+
 def install_service(exe_path: "str | None" = None) -> int:
     """Register the service (auto-start) and (best-effort) start it.
 
@@ -248,7 +294,7 @@ def install_service(exe_path: "str | None" = None) -> int:
     GUI does this via a UAC re-launch).
 
     ``exe_path`` is the STABLE installed-exe path the service must be registered
-    to (``<install_dir>\\TallyCloudSync.exe``). When given, the binPath is that
+    to (``<install_dir>\\Teloora.exe``). When given, the binPath is that
     exact file - NEVER whatever exe happened to be running when this verb
     executed (so launching the installer from a download / release / temp folder
     no longer mis-points the service). The already-installed branch ALSO
@@ -450,7 +496,7 @@ def run_service_dispatch() -> int:
         return 1
     try:
         servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(TallyCloudSyncService)
+        servicemanager.PrepareToHostSingle(TelooraService)
         servicemanager.StartServiceCtrlDispatcher()
         return 0
     except Exception as exc:

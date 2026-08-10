@@ -22,6 +22,8 @@ var _co = (typeof companyProfile  !== 'undefined' && companyProfile)  ? companyP
 var _s  = (typeof companySettings !== 'undefined' && companySettings) ? companySettings : {};
 function _cv(k) { return (_co[k] != null) ? _co[k] : ''; }
 function _sv(k, d) { return (_s[k] != null && _s[k] !== '') ? _s[k] : (d != null ? d : ''); }
+// Current company logo / signature URLs (absolute, built by the api).
+var _branding = (typeof branding !== 'undefined' && branding) ? branding : { logo: null, signature: null };
 function _sChk(k, dflt) { var v = _s[k]; if (v === undefined) return dflt ? 'checked' : ''; return (v === true || v === 'true' || v === 'on' || v === '1') ? 'checked' : ''; }
 
 /* License-scoped SYNC flags (auto_update / sync_push_enabled / sync_pull_enabled
@@ -59,6 +61,36 @@ var settingsTabs = [
     { id: 'notify',  label: 'Notifications', icon: 'fa-bell'                            },
     { id: 'brand',   label: 'Branding',      icon: 'fa-palette'                         },
 ];
+
+/* Every voucher family that can carry its own numbering series. `on` is the
+ * default for a company that has never saved settings: the two families the
+ * app already numbered stay ticked, the rest start OFF so nothing suddenly
+ * begins renumbering vouchers that Tally was numbering fine. */
+var _voucherTypes = [
+    { key: 'sales',          label: 'Sales',          prefix: 'INV-', on: true  },
+    { key: 'sales_order',    label: 'Sales Order',    prefix: 'SO-',  on: false },
+    { key: 'purchase',       label: 'Purchase',       prefix: 'PUR-', on: true  },
+    { key: 'purchase_order', label: 'Purchase Order', prefix: 'PO-',  on: false },
+    { key: 'receipt',        label: 'Receipt',        prefix: 'RCP-', on: false },
+    { key: 'payment',        label: 'Payment',        prefix: 'PAY-', on: false },
+    { key: 'credit_note',    label: 'Credit Note',    prefix: 'CN-',  on: false },
+    { key: 'debit_note',     label: 'Debit Note',     prefix: 'DN-',  on: false },
+    { key: 'journal',        label: 'Journal',        prefix: 'JV-',  on: false },
+    { key: 'contra',         label: 'Contra',         prefix: 'CV-',  on: false },
+    { key: 'quotation',      label: 'Quotation',      prefix: 'QT-',  on: false },
+    { key: 'receipt_note',   label: 'Receipt Note',   prefix: 'GRN-', on: false },
+    { key: 'delivery_note',  label: 'Delivery Note',  prefix: 'DC-',  on: false },
+    { key: 'stock_journal',  label: 'Stock Journal',  prefix: 'SJ-',  on: false },
+    { key: 'physical_stock', label: 'Physical Stock', prefix: 'PS-',  on: false },
+];
+
+// Short financial year ("26-27") — only a placeholder for the suffix box, so a
+// blank field still shows the shape a suffix usually takes.
+var _fyShort = (function () {
+    var y = new Date().getFullYear();
+    var start = (new Date().getMonth() + 1) >= 4 ? y : y - 1;
+    return String(start).slice(2) + '-' + String(start + 1).slice(2);
+})();
 
 // A reusable notification toggle row (label + description + switch).
 var _notifs = [
@@ -328,6 +360,178 @@ var headActions = _isSuper ? '' :
                     <div class="char-counter"><span id="set-terms-count">0/500</span></div>
                 </div>
             </div>
+
+            <hr class="form-divider">
+
+            <%# ── Per-voucher-type numbering. Sales and Purchase used to be the
+                 only two that could be numbered, so every other voucher family
+                 fell back to whatever the create screen invented. Each row is
+                 independent: unticking one leaves that family's numbering to
+                 Tally rather than forcing a cloud series on it. ── %>
+            <h2 class="form-section-title">Voucher Numbering</h2>
+            <p class="form-hint mb-3">
+                Set a prefix, the next number and an optional suffix per voucher type.
+                Leave a type unticked to let Tally number it.
+            </p>
+            <div class="vnum-table">
+                <div class="vnum-head">
+                    <span>Voucher Type</span><span>Prefix</span><span>Next No.</span><span>Suffix</span>
+                </div>
+                <% _voucherTypes.forEach(function (v) { %>
+                    <% var _on = _sChk('vnum_' + v.key + '_enabled', v.on); %>
+                    <div class="vnum-row">
+                        <label class="vnum-name">
+                            <%# The hidden field makes an UNTICKED box post too —
+                                without it the key simply vanishes and the old
+                                value survives the save. %>
+                            <input type="hidden" name="settings[vnum_<%= v.key %>_enabled]" value="">
+                            <input class="form-check-input" type="checkbox"
+                                   name="settings[vnum_<%= v.key %>_enabled]" value="on" <%= _on %>>
+                            <span><%= v.label %></span>
+                        </label>
+                        <input type="text" class="form-control form-control-sm"
+                               name="settings[vnum_<%= v.key %>_prefix]"
+                               value="<%= _sv('vnum_' + v.key + '_prefix', '') %>" placeholder="<%= v.prefix %>">
+                        <input type="number" class="form-control form-control-sm" min="1"
+                               name="settings[vnum_<%= v.key %>_next]"
+                               value="<%= _sv('vnum_' + v.key + '_next', '') %>" placeholder="1">
+                        <input type="text" class="form-control form-control-sm"
+                               name="settings[vnum_<%= v.key %>_suffix]"
+                               value="<%= _sv('vnum_' + v.key + '_suffix', '') %>" placeholder="/<%= _fyShort %>">
+                    </div>
+                <% }); %>
+            </div>
+
+            <hr class="form-divider">
+
+            <h2 class="form-section-title">Print &amp; Format</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label">Print Format</label>
+                    <% var _pf = _sv('print_format', 'default'); %>
+                    <div class="pf-radios">
+                        <% [['default','Default (A4)'],
+                            ['three_inch','Three Inch Thermal Printer'],
+                            ['two_inch','Two Inch Thermal Printer']].forEach(function (o) { %>
+                            <label class="pf-radio">
+                                <input type="radio" name="settings[print_format]" value="<%= o[0] %>"
+                                       <%= _pf === o[0] ? 'checked' : '' %>>
+                                <span><%= o[1] %></span>
+                            </label>
+                        <% }); %>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Authorised Signature</label>
+                    <%- include('../partials/branding-upload', {
+                        kind: 'signature',
+                        url: _branding.signature,
+                        hint: 'Printed above the signature line on a voucher.',
+                    }) %>
+                </div>
+            </div>
+
+            <div class="form-check form-switch settings-switch">
+                <input type="hidden" name="settings[custom_header_enabled]" value="">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-custom-header"
+                       name="settings[custom_header_enabled]" value="on" <%= _sChk('custom_header_enabled', false) %>>
+                <label class="form-check-label" for="set-custom-header">Customized Invoice Header</label>
+            </div>
+            <div class="form-group">
+                <input type="text" class="form-control" name="settings[custom_header]"
+                       value="<%= _sv('custom_header', '') %>" maxlength="200"
+                       placeholder="Printed at the top of the invoice instead of the company name">
+            </div>
+
+            <%# Per-family overrides for the header above. A Quotation is not a
+                tax invoice and a Delivery Note is not either, so one header
+                across all fifteen families prints the wrong word on most of
+                them. Blank = use the general header. ── %>
+            <div class="form-check form-switch settings-switch">
+                <input type="hidden" name="settings[per_type_header_enabled]" value="">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-per-type-header"
+                       name="settings[per_type_header_enabled]" value="on" <%= _sChk('per_type_header_enabled', false) %>>
+                <label class="form-check-label" for="set-per-type-header">Different header per voucher type</label>
+            </div>
+            <div class="vopt-table">
+                <div class="vopt-head">
+                    <span>Voucher Type</span><span>Printed Header</span><span class="vopt-tick">Optional Voucher</span>
+                </div>
+                <% _voucherTypes.forEach(function (v) { %>
+                    <div class="vopt-row">
+                        <span class="vopt-name"><%= v.label %></span>
+                        <input type="text" class="form-control form-control-sm"
+                               name="settings[header_<%= v.key %>]"
+                               value="<%= _sv('header_' + v.key, '') %>" maxlength="200"
+                               placeholder="Use the general header">
+                        <%# An OPTIONAL voucher is Tally's own idea: the entry is
+                            recorded but kept out of the books until someone
+                            confirms it, so it never touches a balance by
+                            accident. Off by default — a voucher that silently
+                            does not count is a surprise nobody asked for. %>
+                        <label class="vopt-tick">
+                            <input type="hidden" name="settings[optional_<%= v.key %>]" value="">
+                            <input class="form-check-input" type="checkbox"
+                                   name="settings[optional_<%= v.key %>]" value="on"
+                                   <%= _sChk('optional_' + v.key, false) %>
+                                   aria-label="Create <%= v.label %> as an optional voucher">
+                        </label>
+                    </div>
+                <% }); %>
+            </div>
+
+            <div class="form-check form-switch settings-switch">
+                <input type="hidden" name="settings[custom_declaration_enabled]" value="">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-custom-decl"
+                       name="settings[custom_declaration_enabled]" value="on" <%= _sChk('custom_declaration_enabled', false) %>>
+                <label class="form-check-label" for="set-custom-decl">Customized Declaration</label>
+            </div>
+            <div class="form-group">
+                <textarea class="form-control" name="settings[custom_declaration]" rows="2" maxlength="500"
+                          placeholder="Printed above the signature block"><%= _sv('custom_declaration', '') %></textarea>
+            </div>
+
+            <hr class="form-divider">
+
+            <h2 class="form-section-title">Ledger Report</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label">Format of Report</label>
+                    <% var _lf = _sv('ledger_report_format', 'detailed'); %>
+                    <div class="pf-radios">
+                        <% [['detailed','Detailed'], ['condensed','Condensed']].forEach(function (o) { %>
+                            <label class="pf-radio">
+                                <input type="radio" name="settings[ledger_report_format]" value="<%= o[0] %>"
+                                       <%= _lf === o[0] ? 'checked' : '' %>>
+                                <span><%= o[1] %></span>
+                            </label>
+                        <% }); %>
+                    </div>
+                </div>
+            </div>
+            <div class="form-check form-switch settings-switch">
+                <input type="hidden" name="settings[ledger_show_narration]" value="">
+                <input class="form-check-input" type="checkbox" role="switch" id="set-ledger-narration"
+                       name="settings[ledger_show_narration]" value="on" <%= _sChk('ledger_show_narration', false) %>>
+                <label class="form-check-label" for="set-ledger-narration">Show Narration</label>
+            </div>
+
+            <style>
+                .vnum-table { border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; }
+                .vnum-head, .vnum-row { display:grid; grid-template-columns:1.4fr 1fr 0.8fr 1fr; gap:10px;
+                    align-items:center; padding:9px 14px; }
+                .vnum-head { background:#f8fafc; font-size:11px; text-transform:uppercase;
+                    letter-spacing:.4px; color:#6b7280; font-weight:600; }
+                .vnum-row { border-top:1px solid #f1f5f9; }
+                .vnum-name { display:flex; align-items:center; gap:9px; margin:0; font-size:13.5px;
+                    color:#334155; font-weight:600; }
+                .pf-radios { display:flex; flex-direction:column; gap:7px; }
+                .pf-radio { display:flex; align-items:center; gap:8px; margin:0; font-size:13.5px; color:#334155; }
+                @media (max-width: 640px) {
+                    .vnum-head { display:none; }
+                    .vnum-row { grid-template-columns:1fr 1fr; }
+                }
+            </style>
         </div>
 
         <!-- ════ NOTIFICATIONS ════ -->
@@ -356,17 +560,20 @@ var headActions = _isSuper ? '' :
                     <input type="text" class="form-control" id="set-app-name" name="settings[app_name]" value="<%= _sv('app_name', (typeof brand !== 'undefined' && brand) ? brand.name : 'Teloora') %>">
                 </div>
                 <div class="form-group">
-                    <label class="form-label" for="set-logo">Logo</label>
-                    <input type="file" class="form-control" id="set-logo" accept="image/*">
-                    <div class="form-hint">Logo upload coming soon.</div>
+                    <label class="form-label">Logo</label>
+                    <%- include('../partials/branding-upload', {
+                        kind: 'logo',
+                        url: _branding.logo,
+                        hint: 'Printed at the top of a voucher. PNG with a transparent background works best.',
+                    }) %>
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="set-primary">Primary Color</label>
-                    <input type="color" class="form-control form-control-color" id="set-primary" name="settings[primary_color]" value="<%= _sv('primary_color', '#2563EB') %>" style="height:42px">
+                    <input type="color" class="form-control form-control-color" id="set-primary" name="settings[primary_color]" value="<%= _sv('primary_color', 'var(--primary)') %>" style="height:42px">
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="set-accent">Accent Color</label>
-                    <input type="color" class="form-control form-control-color" id="set-accent" name="settings[accent_color]" value="<%= _sv('accent_color', '#6D28D9') %>" style="height:42px">
+                    <input type="color" class="form-control form-control-color" id="set-accent" name="settings[accent_color]" value="<%= _sv('accent_color', 'var(--secondary)') %>" style="height:42px">
                 </div>
                 <div class="form-group">
                     <label class="form-label" for="set-theme">Theme</label>

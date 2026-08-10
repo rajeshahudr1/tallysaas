@@ -283,6 +283,11 @@ async function create(req, res) {
                 round_off:       0,
                 total:           totals.total,
                 notes:           body.notes || null,
+                // Buyer / consignee / dispatch / order block — see the
+                // voucher_print_details migration. Stored as a whole, so an
+                // absent body leaves an empty object rather than null (the
+                // column is NOT NULL and the readers expect an object).
+                voucher_details: JSON.stringify(body.voucher_details || {}),
                 created_by:      req.user && req.user.sub ? req.user.sub : null,
                 // Ready to sync as soon as it's saved — the DB default is
                 // 'draft_cloud' (pre-push), so this row must say explicitly
@@ -365,6 +370,10 @@ async function updateDraft(req, res) {
                 cgst, sgst, igst,
                 tax_amount: totals.tax_amount, round_off: 0, total: totals.total,
                 notes: body.notes != null ? body.notes : existing.notes,
+                // Only replaced when the client actually sent a block, so a
+                // partial update cannot silently wipe the dispatch details.
+                ...(body.voucher_details != null
+                    ? { voucher_details: JSON.stringify(body.voucher_details) } : {}),
                 updated_at: now,
             };
             await trx('quotations').where({ id, company_id: req.companyId }).update(header);

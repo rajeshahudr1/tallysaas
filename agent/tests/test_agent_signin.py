@@ -39,9 +39,16 @@ def client(handler):
     import logging
     api = ApiClient("https://example.test/api/v1", logging.getLogger("test"))
     api.calls = []
+    api.retries = []
 
-    def _post(path, *, json, headers=None, timeout=None):
+    # Mirrors ApiClient._post, INCLUDING ``retries``. It drifted: the real
+    # method grew that parameter and _auth_post passes retries=0, so every
+    # sign-in test died on a TypeError from this stub rather than on anything
+    # about sign-in. Kept recorded so the "never retry a credential POST" rule
+    # below can be asserted rather than assumed.
+    def _post(path, *, json, headers=None, timeout=None, retries=None):
         api.calls.append((path, json))
+        api.retries.append(retries)
         return handler(path, json)
 
     api._post = _post
@@ -208,6 +215,33 @@ class LicenceKeyRemovalTests(unittest.TestCase):
         # Signing out must actually forget the token, not just hide the UI.
         from config import Config
         self.assertTrue(callable(getattr(Config("x.ini"), "clear_token", None)))
+
+
+class CredentialPostsAreNeverRetriedTests(unittest.TestCase):
+    """A credential POST must go out ONCE.
+
+    _auth_post passes retries=0 on purpose, and nothing pinned it. The ordinary
+    _post retries on transport errors, which is right for an import and wrong
+    here: a login, a code verification and a resend all COUNT server-side.
+    Retrying a rejected password burns the attempt allowance three times per
+    try, and retrying a resend trips the cooldown the customer is then told
+    about. Silently dropping the 0 would look harmless and lock people out.
+    """
+
+    def test_login_is_sent_once(self):
+        api = client(ok({"challenge_id": "c-1"}))
+        api.login("a@b.com", "pw", "M1")
+        self.assertEqual(api.retries, [0])
+
+    def test_verify_is_sent_once(self):
+        api = client(ok({"token": "t"}))
+        api.verify_otp("c-1", "123456", "M1")
+        self.assertEqual(api.retries, [0])
+
+    def test_resend_is_sent_once(self):
+        api = client(ok({"expires_in": 600}))
+        api.resend_otp("c-1")
+        self.assertEqual(api.retries, [0])
 
 
 if __name__ == "__main__":

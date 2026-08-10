@@ -67,6 +67,12 @@ var _canDeleteSalesOrder = _canPath3('/sales-orders', 'delete');
     ],
 }) %>
 
+<%# Register view switcher — the same period regrouped by Ledger, Voucher
+    Type, Ledger Group, Stock Item, Stock Group or Stock Category. %>
+<%- include('../partials/register-tabs', {
+    basePath: '/sales-orders', active: 'bill', hasStock: true, showMode: false, query: '',
+}) %>
+
 <form id="sales-order-filters-form" autocomplete="off" method="get" action="/sales-orders">
     <%- include('../partials/filter-card', {
         filterId: 'sales-order-filters',
@@ -131,8 +137,10 @@ var _canDeleteSalesOrder = _canPath3('/sales-orders', 'delete');
                                     <i class="fa-solid fa-ellipsis-vertical"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/sales-orders/<%= r.id %>/edit">
-                                        <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
+                                    <% if (_canEditSalesOrder) { %>
+                                        <li><a class="dropdown-item" href="/sales-orders/<%= r.id %>/edit">
+                                            <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</a></li>
+                                    <% } %>
                                     <li><a class="dropdown-item" href="/sales-orders/<%= r.id %>/pdf" target="_blank">
                                         <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
                                     <% if (_convertible && _canEditSalesOrder) { %>

@@ -18,6 +18,10 @@ class Supplier {
     this.address,
     this.openingBalance,
     this.paymentTerms,
+    this.creditDays,
+    this.closingBalance,
+    this.lastPurchasedDate,
+    this.tallyLedgerGroup,
     this.isTallyLedger,
     this.status,
     this.customFields = const {},
@@ -37,6 +41,20 @@ class Supplier {
   final String? address;
   final num? openingBalance;
   final String? paymentTerms;
+
+  /// Credit PERIOD, in days — the numeric counterpart to [paymentTerms].
+  /// NULL means "no agreed terms", deliberately NOT 0.
+  final int? creditDays;
+
+  /// Where the supplier stands TODAY, from the synced Tally ledger.
+  final num? closingBalance;
+
+  /// When we last bought from them; null when we never have.
+  final String? lastPurchasedDate;
+
+  /// The supplier's group in Tally, kept apart from the cloud's own
+  /// `supplier_group` so neither silently overwrites the other.
+  final String? tallyLedgerGroup;
   final bool? isTallyLedger;
   final String? status; // Active | Inactive | Blocked
   final Map<String, dynamic> customFields;
@@ -56,6 +74,10 @@ class Supplier {
         address: _sn(j['address']),
         openingBalance: _toNum(j['opening_balance']),
         paymentTerms: _sn(j['payment_terms']),
+        creditDays: _toInt(j['credit_days']),
+        closingBalance: _toNum(j['closing_balance']),
+        lastPurchasedDate: _sn(j['last_purchased_date']),
+        tallyLedgerGroup: _sn(j['tally_ledger_group']),
         isTallyLedger: _toBool(j['is_tally_ledger']),
         status: _sn(j['status']),
         customFields: _toMap(j['custom_fields']),

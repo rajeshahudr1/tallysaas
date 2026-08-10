@@ -33,7 +33,7 @@ var _isPaid = _pay && _pay.status === 'paid';
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pay<% if (_pay && _pay.company_name) { %> · <%= _pay.company_name %><% } %></title>
 <style>
-  :root { --brand:#2563EB; --ink:#111827; --muted:#6B7280; --paper:#F3F4F6; --ok:#16A34A; }
+  :root { --brand:var(--primary); --ink:#111827; --muted:#6B7280; --paper:#F3F4F6; --ok:#16A34A; }
   * { box-sizing: border-box; }
   body {
     margin: 0; min-height: 100vh; background: var(--paper); color: var(--ink);
@@ -71,6 +71,8 @@ var _isPaid = _pay && _pay.status === 'paid';
   .not-found i { font-size: 32px; color: #D1D5DB; margin-bottom: 12px; display: block; }
   .footer-note { font-size: 12px; color: var(--muted); margin-top: 18px; }
 </style>
+    <!-- Brand colours -> CSS vars (web/config/brand.js). This page has no theme.css. -->
+    <%- include('../partials/brand-vars') %>
 </head>
 <body>
   <div class="card">

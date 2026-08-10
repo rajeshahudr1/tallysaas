@@ -68,7 +68,12 @@ function _pageHref(p) {
             <thead>
                 <tr>
                     <th>Voucher No</th>
+                    <%# The OTHER side of each voucher — who this ledger actually
+                        moved money with. Without it a bank statement is just a
+                        list of amounts. %>
+                    <th>Ledger</th>
                     <th>Voucher Type</th>
+                    <th>Ref. No</th>
                     <th>Date</th>
                     <th class="is-num">Amount</th>
                 </tr>
@@ -81,7 +86,13 @@ function _pageHref(p) {
                                 <a class="daybook-voucher" href="<%= r.href %>"><%= r.voucher || '(no number)' %></a>
                             <% } else { %><%= r.voucher || '—' %><% } %>
                         </td>
+                        <td>
+                            <% if (r.counter_ledger) { %>
+                                <a href="/ledgers/<%= encodeURIComponent(r.counter_ledger) %>"><%= r.counter_ledger %></a>
+                            <% } else { %>—<% } %>
+                        </td>
                         <td><%= r.type %></td>
+                        <td style="color:#64748b"><%= r.reference_no || '—' %></td>
                         <td><%= r.date %></td>
                         <td class="is-num"><%= r.amount %> <span class="ledger-dc"><%= r.dc %></span></td>
                     </tr>

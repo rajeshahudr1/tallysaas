@@ -23,6 +23,7 @@ class MyVoucher {
     this.party,
     this.amount,
     this.status,
+    this.modifiedAt,
   });
 
   final int id;
@@ -39,6 +40,10 @@ class MyVoucher {
   final String? party;
   final num? amount;
   final String? status;
+
+  /// When the entry last changed — what tells you whether a stuck voucher has
+  /// moved at all since it was raised.
+  final String? modifiedAt;
 
   /// Where this row opens. Kinds whose screen the app has are pushed; the rest
   /// simply don't navigate rather than guessing a route that 404s.
@@ -80,6 +85,7 @@ class MyVoucher {
         party: _sn(j['party']),
         amount: _toNum(j['amount']),
         status: _sn(j['status']),
+        modifiedAt: _sn(j['modified_at']),
       );
 }
 
@@ -229,8 +235,13 @@ class _VoucherCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis),
                 ],
                 const SizedBox(height: 2),
-                Text(date == null ? '—' : Fmt.date(date),
-                    style: theme.textTheme.bodySmall),
+                Text(
+                  [
+                    date == null ? '—' : Fmt.date(date),
+                    if (v.modifiedAt != null) 'modified ${Fmt.date(v.modifiedAt)}',
+                  ].join('  •  '),
+                  style: theme.textTheme.bodySmall,
+                ),
               ],
             ),
           ),

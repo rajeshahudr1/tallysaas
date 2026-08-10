@@ -89,6 +89,7 @@ import ui_theme
 import ui_signin
 import ui_splash
 import ui_dashboard
+import ui_update
 from ui_theme import (          # noqa: F401  (re-exported for the views)
     BRAND, BRAND_DEEP, BG, CARD, TXT, SUB, BORDER,
     OK_GREEN, BAD_RED, WARN_AMBER,
@@ -98,16 +99,22 @@ from ui_theme import (          # noqa: F401  (re-exported for the views)
     SPACE_TIGHT, SPACE_ITEM, SPACE_GROUP, SPACE_BLOCK, SPACE_SECTION, SPACE_PAGE,
 )
 
-# IDENTITY — deliberately NOT rebranded. These are the on-disk names an
-# existing install already uses (exe filename, startup script, install
-# folder). Renaming any of them would make an updated build unable to find /
-# recognise a machine's existing installation (duplicate install at best, an
-# orphaned config at worst). Only SHORTCUT_NAME (cosmetic, recreated on every
-# install/update) follows the brand.
-INSTALLED_EXE_NAME = "TallyCloudSync.exe"
-STARTUP_VBS_NAME = "TallyCloudSync.vbs"
+# IDENTITY — the on-disk names an install uses (exe filename, startup script,
+# install folder), all derived from brand.SLUG so a rebrand is ONE edit.
+#
+# Changing SLUG changes what a NEW build installs itself as; an install made by
+# an older build keeps its old names and is not adopted (duplicate install at
+# best, orphaned config at worst). So a SLUG change is a "uninstall the old
+# agent, run the new exe once" release, not a silent in-place upgrade.
+from brand import SLUG as _SLUG
+# The one dark surface in the app (the activity log) uses the logo navy.
+from brand import COLORS as _BRAND_COLORS
+BRAND_NAVY = _BRAND_COLORS["navy"]
+
+INSTALLED_EXE_NAME = f"{_SLUG}.exe"
+STARTUP_VBS_NAME = f"{_SLUG}.vbs"
 SHORTCUT_NAME = f"{BRAND_NAME}.lnk"
-DEFAULT_INSTALL_DIR = r"C:\TallyCloudSync"
+DEFAULT_INSTALL_DIR = "C:\\" + _SLUG
 
 # Bounds on the sync interval, enforced wherever it is set or read.
 #
@@ -246,10 +253,9 @@ def is_activated(cfg: Config) -> bool:
 # only counts when it really holds an activated install — a leftover registry
 # value from an uninstall must not send a first-time customer into "update" mode
 # for something that is not there.
-# IDENTITY — deliberately NOT rebranded: an existing install's registry value
-# lives under this key, and changing it would orphan every machine already
-# activated (see note above INSTALLED_EXE_NAME).
-REG_SUBKEY = r"Software\TallyCloudSync"
+# Registry home, from the same slug as the exe / install dir. See the note
+# above INSTALLED_EXE_NAME: a slug change orphans older installs by design.
+REG_SUBKEY = "Software\\" + _SLUG
 REG_VALUE_INSTALL_DIR = "InstallDir"
 
 
@@ -502,6 +508,54 @@ def _is_lock_error(exc: BaseException) -> bool:
     """
     return isinstance(exc, OSError) and getattr(exc, "winerror", None) == 32 \
         or isinstance(exc, PermissionError)
+
+
+def copy_with_progress(src: str, dst: str, on_progress=None,
+                       chunk: int = 1024 * 1024) -> None:
+    """``shutil.copy2`` that reports how far along it is (0.0 .. 1.0).
+
+    The update screen shows a REAL percentage, and this is where the only
+    honest denominator in the whole operation comes from: the size of the file
+    before the first byte moves. An indeterminate bar was the complaint — it
+    sweeps identically whether the copy is running, stalled behind antivirus, or
+    finished, so it answers the one question the customer has ("how far?") with
+    nothing.
+
+    ``on_progress`` is decoration and is treated as such: it is called
+    best-effort, and an exception from it must never cost the customer an update
+    that is otherwise succeeding. The final call is always exactly 1.0 — a bar
+    that stops at 97% because the last chunk was short reads as a hang.
+    """
+    total = 0
+    try:
+        total = os.path.getsize(src)
+    except OSError:
+        total = 0
+
+    def report(fraction: float) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(max(0.0, min(1.0, fraction)))
+        except Exception:                                   # noqa: BLE001
+            pass
+
+    done = 0
+    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        while True:
+            buf = fsrc.read(chunk)
+            if not buf:
+                break
+            fdst.write(buf)
+            done += len(buf)
+            if total:
+                report(done / total)
+    # Mode and timestamps, exactly as copy2 would leave them.
+    try:
+        shutil.copystat(src, dst)
+    except OSError:
+        pass
+    report(1.0)
 
 
 def copy_over_running_exe(src: str, dst: str, stop_fn, append,
@@ -812,7 +866,7 @@ def spawn_folder_cleanup(install_dir: str, elevated: bool = False) -> bool:
     # being purged — never ``exe_path()``. It used to be the running exe, which
     # is the same file only when the uninstall is driven from the installed
     # copy. Uninstall from the downloaded exe instead and the batch deleted THAT
-    # — the customer's own download vanished while C:\TallyCloudSync stayed put,
+    # — the customer's own download vanished while C:\Teloora stayed put,
     # which is the exact opposite of what they asked for.
     exe = os.path.join(install_dir, INSTALLED_EXE_NAME)
     lines = [
@@ -1014,7 +1068,7 @@ def run_elevated_verb(verb: str, wait: bool = True, timeout: int = 60,
 
     ``extra`` is an OPTIONAL extra argument appended AFTER the verb (quoted) -
     used by ``install-service`` to carry the absolute, STABLE installed-exe path
-    (``<install_dir>\\TallyCloudSync.exe``) so the elevated copy registers the
+    (``<install_dir>\\Teloora.exe``) so the elevated copy registers the
     service to that exact path, never to whatever exe is currently running.
     """
     if os.name != "nt":
@@ -1084,6 +1138,55 @@ def run_elevated_verb(verb: str, wait: bool = True, timeout: int = 60,
         return code.value == 0
     except Exception:
         return False
+
+
+def repoint_and_start_service(installed_exe: str, append=None, verb_fn=None,
+                              installed_fn=None) -> bool:
+    """Re-register the service to ``installed_exe``, then start it.
+
+    WHY REGISTER RATHER THAN JUST START. An update used to run ``start-service``,
+    which starts whatever is registered and cannot repair a WRONG registration.
+    A machine whose service had been registered by an older build carried a
+    binPath with no ``--run-service``:
+
+        BINARY_PATH_NAME : "C:\\Teloora\\Teloora.exe"
+
+    SCM launched that with no arguments, so the exe opened the GUI instead of
+    calling StartServiceCtrlDispatcher, never reported RUNNING, and sat in
+    START_PENDING forever — the update screen hung on "Restarting the background
+    service..." and the Dashboard read "Service: Unknown" on a machine that was
+    in fact syncing in-process. ``install-service`` re-points binPath, args and
+    the versioned display name (win_service.install_service's already-installed
+    branch) and then starts it. An update is the one moment the correct path is
+    known for certain, so it is the moment to assert it.
+
+    Best-effort by contract: the exe is already copied by the time this runs, so
+    NOTHING here may turn a completed update into a failed one. Returns True
+    only when the elevated verb ran and exited 0.
+
+    ``verb_fn`` / ``installed_fn`` exist for the tests; production passes neither.
+    """
+    verb_fn = verb_fn or run_elevated_verb
+    installed_fn = installed_fn or service_installed
+    try:
+        if not installed_fn():
+            # A logon-autostart install has no service. Do not summon a UAC
+            # prompt for a thing that is not there.
+            return False
+    except Exception:                                       # noqa: BLE001
+        return False
+    if append:
+        append("[..] Restarting the background service...")
+    try:
+        ok = bool(verb_fn("install-service", wait=True, timeout=90,
+                          extra=os.path.abspath(installed_exe)))
+    except Exception:                                       # noqa: BLE001
+        ok = False
+    if append:
+        append("[OK] Background service restarted." if ok else
+               "[!] Could not restart the service — open the Dashboard and "
+               "press Start.")
+    return ok
 
 
 # --------------------------------------------------------------------------- #
@@ -2106,7 +2209,7 @@ class SetupView:
                          "(a UAC prompt will appear)...")
             try:
                 # Pass the STABLE install-dir exe path so the service binPath is
-                # ALWAYS <install_dir>\TallyCloudSync.exe - never the launcher /
+                # ALWAYS <install_dir>\Teloora.exe - never the launcher /
                 # release / temp exe that ran this installer. The service then
                 # reads <install_dir>\config.ini (the token) and writes its logs
                 # + .status.json into <install_dir> (its own folder).
@@ -2234,62 +2337,30 @@ class UpdateView:
         self.installed_exe = os.path.join(install_dir, INSTALLED_EXE_NAME)
         self._done = False
 
-        outer = ttk.Frame(parent)
-        outer.pack(fill="both", expand=True)
-
-        header = ttk.Frame(outer, style="Header.TFrame")
-        header.pack(fill="x")
-        hpad = ttk.Frame(header, style="Header.TFrame")
-        hpad.pack(fill="x", padx=18, pady=14)
-        ttk.Label(hpad, text=APP_TITLE, style="Header.TLabel").pack(anchor="w")
-        ttk.Label(hpad, text="Updating your existing installation",
-                  style="HeaderSub.TLabel").pack(anchor="w")
-
-        body = ttk.Frame(outer)
-        body.pack(fill="both", expand=True, padx=18, pady=16)
-
-        card = ttk.Frame(body, style="Card.TFrame")
-        card.pack(fill="x")
-        cin = ttk.Frame(card, style="Card.TFrame")
-        cin.pack(fill="x", padx=16, pady=14)
-        self.lbl_state = ttk.Label(cin, text="Updating...", style="CardBig.TLabel")
-        self.lbl_state.pack(anchor="w")
-        ttk.Label(cin, text="Folder: " + install_dir,
-                  style="CardSub.TLabel").pack(anchor="w", pady=(6, 0))
-        ttk.Label(cin,
-                  text="Your licence and settings are kept — nothing to re-enter.",
-                  style="CardSub.TLabel").pack(anchor="w", pady=(2, 0))
-
-        self.progress = ttk.Progressbar(body, style="Brand.Horizontal.TProgressbar",
-                                        mode="indeterminate", length=240)
-        self.progress.pack(fill="x", pady=(14, 12))
-        # Idle until the customer says go: a bar that animates while the screen
-        # is still asking a question says work is happening when none is.
-
-        self.log = tk.Text(body, height=8, wrap="word", relief="flat")
-        self.log.pack(fill="both", expand=True)
-        self.log.configure(state="disabled")
-
-        btns = ttk.Frame(body)
-        btns.pack(fill="x", pady=(12, 0))
-        self.btn_close = ttk.Button(btns, text="Close", command=self._close,
-                                    state="disabled")
-        self.btn_close.pack(side="right")
-        self.btn_setup = ttk.Button(
-            btns, text="Set up as a new install instead", command=self._fallback_setup)
-        self.btn_setup.pack(side="left")
-        # The decision lives ON this screen, not in a dialog on top of it. The
-        # screen already states both versions and what will happen; a modal
-        # asking the same question again is the same sentence twice, and it
-        # covers the very text it is asking about.
-        self.btn_update = ttk.Button(btns, text="Update now",
-                                     style="Primary.TButton",
-                                     command=self._start_update)
-        self.btn_later = ttk.Button(btns, text="Not now",
-                                    command=self._open_installed_and_close)
+        # The window is ui_update's; this class only decides and works. It was
+        # the last ttk screen in the product and read as an older application
+        # beside the sign-in and Dashboard windows — during an upgrade, of all
+        # moments. See ui_update for the layout and for why its bar carries a
+        # real figure.
+        self.ui = ui_update.Screen(parent, on_setup=self._fallback_setup,
+                                   on_close=self._close)
+        self.ui.folder(install_dir)
 
         # Decide FIRST, then act. See _decide.
         self.app.root.after(80, self._decide)
+
+    # -- the screen, driven ------------------------------------------------- #
+    # The step budget. The copy is ~70% of the wall clock on a normal machine,
+    # so it gets ~70% of the bar; the rest are short, fixed steps. These are
+    # weights on real work, not a timer — nothing here advances on its own.
+    P_START, P_COPY, P_VERSION, P_SIDE, P_SERVICE = 0.04, 0.74, 0.82, 0.88, 1.0
+
+    def _progress(self, fraction: float, step: str = "") -> None:
+        """Paint the bar from the WORKER thread (Tk is main-thread only)."""
+        try:
+            self.app.root.after(0, lambda: self.ui.progress(fraction, step))
+        except Exception:                                   # noqa: BLE001
+            pass
 
     # -- what this exe is for ---------------------------------------------- #
     def _installed_version(self) -> str:
@@ -2329,11 +2400,11 @@ class UpdateView:
         self._append("[i] Installed: v%s    This file: v%s"
                      % (installed or "?", mine or "?"))
         if installed and mine and not sync_agent._is_newer(mine, installed):
-            self.lbl_state.configure(text="Already up to date",
-                                     foreground=OK_GREEN)
+            self.ui.state("Already up to date", tone="ok")
+            self.ui.progress(1.0, "Nothing to install")
             self._append("[OK] The installed copy is already v%s - opening it."
                          % installed)
-            self.btn_close.configure(state="normal")
+            self.ui.set_close_enabled(True)
             if relaunch_installed(self.installed_exe):
                 try:
                     self.app.root.withdraw()
@@ -2346,18 +2417,14 @@ class UpdateView:
         # Both numbers, spelled out, on the screen — the whole question is
         # "which one am I on and which one is this", and naming only the new one
         # sends the customer looking for the old one.
-        try:
-            self.lbl_state.configure(
-                text="Update available:  v%s  ->  v%s"
-                     % (installed or "?", mine or "?"), foreground=BRAND)
-        except Exception:                                   # noqa: BLE001
-            pass
+        self.ui.state("Update available:  v%s  →  v%s"
+                      % (installed or "?", mine or "?"))
         self._append("")
         self._append("[i] Press 'Update now' to install v%s. Your licence and "
                      "settings are kept." % (mine or "the new version"))
-        self.btn_update.pack(side="right", padx=(8, 0))
-        self.btn_later.pack(side="right")
-        self.btn_close.configure(state="normal")
+        self.ui.offer(on_update=self._start_update,
+                      on_later=self._open_installed_and_close)
+        self.ui.set_close_enabled(True)
 
     def _open_installed_and_close(self) -> None:
         """'Not now' — leave the install alone and open what is already there."""
@@ -2372,17 +2439,12 @@ class UpdateView:
 
     def _start_update(self) -> None:
         """'Update now' — from here it is work, not a question."""
-        for btn in (self.btn_update, self.btn_later):
-            try:
-                btn.pack_forget()
-            except Exception:                               # noqa: BLE001
-                pass
-        self.btn_close.configure(state="disabled")
-        try:
-            self.lbl_state.configure(text="Updating...", foreground=BRAND)
-            self.progress.start(12)
-        except Exception:                                   # noqa: BLE001
-            pass
+        self.ui.hide_choice()
+        # Close stays dead until the copy is done: this is the one window in the
+        # product where closing mid-step could leave a half-written exe.
+        self.ui.set_close_enabled(False)
+        self.ui.state("Updating...")
+        self.ui.progress(self.P_START, "Preparing")
         threading.Thread(target=self._work, name="update-in-place",
                          daemon=True).start()
 
@@ -2397,16 +2459,10 @@ class UpdateView:
 
     # -- ui helpers -------------------------------------------------------- #
     def _append(self, line: str) -> None:
-        def do():
-            try:
-                self.log.configure(state="normal")
-                self.log.insert("end", line + "\n")
-                self.log.see("end")
-                self.log.configure(state="disabled")
-            except Exception:                               # noqa: BLE001
-                pass
+        """One line of detail. Marshalled onto the main thread — _apply runs on
+        a worker, and Tk may only be touched from the thread that owns it."""
         try:
-            self.app.root.after(0, do)
+            self.app.root.after(0, lambda: self.ui.append(line))
         except Exception:                                   # noqa: BLE001
             pass
 
@@ -2426,16 +2482,12 @@ class UpdateView:
         ok, err = self._apply()
 
         def done():
-            try:
-                self.progress.stop()
-                self.progress.configure(mode="determinate", maximum=100,
-                                        value=100 if ok else 0)
-            except Exception:                               # noqa: BLE001
-                pass
-            self.btn_close.configure(state="normal")
+            self.ui.progress(1.0 if ok else 0.0,
+                             "Finished" if ok else "Stopped")
+            self.ui.set_close_enabled(True)
             if ok:
-                self.lbl_state.configure(text="Updated", foreground=OK_GREEN)
-                self.btn_setup.pack_forget()
+                self.ui.state("Updated", tone="ok")
+                self.ui.hide_setup()
                 # Reopen the installed exe; it finds its config and goes straight
                 # to the Dashboard. Then get out of the way.
                 if relaunch_installed(self.installed_exe):
@@ -2452,7 +2504,7 @@ class UpdateView:
                     self._append("[!] Could not reopen automatically — start "
                                  + APP_TITLE + " from the Start Menu.")
             else:
-                self.lbl_state.configure(text="Update failed", foreground=BAD_RED)
+                self.ui.state("Update failed", tone="bad")
                 self._append("[x] " + (err or "Unknown error."))
                 self._append("    Your existing installation is untouched and "
                              "still running.")
@@ -2472,14 +2524,25 @@ class UpdateView:
             return False, "Already running from the install folder."
 
         self._append("[..] Updating " + self.install_dir + " ...")
+        # The copy is the long step and the only one with a real denominator, so
+        # it owns most of the bar and moves by BYTES. Its fraction is mapped into
+        # the P_START..P_COPY slice, which is why the number never jumps back
+        # when a locked-file retry starts the copy over.
+        span = self.P_COPY - self.P_START
+
+        def copied(f: float) -> None:
+            self._progress(self.P_START + span * f, "Copying the application")
+
         try:
             copy_over_running_exe(
                 src, self.installed_exe,
                 stop_fn=lambda: stop_background_syncer(self.install_dir),
-                append=self._append)
+                append=self._append,
+                copy_fn=lambda s, d: copy_with_progress(s, d, on_progress=copied))
         except Exception as exc:                            # noqa: BLE001
             return False, str(exc)
         self._append("[OK] Application updated.")
+        self._progress(self.P_COPY, "Recording the version")
 
         # Record the new version in the INSTALL's config, so the machine knows
         # what it is now running. The exe was replaced but this file was not,
@@ -2495,6 +2558,7 @@ class UpdateView:
             self._append("[OK] Recorded version v%s." % inst_cfg.agent_version)
         except Exception as exc:                            # noqa: BLE001
             self.logger.warning("Could not record the new version: %s", exc)
+        self._progress(self.P_VERSION, "Copying the side files")
 
         # Side files are cosmetic; a failure here must not fail the update.
         here = app_dir()
@@ -2509,18 +2573,15 @@ class UpdateView:
         # Re-assert the pointer: this install is current, and an older build may
         # never have written one (which is how we got here via the default dir).
         remember_install_dir(self.install_dir)
+        self._progress(self.P_SIDE, "Restarting the background service")
 
-        # Restart the syncer we stopped to free the file. Best-effort: if the
+        # Restart the syncer we stopped to free the file — and RE-POINT it at
+        # the exe we just wrote while we are here. See repoint_and_start_service
+        # for the START_PENDING hang a stale binPath causes. Best-effort: if the
         # service will not start, the Dashboard we are about to open says so and
         # can start it — better than blocking the update on it.
         try:
-            if service_installed():
-                self._append("[..] Restarting the background service...")
-                if run_elevated_verb("start-service", wait=True, timeout=60):
-                    self._append("[OK] Background service restarted.")
-                else:
-                    self._append("[!] Could not restart the service — open the "
-                                 "Dashboard and press Start.")
+            repoint_and_start_service(self.installed_exe, append=self._append)
         except Exception as exc:                            # noqa: BLE001
             self.logger.debug("Service restart after update failed: %s", exc)
         return True, ""
@@ -2784,7 +2845,7 @@ class DashboardView:
         # The raw tail stays a console: these are log LINES, not rows, and the
         # customer is usually here to copy one into a support email.
         self.activity = tk.Text(wrap, height=10, wrap="word", state="disabled",
-                                background="#0f172a", foreground="#cbd5e1",
+                                background=BRAND_NAVY, foreground="#CBD5E1",
                                 insertbackground="#cbd5e1", relief="flat",
                                 font=("Consolas", 9), padx=10, pady=8)
         self.activity.pack(fill="both", expand=True, padx=16, pady=(0, 14))
@@ -2861,7 +2922,7 @@ class DashboardView:
         self.lbl_license = ttk.Label(
             st,
             text="Activated" if activated else "Not activated",
-            foreground="#0a7d28" if activated else "#b00020")
+            foreground=POSTED if activated else VARIANCE)
         self.lbl_license.grid(row=0, column=1, sticky="w", pady=4)
         ttk.Button(st, text="Sign in again...",
                    command=self.on_reactivate_prompt).grid(
@@ -2877,7 +2938,7 @@ class DashboardView:
             row=4, column=0, columnspan=2, sticky="w")
         ttk.Button(st, text="Save settings", command=self.on_save).grid(
             row=5, column=0, sticky="w", pady=(10, 0))
-        self.s_msg = ttk.Label(st, text="", foreground="#0a7d28")
+        self.s_msg = ttk.Label(st, text="", foreground=POSTED)
         self.s_msg.grid(row=5, column=1, sticky="w", pady=(10, 0))
 
     def _focus_interval(self) -> None:
@@ -3510,7 +3571,7 @@ class DashboardView:
             remove_startup_vbs()
 
         self.cfg = cfg
-        self.s_msg.configure(text="Saved.", foreground="#0a7d28")
+        self.s_msg.configure(text="Saved.", foreground=POSTED)
         self._activity("[OK] Settings saved.")
         self.lbl_version.configure(text="Version: " + (cfg.agent_version or "?"))
 
@@ -3539,7 +3600,7 @@ class DashboardView:
             cfg.save()
         except Exception as exc:
             self.s_msg.configure(text="Could not sign out: " + str(exc),
-                                 foreground="#b00020")
+                                 foreground=VARIANCE)
             return
 
         # Stop the service before the wizard reinstalls it; a running service
@@ -4281,7 +4342,7 @@ def _route_service_argv(argv: list[str]) -> Optional[int]:
             return 1
         if verb == "install-service":
             # OPTIONAL trailing token = the absolute STABLE installed-exe path the
-            # service must be registered to (<install_dir>\TallyCloudSync.exe).
+            # service must be registered to (<install_dir>\Teloora.exe).
             # We use the ORIGINAL argv (not the lower-cased copy) so the path
             # keeps its real casing. The token right AFTER 'install-service' is
             # the exe path; absent -> install_service() falls back to the running

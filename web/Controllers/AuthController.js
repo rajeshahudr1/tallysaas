@@ -19,6 +19,7 @@ function showLogin(req, res) {
         title: 'Sign in',
         error: null,
         email: '',
+        remember: false,
         next: typeof req.query.next === 'string' ? req.query.next : '/',
     });
 }
@@ -28,9 +29,12 @@ async function login(req, res) {
     const email = String(req.body.email || '').trim();
     const password = String(req.body.password || '');
     const next = (typeof req.body.next === 'string' && req.body.next.startsWith('/')) ? req.body.next : '/';
+    // "Remember me" — keep the session cookie for 30 days instead of letting
+    // it die with the browser session.
+    const remember = req.body.remember === '1' || req.body.remember === 'on';
 
     const rerender = (error) => res.status(200).render('auth/login', {
-        layout: false, title: 'Sign in', error, email, next,
+        layout: false, title: 'Sign in', error, email, remember, next,
     });
 
     if (!email || !password) return rerender('Enter your email and password.');
@@ -48,6 +52,9 @@ async function login(req, res) {
     const user = body.data.user || {};
     req.session.token = body.data.token;
     req.session.user  = user;
+    if (req.session.cookie) {
+        req.session.cookie.maxAge = remember ? 30 * 24 * 60 * 60 * 1000 : null;
+    }
 
     // Fetch the companies this user may switch between (license-scoped; super
     // admin = all) so the header switcher + /switch-company are populated.

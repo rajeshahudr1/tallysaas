@@ -17,6 +17,7 @@ import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/image_viewer.dart';
 import '../../shared/widgets/status_pill.dart';
+import '../registers/stock_grouping_screen.dart';
 import 'products_controller.dart';
 
 /// Products master — searchable, paginated list with pull-to-refresh, infinite
@@ -90,6 +91,14 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
         title: const Text('Products'),
         actions: [
           const ModuleInfoButton('products'),
+          // The same stock rolled up by Group / Godown / Category.
+          IconButton(
+            icon: const Icon(Icons.pivot_table_chart_outlined),
+            tooltip: 'Stock summary',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => const StockGroupingScreen(),
+            )),
+          ),
           IconButton(
             icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
             color: hasFilter ? AppColors.primary : null,
@@ -112,8 +121,10 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
             ),
       body: Column(
         children: [
+          _stockChips(),
           Padding(
-            padding: const EdgeInsets.all(AppSpacing.md12),
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md12, 0, AppSpacing.md12, AppSpacing.md12),
             child: AppTextField(
               controller: _searchCtl,
               hint: 'Search by name, SKU, HSN…',
@@ -122,6 +133,57 @@ class _ProductsScreenState extends ConsumerState<ProductsScreen> {
             ),
           ),
           Expanded(child: _body(state)),
+        ],
+      ),
+    );
+  }
+
+  /// Stock-position chips. "Not In Stock" is exactly zero; NEGATIVE stock is
+  /// its own chip because Tally allows it and it usually means a sale was
+  /// booked before its purchase — a real problem, not just "none left".
+  Widget _stockChips() {
+    const tabs = <MapEntry<String, String>>[
+      MapEntry('', 'All Stocks'),
+      MapEntry('in', 'In Stock'),
+      MapEntry('out', 'Not In Stock'),
+      MapEntry('negative', 'Negative Stock'),
+    ];
+    final ctrl = ref.read(productsControllerProvider.notifier);
+    final current = ctrl.adv['stock'] ?? '';
+    return SizedBox(
+      height: 52,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md12, vertical: AppSpacing.sm8),
+        children: [
+          for (final t in tabs) ...[
+            ChoiceChip(
+              label: Text(t.value),
+              selected: current == t.key,
+              onSelected: (_) {
+                if (current == t.key) return;
+                // Keep every other advanced filter the user set; only the
+                // stock position changes.
+                final next = Map<String, String>.from(ctrl.adv);
+                if (t.key.isEmpty) {
+                  next.remove('stock');
+                } else {
+                  next['stock'] = t.key;
+                }
+                ctrl.setAdvFilter(next);
+                setState(() {});
+              },
+              labelStyle: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: current == t.key ? Colors.white : AppColors.text2,
+              ),
+              selectedColor: AppColors.primary,
+              backgroundColor: Colors.white,
+              showCheckmark: false,
+            ),
+            const SizedBox(width: AppSpacing.sm8),
+          ],
         ],
       ),
     );
@@ -228,10 +290,29 @@ class _ProductCard extends StatelessWidget {
             children: [
               if (p.salesPrice != null)
                 Text(Fmt.inr(p.salesPrice), style: theme.textTheme.titleSmall),
-              if (p.openingStock != null) ...[
+              // Show where the item stands TODAY when we know it; the opening
+              // figure alone told you nothing about what is actually on hand.
+              // Negative stock is real in Tally (a sale booked before its
+              // purchase), so it is flagged rather than hidden.
+              if (p.closingStock != null) ...[
                 const SizedBox(height: 4),
-                Text('Stock ${Fmt.num0(p.openingStock)}',
+                Text('Stock ${Fmt.num0(p.closingStock)}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: (p.closingStock ?? 0) < 0 ? AppColors.danger : null,
+                      fontWeight: (p.closingStock ?? 0) < 0 ? FontWeight.w700 : null,
+                    )),
+              ] else if (p.openingStock != null) ...[
+                const SizedBox(height: 4),
+                Text('Opening ${Fmt.num0(p.openingStock)}',
                     style: theme.textTheme.bodySmall),
+              ],
+              // What that stock is worth. Omitted (not shown as ₹0.00) for an
+              // item we have never bought: there is no rate to value it at.
+              if (p.stockValue != null) ...[
+                const SizedBox(height: 2),
+                Text(Fmt.inr(p.stockValue),
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: AppColors.text3)),
               ],
               if (p.status != null) ...[
                 const SizedBox(height: 6),

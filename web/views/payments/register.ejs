@@ -19,6 +19,12 @@ function _mlabel(ym) { var p = String(ym).split('-'); return (MN[Number(p[1])] |
     ],
 }) %>
 
+<%# Register view switcher — the same period regrouped by Ledger, Voucher
+    Type or Ledger Group. %>
+<%- include('../partials/register-tabs', {
+    basePath: '/payments', active: 'month', hasStock: false, showMode: false, query: '',
+}) %>
+
 <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
     <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:12px 18px;min-width:170px">
         <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
@@ -80,7 +86,7 @@ function _mlabel(ym) { var p = String(ym).split('-'); return (MN[Number(p[1])] |
                 <% } %>
                 <% _months.forEach(function (m) { %>
                     <tr class="reg-row" style="cursor:pointer" onclick="location.href='/payments?month=<%= m.month %>'">
-                        <td style="font-weight:600"><a href="/payments?month=<%= m.month %>" style="color:#2563EB;text-decoration:none"><%= _mlabel(m.month) %></a></td>
+                        <td style="font-weight:600"><a href="/payments?month=<%= m.month %>" style="color:var(--primary);text-decoration:none"><%= _mlabel(m.month) %></a></td>
                         <td style="text-align:right"><%= m.count %></td>
                         <td style="text-align:right"><%= _inr(m.total) %></td>
                         <td style="text-align:right;color:#475569"><%= _inr(m.closing) %></td>

@@ -31,7 +31,16 @@ var filterFields = [
     { type: 'text',   name: 'search',   label: 'Search',   placeholder: 'Search by name, SKU, HSN...', colClass: 'filter-col-fifth' },
     { type: 'select', name: 'category', label: 'Category', options: _opts('All Categories', _cats),    colClass: 'filter-col-fifth' },
     { type: 'select', name: 'gst_rate', label: 'GST Rate', options: _opts('All Rates', _gstRates),     colClass: 'filter-col-fifth' },
-    { type: 'select', name: 'stock',    label: 'Stock',    options: _opts('All', ['In Stock', 'Low Stock', 'Out of Stock']), colClass: 'filter-col-fifth' },
+    /* Values match the api's ?stock= contract (in | out | negative). They used
+     * to read 'In Stock' / 'Low Stock' / 'Out of Stock', which the api silently
+     * ignored — the dropdown looked live but filtered nothing. */
+    { type: 'select', name: 'stock', label: 'Stock', colClass: 'filter-col-fifth',
+      options: [
+          { value: '',         label: 'All' },
+          { value: 'in',       label: 'In Stock' },
+          { value: 'out',      label: 'Not In Stock' },
+          { value: 'negative', label: 'Negative Stock' },
+      ] },
     { type: 'select', name: 'status',   label: 'Status',   options: _opts('All Status', ['Active', 'Inactive', 'Blocked']), colClass: 'filter-col-fifth' },
 ];
 
@@ -44,7 +53,10 @@ var tableColumns = [
     { key: 'gst_rate',       label: 'GST',           sortable: true, type: 'badge', align: 'center' },
     { key: 'purchase_price', label: 'Purchase Price', sortable: true, type: 'currency' },
     { key: 'sales_price',    label: 'Sales Price',   sortable: true, type: 'currency' },
-    { key: 'stock',          label: 'Stock',         sortable: true, type: 'text', align: 'center' },
+    { key: 'stock',          label: 'Opening Stock', sortable: true, type: 'text', align: 'center' },
+    { key: 'closing_stock',  label: 'Closing Stock', sortable: true, type: 'text', align: 'center' },
+    { key: 'avg_purchase_rate', label: 'Avg Pur Rate', sortable: true, type: 'currency' },
+    { key: 'stock_value',    label: 'Amount',        sortable: true, type: 'currency' },
     { key: 'status',         label: 'Status',        sortable: true, type: 'status' },
     { key: 'created_at',     label: 'Created At',    sortable: true, type: 'date' },
 ];
@@ -63,6 +75,40 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
         { label: 'Add Product', icon: 'fa-plus',   gradient: true, href: '/products/add' },
     ],
 }) %>
+
+<%# ── Stock-position tabs. "Not In Stock" is exactly zero; NEGATIVE stock is
+     its own tab because Tally allows it and it usually means a sale was
+     booked before its purchase — a real problem, not just "none left". ── %>
+<% var _stockTab = (typeof stockFilter !== 'undefined' && stockFilter) ? stockFilter : '';
+   var _stockTabs = [
+       { k: '',         label: 'All Stocks' },
+       { k: 'in',       label: 'In Stock' },
+       { k: 'out',      label: 'Not In Stock' },
+       { k: 'negative', label: 'Negative Stock' },
+   ]; %>
+<div class="stock-tabs">
+    <% _stockTabs.forEach(function (t) { %>
+        <a href="/products<%= t.k ? '?stock=' + t.k : '' %>"
+           class="stock-tab <%= _stockTab === t.k ? 'is-active' : '' %>"><%= t.label %></a>
+    <% }); %>
+</div>
+
+<%# ── The same stock, rolled up instead of listed item by item. ── %>
+<div class="stock-tabs">
+    <span class="stock-tabs-label">View</span>
+    <a href="/products" class="stock-tab is-active">Summary</a>
+    <a href="/products?by=group" class="stock-tab">Group</a>
+    <a href="/products?by=godown" class="stock-tab">Godown</a>
+    <a href="/products?by=category" class="stock-tab">Category</a>
+</div>
+<style>
+    .stock-tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; align-items:center; }
+    .stock-tabs-label { font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#94a3b8; font-weight:600; margin-right:2px; }
+    .stock-tab { padding:7px 15px; border-radius:8px; border:1px solid #e2e8f0; background:#fff;
+        color:#475569; font-size:12.5px; font-weight:600; text-decoration:none; }
+    .stock-tab:hover { border-color:#cbd5e1; color:var(--primary); }
+    .stock-tab.is-active { background:var(--primary); border-color:var(--primary); color:#fff; }
+</style>
 
 <form id="product-filters-form" autocomplete="off" method="get" action="/products">
     <%- include('../partials/filter-card', {
@@ -94,7 +140,8 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
         tableId: 'products-table',
         basePath: '/products',
         editable: true,
-        sortKeys: ['name', 'sku', 'category', 'hsn', 'gst_rate', 'purchase_price', 'sales_price', 'stock', 'status', 'created_at'],
+        sortKeys: ['name', 'sku', 'category', 'hsn', 'gst_rate', 'purchase_price', 'sales_price',
+                   'stock', 'closing_stock', 'avg_purchase_rate', 'status', 'created_at'],
         columns: tableColumns,
         rows: _rows,
         selectable: true,
@@ -114,12 +161,12 @@ var sortOptions = ['Created At', 'Product Name', 'Category', 'Sales Price', 'Sto
     .data-table-thumb { width:40px; height:40px; border-radius:8px; object-fit:cover; border:1px solid #e5e7eb; background:#f9fafb; display:inline-block; vertical-align:middle; }
     .data-table-thumb--empty { display:inline-flex; align-items:center; justify-content:center; color:#cbd5e1; }
     .data-table-thumb-btn { border:none; background:none; padding:0; cursor:pointer; line-height:0; border-radius:8px; }
-    .data-table-thumb-btn:hover .data-table-thumb { outline:2px solid #6366f1; }
+    .data-table-thumb-btn:hover .data-table-thumb { outline:2px solid var(--primary); }
     #imgGalleryModal .ig-main { width:100%; background:#0b0b0c; border-radius:10px; display:flex; align-items:center; justify-content:center; min-height:260px; max-height:60vh; overflow:hidden; }
     #imgGalleryModal .ig-main img { max-width:100%; max-height:60vh; object-fit:contain; display:block; }
     #imgGalleryModal .ig-thumbs { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
     #imgGalleryModal .ig-thumb { width:56px; height:56px; object-fit:cover; border-radius:8px; cursor:pointer; border:2px solid transparent; }
-    #imgGalleryModal .ig-thumb.is-active { border-color:#6366f1; }
+    #imgGalleryModal .ig-thumb.is-active { border-color:var(--primary); }
     @media (min-width: 992px) {
         .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
     }

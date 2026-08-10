@@ -26,6 +26,9 @@ var _products = (typeof invoiceProducts !== 'undefined' && invoiceProducts) ? in
 var _ledgers  = (typeof salesLedgerOptions !== 'undefined' && salesLedgerOptions) ? salesLedgerOptions : [];
 var _qNo      = (typeof nextQuotationNo !== 'undefined' && nextQuotationNo) ? nextQuotationNo : '';
 var _ncLedgerGroups = (typeof ledgerGroupOptions !== 'undefined' && ledgerGroupOptions) ? ledgerGroupOptions : [];
+// Tally price levels. Empty for a company that prices everyone the same — the
+// field is then omitted rather than shown as a dead control.
+var _priceLevels = (typeof priceLevelOptions !== 'undefined' && priceLevelOptions) ? priceLevelOptions : [];
 var _ncGstRegTypes  = (typeof gstRegistrationTypes !== 'undefined' && gstRegistrationTypes) ? gstRegistrationTypes : [];
 
 function _esc(s) {
@@ -36,17 +39,56 @@ function _esc(s) {
 
 /* Products as a JS array for the searchable line-item picker (Task 5). */
 var _productsJson = JSON.stringify(_products.map(function (p) {
-    return { id: p.id, name: p.name, hsn: p.hsn || '', unit: p.unit || '', rate: p.rate || 0, gst: p.gst || 0, stock: (p.stock != null ? p.stock : 0) };
+    return { id: p.id, name: p.name, hsn: p.hsn || '', unit: p.unit || '', rate: p.rate || 0, gst: p.gst || 0, stock: (p.stock != null ? p.stock : null) };
 }));
 
 /* Party + sales-ledger options for the header comboboxes (auto-advance flow). */
-var _partiesJson = JSON.stringify(_custs.map(function (c) { return { id: c.id, name: c.name }; }));
-var _ledgersJson = JSON.stringify(_ledgers.map(function (l) { return { id: l.id, name: l.name, parent: l.parent || '' }; }));
+var _partiesJson = JSON.stringify(_custs.map(function (c) {
+    return {
+        id: c.id, name: c.name,
+        balance: (c.closing_balance == null ? null : c.closing_balance),
+        gst_number: c.gst_number || '', gst_registration_type: c.gst_registration_type || '',
+        billing_address: c.billing_address || '', country: c.country || '',
+        state: c.state || '', pincode: c.pincode || '',
+    };
+}));
+var _ledgersJson = JSON.stringify(_ledgers.map(function (l) {
+    return {
+        id: l.id, name: l.name, parent: l.parent || '',
+        tax_type: l.tax_type || '', tax_classification: l.tax_classification || '',
+    };
+}));
+
+/* The Tally GODOWNS among the locations — stock physically sits in one, and a
+   voucher line needs it. When the company has exactly one (the common case,
+   "Main Location"), every new line starts there rather than making the user
+   pick the only option there is. */
+var _godowns = _locs.filter(function (l) { return l.is_tally_godown; });
+var _godownsJson = JSON.stringify(_godowns.map(function (g) { return g.name; }));
+var _defaultGodown = _godowns.length === 1 ? _godowns[0].name : '';
+
+/* The units actually in use on this company's items — suggestions for the
+   editable Units box, so the common answers are one keystroke away. */
+var _units = (function () {
+    var seen = {};
+    _products.forEach(function (p) { if (p.unit) seen[p.unit] = true; });
+    return Object.keys(seen).sort();
+})();
 
 var _today = new Date().toISOString().slice(0, 10);
+
+/* EDIT MODE. The same screen serves create and edit (like sales-invoices):
+   when editQuotation is present the form posts to /:id/update and every field
+   starts filled. Absent -> untouched create behaviour. */
+var _edit      = (typeof editQuotation !== 'undefined' && editQuotation) ? editQuotation : null;
+var _editItems = (typeof editItems !== 'undefined' && editItems) ? editItems : [];
+var _formAction = _edit ? ('/quotations/' + _edit.id + '/update') : '/quotations';
+var _submitLabel = _edit ? 'Update Voucher' : 'Create Voucher';
+var _dateVal   = _edit ? ymd(_edit.quotation_date) : _today;
+var _validVal  = _edit ? ymd(_edit.valid_till) : '';
 %>
 
-<form id="quotation-form" method="post" action="/quotations" autocomplete="off" novalidate>
+<form id="quotation-form" method="post" action="<%= _formAction %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/quotation.js on submit. -->
     <input type="hidden" name="items_json" id="items_json">
@@ -70,12 +112,17 @@ var _today = new Date().toISOString().slice(0, 10);
                     <div class="li-prod-cell">
                         <input type="text" class="form-control li-product-search" id="q-party"
                                placeholder="Search customer…" autocomplete="off" required>
-                        <input type="hidden" name="customer_id" id="q-party-id">
+                        <input type="hidden" name="customer_id" id="q-party-id" value="<%= _edit ? (_edit.customer_id || '') : '' %>">
                         <button type="button" class="li-prod-clear" id="q-party-clear" title="Clear customer" aria-label="Clear customer" hidden>
                             <i class="fa-solid fa-xmark"></i>
                         </button>
                         <div class="li-prod-menu" id="q-party-menu" hidden></div>
                     </div>
+                    <%# Where the party stands right now. Raising a quotation for
+                        someone already deep in arrears is a decision you want to
+                        make knowingly, so the figure sits under the picker
+                        rather than a screen away. %>
+                    <div class="q-party-balance" id="q-party-balance" hidden></div>
                 </div>
 
                 <div class="form-group">
@@ -138,13 +185,28 @@ var _today = new Date().toISOString().slice(0, 10);
             <div class="form-grid">
                 <div class="form-group">
                     <label class="form-label" for="q-date">Date<span class="req">*</span></label>
-                    <input type="date" class="form-control" id="q-date" name="quotation_date" value="<%= _today %>" required disabled>
+                    <input type="date" class="form-control" id="q-date" name="quotation_date" value="<%= _dateVal %>" required<%= _edit ? '' : ' disabled' %>>
                 </div>
 
                 <div class="form-group">
                     <label class="form-label" for="q-valid-till">Valid Till</label>
-                    <input type="date" class="form-control" id="q-valid-till" name="valid_till">
+                    <input type="date" class="form-control" id="q-valid-till" name="valid_till" value="<%= _validVal %>">
                 </div>
+
+                <%# Tally's per-tier rate card ("Wholesale", "Retail"). Only
+                    rendered when the company actually uses price levels —
+                    an empty picker would just be a dead control. %>
+                <% if (_priceLevels.length) { %>
+                <div class="form-group">
+                    <label class="form-label" for="q-price-level">Price Level</label>
+                    <select class="form-select" id="q-price-level" name="price_level">
+                        <option value="">Standard rate</option>
+                        <% _priceLevels.forEach(function (pl) { %>
+                            <option value="<%= _esc(pl.name) %>"><%= pl.name %></option>
+                        <% }); %>
+                    </select>
+                </div>
+                <% } %>
             </div>
         </div>
 
@@ -164,7 +226,7 @@ var _today = new Date().toISOString().slice(0, 10);
                         <th class="num">Amount</th>
                         <th class="center">Tax Incl.</th>
                         <th class="center">
-                            <button type="button" class="q-add-btn" id="q-add-row" title="Add row" aria-label="Add row" disabled>
+                            <button type="button" class="q-add-btn" id="q-add-row" title="Add row" aria-label="Add row">
                                 <i class="fa-solid fa-plus"></i>
                             </button>
                         </th>
@@ -216,6 +278,19 @@ var _today = new Date().toISOString().slice(0, 10);
                             </select>
                         </div>
                     </div>
+
+                    <%# ── The four blocks a PRINTED voucher needs but the ledger
+                         does not: who to bill, who to ship to, how it went out,
+                         and which order it answers. They post as one
+                         `voucher_details` object (see the voucher_print_details
+                         migration) rather than 28 loose columns.
+
+                         Buyer's Details prefill from the chosen party — that is
+                         the whole point of picking a party — but stay editable,
+                         because a bill-to address genuinely does differ from the
+                         master often enough to matter. ── %>
+                    <% var _vd = _edit && _edit.voucher_details ? _edit.voucher_details : {}; %>
+                    <%- include('../partials/voucher-details-fields', { p: 'q', vd: _vd, gstRegTypes: _ncGstRegTypes }) %>
                 </div>
             </div>
         </div>
@@ -225,6 +300,17 @@ var _today = new Date().toISOString().slice(0, 10);
             <div></div>
 
             <div class="q-totals">
+                <%# Gross and Discount only appear once there IS a discount, so a
+                    plain bill stays three clean rows. Sub Total below is the
+                    TAXABLE value, which is what Grand Total is built from —
+                    that way the panel always reads as arithmetic you can
+                    follow. %>
+                <div class="q-total-row" id="q-gross-row" hidden>
+                    <span class="lbl">Gross</span><span class="val" id="q-gross">₹0.00</span>
+                </div>
+                <div class="q-total-row" id="q-discount-row" hidden>
+                    <span class="lbl">Discount</span><span class="val" id="q-discount">− ₹0.00</span>
+                </div>
                 <div class="q-total-row">
                     <span class="lbl">Sub Total</span><span class="val" id="q-subtotal">₹0.00</span>
                 </div>
@@ -240,7 +326,7 @@ var _today = new Date().toISOString().slice(0, 10);
         <div class="form-card-footer" style="border-top:0; background:#fff;">
             <a class="btn btn-light" href="/quotations">Cancel</a>
             <button type="submit" class="btn btn-primary" id="q-submit">
-                <i class="fa-solid fa-cloud-arrow-up me-1"></i>Create Voucher
+                <i class="fa-solid fa-cloud-arrow-up me-1"></i><%= _submitLabel %>
             </button>
         </div>
     </div>
@@ -251,16 +337,27 @@ var _today = new Date().toISOString().slice(0, 10);
 <template id="q-row-tpl">
     <tr class="q-row">
         <td class="li-prod-cell">
-            <input type="text" class="li-product-search q-item-search" placeholder="Search item…" autocomplete="off" disabled>
+            <input type="text" class="li-product-search q-item-search" placeholder="Search item…" autocomplete="off">
             <input type="hidden" class="q-item">
             <div class="li-prod-menu" hidden></div>
         </td>
-        <td><input type="number" class="q-qty li-num" min="0" step="1" value="1" disabled></td>
-        <td><input type="number" class="q-rate li-num" min="0" step="0.01" value="0" disabled></td>
-        <td><input type="text" class="q-unit" readonly placeholder="—"></td>
+        <td><input type="number" class="q-qty li-num" min="0" step="1" value="1"></td>
+        <td><input type="number" class="q-rate li-num" min="0" step="0.01" value="0"></td>
+        <%# Units: fills from the item but stays EDITABLE. A read-only box could
+            not be corrected when an item's unit is wrong or missing in Tally,
+            which left the line with no unit at all on the print. Backed by a
+            datalist of the units actually in use. %>
+        <td><input type="text" class="q-unit" placeholder="—" list="q-unit-options"></td>
         <td><input type="number" class="q-disc li-num" min="0" max="100" step="0.01" value="0"></td>
-        <td><input type="text" class="q-hsn" readonly placeholder="—"></td>
-        <td><input type="text" class="q-godown" placeholder="Godown"></td>
+        <%# HSN: fills from the item, editable for the same reason — plenty of
+            Tally masters carry no HSN (or a placeholder), and an HSN is
+            mandatory on a GST invoice. %>
+        <td><input type="text" class="q-hsn" placeholder="—"></td>
+        <%# Godown is where the stock physically sits. Backed by a datalist of
+            the company's Tally godowns, and prefilled when there is only one —
+            picking the single available option by hand is not a decision. %>
+        <td><input type="text" class="q-godown" placeholder="Godown" list="q-godown-options"
+                   value="<%= _esc(_defaultGodown) %>"></td>
         <td><input type="text" class="q-desc" placeholder="Description"></td>
         <td><span class="q-amount li-cell-calc">₹0.00</span></td>
         <td class="center"><input type="checkbox" class="q-taxincl" title="Tax inclusive"></td>
@@ -271,6 +368,16 @@ var _today = new Date().toISOString().slice(0, 10);
         </td>
     </tr>
 </template>
+
+<%# Suggestion lists for the editable line fields. A datalist SUGGESTS without
+    restricting, which is what these need: the company's real godowns and units
+    are the common answers, but a one-off value must still be typeable. %>
+<datalist id="q-godown-options">
+    <% _godowns.forEach(function (g) { %><option value="<%= _esc(g.name) %>"></option><% }); %>
+</datalist>
+<datalist id="q-unit-options">
+    <% _units.forEach(function (u) { %><option value="<%= _esc(u) %>"></option><% }); %>
+</datalist>
 
 <!-- ── "Create New Customer" modal — pinned row atop the Party list (Defect 4).
      Fields mirror what POST /quotations/create/quick-customer forwards to the
@@ -387,7 +494,11 @@ var _today = new Date().toISOString().slice(0, 10);
     window.QUOTATION_PRODUCTS = <%- _productsJson %>;
     window.QUOTATION_PARTIES  = <%- _partiesJson %>;
     window.QUOTATION_LEDGERS  = <%- _ledgersJson %>;
+    window.QUOTATION_GODOWNS  = <%- _godownsJson %>;
+    window.QUOTATION_DEFAULT_GODOWN = <%- JSON.stringify(_defaultGodown) %>;
     window.QUOTATION_QUICK_CUSTOMER_URL = '/quotations/create/quick-customer';
+    // Edit mode: the existing header + line items, for quotation.js to load.
+    window.QUOTATION_EDIT = <%- _edit ? JSON.stringify({ id: _edit.id, customer_id: _edit.customer_id, customer_name: _edit.customer_name || '', ledger_name: _edit.ledger_name || '', quotation_no: _edit.quotation_no || '', items: _editItems }) : 'null' %>;
 </script>
 
 <style>
@@ -407,13 +518,16 @@ var _today = new Date().toISOString().slice(0, 10);
     .li-prod-menu {
         position: fixed; z-index: 1080;
         max-height: 240px; overflow-y: auto; background: #fff;
-        border: 1px solid var(--border, #d1d5db); border-radius: 6px;
-        box-shadow: 0 8px 24px rgba(0,0,0,.12);
+        border: 1px solid var(--border, #E9EDF3); border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(16,24,40,.10); padding: 4px;
     }
-    .li-prod-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .li-prod-item:hover, .li-prod-item.is-active { background: #eef2ff; }
+    .li-prod-item { padding: 9px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 8px; }
+    .li-prod-item:hover, .li-prod-item.is-active { background: #EAF1FE; color: #1560E0; }
     .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
     .li-prod-item .li-prod-sub { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; }
+    /* Negative stock is a real state in Tally (issued before received), so it
+       is flagged rather than hidden or clamped away. */
+    .li-prod-item .li-prod-sub.is-negative { color: var(--danger); font-weight: 600; }
 
     /* Single header bar (Defect 1 fix) — replaces the stacked page-head +
        voucher-head pair; a compact Back arrow instead of a second title. */
@@ -476,5 +590,5 @@ var _today = new Date().toISOString().slice(0, 10);
         color: var(--primary); font-weight: 600; gap: 6px;
         border-bottom: 1px solid var(--border, #e5e7eb);
     }
-    .li-prod-item.li-prod-create:hover { background: #eef2ff; }
+    .li-prod-item.li-prod-create:hover { background: #EAF1FE; }
 </style>

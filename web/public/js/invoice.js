@@ -118,9 +118,14 @@
             var qty = row.querySelector('.li-qty');
             if (qty) {
                 if (p && p.stock != null) {
-                    qty.max = p.stock;
+                    // Stock on hand is a HINT, not a cap. A quotation or an
+                    // order is a promise about goods you may not hold yet, and
+                    // Tally itself allows a negative balance, so clamping the
+                    // Qty box to it silently rewrote what the user typed —
+                    // usually to 0, because most synced items report no
+                    // movement. Show the figure, let the user decide.
                     qty.title = 'In stock: ' + p.stock;
-                    if ((parseFloat(qty.value) || 0) > p.stock) qty.value = p.stock;
+                    qty.removeAttribute('max');
                 } else {
                     qty.removeAttribute('max'); qty.title = '';
                 }

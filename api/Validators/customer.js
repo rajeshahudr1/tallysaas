@@ -76,6 +76,10 @@ const createCustomerSchema = Joi.object({
 
     opening_balance:  Joi.number().min(0).precision(2).default(0),
     credit_limit:     Joi.number().min(0).precision(2).default(0),
+    // Credit PERIOD, in days. No default: null means "no agreed terms", which
+    // is a different statement from "zero days of credit" — a voucher form
+    // reads null as "no default due date" and the Parties list prints a dash.
+    credit_days:      Joi.number().integer().min(0).max(3650).allow(null),
 
     status:           Joi.string().valid(...STATUSES).default('Active'),
 
@@ -95,6 +99,9 @@ const createCustomerSchema = Joi.object({
     notes:            optText(2000),
     internal_remarks: optText(2000),
     custom_fields:    Joi.object().unknown(true).allow(null),
+
+    // Starred on the Parties screen. Cloud-only — Tally has no such field.
+    is_favourite:     Joi.boolean(),
 });
 
 /**
@@ -118,6 +125,7 @@ const updateCustomerSchema = Joi.object({
 
     opening_balance:  Joi.number().min(0).precision(2),
     credit_limit:     Joi.number().min(0).precision(2),
+    credit_days:      Joi.number().integer().min(0).max(3650).allow(null),
 
     status:           Joi.string().valid(...STATUSES),
 
@@ -137,6 +145,9 @@ const updateCustomerSchema = Joi.object({
     notes:            optText(2000),
     internal_remarks: optText(2000),
     custom_fields:    Joi.object().unknown(true).allow(null),
+
+    // Starred on the Parties screen. Cloud-only — Tally has no such field.
+    is_favourite:     Joi.boolean(),
 }).min(1).messages({
     'object.min': 'Provide at least one field to update.',
 });

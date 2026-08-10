@@ -14,15 +14,15 @@
 # ─────────────────────────────────────────────────────────────
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$exe  = Join-Path $here 'TallyCloudSyncAgent.exe'
+$exe  = Join-Path $here 'TelooraAgent.exe'
 
 if (-not (Test-Path $exe)) {
-    Write-Host "ERROR: TallyCloudSyncAgent.exe not found next to this script ($here)." -ForegroundColor Red
+    Write-Host "ERROR: TelooraAgent.exe not found next to this script ($here)." -ForegroundColor Red
     Read-Host "Press Enter to exit"; exit 1
 }
 
 $startup = [Environment]::GetFolderPath('Startup')
-$vbsPath = Join-Path $startup 'TallyCloudSyncAgent.vbs'
+$vbsPath = Join-Path $startup 'TelooraAgent.vbs'
 
 # Launcher with the ABSOLUTE exe path (so it works from the Startup folder).
 $vbs = @(
@@ -33,7 +33,7 @@ $vbs = @(
 Set-Content -Path $vbsPath -Value $vbs -Encoding ASCII
 
 # Start it now too, so you don't have to log off/on.
-Get-Process TallyCloudSyncAgent -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process TelooraAgent -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Process wscript.exe -ArgumentList ('"{0}"' -f $vbsPath)
 
 Write-Host ""

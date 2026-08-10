@@ -67,6 +67,27 @@ class TallySkipped(TallyUnavailable):
 # one crash and one crash every interval.
 _POISON: set[str] = set()
 
+# Every collection label the agent can send, WITHOUT the per-fetch nonce. Used
+# by _poison_key to recognise "this nonced name is really that known request".
+# Longest first, so a shorter name can never claim a longer one's prefix.
+_COLLECTION_STEMS: tuple = tuple(sorted(
+    ["Collection TSSM" + _m.collection_type for _m in MASTERS]
+    + ["Collection TSSRec" + _m.collection_type for _m in MASTERS]
+    + ["Collection " + _n for _n in ("TSSCmpFull", "TSSGodownColl", "TSSGroupColl",
+                                     "TSSLedgerColl", "TSSStockColl", "TSSVch")],
+    key=len, reverse=True))
+
+# The delete detector (master_ids) asks for the SAME Tally object type under
+# "TSSRec<Type>" that the master pull asks for under "TSSM<Type>". An object
+# type this company cannot serve kills Tally down either path, so both must
+# share one quarantine entry — keyed on the object type, not on the name we
+# happened to ask under. Without this the store grew a second entry for one
+# broken type, after crashing Tally a second time to learn it.
+_RECONCILE_ALIASES: dict = {
+    "Collection TSSRec" + _m.collection_type: "Collection TSSM" + _m.collection_type
+    for _m in MASTERS
+}
+
 # Where that set is REMEMBERED between runs. Set once at startup (see
 # use_skip_store). Without it the knowledge died with the process: the service
 # restarts — after an update, a reboot, or because the operator pressed Stop and
@@ -76,20 +97,89 @@ _POISON: set[str] = set()
 _POISON_FILE: Optional[str] = None
 
 
+# WHICH TallyPrime taught us the quarantine. Not an edition check — nothing here
+# decides what any value MEANS. It only notices when the product answering on
+# :9000 stops being the one whose limits we learned, because those limits are a
+# property of that Tally and not of the company: TDS, TCS and the payroll
+# masters are absent on a TallyPrime EDU and real data the day a licence is
+# activated. Without this the agent would go on skipping them forever, silently,
+# because a file written weeks earlier said they were fatal.
+#
+# Deliberately NOT "detect Educational and disable those masters": a wrong guess
+# there fails in the worse direction — it drops real data on a licensed machine.
+# A changed identity only ever causes RE-LEARNING, and the worst case of a false
+# change is one repeated crash we already survive.
+_TALLY_IDENTITY: str = ""
+
+
+def _identity_of(response: str) -> str:
+    """The product identity carried in every response HEADER, or "".
+
+    Free: it is in the reply to whatever we just asked, so this costs no extra
+    round trip and cannot itself upset Tally.
+    """
+    parts = []
+    for tag in ("PRODTYPE", "PRODMAJORVER", "PRODMINORVER",
+                "PRODMAJORREL", "PRODMINORREL"):
+        m = re.search("<" + tag + r">(.*?)</" + tag + ">", response or "", re.I | re.S)
+        # Whatever this build reports, in a fixed order. Demanding all five
+        # would make a build that omits one look like "no identity" forever, so
+        # the store could never reset on it; PRODTYPE alone is enough to notice
+        # a change, and the rest sharpen it when present.
+        parts.append(m.group(1).strip() if m else "")
+    return "/".join(parts) if parts[0] else ""
+
+
+def note_tally_identity(response: str) -> None:
+    """Compare the answering Tally against the one the store was learned on.
+
+    Same Tally (or an unreadable header): keep everything. A DIFFERENT one:
+    forget the quarantine and write that through, so the next process does not
+    reload the stale list and undo it.
+    """
+    global _TALLY_IDENTITY
+    ident = _identity_of(response)
+    if not ident:
+        return
+    if not _TALLY_IDENTITY:
+        # First sighting — including a store written by an older build, which
+        # carries no identity. Adopt it rather than discarding a real crash list,
+        # and WRITE IT DOWN NOW. Persisting only alongside a new quarantine was
+        # not enough: on a machine whose list is already complete nothing more is
+        # ever quarantined, so the file kept no identity, every process adopted
+        # whatever it first saw, and a licence change would be compared against
+        # nothing and pass unnoticed — leaving the stale skips in place forever.
+        _TALLY_IDENTITY = ident
+        _save_skip_store()
+        return
+    if ident == _TALLY_IDENTITY:
+        return
+    _TALLY_IDENTITY = ident
+    _POISON.clear()
+    _save_skip_store()
+
+
 def use_skip_store(path: str) -> None:
     """Point the quarantine at a file and load what is already in it.
 
-    Wholly best-effort: an unreadable or corrupt store just means the agent
-    re-learns the hard way, which is exactly where it was before the file
-    existed. It must never stop the agent from starting.
+    Accepts both shapes: the current {"tally": ..., "labels": [...]} and the
+    bare list older builds wrote. Wholly best-effort — an unreadable or corrupt
+    store just means the agent re-learns the hard way, which is exactly where it
+    was before the file existed. It must never stop the agent from starting.
     """
-    global _POISON_FILE
+    global _POISON_FILE, _TALLY_IDENTITY
     _POISON_FILE = path
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            for label in json.load(fh) or []:
-                if isinstance(label, str) and label.strip():
-                    _POISON.add(label.strip())
+            data = json.load(fh)
+        if isinstance(data, dict):
+            _TALLY_IDENTITY = str(data.get("tally") or "")
+            labels = data.get("labels") or []
+        else:
+            labels = data or []          # older build: a bare list, no identity
+        for label in labels:
+            if isinstance(label, str) and label.strip():
+                _POISON.add(label.strip())
     except Exception:                                       # noqa: BLE001
         pass
 
@@ -100,7 +190,8 @@ def _save_skip_store() -> None:
         return
     try:
         with open(_POISON_FILE, "w", encoding="utf-8") as fh:
-            json.dump(sorted(_POISON), fh, indent=1)
+            json.dump({"tally": _TALLY_IDENTITY, "labels": sorted(_POISON)},
+                      fh, indent=1)
     except Exception:                                       # noqa: BLE001
         pass
 
@@ -266,10 +357,74 @@ class TallyConnector:
         a multi-company Tally crashed it a second time — one avoidable crash per
         company. The key drops the company so the first crash protects them all.
         """
-        return str(label).split(" company=")[0].strip()
+        key = str(label).split(" company=")[0].strip()
+        # …and the cache-busting nonce. An AlterID-filtered collection is sent
+        # under a unique name every time (Tally caches a TDL definition by name
+        # for the session — see _collection_request_xml), so the incremental
+        # path asks for "Collection TSSMTDSCategory75d7c310" while the store
+        # learned "Collection TSSMTDSCategory". Different strings, so from the
+        # second cycle on the quarantine matched nothing and the request that
+        # kills Tally went out again under a new name, every single cycle.
+        #
+        # Collapsed onto a KNOWN name rather than by stripping trailing hex:
+        # the nonce is bare hex with no separator, and real names end in hex
+        # letters too (PayHead 'd', VoucherType 'e'), so stripping would corrupt
+        # those into keys of their own.
+        for stem in _COLLECTION_STEMS:
+            if len(key) > len(stem) and key.startswith(stem) \
+                    and all(c in "0123456789abcdefABCDEF" for c in key[len(stem):]):
+                key = stem
+                break
+        # Finally, the two names for one object type collapse together.
+        return _RECONCILE_ALIASES.get(key, key)
+
+    # THE LIFELINE. Without these there is no sync at all, so "skip it from now
+    # on" can never be the right answer for them — if one is truly broken we
+    # want it failing loudly every cycle, not disappearing into a file.
+    #
+    # They need protecting because the quarantine's evidence is circumstantial:
+    # when Tally dies EVERY request in flight sees the same dropped connection,
+    # including ones that had nothing to do with it. On a live machine an
+    # unrelated crash landed while the agent was asking which companies were
+    # open, and "Collection List of Companies" went into the skip store — which
+    # is on disk, so the agent found no company, synced nothing, and did so
+    # after every restart, silently, forever.
+    ESSENTIAL = frozenset({"Collection List of Companies",
+                           "Collection Company Info",
+                           "Collection List of Companies with Details"})
+
+    @classmethod
+    def _is_essential(cls, label: str) -> bool:
+        return cls._poison_key(label) in cls.ESSENTIAL
 
     def _is_poison(self, label: str) -> bool:
+        if self._is_essential(label):
+            # Stores written by older builds may already name one of these.
+            return False
         return self._poison_key(label) in self._poison
+
+    @staticmethod
+    def _is_fragile(label: str) -> bool:
+        """True for a request whose ABSENCE is known to take TallyPrime down.
+
+        These are the feature_must_be_on collections (TDS/TCS). They matter here
+        because "Incorrect Object Type!" presents in TWO ways, and only one of
+        them was handled. Usually Tally drops the connection mid-answer, which
+        _killed_tally spots. But the error box is MODAL — while it is up, the XML
+        server behind it answers nobody — so the other presentation is a request
+        that simply never comes back, and a read timeout is not evidence of a
+        crash anywhere else in this file.
+
+        The distinction is what makes a timeout safe to act on HERE and nowhere
+        else: these are tiny requests against small masters. One that has not
+        answered inside the timeout is not busy; it is stuck behind a box. A
+        stock summary over three years genuinely can be slow, so quarantining on
+        ITS timeout would silently cost the customer real data.
+        """
+        coll = TallyConnector._poison_key(label).replace(
+            "Collection TSSM", "", 1).strip()
+        spec = next((s for s in MASTERS if s.collection_type == coll), None)
+        return bool(spec is not None and spec.feature_must_be_on)
 
     @staticmethod
     def _poison_family(label: str) -> set[str]:
@@ -348,7 +503,11 @@ class TallyConnector:
             # SERVING this request — i.e. it crashed on it. Naming the request is
             # what turns "Tally is down" into "Tally dies on THIS report".
             self.log.error("Tally transport error on [%s]: %s", label, exc)
-            if _killed_tally(exc):
+            # Either presentation of the same fault: Tally closed the connection,
+            # or Tally stopped answering because its modal error box is up. See
+            # _is_fragile for why a timeout counts only for these requests.
+            hung = isinstance(exc, requests.Timeout) and self._is_fragile(label)
+            if (_killed_tally(exc) or hung) and not self._is_essential(label):
                 # QUARANTINE IT. Tally did not merely fail to answer — it died
                 # mid-answer, which is what an object type it does not support
                 # looks like from this side ("Internal Error … Incorrect Object
@@ -360,9 +519,11 @@ class TallyConnector:
                     self._poison.add(key)
                 _save_skip_store()
                 self.log.error(
-                    "Tally CLOSED THE CONNECTION on [%s] — that request will be "
-                    "skipped for the rest of this run. If this company does not "
-                    "use that feature, this is expected.", label)
+                    "Tally %s on [%s] — that request will be skipped from now "
+                    "on. If this company does not use that feature, this is "
+                    "expected.",
+                    "STOPPED ANSWERING (its error box is up)" if hung
+                    else "CLOSED THE CONNECTION", label)
             raise TallyUnavailable(
                 "Tally Prime is not reachable on "
                 + self.url
@@ -397,11 +558,44 @@ class TallyConnector:
         # DEBUG diagnostic (log_level=DEBUG): the response size per request tells
         # us at a glance whether Tally answered with data or an empty/error body.
         self.log.debug("Tally HTTP %s, %d bytes response.", resp.status_code, len(text or ""))
+        # Free when it is there. A Collection export's HEADER comes back empty,
+        # so this alone is not enough — check_identity() below asks explicitly
+        # once a cycle. Both feed the same comparison.
+        note_tally_identity(text)
         return text
 
     # ------------------------------------------------------------------ #
     # High-level reads
     # ------------------------------------------------------------------ #
+    def check_identity(self) -> str:
+        """Ask WHICH TallyPrime this is, and reset the quarantine if it changed.
+
+        One small request per cycle. It has to be explicit because a Collection
+        export answers with an EMPTY <HEADER> — the product identity only comes
+        back on a Function export, which this is. Measured against the live
+        gateway: it answers in milliseconds and returns the full version quad
+        plus PRODTYPE, twice out of two.
+
+        Nothing here interprets the values (see note_tally_identity for why
+        reading them as "this is Educational" would be the dangerous design).
+        It exists so that activating a licence stops the agent skipping the
+        masters that Educational mode could not serve — otherwise a file written
+        weeks earlier would suppress real TDS and payroll data forever.
+
+        Best-effort: on any failure we simply keep what we know. This must never
+        be the reason a cycle does not run.
+        """
+        xml = ("<ENVELOPE><HEADER><VERSION>1</VERSION>"
+               "<TALLYREQUEST>Export</TALLYREQUEST><TYPE>Function</TYPE>"
+               "<ID>$$LicenseInfo</ID></HEADER><BODY><DESC><FUNCPARAMLIST>"
+               "<PARAM>IsEducationalMode</PARAM></FUNCPARAMLIST></DESC></BODY>"
+               "</ENVELOPE>")
+        try:
+            self.send(xml, timeout=15)     # send() notes the identity for us
+        except Exception:                                   # noqa: BLE001
+            pass
+        return _TALLY_IDENTITY
+
     def company_info(self) -> dict[str, Any]:
         """Return basic info about the open company / list of companies.
 
@@ -1458,6 +1652,64 @@ class TallyConnector:
     # ------------------------------------------------------------------ #
     # Generic master fetch (registry-driven — see tally_schema.py)
     # ------------------------------------------------------------------ #
+    # A master that can take TallyPrime down gets seconds, not minutes. These
+    # are tiny collections over small tables; one that has not answered in
+    # MASTER_TIMEOUT_FRAGILE seconds is not busy, it is sitting behind the modal
+    # error box, and waiting the full two minutes only delays every step after
+    # it. Measured live: TDSCategory returned at exactly the 120s timeout, twice.
+    MASTER_TIMEOUT = 120
+    MASTER_TIMEOUT_FRAGILE = 15
+
+    @classmethod
+    def master_timeout(cls, kind: str) -> int:
+        spec = BY_KIND.get(kind)
+        return (cls.MASTER_TIMEOUT_FRAGILE
+                if spec is not None and spec.feature_must_be_on
+                else cls.MASTER_TIMEOUT)
+
+    @staticmethod
+    def master_fetch_order() -> list:
+        """MASTERS, with the ones that can kill Tally moved to the END.
+
+        The F11 gate cannot save a company that REPORTS a feature Tally still
+        cannot serve — this customer's F11 says ISTDSON=Yes on a TallyPrime EDU
+        that has no TDSCategory object — so the first cycle on a fresh machine
+        will meet the error box once, whatever we do. What we CAN decide is what
+        that costs. Asked last, it costs only the masters that were unreadable
+        anyway: everything ordinary has already been read, and (because the
+        upload runs before outstandings) the customer's data is already in the
+        cloud. Asked in registry order, it cost the entire rest of the cycle.
+
+        Ordinary masters keep their registry order — some of them depend on it.
+        """
+        return ([s for s in MASTERS if not s.feature_must_be_on]
+                + [s for s in MASTERS if s.feature_must_be_on])
+
+    @staticmethod
+    def feature_allows(kind: str, features: "Optional[dict[str, Any]]") -> bool:
+        """May this company be asked for ``kind`` at all?
+
+        THE ONE PLACE the F11 gate is decided, because there are two callers —
+        the master pull and the delete-detection reconcile — and only the pull
+        used to gate. The reconcile asked every registered kind unconditionally,
+        so a company with payroll off was still asked for TSSRecEmployeeGroup
+        and TallyPrime went down with "Incorrect Object Type!" once every
+        RECONCILE_EVERY cycles. Gating one caller only moves the crash.
+
+        The rule: an explicit "no" always blocks. An ABSENT flag normally
+        allows — a Tally build that does not report a flag must not cost the
+        company a master it really uses — EXCEPT for specs marked
+        feature_must_be_on, where silence means no because asking for those
+        does not return empty, it takes Tally down.
+        """
+        spec = BY_KIND.get(kind)
+        if spec is None or not spec.requires_feature:
+            return True            # ungated (ledger, group, …) — always allowed
+        flag = str((features or {}).get(spec.requires_feature, "")).strip().lower()
+        on = flag in ("yes", "true", "1")
+        off = flag in ("no", "false", "0")
+        return not (off or (spec.feature_must_be_on and not on))
+
     def fetch_master(self, kind: str, company: Optional[str] = None,
                      features: Optional[dict[str, Any]] = None,
                      after_alterid: int = 0) -> list[dict[str, Any]]:
@@ -1476,31 +1728,19 @@ class TallyConnector:
         spec = BY_KIND.get(kind)
         if spec is None:
             raise ValueError(f"unknown master kind {kind!r}")
-        if spec.requires_feature:
+        if not self.feature_allows(kind, features):
             flag = str((features or {}).get(spec.requires_feature, "")).strip().lower()
-            on = flag in ("yes", "true", "1")
-            off = flag in ("no", "false", "0")
-            # Normally: skip only on an EXPLICIT "no", because an absent flag
-            # usually means this Tally build did not report it and guessing
-            # "off" would silently drop a master the company really uses.
-            #
-            # For a spec marked feature_must_be_on, silence means NO. Those are
-            # the object types a company without the feature does not merely
-            # lack — asking for them crashes TallyPrime outright. This company
-            # never reports ISTDSON at all, so "only skip on an explicit no"
-            # sent the TDS request every single cycle and took Tally down with
-            # it every single time.
-            if off or (spec.feature_must_be_on and not on):
-                self.log.info(
-                    "Master %s skipped: %s is %s.", kind, spec.requires_feature,
-                    "off" if off else "not reported by this company")
-                return []
+            self.log.info(
+                "Master %s skipped: %s is %s.", kind, spec.requires_feature,
+                "off" if flag in ("no", "false", "0")
+                else "not reported by this company")
+            return []
 
         xml = self._collection_request_xml(
             f"TSSM{spec.collection_type}", spec.collection_type, spec.fetch_list, company,
             after_alterid,
         )
-        root = self._safe_parse(self.send(xml, timeout=120))
+        root = self._safe_parse(self.send(xml, timeout=self.master_timeout(kind)))
         if root is None:
             return []
 
@@ -1547,7 +1787,7 @@ class TallyConnector:
         cost the company its other twenty.
         """
         out: dict[str, list[dict[str, Any]]] = {}
-        for spec in MASTERS:
+        for spec in self.master_fetch_order():
             try:
                 rows = self.fetch_master(spec.kind, company=company, features=features,
                                          after_alterid=after_alterid)

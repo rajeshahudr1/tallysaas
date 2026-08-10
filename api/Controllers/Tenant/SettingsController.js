@@ -24,6 +24,7 @@
 const R  = require('../../Helpers/response');
 const db = require('../../config/db').db;
 const masterDb = require('../../config/masterDb').db;   // licenses live in the master control plane
+const { fullUrl, deleteFile, BRANDING_KINDS } = require('../../Helpers/uploads');
 
 const OOPS_MSG     = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND    = 'Company not found.';
@@ -144,8 +145,18 @@ async function get(req, res) {
             const { license_id, ...rest } = company;
             companyOut = rest;
         }
+        // Branding images are stored as RELATIVE paths; the web and the app
+        // must never build a URL themselves, so they are sent absolute. The
+        // stored path already carries a version suffix, so a replaced logo
+        // is not served from cache.
+        const branding = {};
+        for (const kind of BRANDING_KINDS) {
+            const p = settings[`${kind}_path`];
+            branding[kind] = p ? fullUrl(req, p) : null;
+        }
+
         return R.successResponse(res, {
-            company: companyOut, settings, sync,
+            company: companyOut, settings, sync, branding,
             // The full syncable-module catalog for rendering the auto-sync popup.
             modules: SM.SYNC_MODULES,
         });
@@ -267,7 +278,70 @@ async function update(req, res) {
     }
 }
 
+/**
+ * POST /settings/branding/:kind — replace the company logo or the
+ * authorised signature (multipart, field `image`).
+ *
+ * The file lands at a fixed name per company+kind, so a new upload
+ * overwrites the old one on disk. What is STORED in settings is that path
+ * plus a `?v=` stamp: without it the browser (and the PDF renderer) keep
+ * serving the previous image from cache, and the user concludes the upload
+ * silently failed.
+ */
+async function uploadBranding(req, res) {
+    try {
+        const kind = String(req.params.kind || '');
+        if (!BRANDING_KINDS.has(kind)) return R.errorResponse(res, 'Unknown image type.', 422);
+        if (!req.file) return R.errorResponse(res, 'No image was uploaded.', 422);
+
+        const rel = `branding/${req.companyId}/${req.file.filename}`;
+        const stamped = `${rel}?v=${Date.now()}`;
+        const key = `${kind}_path`;
+
+        // UPSERT by (company_id, key) — the same shape update() uses for
+        // every other setting.
+        const existing = await db('settings')
+            .where({ company_id: req.companyId, key }).first('id');
+        // settings.value is JSONB, so a bare string is not valid input — it
+        // has to be encoded as a JSON string, the same way update() does.
+        const value = db.raw('?::jsonb', [JSON.stringify(stamped)]);
+        if (existing) {
+            await db('settings').where('id', existing.id).update({ value });
+        } else {
+            await db('settings').insert({ company_id: req.companyId, key, value });
+        }
+
+        return R.successResponse(res, { kind, url: fullUrl(req, stamped) },
+            kind === 'logo' ? 'Company logo updated.' : 'Signature updated.');
+    } catch (err) {
+        console.error('settings.uploadBranding error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/** DELETE /settings/branding/:kind — go back to printing no image. */
+async function removeBranding(req, res) {
+    try {
+        const kind = String(req.params.kind || '');
+        if (!BRANDING_KINDS.has(kind)) return R.errorResponse(res, 'Unknown image type.', 422);
+        const key = `${kind}_path`;
+        const row = await db('settings').where({ company_id: req.companyId, key }).first('id', 'value');
+        if (row) {
+            // Strip the cache-buster before touching the filesystem — the
+            // `?v=` is part of the URL, never part of the filename.
+            deleteFile(String(row.value || '').split('?')[0]);
+            await db('settings').where('id', row.id).del();
+        }
+        return R.successResponse(res, { kind }, 'Image removed.');
+    } catch (err) {
+        console.error('settings.removeBranding error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 module.exports = {
     get,
     update,
+    uploadBranding,
+    removeBranding,
 };

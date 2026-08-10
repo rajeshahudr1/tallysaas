@@ -58,17 +58,28 @@ class OptionItem {
     this.locationId, this.locationName,
     this.stock, this.rate, this.gstRate,
     this.hsn, this.unit,
+    this.balance,
   });
   final int id;
   final String name;
 
-  /// Present on product options — current stock on hand (opening_stock),
-  /// the effective rate (sales_price; already price-list-adjusted for a
-  /// customer-portal login) and the GST %. Drives the invoice line's rate/GST
-  /// auto-fill + the qty-vs-stock guard (the API enforces the same rule).
+  /// Present on product options — stock ON HAND (opening plus everything
+  /// received, less everything issued), the effective rate (sales_price;
+  /// already price-list-adjusted for a customer-portal login) and the GST %.
+  /// Drives the line's rate/GST auto-fill and the "In stock" hint.
+  ///
+  /// Read from `closing_stock`, NOT `opening_stock`: opening is where the item
+  /// STARTED and is routinely 0 on a synced item, which made every line report
+  /// "In stock: 0" for goods that were on the shelf.
   final double? stock;
   final double? rate;
   final double? gstRate;
+
+  /// Present on party options — the synced Tally closing balance, so the
+  /// picker can show where a customer or supplier stands before you raise a
+  /// voucher against them. Null when the party has no synced ledger, which is
+  /// deliberately different from a balance of zero.
+  final double? balance;
 
   /// Present on product options — the HSN/SAC code and unit of measure. Invoice
   /// lines carry both to the API (the web does the same), so a voucher records
@@ -86,11 +97,14 @@ class OptionItem {
         name: (j['name'] ?? '').toString(),
         locationId: _toInt(j['location_id']),
         locationName: (j['location'] == null) ? null : j['location'].toString(),
-        stock: _toDouble(j['opening_stock']),
+        // closing_stock first; opening_stock only as a fallback for an older
+        // API that does not send it yet.
+        stock: _toDouble(j['closing_stock'] ?? j['opening_stock']),
         rate: _toDouble(j['rate'] ?? j['sales_price']),
         gstRate: _toDouble(j['gst_rate']),
         hsn: _str(j['hsn'] ?? j['hsn_code']),
         unit: _str(j['unit']),
+        balance: _toDouble(j['closing_balance']),
       );
 
   @override

@@ -31,9 +31,12 @@ const fs         = require('fs');
 const knexLib    = require('knex');
 const { Client } = require('pg');
 
-const passwords  = require('../Helpers/passwords');
-const licenseKey = require('../Helpers/licenseKey');
-const keyCrypto  = require('../Helpers/keyCrypto');
+const passwords   = require('../Helpers/passwords');
+const licenseKey  = require('../Helpers/licenseKey');
+const keyCrypto   = require('../Helpers/keyCrypto');
+const tenantRoles = require('../Helpers/tenantRoles');
+const credentials = require('../config/tenantCredentials');
+const { withSsl } = require('../config/pgSsl');
 const { migrateTenant } = require('./migrate-tenants');
 
 const MASTER_DB    = String(process.env.MASTER_DB_DATABASE || 'tallysaas_master');
@@ -70,6 +73,7 @@ function baseConn() {
         port    : parseInt(process.env.DB_PORT, 10) || 5432,
         user    : process.env.DB_USERNAME || 'postgres',
         password: String(process.env.DB_PASSWORD || ''),
+        ...withSsl(),
     };
 }
 function adminClient() { return new Client({ ...baseConn(), database: 'postgres' }); }
@@ -108,7 +112,65 @@ async function dropDatabaseIfExists(dbName) {
             [dbName],
         );
         await admin.query(`DROP DATABASE IF EXISTS "${dbName}"`);
+        // The db is gone; its login role must go with it, or a re-provisioned
+        // licence with the same id would inherit the old (leaked?) password.
+        const m = /^tally_lic_(\d+)$/.exec(dbName);
+        if (m) {
+            await tenantRoles.dropRoleIfExists(admin, dbName, tenantRoles.roleNameForLicense(m[1]));
+            credentials.forget(dbName);
+        }
     } finally { await admin.end(); }
+}
+
+/**
+ * Give a licence its own PostgreSQL LOGIN role and lock its tenant db to it,
+ * then persist the (encrypted) password on the licence row and prime the
+ * in-process credential cache so the tenant is usable without a restart.
+ *
+ * Idempotent: re-running ROTATES the password. That is safe because the new
+ * value is written to master in the same call and the tenant pool is evicted;
+ * it also means db/scripts/upgrade-tenant-roles.js doubles as a rotation tool.
+ *
+ * Requires LICENSE_KEY_SECRET — without it keyCrypto returns null and we would
+ * store a password we can never read back, locking the licence out. So we
+ * refuse up front rather than half-apply.
+ *
+ * @param {import('knex').Knex} master
+ * @param {number} licenseId
+ * @param {import('knex').Knex} tenantKnex  connected to the tenant db as owner
+ * @param {Function} log
+ * @returns {Promise<string>} the role name
+ */
+async function ensureTenantRole(master, licenseId, tenantKnex, log = NOOP) {
+    if (!keyCrypto.isConfigured()) {
+        throw new Error(
+            'LICENSE_KEY_SECRET is not set — refusing to create a tenant DB role whose password ' +
+            'could never be decrypted. Set it in api/.env first.',
+        );
+    }
+    const dbName   = `tally_lic_${Number(licenseId)}`;
+    const roleName = tenantRoles.roleNameForLicense(licenseId);
+    const password = tenantRoles.generatePassword();
+
+    const admin = adminClient();
+    await admin.connect();
+    try {
+        await tenantRoles.ensureRole(admin, dbName, roleName, password);
+    } finally { await admin.end(); }
+
+    // Data-only privileges, granted from inside the db as the object owner.
+    await tenantRoles.grantDataPrivileges(tenantKnex, roleName);
+
+    const enc = keyCrypto.encryptKey(password);
+    if (!enc) throw new Error('failed to encrypt the tenant role password (keyCrypto returned null).');
+    await master('licenses').where('id', licenseId).update({ db_role: roleName, db_role_password_enc: enc });
+
+    credentials.set(dbName, roleName, password);
+    // A pool opened under the OLD credentials must not be reused after a rotation.
+    await require('../config/tenantDb').evict(dbName).catch(() => {});
+
+    log(`✓ db role "${roleName}" → ${dbName} (connect revoked from PUBLIC, data-only grants)`);
+    return roleName;
 }
 
 async function runSchemaFile(knex, file) {
@@ -152,6 +214,19 @@ async function setupMaster(ctx = {}) {
     const dbCreated = await ensureDatabase(MASTER_DB);
     log(dbCreated ? `✓ created master db "${MASTER_DB}"` : `✓ master db "${MASTER_DB}" exists`);
 
+    // A fresh Postgres db grants CONNECT to PUBLIC, so every tenant role could
+    // otherwise open the master and read all password hashes + licence rows.
+    try {
+        const admin = adminClient();
+        await admin.connect();
+        try {
+            await tenantRoles.lockdownMasterDb(admin, MASTER_DB, String(process.env.DB_USERNAME || 'postgres'));
+            log(`✓ ${MASTER_DB}: CONNECT revoked from PUBLIC`);
+        } finally { await admin.end(); }
+    } catch (e) {
+        log(`! could not lock down ${MASTER_DB}: ${e.message}`);
+    }
+
     const m = makeKnex(MASTER_DB);
     try {
         // Only apply the schema on a fresh db (knex_migrations table absent).
@@ -168,6 +243,11 @@ async function setupMaster(ctx = {}) {
         await m.raw("ALTER TABLE user_sessions ADD COLUMN IF NOT EXISTS platform varchar(16)").catch(() => {});
         await m.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_push_modules text").catch(() => {});
         await m.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS sync_pull_modules text").catch(() => {});
+        // Per-licence DB role directory (see Helpers/tenantRoles.js). Also created
+        // by db/migrations/20260810120000_tenant_db_roles.js — stated here too so a
+        // provision-only setup (no knex migrate) still gets the columns.
+        await m.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS db_role varchar(64)").catch(() => {});
+        await m.raw("ALTER TABLE licenses ADD COLUMN IF NOT EXISTS db_role_password_enc text").catch(() => {});
 
         const permIdBySlug = await seedPermissions(m);
         log(`✓ master permissions: ${Object.keys(permIdBySlug).length}`);
@@ -279,6 +359,12 @@ async function provisionLicense(opts, ctx = {}) {
                 valid_from: new Date(), valid_until: validUntil, status: 'active',
             });
             log(`✓ admin user id=${masterUserId} <${email}> (master auth + tenant mirror + active seat) password=${password}`);
+
+            // 7) ISOLATION — the licence's own PG login role. Last, so every table
+            //    and sequence created above is covered by the grants. From here on
+            //    this tenant's pools connect as `tally_lic_<id>_app`, which cannot
+            //    CONNECT to any other licence's database.
+            await ensureTenantRole(m, lic.id, t, log);
         } catch (err) {
             // Cross-DB partial failure → roll the master rows back (leave NO orphan
             // licence / admin / seat) and drop the half-built tenant db, then
@@ -297,6 +383,9 @@ async function provisionLicense(opts, ctx = {}) {
 
 module.exports = {
     setupMaster, provisionLicense, MASTER_DB, ensureDatabase, makeKnex,
+    // Reused by db/scripts/upgrade-tenant-roles.js to back-fill / rotate roles
+    // on licences provisioned before per-licence roles existed.
+    ensureTenantRole,
     // Exposed so the knex master migration/seed reuse the SAME schema + catalogue
     // (one source of truth — knex-migrate and provision.js produce identical masters).
     seedPermissions, seedRoles, MODULES, ACTIONS, SYSTEM_ROLES,

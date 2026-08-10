@@ -27,13 +27,18 @@ function _esc(s) {
 }
 
 var _productsJson = JSON.stringify(_products.map(function (p) {
-    return { id: p.id, name: p.name, unit: p.unit || '', stock: (p.stock != null ? p.stock : 0) };
+    return { id: p.id, name: p.name, unit: p.unit || '', stock: (p.stock != null ? p.stock : null) };
 }));
 
 var _today = new Date().toISOString().slice(0, 10);
+
+/* EDIT MODE — one screen serves create and edit, as in the voucher modules. */
+var _edit      = (typeof editJournal !== 'undefined' && editJournal) ? editJournal : null;
+var _editItems = (typeof editItems !== 'undefined' && editItems) ? editItems : [];
+var _dateVal   = _edit ? ymd(_edit.journal_date) : _today;
 %>
 
-<form id="stock-journal-form" method="post" action="/stock-journals" autocomplete="off" novalidate>
+<form id="stock-journal-form" method="post" action="<%= _edit ? ('/stock-journals/' + _edit.id + '/update') : '/stock-journals' %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/stock-voucher.js on submit. -->
     <input type="hidden" name="items_json" id="items_json">
@@ -54,7 +59,7 @@ var _today = new Date().toISOString().slice(0, 10);
             <div class="form-grid">
                 <div class="form-group">
                     <label class="form-label" for="sv-date">Date<span class="req">*</span></label>
-                    <input type="date" class="form-control" id="sv-date" name="journal_date" value="<%= _today %>" required>
+                    <input type="date" class="form-control" id="sv-date" name="journal_date" value="<%= _dateVal %>" required>
                 </div>
 
                 <div class="form-group">
@@ -162,7 +167,7 @@ var _today = new Date().toISOString().slice(0, 10);
         <div class="form-card-footer" style="border-top:0; background:#fff;">
             <a class="btn btn-light" href="/stock-journals">Cancel</a>
             <button type="submit" class="btn btn-primary" id="sv-submit">
-                <i class="fa-solid fa-cloud-arrow-up me-1"></i>Create Voucher
+                <i class="fa-solid fa-cloud-arrow-up me-1"></i><%= _edit ? 'Update Voucher' : 'Create Voucher' %>
             </button>
         </div>
     </div>
@@ -196,6 +201,8 @@ var _today = new Date().toISOString().slice(0, 10);
 <%# Products for the searchable item picker. %>
 <script>
     window.STOCK_JOURNAL_PRODUCTS = <%- _productsJson %>;
+    // Edit mode: existing header + line items for stock-voucher.js.
+    window.STOCK_JOURNAL_EDIT = <%- _edit ? JSON.stringify({ id: _edit.id, voucher_no: _edit.voucher_no || '', narration: _edit.narration || '', items: _editItems }) : 'null' %>;
 </script>
 
 <style>
@@ -210,11 +217,11 @@ var _today = new Date().toISOString().slice(0, 10);
     .li-prod-menu {
         position: fixed; z-index: 1080;
         max-height: 240px; overflow-y: auto; background: #fff;
-        border: 1px solid var(--border, #d1d5db); border-radius: 6px;
-        box-shadow: 0 8px 24px rgba(0,0,0,.12);
+        border: 1px solid var(--border, #E9EDF3); border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(16,24,40,.10); padding: 4px;
     }
-    .li-prod-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .li-prod-item:hover, .li-prod-item.is-active { background: #eef2ff; }
+    .li-prod-item { padding: 9px 12px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 8px; }
+    .li-prod-item:hover, .li-prod-item.is-active { background: #EAF1FE; color: #1560E0; }
     .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
     .li-prod-item .li-prod-sub { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; }
 

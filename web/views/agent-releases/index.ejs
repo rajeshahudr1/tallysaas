@@ -3,7 +3,7 @@
  * views/agent-releases/index.ejs — PLATFORM ADMIN · Agent Updates.
  * Route: GET /agent-releases  ·  activeMenu: 'agent-releases'  ·  super-admin only.
  *
- * Upload a freshly-built TallyCloudSync.exe from the browser and publish it as
+ * Upload a freshly-built agent exe from the browser and publish it as
  * the CURRENT agent release. Agents with auto_update=ON self-update; agents with
  * auto_update=OFF get a "new version available" bell notification on their sync
  * dashboard. Shows the current release, an upload/publish form, and the publish
@@ -11,7 +11,7 @@
  * other platform-admin screens so it looks identical.
  *
  * NOTE: publishing requires the operator to have already BUILT the exe
- * (TallyCloudSync.exe) — this page only uploads + publishes it, it does not
+ * (the agent exe) — this page only uploads + publishes it, it does not
  * build it.
  *
  * Expected locals (routes/web.js → res.render):
@@ -90,7 +90,7 @@ var _dir     = (typeof releaseDir !== 'undefined' && releaseDir) ? releaseDir : 
 
                 <div class="alert alert-info py-2 px-3 small mb-3" role="note">
                     <i class="fa-solid fa-circle-info me-1"></i>
-                    Build <code>TallyCloudSync.exe</code> first, then upload it here. Publishing makes it
+                    Build <code><%= brand.shortName %>.exe</code> first, then upload it here. Publishing makes it
                     the current release — auto-update agents pull it within a minute; the rest get a
                     "new version available" notification.
                 </div>
@@ -105,7 +105,7 @@ var _dir     = (typeof releaseDir !== 'undefined' && releaseDir) ? releaseDir : 
                         <label class="form-label" for="ar-version">Version<span class="req">*</span></label>
                         <input type="text" class="form-control" id="ar-version" name="version"
                                placeholder="e.g. 1.2.0" pattern="[A-Za-z0-9._-]+" required>
-                        <div class="form-hint">Saved as <code>TallyCloudSync-&lt;version&gt;.exe</code> in the release folder.</div>
+                        <div class="form-hint">Saved as <code><%= brand.shortName %>-&lt;version&gt;.exe</code> in the release folder.</div>
                     </div>
 
                     <div class="form-group mb-3">

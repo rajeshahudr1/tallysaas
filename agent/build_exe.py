@@ -1,23 +1,23 @@
 """Build the standalone Teloora Agent executable with PyInstaller.
 
-Produces a single ``TallyCloudSyncAgent.exe`` from :mod:`sync_agent` so the
+Produces a single ``TelooraAgent.exe`` from :mod:`sync_agent` so the
 customer does not need a Python install. Run on a Windows machine that has the
 project's dependencies installed.
 
 Quick build (manual)
 ---------------------
     pip install pyinstaller
-    pyinstaller --onefile --name TallyCloudSyncAgent sync_agent.py
+    pyinstaller --onefile --name TelooraAgent sync_agent.py
 
 …or just run this script, which does the same with sensible flags and a few
 pre-flight checks:
 
-    python build_exe.py            # console agent  -> dist/TallyCloudSyncAgent.exe
-    python build_exe.py --gui      # windowed GUI   -> dist/TallyCloudSync.exe
+    python build_exe.py            # console agent  -> dist/TelooraAgent.exe
+    python build_exe.py --gui      # windowed GUI   -> dist/Teloora.exe
     python build_exe.py --both     # build both exes
 
-The console binary lands in ``dist/TallyCloudSyncAgent.exe`` (headless / debug)
-and the windowed GUI binary in ``dist/TallyCloudSync.exe`` (the new primary
+The console binary lands in ``dist/TelooraAgent.exe`` (headless / debug)
+and the windowed GUI binary in ``dist/Teloora.exe`` (the new primary
 deliverable: a self-installing tkinter app with no console window).
 
 Auto-start at logon
@@ -26,19 +26,19 @@ The agent is meant to run whenever the customer logs in. Two common ways:
 
 1. Startup-folder shortcut (simplest):
    - Press Win+R, type ``shell:startup``, press Enter.
-   - Drop a shortcut to ``dist\\TallyCloudSyncAgent.exe`` into that folder.
+   - Drop a shortcut to ``dist\\TelooraAgent.exe`` into that folder.
    - It launches automatically at every logon.
 
 2. Task Scheduler (more robust — survives without an open console, can
    restart on failure). Create a logon-triggered task:
 
-       schtasks /Create /TN "TallyCloudSyncAgent" ^
-           /TR "C:\\TallyAgent\\TallyCloudSyncAgent.exe" ^
+       schtasks /Create /TN "TelooraAgent" ^
+           /TR "C:\\TallyAgent\\TelooraAgent.exe" ^
            /SC ONLOGON /RL HIGHEST /F
 
    Remove it later with:
 
-       schtasks /Delete /TN "TallyCloudSyncAgent" /F
+       schtasks /Delete /TN "TelooraAgent" /F
 
 Notes
 -----
@@ -51,14 +51,14 @@ Notes
 * PRODUCTION BUILD: before building the distributable GUI exe, set
   ``constants.API_BASE_URL`` to your production domain (it is the ONLY place the
   server URL lives). Then:  ``python build_exe.py --gui``  ->
-  ``dist/TallyCloudSync.exe``.
+  ``dist/Teloora.exe``.
 * WINDOWS SERVICE (no logged-in user): the GUI build IS the service. The SAME
   one exe serves the GUI, the service (run via ``--run-service``) and service
   management (``install-service`` / ``remove-service`` / ``start-service`` /
   ``stop-service``). The Setup wizard registers + starts the service
   automatically (elevated via UAC). pywin32 is bundled via the hidden-imports
   below, so no extra steps are needed at runtime. To run the exe AS the service
-  by hand for testing, run ``TallyCloudSync.exe install-service`` from an
+  by hand for testing, run ``Teloora.exe install-service`` from an
   elevated prompt (or let the installer do it).
 """
 
@@ -71,28 +71,80 @@ import sys
 from pathlib import Path
 
 from brand import NAME as _BRAND_NAME
+from brand import CONSOLE_EXE_NAME as _CONSOLE_EXE, GUI_EXE_NAME as _GUI_EXE, PUBLISHER as _PUBLISHER
 
 
-# NOTE: APP_NAME / GUI_APP_NAME below are the OUTPUT EXE FILENAMES, not display
-# text. gui_agent.py's INSTALLED_EXE_NAME ("TallyCloudSync.exe") and the
-# scheduled-task / shortcut names elsewhere all key off these — renaming them
-# would make an updated build invisible to an existing install's detection
-# logic. Deliberately left as-is; only the version-info strings below (product
-# name / description, visible in Explorer's file Properties dialog) follow the
-# brand.
-APP_NAME = "TallyCloudSyncAgent"
+# APP_NAME / GUI_APP_NAME are the OUTPUT EXE FILENAMES. They come from
+# brand.SLUG, the same constant gui_agent.INSTALLED_EXE_NAME, win_service
+# .SERVICE_NAME and the install dir / registry key are built from — so the
+# whole Windows identity rebrands from one edit. An install made by an older
+# build is NOT adopted after a slug change: uninstall it, run the new exe once.
+APP_NAME = _CONSOLE_EXE
 ENTRY_SCRIPT = "sync_agent.py"
 
 # The publisher CN on our code-signing certificate. Baked here (and in
 # constants) so a build can assert it signed with the RIGHT certificate, not
 # merely with A certificate.
-PUBLISHER_CN = "Dukansetu"
+PUBLISHER_CN = _PUBLISHER
 
 # The windowed (no-console) GUI build. This is the new PRIMARY deliverable: a
 # self-installing tkinter app. PyInstaller bundles tkinter automatically, so no
 # extra hidden-imports are needed for it beyond the agent's sibling modules.
-GUI_APP_NAME = "TallyCloudSync"
+GUI_APP_NAME = _GUI_EXE
 GUI_ENTRY_SCRIPT = "gui_agent.py"
+
+
+def _current_version() -> str:
+    """The version already stamped into config.py, as a plain "X.Y.Z" string."""
+    try:
+        text = (Path(__file__).parent / "config.py").read_text(encoding="utf-8")
+        m = re.search(r'_DEFAULT_AGENT_VERSION\s*=\s*"([^"]+)"', text)
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return "0.0.0"
+
+
+def _write_version_resource(here: Path, app_name: str) -> Path | None:
+    """Write a PyInstaller --version-file describing this build, and return it.
+
+    Everything visible comes from brand.py, so a rebrand needs no edit here.
+    Returns None (build continues without the resource) if it can't be written —
+    blank Properties is a cosmetic loss, never a reason to fail a release.
+    """
+    ver = _current_version()
+    parts = (ver.split(".") + ["0", "0", "0", "0"])[:4]
+    try:
+        nums = tuple(int(p) for p in parts)
+    except ValueError:
+        nums = (0, 0, 0, 0)
+
+    body = f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers={nums}, prodvers={nums}, mask=0x3f, flags=0x0,
+                    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+        StringStruct('CompanyName', {PUBLISHER_CN!r}),
+        StringStruct('FileDescription', {_BRAND_NAME + ' Agent'!r}),
+        StringStruct('FileVersion', {ver!r}),
+        StringStruct('InternalName', {app_name!r}),
+        StringStruct('OriginalFilename', {app_name + '.exe'!r}),
+        StringStruct('ProductName', {_BRAND_NAME!r}),
+        StringStruct('ProductVersion', {ver!r}),
+    ])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])]),
+  ]
+)
+"""
+    try:
+        out = here / "build" / "version_info.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(body, encoding="utf-8")
+        return out
+    except OSError as exc:
+        print(f"[build] could not write version resource ({exc}); Properties will be blank")
+        return None
 
 
 def _stamp_version(version: str) -> bool:
@@ -199,7 +251,7 @@ def _nuitka_cmd(here: Path, app_name: str, entry: str, gui: bool) -> list[str]:
         "--include-module=codesign",
         # Company/version metadata — an exe with no publisher fields looks
         # anonymous in Explorer even when correctly signed.
-        "--company-name=Dukansetu",
+        f"--company-name={_PUBLISHER}",
         f"--product-name={_BRAND_NAME}",
         f"--file-description={_BRAND_NAME} Agent",
     ]
@@ -330,8 +382,8 @@ def build(gui: bool = False, nuitka: bool = False,
     """Invoke PyInstaller to produce the one-file executable.
 
     ``gui=False`` builds the CONSOLE agent (``sync_agent.py`` ->
-    ``TallyCloudSyncAgent.exe``). ``gui=True`` builds the WINDOWED, no-console
-    GUI (``gui_agent.py`` -> ``TallyCloudSync.exe``) with ``--windowed`` so no
+    ``TelooraAgent.exe``). ``gui=True`` builds the WINDOWED, no-console
+    GUI (``gui_agent.py`` -> ``Teloora.exe``) with ``--windowed`` so no
     console window appears. PyInstaller bundles tkinter automatically.
 
     Returns a process exit code (0 on success).
@@ -474,6 +526,15 @@ def build(gui: bool = False, nuitka: bool = False,
     icon_ico = here / "app_icon.ico"
     if icon_ico.exists():
         cmd += ["--icon", str(icon_ico), "--add-data", str(icon_ico) + ";."]
+
+    # Windows VERSIONINFO — what Explorer's Properties ▸ Details tab shows, and
+    # what SmartScreen quotes when it warns about an unsigned download. The
+    # Nuitka path sets these via flags; PyInstaller needs a resource file, so
+    # one is generated here from the brand + the stamped version. Without it the
+    # exe's Properties are blank, which reads as "no idea who wrote this".
+    ver_file = _write_version_resource(here, app_name)
+    if ver_file is not None:
+        cmd += ["--version-file", str(ver_file)]
     # SPLASH — shown by the bootloader IMMEDIATELY, before Python even starts.
     #
     # --onefile unpacks ~46 MB of files to a fresh temp folder on EVERY launch,
@@ -508,6 +569,14 @@ def build(gui: bool = False, nuitka: bool = False,
     # returns None) and the customer is left looking at the static one.
     if gui and splash_png.exists():
         cmd += ["--add-data", str(splash_png) + ";."]
+    # The product mark at the exact sizes the UI draws it (ui_signin.MARK_SIZES).
+    # Rendered from app_icon.ico, so the logo in the window is the same artwork
+    # as the one on the taskbar. Missing files just fall back to a drawn glyph.
+    if gui:
+        for px in (38, 44):
+            mark_png = here / f"logo_mark_{px}.png"
+            if mark_png.exists():
+                cmd += ["--add-data", str(mark_png) + ";."]
     if gui:
         # No console window for the windowed GUI. The GUI also imports the engine
         # entry point (sync_agent) + the new constants/win_service modules, so
@@ -561,7 +630,7 @@ def build(gui: bool = False, nuitka: bool = False,
             except OSError:
                 pass
         if gui:
-            print("\nThis is the self-installing GUI. Run TallyCloudSync.exe,")
+            print("\nThis is the self-installing GUI. Run Teloora.exe,")
             print("      sign in with email + password, then enter the emailed code.")
         else:
             print("\nNext: copy config.example.ini -> config.ini beside the exe,")
@@ -645,9 +714,9 @@ def main(argv: list[str] | None = None) -> int:
         python build_exe.py --both           Build BOTH exes.
         python build_exe.py --version 1.0.1  Stamp v1.0.1 into config, then build.
 
-    ``--gui`` produces ``dist/TallyCloudSync.exe`` (the self-installing tkinter
+    ``--gui`` produces ``dist/Teloora.exe`` (the self-installing tkinter
     app, no console window); the default still produces
-    ``dist/TallyCloudSyncAgent.exe`` (the headless console agent). After
+    ``dist/TelooraAgent.exe`` (the headless console agent). After
     building, the operator drops the exe into the server's AGENT_RELEASE_DIR and
     publishes its version (POST /super-admin/agent-release) so agents
     auto-update to it.

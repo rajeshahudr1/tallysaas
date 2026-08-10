@@ -11,6 +11,13 @@
  *   activeMenu  string  — key of the active menu item (e.g. 'customers')
  * ─────────────────────────────────────────────────────────── */
 var _active = (typeof activeMenu !== 'undefined') ? activeMenu : '';
+var _icons = (typeof menuIcons !== 'undefined' && menuIcons) ? menuIcons : {};
+function _icon(fa, cls) {
+    var id = _icons[fa];
+    if (!id) return '<i class="fa-solid ' + fa + ' ' + cls + '"></i>';
+    return '<svg class="' + cls + ' icon-line" aria-hidden="true"><use href="#' + id + '"></use></svg>';
+}
+
 // Cross-tenant platform admin? The "Licenses" group is shown ONLY then.
 var _isSuperAdmin = (typeof isSuperAdmin !== 'undefined') ? !!isSuperAdmin : false;
 // Tenant license-admin? The custom-role "Roles" item is shown ONLY then.
@@ -113,23 +120,38 @@ if (_isSuperAdmin) {
 %>
 <div class="sidebar-inner">
 
-    <!-- Brand / logo -->
+    <!-- Brand / logo — the SAME lock-up the login screen shows, on a white
+         plate so the navy wordmark reads against the dark sidebar. Both paths
+         come from web/config/brand.js; swap them there and it changes here.
+         The square mark is what's left when the sidebar collapses to the rail. -->
+    <%
+    var _bLogoFull = (typeof brand !== 'undefined' && brand && brand.logoFull) ? brand.logoFull : '/img/logo-full.png';
+    var _bLogoMark = (typeof brand !== 'undefined' && brand && brand.logoMark) ? brand.logoMark : '/img/logo-mark.png';
+    var _bName     = (typeof brand !== 'undefined' && brand) ? brand.name : 'Teloora';
+    %>
     <a class="sidebar-brand" href="/">
-        <span class="sidebar-logo"><i class="<%= (typeof brand !== 'undefined' && brand) ? brand.iconClass : 'fa-solid fa-cloud' %>"></i></span>
-        <span class="sidebar-brand-text"><%= (typeof brand !== 'undefined' && brand) ? brand.name : 'Teloora' %></span>
+        <span class="sidebar-logo"><img src="<%= _bLogoMark %>" alt="<%= _bName %>"></span>
+        <span class="sidebar-brand-full"><img src="<%= _bLogoFull %>" alt="<%= _bName %>"></span>
     </a>
 
     <!-- Navigation — labelled groups collapse/expand on click (the chevron
          rotates; state is remembered per-group via localStorage in app.js). -->
     <nav class="sidebar-nav" aria-label="Primary">
+        <% var _seenSection = null; %>
         <% menu.forEach(function (group) { %>
+            <%# Band heading (MAIN / MANAGE / SETTINGS). Drawn once, when the
+                band changes — groups keep their own rows and sub-items, so this
+                only adds structure; nothing became unreachable. %>
+            <% if (group.section && group.section !== _seenSection) { _seenSection = group.section; %>
+                <div class="sidebar-band"><%= group.section %></div>
+            <% } %>
             <% if (group.label) { %>
                 <% var gid = group.label.toLowerCase().replace(/[^a-z0-9]+/g, '-'); %>
                 <% var groupActive = group.items.some(function (it) { return it.key === _active; }); %>
                 <button type="button" class="sidebar-section sidebar-section-toggle"
                         data-group="<%= gid %>" aria-expanded="<%= groupActive ? 'true' : 'false' %>"
                         <%= groupActive ? 'data-group-active' : '' %> aria-controls="grp-<%= gid %>">
-                    <i class="fa-solid <%= group.icon || 'fa-folder' %> sidebar-section-icon" aria-hidden="true"></i>
+                    <%- _icon(group.icon || 'fa-folder', 'sidebar-section-icon') %>
                     <span class="sidebar-section-text"><%= group.label %></span>
                     <i class="fa-solid fa-chevron-down sidebar-section-caret"></i>
                 </button>
@@ -138,13 +160,13 @@ if (_isSuperAdmin) {
                         <li>
                             <% if (item.soon) { %>
                                 <span class="sidebar-link is-disabled" aria-disabled="true" title="<%= item.label %> — coming soon">
-                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <%- _icon(item.icon, 'sidebar-link-icon') %>
                                     <span class="sidebar-link-text"><%= item.label %></span>
                                     <span class="sidebar-soon">Soon</span>
                                 </span>
                             <% } else { %>
                                 <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>" title="<%= item.label %>">
-                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <%- _icon(item.icon, 'sidebar-link-icon') %>
                                     <span class="sidebar-link-text"><%= item.label %></span>
                                 </a>
                             <% } %>
@@ -157,13 +179,13 @@ if (_isSuperAdmin) {
                         <li>
                             <% if (item.soon) { %>
                                 <span class="sidebar-link is-disabled" aria-disabled="true" title="<%= item.label %> — coming soon">
-                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <%- _icon(item.icon, 'sidebar-link-icon') %>
                                     <span class="sidebar-link-text"><%= item.label %></span>
                                     <span class="sidebar-soon">Soon</span>
                                 </span>
                             <% } else { %>
                                 <a class="sidebar-link <%= item.key === _active ? 'is-active' : '' %>" href="<%= item.href %>" title="<%= item.label %>">
-                                    <i class="fa-solid <%= item.icon %> sidebar-link-icon"></i>
+                                    <%- _icon(item.icon, 'sidebar-link-icon') %>
                                     <span class="sidebar-link-text"><%= item.label %></span>
                                 </a>
                             <% } %>

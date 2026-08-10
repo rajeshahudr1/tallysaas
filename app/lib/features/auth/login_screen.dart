@@ -87,22 +87,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Brand lockup — matches the web sign-in (cloud tile + wordmark).
+            // Brand lockup — centred, matching the web sign-in's mobile
+            // breakpoint (mark + wordmark, nothing else above the form).
             Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                SvgPicture.asset(Brand.logoAsset, width: 44, height: 44),
-                const SizedBox(width: AppSpacing.md12),
+                SvgPicture.asset(Brand.logoAsset, width: 40, height: 40),
+                const SizedBox(width: AppSpacing.sm8),
                 const Text(
                   Brand.name,
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.text1),
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                    color: AppColors.text1,
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: AppSpacing.xl24),
-            Text('Welcome back', style: theme.textTheme.titleLarge),
+            Text(
+              'Welcome back!',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleLarge,
+            ),
             const SizedBox(height: AppSpacing.xs4),
             Text(
-              'Sign in to your account to continue.',
+              'Sign in to continue to your account',
+              textAlign: TextAlign.center,
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: AppSpacing.xl24),
@@ -119,7 +131,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               textInputAction: TextInputAction.next,
               prefixIcon: Icons.mail_outline,
               validator: Validators.email,
-              hint: 'you@company.com',
+              hint: 'Enter your email',
             ),
             const SizedBox(height: AppSpacing.md12),
             AppTextField(
@@ -130,47 +142,35 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               prefixIcon: Icons.lock_outline,
               validator: (v) => Validators.minLen(v, 4, 'Password'),
               onSubmitted: (_) => _submit(),
-            ),
-            const SizedBox(height: AppSpacing.sm8),
-
-            // Quick toggle for the masked password field.
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton.icon(
-                onPressed: _busy
-                    ? null
-                    : () => setState(() => _obscure = !_obscure),
+              hint: 'Enter your password',
+              // Eye toggle sits inside the field, as on the web form.
+              suffix: IconButton(
+                onPressed:
+                    _busy ? null : () => setState(() => _obscure = !_obscure),
                 icon: Icon(
-                  _obscure ? Icons.visibility : Icons.visibility_off,
-                  size: 18,
+                  _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                  size: 20,
+                  color: AppColors.text3,
                 ),
-                label: Text(_obscure ? 'Show password' : 'Hide password'),
+                tooltip: _obscure ? 'Show password' : 'Hide password',
               ),
             ),
-
             const SizedBox(height: AppSpacing.md12),
-            AppButton(
-              label: 'Sign in',
-              loading: _busy,
-              onPressed: _submit,
-            ),
-            const SizedBox(height: AppSpacing.sm8),
-            Center(
+
+            Align(
+              alignment: Alignment.centerRight,
               child: TextButton(
                 onPressed: _busy ? null : () => context.go('/forgot-password'),
                 child: const Text('Forgot password?'),
               ),
             ),
-
             const SizedBox(height: AppSpacing.sm8),
-            // Demo hint — handy while the API is still being seeded. Not a
-            // hardcoded credential the app uses; purely an on-screen note.
-            Text(
-              'Demo: admin@tallysaas.test',
-              textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: AppColors.text3,
-              ),
+
+            AppButton(
+              label: 'Sign in',
+              icon: Icons.login,
+              loading: _busy,
+              onPressed: _submit,
             ),
           ],
         ),

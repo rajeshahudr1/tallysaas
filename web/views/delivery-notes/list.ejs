@@ -65,6 +65,12 @@ var _canDeleteDeliveryNote = _canPath3('/delivery-notes', 'delete');
     ],
 }) %>
 
+<%# Register view switcher — the same period regrouped by Ledger, Voucher
+    Type, Ledger Group, Stock Item, Stock Group or Stock Category. %>
+<%- include('../partials/register-tabs', {
+    basePath: '/delivery-notes', active: 'bill', hasStock: true, showMode: false, query: '',
+}) %>
+
 <form id="delivery-note-filters-form" autocomplete="off" method="get" action="/delivery-notes">
     <%- include('../partials/filter-card', {
         filterId: 'delivery-note-filters',
@@ -129,8 +135,10 @@ var _canDeleteDeliveryNote = _canPath3('/delivery-notes', 'delete');
                                     <i class="fa-solid fa-ellipsis-vertical"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/delivery-notes/<%= r.id %>/edit">
-                                        <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
+                                    <% if (_canEditDeliveryNote) { %>
+                                        <li><a class="dropdown-item" href="/delivery-notes/<%= r.id %>/edit">
+                                            <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</a></li>
+                                    <% } %>
                                     <li><a class="dropdown-item" href="/delivery-notes/<%= r.id %>/pdf" target="_blank">
                                         <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
                                     <% if (_convertible && _canEditDeliveryNote) { %>

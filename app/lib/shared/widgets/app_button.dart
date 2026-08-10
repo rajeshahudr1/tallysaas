@@ -87,7 +87,9 @@ class AppButton extends StatelessWidget {
     // the fill is painted behind a transparent button rather than by the theme.
     final btn = DecoratedBox(
       decoration: BoxDecoration(
-        gradient: AppGradients.brand,
+        // brandButton, not brand: the primary button label is white and the logo
+        // green cannot carry white text (2.61:1).
+        gradient: AppGradients.brandButton,
         borderRadius: BorderRadius.circular(AppRadius.sm8),
       ),
       child: ElevatedButton(

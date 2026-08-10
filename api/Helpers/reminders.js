@@ -105,9 +105,51 @@ async function overdueCustomers(companyId, asOf = new Date()) {
         .sort((a, b) => b.days_overdue - a.days_overdue);
 }
 
-/** Plain-text reminder body (WhatsApp + the text part of the email). */
-function reminderText({ customerName, companyName, outstanding, oldestDue, overdueCount }) {
+/**
+ * The placeholders a custom reminder template may use. Kept as an explicit
+ * list, not "interpolate whatever appears": a template is user-entered text,
+ * and substituting arbitrary expressions into it would be an injection point.
+ * Exported so the UI can show exactly what is available rather than making
+ * people guess.
+ */
+const TEMPLATE_TOKENS = [
+    { token: '{customer}',    desc: "The party's name" },
+    { token: '{company}',     desc: 'Your company name' },
+    { token: '{outstanding}', desc: 'Total outstanding, formatted' },
+    { token: '{overdue}',     desc: 'How many invoices are overdue' },
+    { token: '{due_date}',    desc: 'Due date of the oldest overdue bill' },
+];
+
+/**
+ * Fill a custom template. Unknown {tokens} are left exactly as typed rather
+ * than blanked: a typo should look like a typo, not silently delete the line
+ * it was on.
+ */
+function applyTemplate(template, values) {
+    return String(template).replace(/\{(\w+)\}/g, (whole, key) => (
+        Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : whole
+    ));
+}
+
+/**
+ * Plain-text reminder body (WhatsApp + the text part of the email).
+ *
+ * `template` is the company's own wording when they have customised it;
+ * without one, the built-in text below is used unchanged. A template that is
+ * blank or whitespace counts as "not customised" — an empty message is never
+ * what someone meant to save.
+ */
+function reminderText({ customerName, companyName, outstanding, oldestDue, overdueCount, template }) {
     const due = oldestDue ? new Date(oldestDue).toLocaleDateString('en-IN') : '';
+    if (template && String(template).trim()) {
+        return applyTemplate(String(template).trim(), {
+            customer:    customerName || 'Customer',
+            company:     companyName || '',
+            outstanding: formatMoney(outstanding),
+            overdue:     overdueCount || 0,
+            due_date:    due,
+        });
+    }
     return `Dear ${customerName || 'Customer'},\n\n` +
         `This is a gentle payment reminder from ${companyName || 'us'}. Your account currently shows an ` +
         `outstanding balance of ${formatMoney(outstanding)}` +
@@ -119,4 +161,5 @@ function reminderText({ customerName, companyName, outstanding, oldestDue, overd
 module.exports = {
     getSettings, saveSettings, normalizeOffsets, DEFAULTS,
     overdueCustomers, reminderText, formatMoney,
+    applyTemplate, TEMPLATE_TOKENS,
 };

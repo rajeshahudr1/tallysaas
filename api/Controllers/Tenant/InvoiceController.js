@@ -31,6 +31,7 @@
  */
 
 const db = require('../../config/db').db;
+const { MOVEMENT_SUBQUERY, closingStockSql } = require('../../Helpers/stockMovement');
 const R  = require('../../Helpers/response');
 const { recordHistory } = require('../../Helpers/history');
 const { htmlToPdf } = require('../../Helpers/pdf');
@@ -357,11 +358,20 @@ async function listPurchase(req, res) {
  * balance, plus the grand total. invoice_date is a plain DATE so to_char gives
  * the real month (no timezone shift). Honours the FY date_from/date_to filters.
  */
-/** Tally report SNAPSHOT (pulled verbatim by the agent) for exact-match figures. */
+/**
+ * Tally report SNAPSHOT (pulled verbatim by the agent) for exact-match figures.
+ *
+ * The agent appends a new row on every pull, so `tally_reports` holds many
+ * rows per report_type. Take the LATEST — a bare .first() returns whatever
+ * order the heap happens to give, which meant a months-old (or empty) pull
+ * could silently override the current register.
+ */
 async function tallyReportSnapshot(cid, rtype) {
     try {
         const row = await db('tally_reports')
-            .where({ company_id: cid, report_type: rtype }).first('payload');
+            .where({ company_id: cid, report_type: rtype })
+            .orderBy('synced_at', 'desc').orderBy('id', 'desc')
+            .first('payload');
         if (!row || !row.payload) return null;
         return typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload;
     } catch (_) { return null; }
@@ -426,9 +436,17 @@ async function monthlyByType(req, res, type) {
         const scoped = req.isSalesman || req.isCustomerUser || req.locationId != null;
         const snapType = type === 'purchase' ? 'purchase_register' : 'sales_register';
         const snap = scoped ? null : await tallyReportSnapshot(req.companyId, snapType);
+        // A snapshot month with NO figure is not an authoritative zero — an
+        // all-zero register is what a failed/partial pull looks like, and
+        // trusting it blanked the whole Sales Register even though the
+        // vouchers were sitting right there. Only non-zero months override.
         const byName = {};
         if (snap && Array.isArray(snap.rows)) {
-            for (const r of snap.rows) byName[String(r.month || '').trim().toLowerCase()] = Number(r.amount) || 0;
+            for (const r of snap.rows) {
+                const amt = Number(r.amount) || 0;
+                if (!amt) continue;
+                byName[String(r.month || '').trim().toLowerCase()] = amt;
+            }
         }
         let running = 0;
         const months = rows.map((r) => {
@@ -455,6 +473,266 @@ async function monthlyByType(req, res, type) {
 
 async function monthlySales(req, res)    { return monthlyByType(req, res, 'sales'); }
 async function monthlyPurchase(req, res) { return monthlyByType(req, res, 'purchase'); }
+
+/* ─────────────────────────────────────────────────────────────────
+ * Grouped register (LiveKeeping parity).
+ *
+ * The web register shows the same period's vouchers regrouped six ways —
+ * by Ledger (the party), Ledger Group, Voucher Type, Stock Item, Stock
+ * Group or Stock Category. Three of those are HEADER groupings (one row
+ * per voucher, so `total` sums cleanly) and three are LINE groupings
+ * (invoice_items, which also carry a quantity).
+ *
+ * `mode` mirrors LiveKeeping's Gross/Net toggle:
+ *   gross — returns (Credit/Debit Note voucher types) excluded, the same
+ *           basis the month register and every dashboard figure use.
+ *   net   — returns INCLUDED and subtracted, so the group totals net off
+ *           the sales/purchase returns booked against them.
+ * ───────────────────────────────────────────────────────────────── */
+
+// group key → { level, label, expr, join } — `level` decides which table the
+// SUM runs over, so a Stock Item row can never double-count a voucher header.
+const GROUP_SPECS = {
+    ledger:         { level: 'header', label: 'Ledger' },
+    ledger_group:   { level: 'header', label: 'Ledger Group' },
+    voucher_type:   { level: 'header', label: 'Voucher Type' },
+    stock_item:     { level: 'line',   label: 'Stock Item' },
+    stock_group:    { level: 'line',   label: 'Stock Group' },
+    stock_category: { level: 'line',   label: 'Stock Category' },
+};
+
+/**
+ * The scope CTE every grouping starts from: one row per voucher, already
+ * carrying its party name and its Gross/Net sign. Returns { sql, binds }.
+ *
+ * Party name resolution, in order:
+ *   1. the linked customer / supplier master (cloud-created vouchers), then
+ *   2. the SYNCED voucher's counter-party ledger. A Tally sales voucher's
+ *      entries are the party, the revenue ledger, the taxes and round-off;
+ *      the party is reliably the largest line by magnitude, and `is_debit`
+ *      is not — Tally flips its sign per voucher class, so trusting it
+ *      mislabels roughly half the register.
+ *
+ * Every filter here mirrors monthlyByType(), so a grouped view and the Month
+ * view of the same period always add up to the same grand total.
+ */
+function registerScopeSql(req, type, mode) {
+    const binds = [];
+    const w = [];
+    w.push('i.company_id = ?');       binds.push(req.companyId);
+    w.push('i.type = ?');             binds.push(type);
+    w.push('i.deleted_at is null');
+    w.push('i.tally_optional = false');
+    if (req.locationId != null) { w.push('i.location_id = ?'); binds.push(req.locationId); }
+    if (req.isSalesman)     { w.push('i.created_by = ?');  binds.push(req.user.sub); }
+    if (req.isCustomerUser) { w.push('i.customer_id = ?'); binds.push(req.customerId); }
+    if (req.query.date_from) { w.push('i.invoice_date >= ?'); binds.push(req.query.date_from); }
+    if (req.query.date_to)   { w.push('i.invoice_date <= ?'); binds.push(req.query.date_to); }
+
+    const approval = String(req.query.approval || '').trim();
+    if (approval === 'all') {
+        /* no approval filter */
+    } else if (approval) {
+        w.push('i.approval_status = ?'); binds.push(approval);
+    } else {
+        w.push("(i.approval_status not in ('pending','draft','rejected') or i.approval_status is null)");
+    }
+
+    // Gross drops the return vouchers entirely; net keeps them so `sgn` can
+    // subtract them from whatever group they belong to.
+    const returnType = type === 'sales' ? 'Credit Note' : 'Debit Note';
+    let sgn = '1';
+    if (mode === 'net') {
+        sgn = 'case when i.tally_voucher_type = ? then -1 else 1 end';
+        binds.push(returnType);
+    } else {
+        w.push('(i.tally_voucher_type is null or i.tally_voucher_type <> ?)');
+        binds.push(returnType);
+    }
+
+    // NOTE: the `sgn` binding is emitted in the SELECT list, which precedes
+    // the WHERE clause in the final SQL — so push the party subquery's bind
+    // and sgn's bind in the same order the text uses them.
+    const partyBinds = [req.companyId];
+
+    const sql = `
+        select
+            i.id, i.total, i.tally_guid,
+            coalesce(i.tally_voucher_type, ?) as vch_type,
+            coalesce(
+                c.name, s.name,
+                (select e.ledger_name from tally_voucher_entries e
+                  where e.company_id = ? and e.voucher_guid = i.tally_guid
+                  order by abs(e.amount) desc limit 1),
+                '(No Ledger)'
+            ) as party,
+            (${sgn}) as sgn
+        from invoices i
+        left join customers c on c.id = i.customer_id
+        left join suppliers s on s.id = i.supplier_id
+        where ${w.join(' and ')}
+    `;
+    // Bind order across the whole statement: vch_type default, party subquery
+    // company id, then sgn's return type (net only), then every WHERE bind.
+    const defaultVchType = type === 'sales' ? 'Sales' : 'Purchase';
+    const selectBinds = mode === 'net'
+        ? [defaultVchType, ...partyBinds, returnType]
+        : [defaultVchType, ...partyBinds];
+    // `binds` still holds the WHERE values (and, in gross mode, the trailing
+    // returnType the WHERE clause uses). Drop net-mode's sgn bind — it was
+    // pushed into `binds` above but belongs to the SELECT list.
+    const whereBinds = mode === 'net' ? binds.slice(0, -1) : binds;
+    return { sql, binds: [...selectBinds, ...whereBinds] };
+}
+
+async function groupedByType(req, res, type) {
+    const by   = String(req.query.by || '').trim().toLowerCase();
+    const spec = GROUP_SPECS[by];
+    if (!spec) return R.errorResponse(res, 'Unknown grouping.', 422);
+    const mode = String(req.query.mode || 'gross').trim().toLowerCase() === 'net' ? 'net' : 'gross';
+
+    try {
+        const scope = registerScopeSql(req, type, mode);
+        let sql;
+        let binds = [...scope.binds];
+
+        if (spec.level === 'header') {
+            let keyExpr;
+            let extraJoin = '';
+            if (by === 'ledger') {
+                keyExpr = 'v.party';
+            } else if (by === 'ledger_group') {
+                // The Tally ledger master carries the real group ("50% SALES
+                // CUSTOMER", "Sundry Debtors", …). `customer_groups` is a
+                // cloud-only table the Tally sync never fills, so reading it
+                // here would report every voucher as "(No Group)".
+                extraJoin = 'left join tally_ledgers tl on tl.company_id = ? and lower(tl.name) = lower(v.party)';
+                keyExpr = "coalesce(tl.parent, '(No Group)')";
+            } else {
+                keyExpr = 'v.vch_type';
+            }
+            sql = `
+                with v as (${scope.sql})
+                select ${keyExpr} as name,
+                       sum(v.total * v.sgn) as amount,
+                       count(v.id) as count
+                from v ${extraJoin}
+                group by ${keyExpr}
+                order by ${keyExpr} asc
+            `;
+            if (by === 'ledger_group') binds = [...binds, req.companyId];
+        } else {
+            // Line level. A SYNCED voucher's stock lines live in
+            // tally_inventory_entries (keyed by voucher guid); a CLOUD-created
+            // one's live in invoice_items. A cloud invoice that has since been
+            // pushed to Tally has BOTH, so the tally side is taken only when
+            // the invoice has no invoice_items — otherwise every such voucher
+            // would be counted twice.
+            //
+            // Both branches emit an ALREADY-SIGNED amount and qty, so the outer
+            // aggregate is a plain sum. They need different treatment because
+            // Tally and the cloud store a return's lines differently: Tally
+            // writes the credit note's line AMOUNT negative but its QTY
+            // positive, while invoice_items keeps both positive and leans on
+            // the voucher type for direction. Multiplying the Tally amount by
+            // sgn would flip it back to positive and make Net read HIGHER than
+            // Gross.
+            //
+            // Tally signs an inventory line by its stock DIRECTION: a sale is
+            // an outflow (positive) and a purchase an inflow (negative). A
+            // Purchase register must read positive, so its lines are flipped —
+            // which also lands a Debit Note (goods going back out, positive in
+            // Tally) on the negative side, exactly where Net wants it.
+            const tallyBase = type === 'purchase' ? -1 : 1;
+            const linesSql = `
+                select v.id, e.item_name as item,
+                       (e.qty * v.sgn) as qty,
+                       (e.amount * ${tallyBase}) as amount
+                  from v
+                  join tally_inventory_entries e
+                    on e.company_id = ? and e.voucher_guid = v.tally_guid
+                 where not exists (select 1 from invoice_items ii where ii.invoice_id = v.id)
+                union all
+                select v.id,
+                       coalesce(p.name, ii.description) as item,
+                       (ii.quantity * v.sgn) as qty,
+                       (ii.amount * v.sgn) as amount
+                  from v
+                  join invoice_items ii on ii.invoice_id = v.id
+                  left join products p on p.id = ii.product_id
+            `;
+            let keyExpr;
+            let extraJoin = '';
+            if (by === 'stock_item') {
+                keyExpr = "coalesce(l.item, '(No Item)')";
+            } else if (by === 'stock_group') {
+                // Stock Group = the item's category. Tally's stock groups sync
+                // into `categories`, and the synced lines only carry the item
+                // NAME, so the product master is matched by name.
+                extraJoin = `
+                    left join products p2 on p2.company_id = ? and lower(p2.name) = lower(l.item)
+                    left join categories cat on cat.id = p2.category_id`;
+                // Tally files an item that belongs to no stock group under the
+                // root group "Primary" — use its name so the register reads the
+                // same as Tally's own Sales Register.
+                keyExpr = "coalesce(cat.name, 'Primary')";
+            } else {
+                // Stock Category = the category's PARENT, falling back to the
+                // category itself. Tally keeps stock groups and stock
+                // categories as two independent classifications; we sync only
+                // the group tree, so a flat tree reports group == category.
+                extraJoin = `
+                    left join products p2 on p2.company_id = ? and lower(p2.name) = lower(l.item)
+                    left join categories cat on cat.id = p2.category_id
+                    left join categories pcat on pcat.id = cat.parent_id`;
+                keyExpr = "coalesce(pcat.name, cat.name, 'Primary')";
+            }
+            sql = `
+                with v as (${scope.sql}), l as (${linesSql})
+                select ${keyExpr} as name,
+                       sum(l.amount) as amount,
+                       sum(l.qty) as qty,
+                       count(distinct l.id) as count
+                from l ${extraJoin}
+                group by ${keyExpr}
+                order by ${keyExpr} asc
+            `;
+            // linesSql's company-id bind, then the product-join's (if any).
+            binds = [...binds, req.companyId];
+            if (by !== 'stock_item') binds = [...binds, req.companyId];
+        }
+
+        const result = await db.raw(sql, binds);
+        const rows = (result.rows || []).map((r) => ({
+            name: r.name,
+            amount: money(r.amount),
+            qty: spec.level === 'line' ? Math.round((Number(r.qty) || 0) * 100) / 100 : null,
+            count: Number(r.count) || 0,
+        }));
+
+        const grand = money(rows.reduce((s, r) => s + r.amount, 0));
+        return R.successResponse(res, {
+            data: rows,
+            meta: {
+                by, mode, label: spec.label, level: spec.level,
+                grand_total: grand, groups: rows.length,
+                // Grouped views are reconstructed from the vouchers themselves.
+                // The MONTH register prefers Tally's own register snapshot where
+                // one exists, so the two can differ slightly on historical
+                // months — the UI labels this so the gap never reads as a bug.
+                source: 'cloud',
+                // The Stock views carry a quantity column; the header views don't.
+                has_qty: spec.level === 'line',
+            },
+        });
+    } catch (err) {
+        console.error(`invoices.grouped(${type}, ${by}) error:`, err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+async function groupedSales(req, res)    { return groupedByType(req, res, 'sales'); }
+async function groupedPurchase(req, res) { return groupedByType(req, res, 'purchase'); }
 
 async function get(req, res) {
     const id = Number(req.params.id);
@@ -616,17 +894,28 @@ async function checkSalesStock(req, items) {
     }
     if (!need.size) return null;
 
-    const prods = await db('products')
-        .where('company_id', req.companyId)
-        .whereNull('deleted_at')
-        .whereIn('id', Array.from(need.keys()))
-        .select('id', 'name', 'opening_stock');
+    // Compared against CLOSING stock — opening plus everything received, less
+    // everything issued — which is the figure the Items screen and the voucher
+    // form both show as "In stock". Reading products.opening_stock here meant
+    // the guard enforced a number nobody could see: opening is where the item
+    // STARTED, and on a synced item it is routinely 0 while the item is very
+    // much on the shelf.
+    const prods = await db('products as p')
+        .leftJoin(db.raw(`(${MOVEMENT_SUBQUERY}) as mv`), function join() {
+            this.on('mv.company_id', '=', 'p.company_id')
+                .andOn(db.raw('mv.item_key = lower(p.name)'));
+        })
+        .where('p.company_id', req.companyId)
+        .whereNull('p.deleted_at')
+        .whereIn('p.id', Array.from(need.keys()))
+        .select('p.id', 'p.name',
+            db.raw(closingStockSql('p') + ' as closing_stock'));
     const byId = new Map(prods.map((p) => [Number(p.id), p]));
 
     for (const [pid, qty] of need) {
         const p = byId.get(pid);
         if (!p) continue;   // FK/catalog checks handle unknown products
-        const stock = Number(p.opening_stock) || 0;
+        const stock = Number(p.closing_stock) || 0;
         if (qty > stock) {
             return `Not enough stock for "${p.name}" — only ${stock} available, you asked for ${qty}.`;
         }
@@ -956,6 +1245,62 @@ async function submitDraft(req, res) {
  * header + line items are recomputed + rewritten atomically. Passing
  * save_as_draft=false in the body ALSO submits it for approval in the same call.
  */
+/**
+ * PUT /purchase-invoices/:id — rewrite a purchase bill's header and lines.
+ *
+ * The sales counterpart is updateDraft(), which is scoped to type:'sales' and
+ * enforces approval/catalog/oversell rules that do not apply to a bill you
+ * RECEIVED. Totals are recomputed from the posted items by the same
+ * computeTotals() create uses, so an edited bill cannot disagree with a
+ * created one.
+ */
+async function updatePurchase(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+    const body = req.body;
+    try {
+        const q = db('invoices')
+            .where({ id, company_id: req.companyId, type: 'purchase' })
+            .whereNull('deleted_at');
+        // A location-restricted user cannot edit another location's bill.
+        if (req.locationId != null) q.where('location_id', req.locationId);
+        const inv = await q.first();
+        if (!inv) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+
+        const { items, totals } = computeTotals(body.items);
+
+        const updated = await db.transaction(async (trx) => {
+            const now = new Date();
+            const header = {
+                supplier_id:  body.supplier_id != null ? body.supplier_id : inv.supplier_id,
+                location_id:  req.locationId != null
+                    ? req.locationId
+                    : (body.location_id != null ? body.location_id : inv.location_id),
+                supplier_bill_no: body.supplier_bill_no != null ? body.supplier_bill_no : inv.supplier_bill_no,
+                invoice_date: body.invoice_date || inv.invoice_date,
+                due_date:     body.due_date || null,
+                subtotal:  totals.subtotal, discount: totals.discount, taxable: totals.taxable,
+                cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
+                tax_amount: totals.tax_amount, round_off: totals.round_off, total: totals.total,
+                notes: body.notes != null ? body.notes : inv.notes,
+                updated_at: now,
+            };
+            await trx('invoices').where({ id, company_id: req.companyId }).update(header);
+            await trx('invoice_items').where({ invoice_id: id, company_id: req.companyId }).del();
+            const itemRows = items.map((it) => ({ company_id: req.companyId, invoice_id: id, ...it }));
+            const insertedItems = itemRows.length
+                ? await trx('invoice_items').insert(itemRows).returning('*') : [];
+            const hdr = await trx('invoices').where({ id, company_id: req.companyId }).first();
+            return { ...hdr, items: insertedItems };
+        });
+
+        return R.successResponse(res, updated, 'Purchase updated.');
+    } catch (err) {
+        console.error('invoices.updatePurchase error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 async function updateDraft(req, res) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
@@ -1020,6 +1365,8 @@ module.exports = {
     listPurchase,
     monthlySales,
     monthlyPurchase,
+    groupedSales,
+    groupedPurchase,
     get,
     pdf,
     createSales,
@@ -1029,6 +1376,7 @@ module.exports = {
     reject,
     submitDraft,
     updateDraft,
+    updatePurchase,
     // Reused by the recurring-invoice generator to build identical line/header math.
     computeTotals,
 };

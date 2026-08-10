@@ -35,17 +35,34 @@ function lineAmount(l) {
     return Math.round((net + net * gst / 100 + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Totals for the on-screen panel.
+ *
+ * `subtotal` is the TAXABLE value — after discount, with GST taken back out
+ * of a tax-inclusive rate — so the panel always reads as arithmetic you can
+ * follow: Sub Total + Taxes = Grand Total.
+ *
+ * It used to be the GROSS, which broke the display in two ways: a discounted
+ * bill showed Sub Total + Taxes overshooting the stated Grand Total, and a
+ * tax-inclusive line counted its GST twice on screen. `gross` and
+ * `discount` are returned so the panel can show those rows too; the STORED
+ * figures are computed server-side and are unchanged.
+ */
 function formTotals(lines) {
-    let subtotal = 0, taxes = 0, grand = 0;
+    let gross = 0, discount = 0, taxable = 0, taxes = 0;
     for (const l of lines) {
-        const gross = (Number(l.qty) || 0) * (Number(l.rate) || 0);
-        const net0  = gross - gross * (Number(l.disc) || 0) / 100;
+        const lineGross = (Number(l.qty) || 0) * (Number(l.rate) || 0);
+        const disc  = lineGross * (Number(l.disc) || 0) / 100;
+        const net0  = lineGross - disc;
         const gst   = Number(l.gst) || 0;
         const net   = l.taxIncl ? net0 / (1 + gst / 100) : net0;
-        subtotal += gross; taxes += net * gst / 100; grand += net + net * gst / 100;
+        gross += lineGross; discount += disc; taxable += net; taxes += net * gst / 100;
     }
     const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-    return { subtotal: r2(subtotal), taxes: r2(taxes), grand: r2(grand) };
+    return {
+        gross: r2(gross), discount: r2(discount), subtotal: r2(taxable),
+        taxes: r2(taxes), grand: r2(taxable + taxes),
+    };
 }
 
 // Custom Order No popup (LiveKeeping's Default/Custom panel, our theme) —
@@ -70,6 +87,11 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
         var tpl   = document.getElementById('so-row-tpl');
         var addBtn = document.getElementById('so-add-row');
         if (!form || !tbody || !tpl) return;
+
+        // Price level, party balance, the Buyer/Consignee/Dispatch/Order block
+        // and the richer item option are identical on all six voucher forms —
+        // they live in voucher-extras.js, driven by this form's id prefix.
+        var VX = window.VoucherExtras;
 
         var PRODUCTS = Array.isArray(window.SALES_ORDER_PRODUCTS) ? window.SALES_ORDER_PRODUCTS : [];
         var PROD_BY_ID = {};
@@ -155,6 +177,17 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
             if (subEl) subEl.textContent = inr(t.subtotal);
             if (taxEl) taxEl.textContent = inr(t.taxes);
             if (grandEl) grandEl.textContent = inr(t.grand);
+            // Gross + Discount only appear once there IS a discount, so a
+            // plain bill stays three clean rows.
+            var hasDisc = t.discount > 0;
+            var grossEl = document.getElementById('so-gross');
+            var grossRow = document.getElementById('so-gross-row');
+            var discEl = document.getElementById('so-discount');
+            var discRow = document.getElementById('so-discount-row');
+            if (grossEl) grossEl.textContent = inr(t.gross);
+            if (grossRow) grossRow.hidden = !hasDisc;
+            if (discEl) discEl.textContent = '− ' + inr(t.discount);
+            if (discRow) discRow.hidden = !hasDisc;
         }
 
         function resetRow(row) {
@@ -183,15 +216,25 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
             if (search) search.value = p ? p.name : '';
             row.querySelector('.so-hsn').value  = p ? (p.hsn || '')  : '';
             row.querySelector('.so-unit').value = p ? (p.unit || '') : '';
-            if (p && p.rate != null) row.querySelector('.so-rate').value = p.rate;
+            // Rate: the chosen PRICE LEVEL wins where it covers this item —
+            // that is the whole point of picking a level — otherwise the item's
+            // own standard price.
+            if (p && !VX.applyLevelToRow(row, p.name) && p.rate != null) {
+                row.querySelector('.so-rate').value = p.rate;
+            }
             // Item chosen → this row's Qty step unlocks (auto-advance gating).
             if (p) row.querySelector('.so-qty').disabled = false;
             var qty = row.querySelector('.so-qty');
             if (qty) {
                 if (p && p.stock != null) {
-                    qty.max = p.stock;
-                    qty.title = 'In stock: ' + p.stock;
-                    if ((parseFloat(qty.value) || 0) > p.stock) qty.value = p.stock;
+                    // Stock on hand is a HINT, not a cap. A quotation or an
+                                        // order is a promise about goods you may not hold yet, and
+                                        // Tally itself allows a negative balance, so clamping the
+                                        // Qty box to it silently rewrote what the user typed —
+                                        // usually to 0, because most synced items report no
+                                        // movement. Show the figure, let the user decide.
+                                        qty.title = 'In stock: ' + p.stock;
+                                        qty.removeAttribute('max');
                 } else {
                     qty.removeAttribute('max'); qty.title = '';
                 }
@@ -239,6 +282,7 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
                         d.className = 'li-prod-item';
                         d.setAttribute('data-i', i);
                         d.textContent = p.name;
+                        VX.decorateProductOption(d, p);
                         d.addEventListener('mousedown', function (e) { e.preventDefault(); choose(i); });
                         menu.appendChild(d);
                     });
@@ -291,7 +335,7 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
             wireProductPicker(row);
             row.querySelectorAll('.so-qty, .so-rate, .so-disc, .so-taxincl').forEach(function (inp) {
                 inp.addEventListener('input', function () {
-                    if (inp.classList.contains('so-qty')) clampQty(row);
+                    if (inp.classList.contains('so-qty')) { clampQty(row); VX.applySlabRate(row); }
                     recalcRow(row); recalcTotals();
                 });
                 inp.addEventListener('change', function () { recalcRow(row); recalcTotals(); });
@@ -698,14 +742,20 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
             clearBtn: document.getElementById('so-party-clear'),
             list:   PARTIES,
             getLabel: function (p) { return p.name; },
-            // Outstanding balance would go here (getSubLabel) if it were part
-            // of the party options this page already loads — it is not
-            // (fetchCustomerInvoiceOptions only returns id/name/location; the
-            // customers API's opening_balance ≠ a real closing balance and
-            // computing one needs a per-customer ledger query), so the
-            // right-hand figure is left out rather than shipping a fake ₹0.00.
+            // Where the party stands right now, beside their name. The options
+            // API now carries the synced Tally closing balance, so this is the
+            // real figure — and it is omitted, rather than faked as ₹0.00, for a
+            // party with no synced ledger.
+            getSubLabel: function (p) { return p.balance == null ? '' : VX.drCr(p.balance); },
             getValue: function (p) { return p.id; },
-            onChoose: unlockLedgerOrDate,
+            onChoose: function (p) {
+                VX.showPartyBalance(p);
+                VX.prefillBuyerFrom(p);
+                unlockLedgerOrDate(p);
+            },
+            // Clearing the party must clear what was shown ABOUT them, or the
+            // balance of the party you just removed sits under an empty box.
+            onClear: function () { VX.showPartyBalance(null); },
             createLabel: 'Create New Customer',
             onCreate: openNewCustomerModal,
         });
@@ -747,6 +797,10 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
             var obType = document.getElementById('so-nc-opening-balance-type'); if (obType) obType.value = 'Cr';
             var regType = document.getElementById('so-nc-gst-reg-type'); if (regType) regType.value = '';
             geoCascade.reset();
+            // Those value resets above fire no 'change' event, so any select
+            // already turned into a searchable dropdown would keep showing the
+            // OLD label. Force the triggers to re-read their <select>.
+            if (window.TCS && window.TCS.refreshSelects) window.TCS.refreshSelects();
             ncModal.show();
             ncModalEl.addEventListener('shown.bs.modal', function focusOnce() {
                 ncModalEl.removeEventListener('shown.bs.modal', focusOnce);
@@ -812,14 +866,68 @@ window.SalesOrderCalc = { lineAmount, formTotals, buildVoucherNo };
             menu:   document.getElementById('so-ledger-menu'),
             list:   LEDGERS,
             getLabel: function (l) { return l.name; },
-            getSubLabel: function (l) { return l.parent; },
+            getSubLabel: function (l) { return window.VoucherExtras.ledgerSubLabel(l); },
             getValue: function (l) { return l.name; },
             onChoose: unlockDate,
         }) : null;
 
         if (dateEl) dateEl.addEventListener('change', unlockFirstItem);
 
-        // Seed the table with a single (locked) empty row, then open Party.
+        VX.init({
+            prefix: 'so',
+            form: form,
+            onLevelChange: function reapplyPriceLevel() {
+                tbody.querySelectorAll('.so-row').forEach(function (row) {
+                    var search = row.querySelector('.so-item-search');
+                    var name = search ? search.value : '';
+                    if (!name) return;
+                    if (!VX.applyLevelToRow(row, name)) {
+                        // Level does not cover this item — back to its own price.
+                        var prod = PROD_BY_ID[String(row.querySelector('.so-item').value)];
+                        if (prod && prod.rate != null) row.querySelector('.so-rate').value = prod.rate;
+                    }
+                    recalcRow(row);
+                });
+                recalcTotals();
+            },
+        });
+
+        // ── EDIT MODE ──────────────────────────────────────────────
+        // Set by the view for /sales-orders/:id/edit. Rebuild the saved lines,
+        // fill the header, and skip the guided walk-through (that is for a
+        // blank voucher — here it would open a combobox over the user's data).
+        var EDIT = window.SALES_ORDER_EDIT || null;
+        if (EDIT) {
+            var partyInput = document.getElementById('so-party');
+            if (partyInput && EDIT.customer_name) partyInput.value = EDIT.customer_name;
+            if (ledgerEl && EDIT.ledger_name) ledgerEl.value = EDIT.ledger_name;
+            var noEl = document.getElementById('so-no');
+            if (noEl && EDIT.order_no) noEl.value = EDIT.order_no;
+
+            var lines = Array.isArray(EDIT.items) ? EDIT.items : [];
+            if (!lines.length) { addRow(); }
+            lines.forEach(function (it) {
+                var row = addRow();
+                var prod = PRODUCTS.filter(function (p) { return String(p.id) === String(it.product_id); })[0];
+                if (prod) {
+                    applyProduct(row, prod);
+                } else {
+                    var si = row.querySelector('.so-item-search');
+                    if (si) si.value = it.description || it.product_name || '';
+                }
+                row.querySelector('.so-qty').value  = it.quantity != null ? it.quantity : 1;
+                row.querySelector('.so-rate').value = it.rate != null ? it.rate : 0;
+                row.querySelector('.so-disc').value = it.discount_pct != null ? it.discount_pct : 0;
+                var hsn = row.querySelector('.so-hsn');   if (hsn && it.hsn) hsn.value = it.hsn;
+                var unit = row.querySelector('.so-unit'); if (unit && it.unit) unit.value = it.unit;
+                var tx = row.querySelector('.so-taxincl'); if (tx) tx.checked = !!it.tax_inclusive;
+                recalcRow(row);
+            });
+            recalcTotals();
+            return;
+        }
+
+        // Seed the table with a single empty row, then open Party.
         addRow();
         partyBox.open();
     }

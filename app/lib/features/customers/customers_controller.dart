@@ -52,6 +52,16 @@ class CustomersController extends StateNotifier<CustomersState> {
   String? _ymd(DateTime? d) => d == null
       ? null
       : '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  /// Which Parties tab is showing: 'all' | 'active' | 'favourite'. Kept
+  /// separate from the advanced filter so opening the filter sheet does not
+  /// silently drop the tab, and switching tab does not drop their filters.
+  String _tab = 'all';
+  String get tab => _tab;
+
+  /// The window "Recent Active" means. Matches the Inactive Customers tile
+  /// on the dashboard, so the two can never disagree about who is active.
+  static const int activeDays = 90;
+
   int _page = 1;
   bool _hasMore = true;
   final List<Customer> _all = [];
@@ -73,6 +83,8 @@ class CustomersController extends StateNotifier<CustomersState> {
         location: _filter.location, salesPerson: _filter.salesPerson,
         customerGroup: _filter.customerGroup, gst: _filter.gst,
         createdFrom: _ymd(_filter.from), createdTo: _ymd(_filter.to),
+        favourite: _tab == 'favourite',
+        activeDays: _tab == 'active' ? activeDays : null,
       );
       _all.addAll(res.items);
       _hasMore = res.hasMore;
@@ -96,6 +108,47 @@ class CustomersController extends StateNotifier<CustomersState> {
     await _reload();
   }
 
+  /// Switch the All / Recent Active / Favourite tab. Re-loads from page 1 —
+  /// staying on page 7 of All when Favourite holds two rows shows an empty
+  /// list that reads as "no favourites".
+  Future<void> setTab(String tab) async {
+    if (_tab == tab) return;
+    _tab = tab;
+    await _reload();
+  }
+
+  /// Star / unstar a party.
+  ///
+  /// The row is updated on screen FIRST and the call made after: a star is
+  /// a one-tap gesture and waiting on a round trip before the icon moves
+  /// makes it feel broken. If the call fails the row is put back, so the
+  /// screen never keeps a state the server rejected.
+  Future<bool> toggleFavourite(int id) async {
+    final i = _all.indexWhere((c) => c.id == id);
+    if (i < 0) return false;
+    final want = !_all[i].isFavourite;
+    _apply(i, want);
+    try {
+      await _repo.setFavourite(id, want);
+    } catch (_) {
+      _apply(i, !want);
+      return false;
+    }
+    // On the Favourite tab an unstarred party no longer belongs here.
+    if (_tab == 'favourite' && !want) await _reload();
+    return true;
+  }
+
+  void _apply(int i, bool on) {
+    _all[i] = _all[i].copyWith(isFavourite: on);
+    if (!mounted) return;
+    final s = state;
+    state = CustomersReady(
+      items: List.unmodifiable(_all),
+      hasMore: _hasMore,
+      loadingMore: s is CustomersReady && s.loadingMore,
+    );
+  }
   Future<void> refresh() => _reload();
 
   /// Append the next page (infinite scroll). No-op while a page is in flight

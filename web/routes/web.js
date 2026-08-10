@@ -19,6 +19,8 @@ const router   = express.Router();
 const multer   = require('multer');
 const FormData = require('form-data');
 const mock     = require('../data/mock');
+// Product name for release filenames — the ONE brand file.
+const brand    = require('../config/brand');
 const api      = require('../Helpers/apiClient');
 const { requireAuth } = require('../Middlewares/sessionGuard');
 const AuthController   = require('../Controllers/AuthController');
@@ -38,6 +40,15 @@ const agentUpload = multer({
 // memory, then re-streamed on to the api as multipart (field `images`). 5MB per
 // file mirrors the api's own multer cap; only image mimetypes pass the filter.
 const PRODUCT_IMG_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+// Company logo / signature — one image per request, same caps as the api.
+const brandingUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    fileFilter(req, file, cb) {
+        if (/^image\//.test(file.mimetype)) cb(null, true);
+        else cb(new Error('Only image files are allowed.'));
+    },
+});
 const productImgUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 5 * 1024 * 1024, files: 8 },
@@ -398,7 +409,9 @@ async function apiList(req, basePath) {
         'category', 'gst_rate', 'hsn', 'parent', 'state', 'financial_year', 'created_from', 'created_to',
         'date_from', 'date_to',
         // Dashboard tile drill-downs (kpi-panel → filtered list).
-        'group', 'inactive', 'missing', 'overdue']) {
+        'group', 'inactive', 'missing', 'overdue',
+        // Stock-position tabs on the Items list (in | out | negative).
+        'stock']) {
         if (req.query[k]) qs.set(k, String(req.query[k]));
     }
 
@@ -414,7 +427,14 @@ async function apiList(req, basePath) {
 async function fetchOptions(req, basePath) {
     const { body } = await api.get(req, `${basePath}?per_page=100`);
     const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
-    return rows.map((r) => ({ id: r.id, name: r.name }));
+    // `is_tally_godown` rides along for /locations: a Tally GODOWN is where
+    // stock physically sits, and a voucher line needs one. A plain cloud
+    // location is not a godown and must not be offered as one.
+    return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        ...(r.is_tally_godown != null ? { is_tally_godown: !!r.is_tally_godown } : {}),
+    }));
 }
 
 /* Tally party-eligible ledger groups (Sundry Debtors / Sundry Creditors
@@ -435,13 +455,41 @@ async function fetchLedgerGroupOptions(req) {
 async function fetchPurchaseLedgerOptions(req) {
     const { body } = await api.get(req, '/tally/ledgers/purchase-options');
     const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
-    return rows.map((r) => ({ id: r.id, name: r.name, parent: r.parent || '' }));
+    // tax_type / tax_classification ride along so the combobox can say whether
+    // the ledger attracts GST and at what rate — what you are booking against,
+    // visible before you pick it rather than after the bill prints wrong.
+    return rows.map((r) => ({
+        id: r.id, name: r.name, parent: r.parent || '',
+        tax_type: r.tax_type || '',
+        tax_classification: r.tax_classification || '',
+    }));
 }
 
 /* Customer options for the invoice form — id + name PLUS the customer's own
  * location (id + label) so the Customer <select> can AUTO-fill the Location
  * field on selection. /customers is assignment-scoped, so a salesman gets only
  * their assigned customers here (canCustomerRead). */
+/* The supplier equivalent of fetchCustomerInvoiceOptions — the party picker on
+ * a purchase-side voucher needs the same two things: where the supplier
+ * stands (synced Tally closing balance) and enough of their master to prefill
+ * the printed buyer block. The supplier master keeps its street address in
+ * `address`, not `billing_address`, and holds no country/state/pincode
+ * columns, so those are left for the user to type rather than invented here.
+ */
+async function fetchSupplierInvoiceOptions(req) {
+    const { body } = await api.get(req, '/suppliers?per_page=100');
+    const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+    return rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        location_id: r.location_id != null ? r.location_id : '',
+        location: r.location || '',
+        gst_number: r.gst_number || '',
+        address: r.address || '',
+        closing_balance: r.closing_balance != null ? Number(r.closing_balance) : null,
+    }));
+}
+
 async function fetchCustomerInvoiceOptions(req) {
     const { body } = await api.get(req, '/customers?per_page=100');
     const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
@@ -450,6 +498,19 @@ async function fetchCustomerInvoiceOptions(req) {
         name: r.name,
         location_id: r.location_id != null ? r.location_id : '',
         location: r.location || '',
+        // The buyer block on a voucher prefills from these, so the picker
+        // carries them rather than the form making a second round trip per
+        // party choice.
+        gst_number: r.gst_number || '',
+        gst_registration_type: r.gst_registration_type || '',
+        billing_address: r.billing_address || '',
+        country: r.country || '',
+        state: r.state || '',
+        pincode: r.pincode || '',
+        // Where the party stands right now, from the synced Tally ledger.
+        // Raising a voucher for someone already deep in arrears is a decision
+        // worth making knowingly, so the picker carries the figure.
+        closing_balance: r.closing_balance != null ? Number(r.closing_balance) : null,
     }));
 }
 
@@ -469,7 +530,28 @@ async function fetchCashBankLedgerOptions(req) {
 async function fetchSalesLedgerOptions(req) {
     const { body } = await api.get(req, '/tally/ledgers/sales-options');
     const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
-    return rows.map((r) => ({ id: r.id, name: r.name, parent: r.parent || '' }));
+    // tax_type / tax_classification ride along so the combobox can say whether
+    // the ledger attracts GST and at what rate — what you are booking against,
+    // visible before you pick it rather than after the bill prints wrong.
+    return rows.map((r) => ({
+        id: r.id, name: r.name, parent: r.parent || '',
+        tax_type: r.tax_type || '',
+        tax_classification: r.tax_classification || '',
+    }));
+}
+
+/* Tally price levels (the per-tier rate card) for the voucher forms' Price
+ * Level picker. A company that does not use price levels gets [], and the
+ * forms then omit the field rather than showing an empty control. */
+async function fetchPriceLevelOptions(req) {
+    try {
+        const { body } = await api.get(req, '/tally/price-levels');
+        const rows = (body && body.data && Array.isArray(body.data.data)) ? body.data.data : [];
+        return rows.map((r) => ({ id: r.id, name: r.name }));
+    } catch (_) {
+        // Never let an optional picker take the whole create screen down.
+        return [];
+    }
 }
 
 /* Assignable roles as {id,name,slug} for the Sales-Person login-role select —
@@ -620,10 +702,26 @@ async function fetchInvoiceProducts(req, priceField) {
         id: p.id, name: p.name, hsn: p.hsn_code || '', unit: p.unit || '',
         rate: p[priceField] != null ? parseFloat(p[priceField]) : 0,
         gst:  p.gst_rate != null ? parseFloat(p.gst_rate) : 0,
-        // Current stock on hand (Tally closing balance) — the create screen caps
-        // the line Qty at this; the api enforces the same rule server-side.
-        stock: p.opening_stock != null ? parseFloat(p.opening_stock) : 0,
+        // Stock ON HAND: opening plus everything received, less everything
+        // issued. This used to read `opening_stock`, which is where the item
+        // STARTED — nearly always 0 on a synced item — so every voucher line
+        // saw "0 in stock" and the Qty box was clamped to zero the moment an
+        // item was picked. Null when the item has no movement recorded, which
+        // the forms read as "unknown", not as "none left".
+        stock: p.closing_stock != null ? parseFloat(p.closing_stock) : null,
     }));
+}
+
+/* Parse the hidden voucher_details_json a voucher form posts. Bad JSON is
+ * dropped rather than thrown: these are optional print details, and losing
+ * them must never cost the user the whole voucher they just typed. */
+function parseVoucherDetails(raw) {
+    if (!raw) return undefined;
+    try {
+        const v = JSON.parse(raw);
+        if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+        return Object.keys(v).length ? v : undefined;
+    } catch { return undefined; }
 }
 
 /* Parse the hidden items_json from an invoice form into the api's item
@@ -1438,6 +1536,16 @@ router.get('/categories/export', async (req, res, next) => {
 });
 
 /* ── TRANSACTIONS · Export Sales Register (month-wise, as shown) ── */
+// Export the grouping on screen (Ledger / Stock Item / …). The month-wise
+// export below stays where it is — it is what the Month view exports.
+router.get('/sales-invoices/register/grouped-export', async (req, res, next) => {
+    try { await exportGroupedRegister(req, res, '/sales-invoices', 'Sales Register'); }
+    catch (err) { next(err); }
+});
+router.get('/purchase-invoices/register/grouped-export', async (req, res, next) => {
+    try { await exportGroupedRegister(req, res, '/purchase-invoices', 'Purchase Register'); }
+    catch (err) { next(err); }
+});
 router.get('/sales-invoices/register/export', async (req, res, next) => {
     try {
         const { rows: months, meta } = await apiList(req, '/sales-invoices/monthly');
@@ -2152,6 +2260,12 @@ router.get('/suppliers', async (req, res, next) => {
                 id: r.id, name: r.name, location: r.location || '', mobile: r.mobile,
                 gst: r.gst_number || '', group: r.supplier_group || '',
                 opening_balance: r.opening_balance, payment_terms: r.payment_terms || '',
+                // From the synced Tally ledger — where the supplier stands
+                // today, as opposed to opening_balance (where they started).
+                closing_balance: r.closing_balance,
+                // Null = no agreed terms, which is not the same as zero days.
+                credit_days: (r.credit_days == null ? '—' : String(r.credit_days)),
+                last_purchased_date: r.last_purchased_date ? fmtDate(r.last_purchased_date) : '—',
                 status: r.status, created_at: fmtDate(r.created_at),
                 _detail: [
                     { group: 'Basic Information' },
@@ -2168,7 +2282,11 @@ router.get('/suppliers', async (req, res, next) => {
                     { label: 'Address', value: r.address || '—' },
                     { group: 'Other' },
                     { label: 'Opening Balance', value: (r.opening_balance != null ? String(r.opening_balance) : '—') },
+                    { label: 'Closing Balance', value: (r.closing_balance != null ? String(r.closing_balance) : '—') },
                     { label: 'Payment Terms', value: r.payment_terms || '—' },
+                    { label: 'Credit Days', value: (r.credit_days != null ? String(r.credit_days) + ' days' : '—') },
+                    { label: 'Last Purchased', value: (r.last_purchased_date ? fmtDate(r.last_purchased_date) : '—') },
+                    { label: 'Tally Ledger Group', value: r.tally_ledger_group || '—' },
                     { label: 'Location', value: r.location || '—' },
                 ].concat(cfRows.length ? [{ group: 'Custom Fields' }].concat(cfRows) : []),
             };
@@ -2212,6 +2330,7 @@ router.post('/suppliers', async (req, res, next) => {
             email: b.email || undefined, gst_number: b.gst_number || undefined, pan_number: b.pan_number || undefined,
             supplier_group: b.supplier_group || undefined, location_id: num(b.location_id),
             opening_balance: num(b.opening_balance), payment_terms: b.payment_terms || undefined,
+            credit_days: (String(b.credit_days || '').trim() === '' ? undefined : num(b.credit_days)),
             address: b.address || undefined,
             status: b.status || 'Active', is_tally_ledger: asBool(b.is_tally_ledger),
             custom_fields: assembleCustomFields(b),
@@ -2226,6 +2345,12 @@ router.post('/suppliers', async (req, res, next) => {
 /* ── MASTERS · Products listing (GET /products) ─────────────── */
 router.get('/products', async (req, res, next) => {
     try {
+        // ?by=group|category|godown → the grouped stock views (defined below).
+        // Handled here rather than as an earlier route so the ordinary list
+        // stays this handler's only job.
+        const _by = String(req.query.by || '').trim().toLowerCase();
+        if (ITEM_GROUPINGS[_by]) return renderItemGrouping(req, res, next);
+
         const mineRaw = String(req.query.mine || '');
         const mine = mineRaw === '1' || mineRaw.toLowerCase() === 'true';
         const { rows, meta } = await apiList(req, mine ? '/products?mine=1' : '/products');
@@ -2242,6 +2367,13 @@ router.get('/products', async (req, res, next) => {
                 hsn: r.hsn_code || '', gst_rate: (r.gst_rate != null ? parseFloat(r.gst_rate) + '%' : ''),
                 purchase_price: r.purchase_price, sales_price: r.sales_price,
                 stock: r.opening_stock != null ? parseFloat(r.opening_stock) : '',
+                // Where the item stands TODAY: opening plus everything received
+                // less everything issued. `stock` above is only the OPENING
+                // figure, which is why both columns exist.
+                closing_stock: r.closing_stock != null ? parseFloat(r.closing_stock) : '',
+                // Blank, not 0, when we have never bought it — a zero rate
+                // would read as "we get it free".
+                avg_purchase_rate: r.avg_purchase_rate,
                 status: r.status, created_at: fmtDate(r.created_at),
                 _detail: [
                     { group: 'Basic Information' },
@@ -2268,9 +2400,57 @@ router.get('/products', async (req, res, next) => {
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: mine ? 'My Stock Items' : 'Products' }],
             productRows, productsTotal: meta.total, page: meta.page, perPage: meta.per_page,
             categoryNames: catOpts.map((o) => o.name), mine, ...config,
+            stockFilter: String(req.query.stock || ''),
         });
     } catch (err) { next(err); }
 });
+
+/* ── Items · grouped views (GET /products?by=group|category|godown) ──
+ * Closing stock and its value rolled up by Stock Group, Stock Category or
+ * Godown instead of item by item. Renders through the shared grouped-register
+ * partial — the shape is the same (a name, a quantity, a value, a count).
+ */
+const ITEM_GROUPINGS = { group: 'Stock Group', category: 'Stock Category', godown: 'Godown' };
+
+async function renderItemGrouping(req, res, next) {
+    try {
+        const by = String(req.query.by || '').trim().toLowerCase();
+        const { body } = await api.get(req, `/items/grouped?by=${encodeURIComponent(by)}`);
+        const d = (body && body.data) || {};
+        const meta = d.meta || {};
+        res.render('vouchers/grouped', {
+            title: `Items · by ${meta.label || by}`,
+            activeMenu: 'products',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Products', href: '/products' },
+                { label: meta.label || by },
+            ],
+            basePath: '/products',
+            totalLabel: meta.movement_only ? 'Net Movement Value' : 'Closing Stock Value',
+            hasStock: true,
+            showMode: false,
+            tabQuery: '',
+            searchValue: '',
+            exportHref: null,
+            groupRows: (d.data || []).map((r) => ({
+                name: r.name,
+                amount: r.closing_value,
+                qty: r.closing_qty,
+                count: r.items,
+                href: null,
+            })),
+            groupMeta: {
+                by, mode: 'gross',
+                label: meta.label || by,
+                level: 'line',
+                grand_total: meta.total_value,
+                groups: meta.groups,
+                has_qty: true,
+            },
+        });
+    } catch (err) { next(err); }
+}
 
 /* ── CASH & BANK ─────────────────────────────────────────────────
  * /cash and /bank are the same screen over two buckets: a total header,
@@ -2375,14 +2555,158 @@ async function renderReceivablesBills(req, res, next) {
     } catch (err) { next(err); }
 }
 
+/* ── Receivables · PARTY-WISE list (GET /receivables) ────────────
+ * The screen's default view: one row per customer with Outstanding,
+ * Overdue, Credit Days and Avg Pay Days, filtered by how far past due the
+ * party is. The ageing-BUCKET drill-down (?bucket=N, reached from the
+ * dashboard doughnut) and the ledger-balance view (?view=ledgers) are still
+ * one query param away — this only changes what plain /receivables shows.
+ */
+// Overdue windows the screen filters by. Kept in the same order as the api's
+// DUE_WINDOWS so the tab a user clicks maps 1:1 onto the filter it applies.
+const RECV_FILTERS = [
+    { key: 'all',      label: 'All' },
+    { key: 'due_today', label: 'Due Today' },
+    { key: 'not_due',  label: 'Not Due' },
+    { key: '1-30',     label: '1-30' },
+    { key: '31-60',    label: '31-60' },
+    { key: '61-120',   label: '61-120' },
+    { key: '>120',     label: '>120' },
+];
+
+// Receivables and Payables are the same screen with the sides swapped, so one
+// renderer drives both. Only the labels and the base path differ.
+const PARTY_SCREENS = {
+    receivables: {
+        base: '/receivables', apiBase: '/receivables', title: 'Receivables',
+        activeMenu: 'receivables', groupAllLabel: 'All Receivables',
+        totalLabel: 'Total Outstanding', partyLabel: 'Customer Name',
+        // Reminders are a customer-side action; you do not remind yourself to
+        // pay a supplier from this screen.
+        showReminders: true,
+    },
+    payables: {
+        base: '/payables', apiBase: '/payables', title: 'Payables',
+        activeMenu: 'payables', groupAllLabel: 'All Payables',
+        totalLabel: 'Total Due', partyLabel: 'Supplier Name',
+        showReminders: false,
+    },
+};
+
+async function renderPartyScreen(req, res, next, key) {
+    const cfg = PARTY_SCREENS[key];
+    try {
+        if (ledgerScreenBarred(res)) return res.redirect('/licenses');
+        const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+        const filter = String(req.query.filter || 'all').trim();
+        const group  = String(req.query.group || '').trim();
+        const search = String(req.query.search || '').trim();
+        const sort   = String(req.query.sort || 'outstanding').trim();
+
+        const qs = new URLSearchParams({ page: String(page), per_page: '20', filter, sort });
+        if (group)  qs.set('group', group);
+        if (search) qs.set('search', search);
+
+        const { body } = await api.get(req, `${cfg.apiBase}/parties?${qs.toString()}`);
+        const d = (body && body.data) || {};
+        const meta = d.meta || {};
+
+        // Every tab keeps the group/search/sort the user already chose — only
+        // the ageing window changes.
+        const keep = (extra) => {
+            const p = new URLSearchParams();
+            Object.entries(extra).forEach(([k, v]) => { if (v) p.set(k, v); });
+            if (group)  p.set('group', group);
+            if (search) p.set('search', search);
+            if (sort && sort !== 'outstanding') p.set('sort', sort);
+            const s = p.toString();
+            return cfg.base + (s ? `?${s}` : '');
+        };
+
+        const groups = Array.isArray(meta.groups) ? meta.groups : [];
+
+        res.render('receivables/parties', {
+            title: cfg.title,
+            activeMenu: cfg.activeMenu,
+            screen: cfg,
+            rows: (d.data || []).map((r) => ({
+                id: r.party_id != null ? r.party_id : r.customer_id,
+                name: r.name || '',
+                mobile: r.mobile || null,
+                email: r.email || null,
+                ledger_group: r.ledger_group || null,
+                outstanding: r.outstanding,
+                overdue: r.overdue,
+                bills: r.bills,
+                credit_days: r.credit_days,
+                avg_pay_days: r.avg_pay_days,
+                reminder: cfg.showReminders ? (r.reminder || null) : null,
+                href: `${cfg.base}/party/${r.party_id != null ? r.party_id : r.customer_id}`,
+            })),
+            meta,
+            filters: RECV_FILTERS.map((f) => ({
+                key: f.key, label: f.label,
+                href: keep({ filter: f.key === 'all' ? '' : f.key }),
+                active: (meta.filter || 'all') === f.key,
+            })),
+            groupOptions: [{ value: '', label: cfg.groupAllLabel, selected: !group }]
+                .concat(groups.map((g) => ({ value: g, label: g, selected: g === group }))),
+            searchValue: search,
+            sortValue: sort,
+        });
+    } catch (err) { next(err); }
+}
+
+const renderReceivablesParties = (req, res, next) => renderPartyScreen(req, res, next, 'receivables');
+
+/* ── One party's OPEN bills (GET /receivables|/payables /party/:id) ── */
+async function renderPartyBills(req, res, next, key) {
+    const cfg = PARTY_SCREENS[key];
+    try {
+        if (ledgerScreenBarred(res)) return res.redirect('/licenses');
+        const id = Number(req.params.id);
+        const { body } = await api.get(req, `${cfg.apiBase}/parties/${id}/bills`);
+        const d = (body && body.data) || {};
+        const meta = d.meta || {};
+        res.render('receivables/party-bills', {
+            title: (meta.customer && meta.customer.name) || 'Party',
+            activeMenu: cfg.activeMenu,
+            screen: cfg,
+            meta,
+            rows: (d.data || []).map((r) => ({
+                voucher_no: r.voucher_no || '',
+                reference_no: r.reference_no || null,
+                date: fmtDate(r.date),
+                due_date: r.due_date ? fmtDate(r.due_date) : '—',
+                due_days: r.due_days,
+                amount: r.amount,
+                bucket_label: r.bucket_label,
+            })),
+        });
+    } catch (err) { next(err); }
+}
+
+router.get('/receivables/party/:id', (req, res, next) => renderPartyBills(req, res, next, 'receivables'));
+router.get('/payables/party/:id',    (req, res, next) => renderPartyBills(req, res, next, 'payables'));
+
 router.get('/cash',        (req, res, next) => renderLedgerBucket(req, res, next, 'cash'));
 router.get('/bank',        (req, res, next) => renderLedgerBucket(req, res, next, 'bank'));
-router.get('/payables',    (req, res, next) => renderLedgerBucket(req, res, next, 'payables'));
+router.get('/payables', (req, res, next) => {
+    // ?view=ledgers keeps the old ledger-balance screen reachable.
+    if (String(req.query.view || '') === 'ledgers') {
+        return renderLedgerBucket(req, res, next, 'payables');
+    }
+    return renderPartyScreen(req, res, next, 'payables');
+});
 router.get('/receivables', (req, res, next) => {
     if (req.query.bucket !== undefined && req.query.bucket !== '') {
         return renderReceivablesBills(req, res, next);
     }
-    return renderLedgerBucket(req, res, next, 'receivables');
+    // ?view=ledgers keeps the old ledger-balance screen reachable.
+    if (String(req.query.view || '') === 'ledgers') {
+        return renderLedgerBucket(req, res, next, 'receivables');
+    }
+    return renderReceivablesParties(req, res, next);
 });
 
 /* ── Ledger statement (GET /ledgers/:name) ──────────────────────
@@ -2428,6 +2752,10 @@ router.get('/ledgers/:name', async (req, res, next) => {
             closing: '₹' + grp(bal.closing_amount), closingDc: bal.closing_dc || '',
             rows: (Array.isArray(data.data) ? data.data : []).map((r) => ({
                 voucher: r.voucher_no,
+                // The counter-party on that voucher (see the api's
+                // counter_ledger) — the column that makes a statement readable.
+                counter_ledger: r.counter_ledger || '',
+                reference_no:   r.reference_no || '',
                 type:    r.voucher_type,
                 date:    fmtDate(r.voucher_date),
                 amount:  '₹' + grp(r.amount),
@@ -2598,17 +2926,193 @@ router.post('/categories', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* ─────────────────────────────────────────────────────────────
+ * Grouped voucher register (LiveKeeping parity).
+ *
+ * Every register (Sales, Purchase, …) can regroup the same period six
+ * ways. `?by=<key>` switches the view; `?mode=net` flips the Gross/Net
+ * basis. This helper does the api call + row shaping ONCE so each
+ * register route is a three-line delegation.
+ * ───────────────────────────────────────────────────────────── */
+const REGISTER_GROUPS = new Set([
+    'ledger', 'ledger_group', 'voucher_type',
+    'stock_item', 'stock_group', 'stock_category',
+]);
+
+/**
+ * CSV of the grouping currently on screen (?by=…&mode=…&date_from/to).
+ *
+ * The older `${base}/register/export` routes always exported the MONTH
+ * register no matter which grouping you were looking at, and only Sales and
+ * Purchase had one at all. This exports what you can actually see, and is
+ * mounted on every register below.
+ */
+async function exportGroupedRegister(req, res, apiPath, title) {
+    const by = String(req.query.by || '').trim().toLowerCase();
+    if (!REGISTER_GROUPS.has(by)) {
+        // No grouping asked for — nothing on screen to export.
+        return res.redirect(apiPath);
+    }
+    const mode = String(req.query.mode || '').trim().toLowerCase() === 'net' ? 'net' : 'gross';
+    const qs = new URLSearchParams({ by, mode });
+    for (const k of ['date_from', 'date_to', 'approval']) {
+        if (req.query[k]) qs.set(k, String(req.query[k]));
+    }
+    const { body } = await api.get(req, `${apiPath}/grouped?${qs.toString()}`);
+    const data = (body && body.data) || {};
+    const meta = data.meta || {};
+    const rows = Array.isArray(data.data) ? data.data : [];
+
+    // Qty only exists for the line-level groupings (Stock Item / Group /
+    // Category); a Ledger grouping has no quantity, and a blank column
+    // would read as "zero sold".
+    const hasQty = !!meta.has_qty;
+    const headers = [meta.label || by, 'Vouchers'].concat(hasQty ? ['Qty'] : []).concat(['Amount']);
+    const records = rows.map((r) => {
+        const base = [r.name || '', r.count];
+        if (hasQty) base.push(Number(r.qty || 0).toFixed(2));
+        base.push(Number(r.amount || 0).toFixed(2));
+        return base;
+    });
+    const totalVch = rows.reduce((n, r) => n + (Number(r.count) || 0), 0);
+    const grand = ['Grand Total', totalVch];
+    if (hasQty) grand.push(rows.reduce((n, r) => n + (Number(r.qty) || 0), 0).toFixed(2));
+    grand.push(Number(meta.grand_total || 0).toFixed(2));
+    records.push(grand);
+
+    const csv = rowsToCsv(headers, records, (r) => r);
+    const slug = String(title || 'register').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    return sendCsv(res, `${slug}-by-${by}.csv`, csv);
+}
+
+/**
+ * Render the grouped view of a register, or return false when ?by= is
+ * absent/unknown so the caller falls through to its normal Month/Bill render.
+ */
+async function renderGroupedRegister(req, res, opts) {
+    const by = String(req.query.by || '').trim().toLowerCase();
+    if (!REGISTER_GROUPS.has(by)) return false;
+    const mode = String(req.query.mode || '').trim().toLowerCase() === 'net' ? 'net' : 'gross';
+
+    // Stock groupings only exist for inventory vouchers. Asking for one on a
+    // Receipt register is a hand-edited URL — fall back to the normal view
+    // rather than rendering an empty table that looks like missing data.
+    const stockKeys = ['stock_item', 'stock_group', 'stock_category'];
+    if (!opts.hasStock && stockKeys.includes(by)) return false;
+
+    const qs = new URLSearchParams({ by, mode });
+    for (const k of ['date_from', 'date_to', 'approval']) {
+        if (req.query[k]) qs.set(k, String(req.query[k]));
+    }
+    const { body } = await api.get(req, `${opts.apiPath}/grouped?${qs.toString()}`);
+    const data = (body && body.data) || {};
+    const meta = data.meta || {};
+    const rows = Array.isArray(data.data) ? data.data : [];
+
+    // Every group row drills into the Bill view filtered by that group's name —
+    // the one drill-down each grouping genuinely has.
+    const groupRows = rows.map((r) => ({
+        ...r,
+        href: r.name ? `${opts.basePath}?view=bill&search=${encodeURIComponent(r.name)}` : null,
+    }));
+
+    // Preserve the period across tab switches so changing the grouping never
+    // silently resets the dates the user chose.
+    const tabQuery = ['date_from', 'date_to']
+        .filter((k) => req.query[k])
+        .map((k) => `${k}=${encodeURIComponent(String(req.query[k]))}`)
+        .join('&');
+
+    res.render('vouchers/grouped', {
+        title: `${opts.title} · by ${meta.label || by}`,
+        activeMenu: opts.activeMenu,
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: opts.title, href: opts.basePath },
+            { label: meta.label || by },
+        ],
+        basePath:   opts.basePath,
+        totalLabel: opts.totalLabel,
+        hasStock:   opts.hasStock,
+        showMode:   opts.showMode !== false,
+        groupRows,
+        groupMeta:  { by, mode, ...meta },
+        searchValue: '',
+        exportHref: opts.exportHref || null,
+        // The period control needs the dates back, not just preserved in
+        // links — the grouped view had no way to change them at all.
+        dateFrom: req.query.date_from ? String(req.query.date_from) : '',
+        dateTo:   req.query.date_to   ? String(req.query.date_to)   : '',
+        tabQuery,
+    });
+    return true;
+}
+
+/* ── Grouped registers for the OTHER voucher families ────────────
+ * Sales + purchase invoices handle `?by=` inside their own route (they also
+ * own the Month register). Every other family is uniform, so one table of
+ * configs and one interceptor cover them all. Registered HERE, before those
+ * routes are defined, so this runs first; with no `?by=` it calls next() and
+ * the family's normal list renders untouched.
+ *
+ * showMode is off for these: Gross/Net exists to net RETURNS off a register,
+ * and none of these families has a return voucher to subtract. A toggle that
+ * changed nothing would just look broken.
+ */
+const OTHER_REGISTERS = {
+    '/credit-notes':    { title: 'Credit Notes',    activeMenu: 'credit-notes',  totalLabel: 'Total Credit Notes',  hasStock: true },
+    '/debit-notes':     { title: 'Debit Notes',     activeMenu: 'debit-notes',   totalLabel: 'Total Debit Notes',   hasStock: true },
+    '/sales-orders':    { title: 'Sales Orders',    activeMenu: 'sales-orders',  totalLabel: 'Total Sales Orders',  hasStock: true },
+    '/purchase-orders': { title: 'Purchase Orders', activeMenu: 'purch-orders',  totalLabel: 'Total Purchase Orders', hasStock: true },
+    '/delivery-notes':  { title: 'Delivery Notes',  activeMenu: 'dely-notes',    totalLabel: 'Total Delivery Notes', hasStock: true },
+    '/receipt-notes':   { title: 'Receipt Notes',   activeMenu: 'recpt-notes',   totalLabel: 'Total Receipt Notes',  hasStock: true },
+    '/receipts':        { title: 'Receipts',        activeMenu: 'receipts',      totalLabel: 'Total Receipts',       hasStock: false },
+    '/payments':        { title: 'Payments',        activeMenu: 'payments',      totalLabel: 'Total Payments',       hasStock: false },
+};
+
+for (const [basePath, cfg] of Object.entries(OTHER_REGISTERS)) {
+    router.get(basePath, async (req, res, next) => {
+        try {
+            const done = await renderGroupedRegister(req, res, {
+                apiPath: basePath, basePath,
+                title: cfg.title, activeMenu: cfg.activeMenu,
+                totalLabel: cfg.totalLabel, hasStock: cfg.hasStock,
+                showMode: false,
+                exportHref: `${basePath}/register/grouped-export`,
+            });
+            if (!done) next();
+        } catch (err) { next(err); }
+    });
+    router.get(`${basePath}/register/grouped-export`, async (req, res, next) => {
+        try { await exportGroupedRegister(req, res, basePath, cfg.title); }
+        catch (err) { next(err); }
+    });
+}
+
 /* ── TRANSACTIONS · Sales Invoices listing (GET /sales-invoices) */
 router.get('/sales-invoices', async (req, res, next) => {
   try {
+    // ?by=… → the grouped register (Ledger / Stock Item / …). Falls through
+    // to the Month register or the Bill list when no grouping is asked for.
+    if (await renderGroupedRegister(req, res, {
+        apiPath: '/sales-invoices', basePath: '/sales-invoices',
+        title: 'Sales Register', activeMenu: 'sales-inv',
+        totalLabel: 'Total Sales', hasStock: true,
+        exportHref: '/sales-invoices/register/grouped-export',
+    })) return;
+
     const month = String(req.query.month || '').trim();
 
     // ── NO MONTH ──
     if (!/^\d{4}-\d{2}$/.test(month)) {
         const approval = String(req.query.approval || '').trim();
+        // ?view=bill → the register's Bill view: a FLAT voucher list across the
+        // whole period (LiveKeeping's "Bill" tab). Same rendering as the
+        // pending/all tabs below, so it shares that branch.
+        const billView = String(req.query.view || '').trim() === 'bill';
         // A non-approved tab (Pending / All) → a FLAT list across every month, so a
         // salesman can find their pending invoices without knowing the month.
-        if (approval && approval !== 'approved') {
+        if (billView || (approval && approval !== 'approved')) {
             const { rows, meta } = await apiList(req, '/sales-invoices');
             const _viewerIsAdmin = !!(res.locals.isCompanyAdmin || res.locals.isSuperAdmin);
             const invoiceRows = rows.map((r) => ({
@@ -2721,20 +3225,42 @@ const MY_VOUCHER_KIND_HREF = {
 };
 router.get('/my/vouchers', async (req, res, next) => {
     try {
-        const { rows, meta } = await apiList(req, '/my/vouchers');
+        const state = String(req.query.state || '').trim();
+        const kind  = String(req.query.kind || '').trim();
+        const extra = [];
+        if (state) extra.push(`state=${encodeURIComponent(state)}`);
+        if (kind)  extra.push(`kind=${encodeURIComponent(kind)}`);
+        const { rows, meta } = await apiList(req,
+            '/my/vouchers' + (extra.length ? `?${extra.join('&')}` : ''));
         const voucherRows = rows.map((r) => {
             const hrefFn = MY_VOUCHER_KIND_HREF[r.kind];
             return {
                 kind: r.kind,
                 label: r.label,
                 date: fmtDate(r.date),
+                // When the entry last changed — the column that tells you
+                // whether a stuck voucher has moved at all.
+                modified_at: r.modified_at ? fmtDate(r.modified_at) : '—',
                 voucher_no: r.voucher_no,
                 party: r.party || '',
                 amount: r.amount,
                 status: r.status || '',
+                // Each family words its status differently; `state` is the api's
+                // collapsed pending / completed / failed.
+                state: r.state || '',
                 href: hrefFn ? hrefFn(r.id) : '#',
             };
         });
+        // Tabs keep whichever voucher-type filter is set, and vice versa.
+        const keep = (over) => {
+            const p = new URLSearchParams();
+            const s = over.state !== undefined ? over.state : state;
+            const k = over.kind !== undefined ? over.kind : kind;
+            if (s) p.set('state', s);
+            if (k) p.set('kind', k);
+            const qs = p.toString();
+            return '/my/vouchers' + (qs ? `?${qs}` : '');
+        };
         res.render('my-entries/vouchers', {
             title: 'My Vouchers',
             activeMenu: 'my-vouchers',
@@ -2743,6 +3269,16 @@ router.get('/my/vouchers', async (req, res, next) => {
             vouchersTotal: meta.total,
             page: meta.page,
             perPage: meta.per_page,
+            stateTabs: [
+                { k: '',          label: 'All',       href: keep({ state: '' }),          active: !state },
+                { k: 'pending',   label: 'Pending',   href: keep({ state: 'pending' }),   active: state === 'pending' },
+                { k: 'completed', label: 'Completed', href: keep({ state: 'completed' }), active: state === 'completed' },
+                { k: 'failed',    label: 'Failed',    href: keep({ state: 'failed' }),    active: state === 'failed' },
+            ],
+            kindOptions: [{ value: '', label: 'All Voucher Types', selected: !kind }]
+                .concat((meta.kinds || []).map((x) => ({
+                    value: x.kind, label: x.label, selected: x.kind === kind,
+                }))),
         });
     } catch (err) { next(err); }
 });
@@ -2980,17 +3516,18 @@ function parseQuotationItems(raw) {
  * customer + their location; products carry the line-item defaults). */
 router.get('/quotations/create', async (req, res, next) => {
   try {
-    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions] = await Promise.all([
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, priceLevelOptions] = await Promise.all([
         fetchCustomerInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchOptions(req, '/sales-persons'),
         fetchInvoiceProducts(req, 'sales_price'),
         fetchSalesLedgerOptions(req),
         fetchLedgerGroupOptions(req),
+        fetchPriceLevelOptions(req),
     ]);
     res.render('quotations/create', {
         title: 'Create Quotation',
-        activeMenu: 'quotations',
+        activeMenu: 'new-quotation',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: 'Quotations', href: '/quotations' },
@@ -2998,11 +3535,84 @@ router.get('/quotations/create', async (req, res, next) => {
         ],
 
         customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
-        ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        ledgerGroupOptions, priceLevelOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         nextQuotationNo: 'Auto-generated on save',
 
-        pageScript: '<script src="/js/quotation.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/quotation.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
     });
+  } catch (err) { next(err); }
+});
+
+/* ── GET /quotations/:id/edit — the SAME create screen, pre-filled.
+ *
+ * The list has always rendered an "Edit"/"View" row action pointing here, but
+ * the route did not exist, so every click was a 404. The api already exposes
+ * GET/PUT /quotations/:id — only the web layer was missing. Follows the
+ * sales-invoices pattern: fetch the record, render the create view with
+ * editQuotation/editItems, and let the form post to /:id/update. */
+router.get('/quotations/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [qR, customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, priceLevelOptions] = await Promise.all([
+        api.get(req, `/quotations/${id}`),
+        fetchCustomerInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchOptions(req, '/sales-persons'),
+        fetchInvoiceProducts(req, 'sales_price'),
+        fetchSalesLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
+        fetchPriceLevelOptions(req),
+    ]);
+    const q = (qR.body && qR.body.data) || null;
+    if (!q || !q.id) {
+        setFlash(req, 'error', 'Quotation not found.');
+        return req.session.save(() => res.redirect('/quotations'));
+    }
+    res.render('quotations/create', {
+        title: 'Edit Quotation',
+        activeMenu: 'quotations',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Quotations', href: '/quotations' },
+            { label: 'Edit Quotation' },
+        ],
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
+        ledgerGroupOptions, priceLevelOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        nextQuotationNo: q.quotation_no || '',
+        editQuotation: q,
+        editItems: Array.isArray(q.items) ? q.items : [],
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/quotation.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+/* POST /quotations/:id/update — save an edited quotation (api PUT). */
+router.post('/quotations/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const num = (v) => (v === '' || v == null ? undefined : Number(v));
+    const payload = {
+        customer_id:     num(b.customer_id),
+        location_id:     num(b.location_id),
+        sales_person_id: num(b.sales_person_id),
+        quotation_no:    b.quotation_no || undefined,
+        quotation_date:  b.quotation_date || undefined,
+        valid_till:      b.valid_till || undefined,
+        ledger_name:     b.ledger_name || undefined,
+        notes:           b.notes || undefined,
+        // Only sent when the form posted a block, so an edit that leaves the
+        // advanced section untouched cannot wipe the stored dispatch details.
+        voucher_details: parseVoucherDetails(b.voucher_details_json),
+        items:           parseQuotationItems(b.items_json),
+    };
+    const result = await api.put(req, `/quotations/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.message) || 'Quotation updated.');
+        return req.session.save(() => res.redirect('/quotations'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update quotation.'));
+    return req.session.save(() => res.redirect(`/quotations/${id}/edit`));
   } catch (err) { next(err); }
 });
 
@@ -3062,6 +3672,10 @@ router.post('/quotations', async (req, res, next) => {
             valid_till:      b.valid_till || undefined,
             ledger_name:     b.ledger_name || undefined,
             notes:           b.notes || undefined,
+            // Buyer / consignee / dispatch / order block, posted as one JSON
+            // field by the form. Undefined when empty, so a voucher without any
+            // of it does not carry an empty object into the api.
+            voucher_details: parseVoucherDetails(b.voucher_details_json),
             items:           parseQuotationItems(b.items_json),
         };
         const result = await api.post(req, '/quotations', payload);
@@ -3103,17 +3717,18 @@ function parseSalesOrderItems(raw) {
  * option sources as the quotation create screen. */
 router.get('/sales-orders/create', async (req, res, next) => {
   try {
-    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions] = await Promise.all([
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, priceLevelOptions] = await Promise.all([
         fetchCustomerInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchOptions(req, '/sales-persons'),
         fetchInvoiceProducts(req, 'sales_price'),
         fetchSalesLedgerOptions(req),
         fetchLedgerGroupOptions(req),
+        fetchPriceLevelOptions(req),
     ]);
     res.render('sales-orders/create', {
         title: 'Create Sales Order',
-        activeMenu: 'sales-orders',
+        activeMenu: 'new-sales-order',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: 'Sales Orders', href: '/sales-orders' },
@@ -3121,10 +3736,10 @@ router.get('/sales-orders/create', async (req, res, next) => {
         ],
 
         customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
-        ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        ledgerGroupOptions, priceLevelOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         nextSalesOrderNo: 'Auto-generated on save',
 
-        pageScript: '<script src="/js/sales-order.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/sales-order.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
     });
   } catch (err) { next(err); }
 });
@@ -3168,6 +3783,71 @@ router.post('/sales-orders/create/quick-customer', async (req, res) => {
 /* ── POST /sales-orders — create a sales order via the api. Header fields
  * submit normally; line items ride the hidden items_json (serialised by
  * /js/sales-order.js). The api computes all totals inside a db transaction. */
+/* GET /sales-orders/:id/edit + POST /sales-orders/:id/update — same story as
+ * quotations: the list already linked here, the api already exposes GET/PUT
+ * /sales-orders/:id, only the web routes were missing. */
+router.get('/sales-orders/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [oR, customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, priceLevelOptions] = await Promise.all([
+        api.get(req, `/sales-orders/${id}`),
+        fetchCustomerInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchOptions(req, '/sales-persons'),
+        fetchInvoiceProducts(req, 'sales_price'),
+        fetchSalesLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
+        fetchPriceLevelOptions(req),
+    ]);
+    const o = (oR.body && oR.body.data) || null;
+    if (!o || !o.id) {
+        setFlash(req, 'error', 'Sales order not found.');
+        return req.session.save(() => res.redirect('/sales-orders'));
+    }
+    res.render('sales-orders/create', {
+        title: 'Edit Sales Order',
+        activeMenu: 'sales-orders',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Sales Orders', href: '/sales-orders' },
+            { label: 'Edit Sales Order' },
+        ],
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
+        ledgerGroupOptions, priceLevelOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        nextSalesOrderNo: o.order_no || '',
+        editOrder: o,
+        editItems: Array.isArray(o.items) ? o.items : [],
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/sales-order.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/sales-orders/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const num = (v) => (v === '' || v == null ? undefined : Number(v));
+    const payload = {
+        customer_id:     num(b.customer_id),
+        location_id:     num(b.location_id),
+        sales_person_id: num(b.sales_person_id),
+        order_no:        b.order_no || undefined,
+        order_date:      b.order_date || undefined,
+        due_on:          b.due_on || undefined,
+        ledger_name:     b.ledger_name || undefined,
+        notes:           b.notes || undefined,
+        items:           parseSalesOrderItems(b.items_json),
+    };
+    const result = await api.put(req, `/sales-orders/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.message) || 'Sales order updated.');
+        return req.session.save(() => res.redirect('/sales-orders'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update sales order.'));
+    return req.session.save(() => res.redirect(`/sales-orders/${id}/edit`));
+  } catch (err) { next(err); }
+});
+
 router.post('/sales-orders', async (req, res, next) => {
     try {
         const b = req.body;
@@ -3319,14 +3999,16 @@ function parsePurchaseOrderItems(raw) {
 router.get('/purchase-orders/create', async (req, res, next) => {
   try {
     const [supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions] = await Promise.all([
-        fetchOptions(req, '/suppliers'),
+        fetchSupplierInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchInvoiceProducts(req, 'purchase_price'),
         fetchPurchaseLedgerOptions(req),
     ]);
+    // The rate card picker every other voucher create screen already carries.
+    const priceLevelOptions = await fetchPriceLevelOptions(req);
     res.render('purchase-orders/create', {
         title: 'Create Purchase Order',
-        activeMenu: 'purch-orders',
+        activeMenu: 'new-po',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: 'Purchase Orders', href: '/purchase-orders' },
@@ -3334,9 +4016,10 @@ router.get('/purchase-orders/create', async (req, res, next) => {
         ],
 
         supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions,
+        priceLevelOptions, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         nextPurchaseOrderNo: 'Auto-generated on save',
 
-        pageScript: '<script src="/js/purchase-order.js" defer></script>',
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/purchase-order.js" defer></script>',
     });
   } catch (err) { next(err); }
 });
@@ -3345,6 +4028,68 @@ router.get('/purchase-orders/create', async (req, res, next) => {
  * fields submit normally; line items ride the hidden items_json (serialised
  * by /js/purchase-order.js). The api computes all totals inside a db
  * transaction. */
+/* GET /purchase-orders/:id/edit + POST /purchase-orders/:id/update — the list
+ * already linked here; the api already exposes GET/PUT /purchase-orders/:id. */
+router.get('/purchase-orders/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [oR, supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions] = await Promise.all([
+        api.get(req, `/purchase-orders/${id}`),
+        fetchSupplierInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchInvoiceProducts(req, 'purchase_price'),
+        fetchPurchaseLedgerOptions(req),
+    ]);
+    const o = (oR.body && oR.body.data) || null;
+    if (!o || !o.id) {
+        setFlash(req, 'error', 'Purchase order not found.');
+        return req.session.save(() => res.redirect('/purchase-orders'));
+    }
+    // The rate card picker every other voucher create screen already carries.
+    const priceLevelOptions = await fetchPriceLevelOptions(req);
+    res.render('purchase-orders/create', {
+        title: 'Edit Purchase Order',
+        activeMenu: 'purch-orders',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Purchase Orders', href: '/purchase-orders' },
+            { label: 'Edit Purchase Order' },
+        ],
+        supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions,
+        priceLevelOptions, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        nextPurchaseOrderNo: o.order_no || '',
+        editOrder: o,
+        editItems: Array.isArray(o.items) ? o.items : [],
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/purchase-order.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/purchase-orders/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const num = (v) => (v === '' || v == null ? undefined : Number(v));
+    const payload = {
+        supplier_id:     num(b.supplier_id),
+        location_id:     num(b.location_id),
+        order_no:        b.order_no || undefined,
+        order_date:      b.order_date || undefined,
+        due_on:          b.due_on || undefined,
+        ledger_name:     b.ledger_name || undefined,
+        notes:           b.notes || undefined,
+        items:           parsePurchaseOrderItems(b.items_json),
+    };
+    const result = await api.put(req, `/purchase-orders/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.message) || 'Purchase order updated.');
+        return req.session.save(() => res.redirect('/purchase-orders'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update purchase order.'));
+    return req.session.save(() => res.redirect(`/purchase-orders/${id}/edit`));
+  } catch (err) { next(err); }
+});
+
 router.post('/purchase-orders', async (req, res, next) => {
     try {
         const b = req.body;
@@ -3497,7 +4242,7 @@ function parseDeliveryNoteItems(raw) {
  * delivered/cancelled here so the picker never offers a dead reference). */
 router.get('/delivery-notes/create', async (req, res, next) => {
   try {
-    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, openOrders] = await Promise.all([
+    const [customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, openOrders, priceLevelOptions] = await Promise.all([
         fetchCustomerInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchOptions(req, '/sales-persons'),
@@ -3505,6 +4250,7 @@ router.get('/delivery-notes/create', async (req, res, next) => {
         fetchSalesLedgerOptions(req),
         fetchLedgerGroupOptions(req),
         api.get(req, '/sales-orders?per_page=100').catch(() => null),
+        fetchPriceLevelOptions(req),
     ]);
     const orderRows = (openOrders && openOrders.body && openOrders.body.data && Array.isArray(openOrders.body.data.data))
         ? openOrders.body.data.data : [];
@@ -3514,7 +4260,7 @@ router.get('/delivery-notes/create', async (req, res, next) => {
 
     res.render('delivery-notes/create', {
         title: 'Create Delivery Note',
-        activeMenu: 'dely-notes',
+        activeMenu: 'new-dely-note',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: 'Delivery Notes', href: '/delivery-notes' },
@@ -3522,11 +4268,11 @@ router.get('/delivery-notes/create', async (req, res, next) => {
         ],
 
         customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
-        ledgerGroupOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        ledgerGroupOptions, priceLevelOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         salesOrderOptions,
         nextDeliveryNoteNo: 'Auto-generated on save',
 
-        pageScript: '<script src="/js/delivery-note.js" defer></script>',
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/delivery-note.js" defer></script>',
     });
   } catch (err) { next(err); }
 });
@@ -3588,6 +4334,73 @@ router.post('/delivery-notes/create/quick-customer', async (req, res) => {
  * by /js/delivery-note.js). The api computes all totals inside a db
  * transaction. `godown`/`tax_inclusive` ride inside each item (like sales
  * orders/quotations) — they must NOT be dropped from parseDeliveryNoteItems. */
+/* GET /delivery-notes/:id/edit + POST /delivery-notes/:id/update — the list
+ * already linked here; the api already exposes GET/PUT /delivery-notes/:id. */
+router.get('/delivery-notes/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [nR, customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions, ledgerGroupOptions, salesOrderOptions, priceLevelOptions] = await Promise.all([
+        api.get(req, `/delivery-notes/${id}`),
+        fetchCustomerInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchOptions(req, '/sales-persons'),
+        fetchInvoiceProducts(req, 'sales_price'),
+        fetchSalesLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
+        fetchOptions(req, '/sales-orders'),
+        fetchPriceLevelOptions(req),
+    ]);
+    const n = (nR.body && nR.body.data) || null;
+    if (!n || !n.id) {
+        setFlash(req, 'error', 'Delivery note not found.');
+        return req.session.save(() => res.redirect('/delivery-notes'));
+    }
+    res.render('delivery-notes/create', {
+        title: 'Edit Delivery Note',
+        activeMenu: 'dely-notes',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Delivery Notes', href: '/delivery-notes' },
+            { label: 'Edit Delivery Note' },
+        ],
+        customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
+        ledgerGroupOptions, priceLevelOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        salesOrderOptions,
+        nextDeliveryNoteNo: n.note_no || '',
+        editNote: n,
+        editItems: Array.isArray(n.items) ? n.items : [],
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/delivery-note.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/delivery-notes/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const num = (v) => (v === '' || v == null ? undefined : Number(v));
+    const payload = {
+        customer_id:     num(b.customer_id),
+        location_id:     num(b.location_id),
+        sales_person_id: num(b.sales_person_id),
+        sales_order_id:  num(b.sales_order_id),
+        note_no:         b.note_no || undefined,
+        note_date:       b.note_date || undefined,
+        dispatch_date:   b.dispatch_date || undefined,
+        ledger_name:     b.ledger_name || undefined,
+        notes:           b.notes || undefined,
+        items:           parseDeliveryNoteItems(b.items_json),
+    };
+    const result = await api.put(req, `/delivery-notes/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.message) || 'Delivery note updated.');
+        return req.session.save(() => res.redirect('/delivery-notes'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update delivery note.'));
+    return req.session.save(() => res.redirect(`/delivery-notes/${id}/edit`));
+  } catch (err) { next(err); }
+});
+
 router.post('/delivery-notes', async (req, res, next) => {
     try {
         const b = req.body;
@@ -3730,6 +4543,58 @@ router.get('/stock-journals/create', async (req, res, next) => {
 /* POST /stock-journals — items ride the hidden items_json (serialised by
  * /js/stock-voucher.js). The api re-checks the balance rule and 422s if it
  * fails; nothing is applied when that happens (whole-transaction). */
+/* GET /stock-journals/:id/edit + POST /stock-journals/:id/update.
+ * Unlike the other voucher modules the api had NO update endpoint here — one
+ * was added (StockJournalController.update) because a stock journal moves
+ * stock, so editing has to reverse the old lines and apply the new ones. */
+router.get('/stock-journals/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [jR, stockProducts] = await Promise.all([
+        api.get(req, `/stock-journals/${id}`),
+        fetchInvoiceProducts(req, 'sales_price'),
+    ]);
+    const j = (jR.body && jR.body.data) || null;
+    if (!j || !j.id) {
+        setFlash(req, 'error', 'Stock journal not found.');
+        return req.session.save(() => res.redirect('/stock-journals'));
+    }
+    res.render('stock-journals/create', {
+        title: 'Edit Stock Journal',
+        activeMenu: 'stock-jrnl',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Stock Journal', href: '/stock-journals' },
+            { label: 'Edit Stock Journal' },
+        ],
+        stockProducts,
+        editJournal: j,
+        editItems: Array.isArray(j.items) ? j.items : [],
+        pageScript: '<script src="/js/stock-voucher.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/stock-journals/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const payload = {
+        voucher_no:   b.voucher_no || undefined,
+        journal_date: b.journal_date || undefined,
+        narration:    b.narration || undefined,
+        items:        parseStockJournalItems(b.items_json),
+    };
+    const result = await api.put(req, `/stock-journals/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.message) || 'Stock journal updated.');
+        return req.session.save(() => res.redirect('/stock-journals'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update stock journal.'));
+    return req.session.save(() => res.redirect(`/stock-journals/${id}/edit`));
+  } catch (err) { next(err); }
+});
+
 router.post('/stock-journals', async (req, res, next) => {
     try {
         const b = req.body;
@@ -3768,6 +4633,10 @@ router.get('/physical-stock', async (req, res, next) => {
         date: fmtDate(r.count_date),
         items: r.items,
         created_by: r.created_by || '',
+        // "Recount", not "Edit": the sheet is superseded by a newer count, never
+        // rewritten. The link carries the voucher_no because these rows have no id.
+        recount: 'Recount',
+        recount_url: `/physical-stock/${encodeURIComponent(r.voucher_no)}/recount`,
     }));
 
     res.render('physical-stock/list', {
@@ -3803,6 +4672,39 @@ router.get('/physical-stock/create', async (req, res, next) => {
 /* POST /physical-stock — items ride the hidden items_json. No delete route:
  * a physical count is evidence of what was counted on that date; a
  * correction is a NEW sheet (PhysicalStockController has no destroy()). */
+/* GET /physical-stock/:voucher_no/recount — open a past sheet pre-filled and
+ * save it as a NEW count. Deliberately not an /:id/edit: see the note in
+ * PhysicalStockController — the audit table is append-only and a count is an
+ * assertion about a moment, so it is superseded, never rewritten. */
+router.get('/physical-stock/:voucher_no/recount', async (req, res, next) => {
+  try {
+    const voucherNo = String(req.params.voucher_no || '').trim();
+    const [sheetR, stockProducts] = await Promise.all([
+        api.get(req, `/physical-stock/${encodeURIComponent(voucherNo)}`),
+        fetchInvoiceProducts(req, 'sales_price'),
+    ]);
+    const sheet = (sheetR.body && sheetR.body.data) || null;
+    const lines = sheet && Array.isArray(sheet.items) ? sheet.items : [];
+    if (!lines.length) {
+        setFlash(req, 'error', 'Physical stock sheet not found.');
+        return req.session.save(() => res.redirect('/physical-stock'));
+    }
+    res.render('physical-stock/create', {
+        title: 'Recount Physical Stock',
+        activeMenu: 'phys-stock',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Physical Stock', href: '/physical-stock' },
+            { label: `Recount ${voucherNo}` },
+        ],
+        stockProducts,
+        recountFrom: voucherNo,
+        recountItems: lines,
+        pageScript: '<script src="/js/stock-voucher.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
 router.post('/physical-stock', async (req, res, next) => {
     try {
         const b = req.body;
@@ -3951,7 +4853,7 @@ function parseReceiptNoteItems(raw) {
 router.get('/receipt-notes/create', async (req, res, next) => {
   try {
     const [supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions, openOrders] = await Promise.all([
-        fetchOptions(req, '/suppliers'),
+        fetchSupplierInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchInvoiceProducts(req, 'purchase_price'),
         fetchPurchaseLedgerOptions(req),
@@ -3963,9 +4865,11 @@ router.get('/receipt-notes/create', async (req, res, next) => {
         .filter((o) => o.order_status !== 'cancelled' && !o.converted_invoice_id)
         .map((o) => ({ id: o.id, order_no: o.order_no, supplier: o.supplier || '' }));
 
+    // The rate card picker every other voucher create screen already carries.
+    const priceLevelOptions = await fetchPriceLevelOptions(req);
     res.render('receipt-notes/create', {
         title: 'Create Receipt Note',
-        activeMenu: 'recpt-notes',
+        activeMenu: 'new-recpt-note',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: 'Receipt Notes', href: '/receipt-notes' },
@@ -3973,10 +4877,11 @@ router.get('/receipt-notes/create', async (req, res, next) => {
         ],
 
         supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions,
+        priceLevelOptions, gstRegistrationTypes: GST_REGISTRATION_TYPES,
         purchaseOrderOptions,
         nextReceiptNoteNo: 'Auto-generated on save',
 
-        pageScript: '<script src="/js/receipt-note.js" defer></script>',
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/receipt-note.js" defer></script>',
     });
   } catch (err) { next(err); }
 });
@@ -4003,6 +4908,76 @@ router.get('/receipt-notes/order/:id', async (req, res) => {
  * transaction. `godown`/`tax_inclusive` ride inside each item (like
  * delivery notes/purchase orders) — they must NOT be dropped from
  * parseReceiptNoteItems. */
+/* GET /receipt-notes/:id/edit + POST /receipt-notes/:id/update — the list
+ * already linked here; the api already exposes GET/PUT /receipt-notes/:id. */
+router.get('/receipt-notes/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [nR, supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions, openOrders] = await Promise.all([
+        api.get(req, `/receipt-notes/${id}`),
+        fetchSupplierInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchInvoiceProducts(req, 'purchase_price'),
+        fetchPurchaseLedgerOptions(req),
+        api.get(req, '/purchase-orders?per_page=100').catch(() => null),
+    ]);
+    const n = (nR.body && nR.body.data) || null;
+    if (!n || !n.id) {
+        setFlash(req, 'error', 'Receipt note not found.');
+        return req.session.save(() => res.redirect('/receipt-notes'));
+    }
+    const orderRows = (openOrders && openOrders.body && openOrders.body.data && Array.isArray(openOrders.body.data.data))
+        ? openOrders.body.data.data : [];
+    const purchaseOrderOptions = orderRows
+        .filter((o) => o.order_status !== 'cancelled' && !o.converted_invoice_id)
+        .map((o) => ({ id: o.id, order_no: o.order_no, supplier: o.supplier || '' }));
+    // The rate card picker every other voucher create screen already carries.
+    const priceLevelOptions = await fetchPriceLevelOptions(req);
+    res.render('receipt-notes/create', {
+        title: 'Edit Receipt Note',
+        activeMenu: 'recpt-notes',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Receipt Notes', href: '/receipt-notes' },
+            { label: 'Edit Receipt Note' },
+        ],
+        supplierOptions, locationOptions, invoiceProducts, purchaseLedgerOptions,
+        priceLevelOptions, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        purchaseOrderOptions,
+        nextReceiptNoteNo: n.note_no || '',
+        editNote: n,
+        editItems: Array.isArray(n.items) ? n.items : [],
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/receipt-note.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/receipt-notes/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const num = (v) => (v === '' || v == null ? undefined : Number(v));
+    const payload = {
+        supplier_id:        num(b.supplier_id),
+        location_id:        num(b.location_id),
+        purchase_order_id:  num(b.purchase_order_id),
+        note_no:            b.note_no || undefined,
+        note_date:          b.note_date || undefined,
+        received_date:      b.received_date || undefined,
+        ledger_name:        b.ledger_name || undefined,
+        notes:              b.notes || undefined,
+        items:              parseReceiptNoteItems(b.items_json),
+    };
+    const result = await api.put(req, `/receipt-notes/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.message) || 'Receipt note updated.');
+        return req.session.save(() => res.redirect('/receipt-notes'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update receipt note.'));
+    return req.session.save(() => res.redirect(`/receipt-notes/${id}/edit`));
+  } catch (err) { next(err); }
+});
+
 router.post('/receipt-notes', async (req, res, next) => {
     try {
         const b = req.body;
@@ -4052,7 +5027,7 @@ router.get('/sales-invoices/create', async (req, res, next) => {
         : null;
     res.render('sales-invoices/create', {
         title: 'Create Invoice',
-        activeMenu: 'sales-inv',
+        activeMenu: 'new-sales-inv',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: 'Sales Invoices', href: '/sales-invoices' },
@@ -4402,10 +5377,38 @@ router.get('/field-tracking', async (req, res, next) => {
 /* ── TRANSACTIONS · Purchase Invoices (GET /purchase-invoices) ─ */
 router.get('/purchase-invoices', async (req, res, next) => {
   try {
+    // ?by=… → the grouped register (Ledger / Stock Item / …).
+    if (await renderGroupedRegister(req, res, {
+        apiPath: '/purchase-invoices', basePath: '/purchase-invoices',
+        title: 'Purchase Register', activeMenu: 'purchase-inv',
+        totalLabel: 'Total Purchase', hasStock: true,
+        exportHref: '/purchase-invoices/register/grouped-export',
+    })) return;
+
     const month = String(req.query.month || '').trim();
 
     // ── NO MONTH → Tally Purchase-Register: month-wise summary (drill-down) ──
     if (!/^\d{4}-\d{2}$/.test(month)) {
+        // ?view=bill → the Bill tab: a flat voucher list across the whole period.
+        if (String(req.query.view || '').trim() === 'bill') {
+            const { rows, meta } = await apiList(req, '/purchase-invoices');
+            const purchaseRows = rows.map((r) => ({
+                id: r.id, bill_no: r.invoice_no, date: fmtDate(r.invoice_date),
+                vch_type: 'Purchase',
+                supplier: r.supplier || '', location: r.location || '',
+                amount: r.taxable, gst: r.tax_amount, total: r.total,
+                status: txStatusLabel(r.status),
+            }));
+            return res.render('purchase-invoices/list', {
+                title: 'Purchase Invoices', activeMenu: 'purchase-inv',
+                breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Purchase Invoices' }],
+                purchaseRows, purchasesTotal: meta.total, grandTotal: meta.grand_total || 0,
+                page: meta.page, perPage: meta.per_page,
+                monthMode: false, monthValue: '',
+                supplierNames: mock.supplierNames, locationNames: mock.locationNames,
+                invoiceStatuses: mock.invoiceStatuses,
+            });
+        }
         const { rows: monthRows, meta: mMeta } = await apiList(req, '/purchase-invoices/monthly');
         return res.render('purchase-invoices/register', {
             title: 'Purchase Register',
@@ -4462,16 +5465,74 @@ router.get('/purchase-invoices', async (req, res, next) => {
 });
 
 /* ── TRANSACTIONS · Create Purchase (GET /purchase-invoices/create) */
+/* GET /purchase-invoices/:id/edit + POST /purchase-invoices/:id/update.
+ * The api had no update for purchase bills — updateDraft is scoped to
+ * type:'sales' — so InvoiceController.updatePurchase was added alongside it. */
+router.get('/purchase-invoices/:id/edit', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [invR, supplierOptions, locationOptions, invoiceProducts] = await Promise.all([
+        api.get(req, `/purchase-invoices/${id}`),
+        fetchSupplierInvoiceOptions(req),
+        fetchOptions(req, '/locations'),
+        fetchInvoiceProducts(req, 'purchase_price'),
+    ]);
+    const inv = (invR.body && invR.body.data) || null;
+    if (!inv || !inv.id) {
+        setFlash(req, 'error', 'Purchase not found.');
+        return req.session.save(() => res.redirect('/purchase-invoices'));
+    }
+    res.render('purchase-invoices/create', {
+        title: 'Edit Purchase',
+        activeMenu: 'purchase-inv',
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: 'Purchase Invoices', href: '/purchase-invoices' },
+            { label: 'Edit Purchase' },
+        ],
+        supplierOptions, locationOptions, invoiceProducts,
+        nextBillNo: inv.invoice_no || '',
+        editInvoice: inv,
+        editItems: Array.isArray(inv.items) ? inv.items : [],
+        pageScript: '<script src="/js/invoice.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+});
+
+router.post('/purchase-invoices/:id/update', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const b = req.body;
+    const num = (v) => (v === '' || v == null ? undefined : Number(v));
+    const payload = {
+        supplier_id:      num(b.supplier_id),
+        location_id:      num(b.location_id),
+        supplier_bill_no: b.supplier_bill_no || undefined,
+        invoice_date:     b.bill_date || b.invoice_date || undefined,
+        due_date:         b.due_date || undefined,
+        notes:            b.notes || undefined,
+        items:            parseInvoiceItems(b.items_json),
+    };
+    const result = await api.put(req, `/purchase-invoices/${id}`, payload);
+    if (apiOk(result)) {
+        setFlash(req, 'success', (result.body && result.body.message) || 'Purchase updated.');
+        return req.session.save(() => res.redirect('/purchase-invoices'));
+    }
+    setFlash(req, 'error', apiError(result, 'Could not update purchase.'));
+    return req.session.save(() => res.redirect(`/purchase-invoices/${id}/update`.replace('/update', '/edit')));
+  } catch (err) { next(err); }
+});
+
 router.get('/purchase-invoices/create', async (req, res, next) => {
   try {
     const [supplierOptions, locationOptions, invoiceProducts] = await Promise.all([
-        fetchOptions(req, '/suppliers'),
+        fetchSupplierInvoiceOptions(req),
         fetchOptions(req, '/locations'),
         fetchInvoiceProducts(req, 'purchase_price'),   // priced at purchase price
     ]);
     res.render('purchase-invoices/create', {
         title: 'Create Purchase',
-        activeMenu: 'purchase-inv',
+        activeMenu: 'new-purchase',
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: 'Purchase Invoices', href: '/purchase-invoices' },
@@ -4576,11 +5637,11 @@ router.get('/payments', async (req, res, next) => {
 /* ── TRANSACTIONS · Add Payment (GET /payments/add) ─────────── */
 router.get('/payments/add', async (req, res, next) => {
     try {
-        const supplierOptions = await fetchOptions(req, '/suppliers');
+        const supplierOptions = await fetchSupplierInvoiceOptions(req);
         const config = await fetchConfig(req, ['payment_modes']);
         res.render('payments/form', {
             title: 'Add Payment',
-            activeMenu: 'payments',
+            activeMenu: 'new-payment',
             breadcrumb: [
                 { label: 'Dashboard', href: '/' },
                 { label: 'Payments', href: '/payments' },
@@ -4677,7 +5738,7 @@ router.get('/receipts/add', async (req, res, next) => {
         const config = await fetchConfig(req, ['payment_modes']);
         res.render('receipts/form', {
             title: 'Add Receipt',
-            activeMenu: 'receipts',
+            activeMenu: 'new-receipt',
             breadcrumb: [
                 { label: 'Dashboard', href: '/' },
                 { label: 'Receipts', href: '/receipts' },
@@ -5556,27 +6617,83 @@ router.get('/reports', (req, res) => {
         title: 'Reports',
         activeMenu: 'reports',
         breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Reports' }],
+        /* The full catalogue. Most entries are not separate screens — they are
+         * the existing register / list screens opened on the right view, which
+         * is exactly how Tally's own report menu works. Building duplicates
+         * would only give two places for the same number to drift. */
         reportGroups: [
-            { group: 'Sales & Purchase', reports: [
-                { title: 'Sales Register', desc: 'All sales invoices with GST breakup', icon: 'fa-file-invoice', tone: 'blue', href: '/reports/sales-register' },
+            { group: 'Accounting Reports', reports: [
                 { title: 'Day Book', desc: 'Every voucher (sales/purchase/receipt/payment), day-wise', icon: 'fa-book', tone: 'indigo', href: '/reports/day-book' },
+                { title: 'Ledger Report', desc: 'One ledger’s voucher-wise movement with opening/closing', icon: 'fa-file-lines', tone: 'blue', href: '/cash' },
+                { title: 'Expenses', desc: 'Expense vouchers by category', icon: 'fa-wallet', tone: 'amber', href: '/expenses' },
+                { title: 'Inactive Customers', desc: 'Customers with no sale in the last 90 days', icon: 'fa-user-clock', tone: 'purple', href: '/customers?inactive=90' },
+                { title: 'Inactive Items', desc: 'Items not sold in the last 90 days', icon: 'fa-box-open', tone: 'teal', href: '/products?inactive=90' },
             ]},
-            { group: 'Outstanding', reports: [
-                { title: 'Outstanding Receivables', desc: 'Customer balances — amount due to you', icon: 'fa-hand-holding-dollar', tone: 'green', href: '/reports/outstanding-receivables' },
-                { title: 'Outstanding Payables', desc: 'Supplier balances — amount you owe', icon: 'fa-money-bill-transfer', tone: 'amber', href: '/reports/outstanding-payables' },
-            ]},
-            { group: 'Inventory', reports: [
-                { title: 'Stock Summary', desc: 'Item-wise stock quantity + value', icon: 'fa-warehouse', tone: 'teal', href: '/reports/stock-summary' },
-            ]},
-            { group: 'Tax', reports: [
+            { group: 'Financial Reports', reports: [
+                { title: 'Balance Sheet', desc: 'Assets vs Liabilities', icon: 'fa-building-columns', tone: 'blue', href: '/reports/balance-sheet' },
+                { title: 'Profit & Loss', desc: 'Trading account — sales vs purchases', icon: 'fa-chart-line', tone: 'green', href: '/reports/profit-loss' },
+                { title: 'Trial Balance', desc: 'Ledger-wise Debit / Credit balances', icon: 'fa-scale-balanced', tone: 'indigo', href: '/reports/trial-balance' },
                 { title: 'GST Summary', desc: 'Output vs input GST + net payable', icon: 'fa-percent', tone: 'purple', href: '/reports/gst-summary' },
             ]},
-            { group: 'Financial Statements', reports: [
-                { title: 'Trial Balance', desc: 'Ledger-wise Debit / Credit balances', icon: 'fa-scale-balanced', tone: 'indigo', href: '/reports/trial-balance' },
-                { title: 'Profit & Loss A/c', desc: 'Trading account — sales vs purchases', icon: 'fa-chart-line', tone: 'green', href: '/reports/profit-loss' },
-                { title: 'Balance Sheet', desc: 'Assets vs Liabilities (derived)', icon: 'fa-building-columns', tone: 'blue', href: '/reports/balance-sheet' },
+            { group: 'Outstanding', reports: [
+                { title: 'Receivables', desc: 'Party-wise outstanding, overdue and pay-days', icon: 'fa-hand-holding-dollar', tone: 'green', href: '/receivables' },
+                { title: 'Payables', desc: 'Supplier-wise dues and terms', icon: 'fa-money-bill-transfer', tone: 'amber', href: '/payables' },
+                { title: 'Outstanding Receivables (bills)', desc: 'Every open sales bill with its age', icon: 'fa-file-invoice-dollar', tone: 'green', href: '/reports/outstanding-receivables' },
+                { title: 'Outstanding Payables (bills)', desc: 'Every open purchase bill with its age', icon: 'fa-file-invoice', tone: 'amber', href: '/reports/outstanding-payables' },
+            ]},
+            { group: 'Sales Overview', reports: [
+                { title: 'By Month', desc: 'Month-wise sales register', icon: 'fa-calendar-days', tone: 'blue', href: '/sales-invoices' },
+                { title: 'By Bills', desc: 'Every sales voucher across the period', icon: 'fa-receipt', tone: 'indigo', href: '/sales-invoices?view=bill' },
+                { title: 'By Ledger', desc: 'Sales grouped by party ledger', icon: 'fa-address-book', tone: 'green', href: '/sales-invoices?by=ledger' },
+                { title: 'By Stock Item', desc: 'Sales grouped by item, with quantity', icon: 'fa-boxes-stacked', tone: 'teal', href: '/sales-invoices?by=stock_item' },
+                { title: 'By Voucher Type', desc: 'Sales grouped by Tally voucher class', icon: 'fa-tags', tone: 'purple', href: '/sales-invoices?by=voucher_type' },
+                { title: 'By Ledger Group', desc: 'Sales grouped by the party’s Tally group', icon: 'fa-layer-group', tone: 'blue', href: '/sales-invoices?by=ledger_group' },
+                { title: 'By Stock Group', desc: 'Sales grouped by stock group', icon: 'fa-cubes', tone: 'amber', href: '/sales-invoices?by=stock_group' },
+                { title: 'By Stock Category', desc: 'Sales grouped by stock category', icon: 'fa-sitemap', tone: 'indigo', href: '/sales-invoices?by=stock_category' },
+            ]},
+            { group: 'Purchase Overview', reports: [
+                { title: 'By Month', desc: 'Month-wise purchase register', icon: 'fa-calendar-days', tone: 'blue', href: '/purchase-invoices' },
+                { title: 'By Bills', desc: 'Every purchase voucher across the period', icon: 'fa-receipt', tone: 'indigo', href: '/purchase-invoices?view=bill' },
+                { title: 'By Ledger', desc: 'Purchases grouped by supplier ledger', icon: 'fa-truck-field', tone: 'green', href: '/purchase-invoices?by=ledger' },
+                { title: 'By Stock Item', desc: 'Purchases grouped by item, with quantity', icon: 'fa-boxes-stacked', tone: 'teal', href: '/purchase-invoices?by=stock_item' },
+            ]},
+            { group: 'Stock Reports', reports: [
+                { title: 'Stock Summary', desc: 'Item-wise stock quantity + value', icon: 'fa-warehouse', tone: 'teal', href: '/reports/stock-summary' },
+                { title: 'In Stock', desc: 'Items with a positive closing balance', icon: 'fa-boxes-packing', tone: 'green', href: '/products?stock=in' },
+                { title: 'Not In Stock', desc: 'Items whose closing balance is exactly zero', icon: 'fa-box-open', tone: 'amber', href: '/products?stock=out' },
+                { title: 'Negative Stock', desc: 'Issued before received — usually a booking error', icon: 'fa-triangle-exclamation', tone: 'purple', href: '/products?stock=negative' },
+                { title: 'Stock Groups', desc: 'Closing stock rolled up by stock group', icon: 'fa-cubes', tone: 'blue', href: '/products?by=group' },
+                { title: 'Stock Category', desc: 'Closing stock rolled up by category', icon: 'fa-sitemap', tone: 'indigo', href: '/products?by=category' },
+                { title: 'Godown', desc: 'Stock movement per godown', icon: 'fa-warehouse', tone: 'teal', href: '/products?by=godown' },
+            ]},
+            { group: 'Top Reports', reports: [
+                { title: 'Top Customers', desc: 'Biggest customers by value', icon: 'fa-user-group', tone: 'green', href: '/reports/top?by=customers' },
+                { title: 'Top Suppliers', desc: 'Biggest suppliers by value', icon: 'fa-truck-field', tone: 'amber', href: '/reports/top?by=suppliers' },
+                { title: 'Items Sold by Value', desc: 'Best sellers by rupees', icon: 'fa-arrow-trend-up', tone: 'blue', href: '/reports/top?by=sold_val' },
+                { title: 'Items Sold by Qty', desc: 'Best sellers by quantity', icon: 'fa-boxes-stacked', tone: 'teal', href: '/reports/top?by=sold_qty' },
+                { title: 'Items Purchased by Value', desc: 'Biggest buys by rupees', icon: 'fa-cart-flatbed', tone: 'indigo', href: '/reports/top?by=bought_val' },
+                { title: 'Items Purchased by Qty', desc: 'Biggest buys by quantity', icon: 'fa-dolly', tone: 'purple', href: '/reports/top?by=bought_qty' },
+            ]},
+            { group: 'Cost Centre', reports: [
+                { title: 'Cost Centre Summary', desc: 'What was booked against each cost centre', icon: 'fa-diagram-project', tone: 'blue', href: '/reports/cost-centres' },
+                { title: 'Ledger Breakup', desc: 'Cost-centre spend split by ledger', icon: 'fa-file-lines', tone: 'indigo', href: '/reports/cost-centres?by=ledger' },
+                { title: 'Group Breakup', desc: 'Cost-centre spend split by ledger group', icon: 'fa-layer-group', tone: 'purple', href: '/reports/cost-centres?by=group' },
+            ]},
+            { group: 'My Entries', reports: [
+                { title: 'My Vouchers', desc: 'Everything you created', icon: 'fa-file-lines', tone: 'blue', href: '/my/vouchers' },
+                { title: 'My Quotations', desc: 'Quotations you raised', icon: 'fa-file-signature', tone: 'indigo', href: '/quotations?mine=1' },
+                { title: 'My eWay Bills', desc: 'e-Way bills you generated', icon: 'fa-truck-fast', tone: 'teal', href: '/einvoices?mine=1&kind=eway' },
+                { title: 'My eInvoices', desc: 'e-Invoices you generated', icon: 'fa-file-circle-check', tone: 'green', href: '/einvoices?mine=1' },
+                { title: 'My Parties', desc: 'Parties you added', icon: 'fa-address-book', tone: 'amber', href: '/customers?mine=1' },
+                { title: 'My Stock Items', desc: 'Items you added', icon: 'fa-boxes-stacked', tone: 'purple', href: '/products?mine=1' },
+                { title: 'Tracking Report', desc: 'Field visits and GPS trail', icon: 'fa-map-location-dot', tone: 'blue', href: '/field-tracking' },
+            ]},
+            { group: 'Registers', reports: [
+                { title: 'Sales Register', desc: 'All sales invoices with GST breakup', icon: 'fa-file-invoice', tone: 'blue', href: '/reports/sales-register' },
             ]},
         ],
+
+        pageScript: '<script src="/js/report-favourites.js" defer></script>',
     });
 });
 
@@ -5658,6 +6775,25 @@ router.post('/data-backup/run-now', async (req, res, next) => {
  * /delivery-notes/order/:id above). Used by the GST Search screen AND by
  * the customer form / quotation & sales-order "Create New Customer" modals
  * for their State auto-fill. AJAX/JSON only. */
+/* GET /tally/price-list?level= — one price level's rate card, for the voucher
+ * forms. This is what a Price Level actually DOES: picking one decides which
+ * card fills the Rate column when an item is chosen, instead of the item's own
+ * standard price. Fetched per level (not per item) so choosing an item stays
+ * instant — the whole card is a few hundred rows at most. */
+router.get('/tally/price-list', async (req, res) => {
+    try {
+        const level = String(req.query.level || '').trim();
+        if (!level) return res.json({ ok: true, data: [] });
+        const result = await api.get(req, `/tally/price-list?level=${encodeURIComponent(level)}`);
+        if (apiOk(result) && result.body && result.body.data) {
+            return res.json({ ok: true, data: result.body.data.data || [] });
+        }
+        return res.status(422).json({ ok: false, error: apiError(result, 'Could not load that price level.') });
+    } catch (err) {
+        return res.status(500).json({ ok: false, error: 'Could not reach the server.' });
+    }
+});
+
 router.get('/gst/verify', async (req, res) => {
     try {
         const gstin = String(req.query.gstin || '').trim().toUpperCase();
@@ -5696,6 +6832,97 @@ router.get('/reports/pdf/:slug', async (req, res, next) => {
 });
 
 /* ── REPORTS · Day Book (GET /reports/day-book) ─────────────── */
+/* ── Cost-centre reports (GET /reports/cost-centres[?by=ledger|group]) ──
+ * Summary with no ?by; a ledger- or group-wise breakup with one. ?centre=
+ * narrows a breakup to a single cost centre.
+ */
+router.get('/reports/cost-centres', async (req, res, next) => {
+    try {
+        const by = String(req.query.by || '').trim().toLowerCase();
+        const centre = String(req.query.centre || '').trim();
+        const qs = new URLSearchParams();
+        for (const k of ['from', 'to']) if (req.query[k]) qs.set(k, String(req.query[k]));
+        let path;
+        if (by === 'ledger' || by === 'group') {
+            qs.set('by', by);
+            if (centre) qs.set('centre', centre);
+            path = `/cost-centres/breakup?${qs.toString()}`;
+        } else {
+            path = `/cost-centres/summary?${qs.toString()}`;
+        }
+        const { body } = await api.get(req, path);
+        const d = (body && body.data) || {};
+        const meta = d.meta || {};
+        const grp = (v) => '₹' + Number(v || 0).toLocaleString('en-IN',
+            { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const isSummary = !by;
+        res.render('reports/generic', {
+            title: meta.label || 'Cost Centres', activeMenu: 'reports',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Reports', href: '/reports' },
+                { label: meta.label || 'Cost Centres' },
+            ],
+            summary: [
+                { label: 'Total', value: grp(meta.total_amount), icon: 'fa-diagram-project', tone: 'blue' },
+                { label: isSummary ? 'Cost Centres' : 'Rows', value: String(meta.rows || 0), icon: 'fa-list', tone: 'indigo' },
+            ],
+            columns: [
+                { key: 'name', label: isSummary ? 'Cost Centre' : (by === 'group' ? 'Ledger Group' : 'Ledger'), bold: true },
+                ...(isSummary ? [{ key: 'category', label: 'Category' }] : []),
+                { key: 'vouchers', label: 'Vouchers', num: true },
+                { key: 'amount', label: 'Amount', num: true },
+            ],
+            rows: (d.data || []).map((r) => ({
+                name: r.name || '—',
+                category: r.category || '—',
+                vouchers: r.vouchers,
+                amount: grp(r.amount),
+            })),
+        });
+    } catch (err) { next(err); }
+});
+
+/* ── Top reports (GET /reports/top?by=…) ─────────────────────────
+ * The dashboard's Top 10 panel, opened as a full report. Same api call, so
+ * the two can never disagree; only the page size differs.
+ */
+const TOP_REPORTS = {
+    customers:  { key: 'customers',  label: 'Top Customers',            unit: false },
+    suppliers:  { key: 'suppliers',  label: 'Top Suppliers',            unit: false },
+    sold_val:   { key: 'sold_val',   label: 'Items Sold by Value',      unit: false },
+    sold_qty:   { key: 'sold_qty',   label: 'Items Sold by Quantity',   unit: true },
+    bought_val: { key: 'bought_val', label: 'Items Purchased by Value', unit: false },
+    bought_qty: { key: 'bought_qty', label: 'Items Purchased by Quantity', unit: true },
+};
+
+router.get('/reports/top', async (req, res, next) => {
+    try {
+        const by = String(req.query.by || 'customers').trim().toLowerCase();
+        const spec = TOP_REPORTS[by] || TOP_REPORTS.customers;
+        const model = await buildDashboardModel(req, res, 'top10');
+        const tab = (model.top10Tabs || []).find((t) => t.key === spec.key)
+            || { rows: [] };
+        res.render('reports/generic', {
+            title: spec.label, activeMenu: 'reports',
+            breadcrumb: [
+                { label: 'Dashboard', href: '/' },
+                { label: 'Reports', href: '/reports' },
+                { label: spec.label },
+            ],
+            summary: [
+                { label: 'Rows', value: String(tab.rows.length), icon: 'fa-list', tone: 'indigo' },
+            ],
+            columns: [
+                { key: 'name', label: 'Name', bold: true },
+                ...(spec.unit ? [{ key: 'qty', label: 'Quantity', num: true }] : []),
+                { key: 'value', label: 'Value', num: true },
+            ],
+            rows: tab.rows.map((r) => ({ name: r.name, qty: r.qty || '—', value: r.value })),
+        });
+    } catch (err) { next(err); }
+});
+
 router.get('/reports/day-book', async (req, res, next) => {
     try {
         const { body } = await api.get(req, '/reports/day-book');
@@ -6029,12 +7256,19 @@ router.get('/reminders', async (req, res, next) => {
     try {
         const r = await api.get(req, '/account/reminders');
         const d = (r.body && r.body.data) || {};
+        // The saved wording lives in the flat settings bag, which is a
+        // key/value store — not one of the list-shaped config options.
+        const sr = await api.get(req, '/settings');
+        const savedSettings = (sr.body && sr.body.data && sr.body.data.settings) || {};
         res.render('reminders/index', {
             title: 'Payment Reminders', activeMenu: 'reminders',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Payment Reminders' }],
             reminders: Array.isArray(d.data) ? d.data : [],
             channels: d.channels || { email: false, whatsapp: false },
             totalOutstanding: d.total_outstanding || 0,
+            // The company's own wording, if they have set one. Read from the
+            // settings bag rather than a dedicated endpoint — it is one string.
+            reminderTemplate: savedSettings.reminder_template || '',
         });
     } catch (err) { next(err); }
 });
@@ -6097,6 +7331,115 @@ router.post('/reminders/:id/send', async (req, res, next) => {
     } catch (err) { next(err); }
 });
 
+/* POST /reminders/template — the company's own reminder wording.
+ * Saved into the shared settings bag; an empty box means "go back to the
+ * built-in text", which is why it is not rejected as blank. */
+/* POST /settings/branding/:kind — company logo / authorised signature.
+ * Received here as multipart, forwarded to the api as multipart. */
+router.post('/settings/branding/:kind', (req, res, next) => {
+    brandingUpload.single('image')(req, res, (err) => {
+        if (err) {
+            const msg = err.code === 'LIMIT_FILE_SIZE'
+                ? 'The image must be under 5 MB.' : (err.message || 'Upload failed.');
+            setFlash(req, 'error', msg);
+            return req.session.save(() => res.redirect('/settings'));
+        }
+        return next();
+    });
+}, async (req, res, next) => {
+    try {
+        const kind = String(req.params.kind || '');
+        if (!['logo', 'signature'].includes(kind)) return res.redirect('/settings');
+        if (!req.file) {
+            setFlash(req, 'error', 'Choose an image first.');
+            return req.session.save(() => res.redirect('/settings'));
+        }
+        // Re-stream the buffer as multipart, exactly as the product-image
+        // proxy does: apiClient speaks JSON, so a file has to go direct.
+        const form = new FormData();
+        form.append('image', req.file.buffer, {
+            filename:    req.file.originalname || 'image',
+            contentType: req.file.mimetype || 'application/octet-stream',
+            knownLength: req.file.buffer.length,
+        });
+        const headers = Object.assign({ Accept: 'application/json' }, form.getHeaders());
+        if (req.session && req.session.token) headers.Authorization = `Bearer ${req.session.token}`;
+        if (req.session && req.session.companyId != null) headers['X-Company-Id'] = String(req.session.companyId);
+
+        let parsed = null;
+        try {
+            const resp = await fetch(`${api.API_URL}/settings/branding/${kind}`, {
+                method: 'POST', headers, body: form.getBuffer(),
+            });
+            try { parsed = await resp.json(); } catch { parsed = null; }
+        } catch (e) {
+            setFlash(req, 'error', 'Cannot reach the API server.');
+            return req.session.save(() => res.redirect('/settings'));
+        }
+        if (parsed && parsed.status === 200) {
+            setFlash(req, 'success', parsed.msg || 'Image updated.');
+        } else {
+            setFlash(req, 'error', (parsed && parsed.msg) || 'Could not upload the image.');
+        }
+        return req.session.save(() => res.redirect('/settings'));
+    } catch (err) { next(err); }
+});
+
+/* POST /settings/branding/:kind/remove — go back to printing no image.
+ * A POST, not a DELETE: it is submitted by a plain HTML form, and a form
+ * cannot issue DELETE. The api route it calls is a real DELETE. */
+router.post('/settings/branding/:kind/remove', async (req, res, next) => {
+    try {
+        const kind = String(req.params.kind || '');
+        if (!['logo', 'signature'].includes(kind)) return res.redirect('/settings');
+        const result = await api.del(req, `/settings/branding/${kind}`);
+        if (apiOk(result)) setFlash(req, 'success', 'Image removed.');
+        else setFlash(req, 'error', apiError(result, 'Could not remove the image.'));
+        return req.session.save(() => res.redirect('/settings'));
+    } catch (err) { next(err); }
+});
+router.post('/reminders/template', async (req, res, next) => {
+    try {
+        const template = String((req.body && req.body.template) || '');
+        const result = await api.put(req, '/settings', { settings: { reminder_template: template } });
+        if (apiOk(result)) {
+            setFlash(req, 'success', template.trim()
+                ? 'Reminder template saved.'
+                : 'Reminder template cleared — the standard message will be used.');
+        } else {
+            setFlash(req, 'error', apiError(result, 'Could not save the template.'));
+        }
+        return req.session.save(() => res.redirect('/reminders'));
+    } catch (err) { next(err); }
+});
+
+/* POST /reminders/send-bulk — chase everyone overdue, or the ticked few. */
+router.post('/reminders/send-bulk', async (req, res, next) => {
+    try {
+        const channel = (req.body && req.body.channel) || 'email';
+        // A single tick posts a string, several post an array; normalise so
+        // "one selected" does not silently become "all".
+        const raw = (req.body && req.body.customer_ids) || [];
+        const customer_ids = (Array.isArray(raw) ? raw : [raw])
+            .map(Number).filter((n) => Number.isInteger(n));
+        const result = await api.post(req, '/account/reminders/send-bulk', { channel, customer_ids });
+        if (apiOk(result)) {
+            const d = (result.body && result.body.data) || {};
+            const failed = Array.isArray(d.failed) ? d.failed : [];
+            // Name who was missed and why — "3 could not be sent" with no
+            // reason is a message nobody can act on.
+            const detail = failed.length
+                ? ' Not sent: ' + failed.slice(0, 5).map((x) => `${x.name} (${x.error})`).join('; ')
+                    + (failed.length > 5 ? ` and ${failed.length - 5} more.` : '')
+                : '';
+            setFlash(req, failed.length ? 'warning' : 'success',
+                ((result.body && result.body.msg) || 'Reminders sent.') + detail);
+        } else {
+            setFlash(req, 'error', apiError(result, 'Could not send the reminders.'));
+        }
+        return req.session.save(() => res.redirect('/reminders'));
+    } catch (err) { next(err); }
+});
 /* ── Business Analytics — read-only insights dashboard ────────── */
 router.get('/analytics', async (req, res, next) => {
     try {
@@ -6742,6 +8085,9 @@ router.get('/settings', async (req, res, next) => {
             companyProfile,            // = body.data.company  {name,email,mobile,gst_number,pan_number,financial_year,address}
             companySettings,           // = body.data.settings {arbitrary key/values}
             syncFlags,                 // = body.data.sync, normalised for the Sync Settings switches
+            // Absolute URLs of the company logo / signature, or nulls. Built
+            // by the api — the web never assembles an upload path itself.
+            branding: payload.branding || { logo: null, signature: null },
             syncModules,               // = body.data.modules [{key,label}] — the auto-sync popup catalog
             syncPushModules,           // selected module keys for AUTO push (Cloud→Tally)
             syncPullModules,           // selected module keys for AUTO pull (Tally→Cloud)
@@ -6796,7 +8142,14 @@ router.get('/customers', async (req, res, next) => {
             mobile:          r.mobile || '',
             gst:             r.gst_number || '',
             opening_balance: r.opening_balance,
+            // From the synced Tally ledger — where the party stands TODAY,
+            // as opposed to opening_balance (where they started).
+            closing_balance: r.closing_balance,
             credit_limit:    r.credit_limit,
+            // A null credit period means "no agreed terms", not zero days —
+            // print a dash rather than a number nobody agreed to.
+            credit_days:     (r.credit_days == null ? '—' : String(r.credit_days)),
+            last_sold_date:  r.last_sold_date ? fmtDate(r.last_sold_date) : '—',
             sales_person:    r.sales_person || '',
             status:          r.status,
             created_at:      fmtDate(r.created_at),
@@ -6820,12 +8173,16 @@ router.get('/customers', async (req, res, next) => {
                 { label: 'Pincode', value: r.pincode || '—' },
                 { group: 'Financial' },
                 { label: 'Opening Balance', value: (r.opening_balance != null ? (String(r.opening_balance) + ' ' + (r.opening_balance_type || 'Cr')) : '—') },
+                { label: 'Closing Balance', value: (r.closing_balance != null ? String(r.closing_balance) : '—') },
                 { label: 'Credit Limit', value: (r.credit_limit != null ? String(r.credit_limit) : '—') },
+                { label: 'Credit Days', value: (r.credit_days != null ? String(r.credit_days) + ' days' : '—') },
+                { label: 'Last Sold Date', value: (r.last_sold_date ? fmtDate(r.last_sold_date) : '—') },
                 { group: 'Assignment' },
                 { label: 'Location', value: r.location || '—' },
                 { label: 'Sales Person', value: r.sales_person || '—' },
                 { label: 'Customer Group', value: r.customer_group || '—' },
                 { label: 'Ledger Group', value: r.ledger_group || '—' },
+                { label: 'Tally Ledger Group', value: r.tally_ledger_group || '—' },
                 { group: 'Notes' },
                 { label: 'Notes', value: r.notes || '—' },
                 { label: 'Internal Remarks', value: r.internal_remarks || '—' },
@@ -6926,6 +8283,10 @@ router.post('/customers', async (req, res, next) => {
             customer_group_id: num(b.customer_group_id),
             opening_balance:   num(b.opening_balance),
             credit_limit:      num(b.credit_limit),
+            // Blank stays blank: an empty Credit Days box means "no agreed
+            // terms", which num() would otherwise flatten to undefined anyway,
+            // but being explicit keeps a later change from turning it into 0.
+            credit_days:       (String(b.credit_days || '').trim() === '' ? undefined : num(b.credit_days)),
             status:            b.status || 'Active',
             billing_address:   b.billing_address || undefined,
             shipping_address:  b.shipping_address || undefined,
@@ -6980,6 +8341,102 @@ async function fetchRecord(req, basePath, id) {
 const _num = (v) => (v === '' || v == null ? undefined : Number(v));
 
 /* Customers */
+/* ── Items Sold / Items Purchased for one party ──────────────────
+ * What this customer took from us (/customers/:id/items) or what we took
+ * from this supplier (/suppliers/:id/items), rolled up per stock item.
+ * LiveKeeping parity — the two tabs on its party detail page.
+ */
+function renderPartyItems(side) {
+    const isCustomer = side === 'customers';
+    return async function handler(req, res, next) {
+        try {
+            const id = Number(req.params.id);
+            const qs = new URLSearchParams();
+            for (const k of ['from', 'to']) if (req.query[k]) qs.set(k, String(req.query[k]));
+            const [itemsR, partyR] = await Promise.all([
+                api.get(req, `/${side}/${id}/items?${qs.toString()}`),
+                api.get(req, `/${side}/${id}`),
+            ]);
+            const d = (itemsR.body && itemsR.body.data) || {};
+            const p = (partyR.body && partyR.body.data) || {};
+            res.render('parties/items', {
+                title: p.name || 'Party',
+                activeMenu: isCustomer ? 'customers' : 'suppliers',
+                party: { id, name: p.name || '' },
+                meta: d.meta || {},
+                rows: (d.data || []).map((r) => ({
+                    name: r.name || '',
+                    unit: r.unit || '',
+                    qty: r.qty,
+                    amount: r.amount,
+                    vouchers: r.vouchers,
+                    last_date: r.last_date ? fmtDate(r.last_date) : '—',
+                })),
+            });
+        } catch (err) { next(err); }
+    };
+}
+
+router.get('/customers/:id/items', renderPartyItems('customers'));
+router.get('/suppliers/:id/items', renderPartyItems('suppliers'));
+
+/* ── Party activity trail (follow-up log) ────────────────────────
+ * GET renders the timeline + the "log an activity" form; POST appends.
+ * There is no edit or delete route: an activity records what happened, and
+ * rewriting it destroys the only evidence of what was agreed.
+ */
+function partyActivityRoutes(side) {
+    const type = side === 'customers' ? 'customer' : 'supplier';
+    return {
+        async show(req, res, next) {
+            try {
+                const id = Number(req.params.id);
+                const { body } = await api.get(req, `/parties/${type}/${id}/activities`);
+                const d = (body && body.data) || {};
+                const meta = d.meta || {};
+                const canEdit = (typeof res.locals.canDo === 'function')
+                    ? res.locals.canDo(side, 'edit') : true;
+                res.render('parties/activity', {
+                    title: (meta.party && meta.party.name) || 'Party',
+                    activeMenu: side,
+                    party: meta.party || { type, id, name: '' },
+                    outcomes: meta.outcomes || [],
+                    canLog: canEdit,
+                    rows: (d.data || []).map((r) => ({
+                        id: r.id,
+                        outcome: r.outcome,
+                        outcome_label: r.outcome_label,
+                        note: r.note || '',
+                        follow_up_on: r.follow_up_on ? fmtDate(r.follow_up_on) : null,
+                        created_at: fmtDateTime(r.created_at),
+                        by: r.by || '',
+                    })),
+                });
+            } catch (err) { next(err); }
+        },
+        async add(req, res, next) {
+            try {
+                const id = Number(req.params.id);
+                const b = req.body || {};
+                const result = await api.post(req, `/parties/${type}/${id}/activities`, {
+                    outcome: b.outcome,
+                    note: b.note || undefined,
+                    follow_up_on: b.follow_up_on || undefined,
+                });
+                if (apiOk(result)) setFlash(req, 'success', 'Activity logged.');
+                else setFlash(req, 'error', apiError(result, 'Could not log the activity.'));
+                return req.session.save(() => res.redirect(`/${side}/${id}/activities`));
+            } catch (err) { next(err); }
+        },
+    };
+}
+
+for (const side of ['customers', 'suppliers']) {
+    const h = partyActivityRoutes(side);
+    router.get(`/${side}/:id/activities`, h.show);
+    router.post(`/${side}/:id/activities`, h.add);
+}
+
 router.get('/customers/:id/edit', async (req, res, next) => {
     try {
         const id = Number(req.params.id);
@@ -6999,6 +8456,26 @@ router.get('/customers/:id/edit', async (req, res, next) => {
         });
     } catch (err) { next(err); }
 });
+/* ── Star / unstar a party (the Parties screen's Favourite tab) ──
+ * A tiny PUT through the normal parties API, so the same permission check
+ * and tenant scoping apply as to any other edit. Redirects back to wherever
+ * the user was, filters and tab intact — losing their place on a one-click
+ * toggle would be worse than not having the toggle. */
+function favouriteRoute(basePath) {
+    router.post(basePath + '/:id/favourite', async (req, res, next) => {
+        try {
+            const id = Number(req.params.id);
+            const on = String(req.body.value || '') === '1';
+            await api.put(req, basePath + '/' + id, { is_favourite: on });
+        } catch (err) { return next(err); }
+        // Referer keeps the tab and filters; it falls back to the plain list
+        // when a browser strips it.
+        return res.redirect(req.get('Referer') || basePath);
+    });
+}
+favouriteRoute('/customers');
+favouriteRoute('/suppliers');
+
 router.post('/customers/:id', async (req, res, next) => {
     try {
         const id = Number(req.params.id); const b = req.body;
@@ -7007,7 +8484,9 @@ router.post('/customers/:id', async (req, res, next) => {
             email: b.email || undefined, gst_number: b.gst_number || undefined, pan_number: b.pan_number || undefined,
             location_id: _num(b.location_id), sales_person_id: _num(b.sales_person_id),
             customer_group_id: _num(b.customer_group_id), opening_balance: _num(b.opening_balance),
-            credit_limit: _num(b.credit_limit), status: b.status || 'Active',
+            credit_limit: _num(b.credit_limit),
+            credit_days: (String(b.credit_days || '').trim() === '' ? undefined : _num(b.credit_days)),
+            status: b.status || 'Active',
             billing_address: b.billing_address || undefined, shipping_address: b.shipping_address || undefined,
             is_tally_ledger: asBool(b.is_tally_ledger), notes: b.notes || undefined, internal_remarks: b.internal_remarks || undefined,
             custom_fields: assembleCustomFields(b),
@@ -7044,6 +8523,7 @@ router.post('/suppliers/:id', async (req, res, next) => {
             email: b.email || undefined, gst_number: b.gst_number || undefined, pan_number: b.pan_number || undefined,
             supplier_group: b.supplier_group || undefined,
             location_id: _num(b.location_id), opening_balance: _num(b.opening_balance), payment_terms: b.payment_terms || undefined,
+            credit_days: (String(b.credit_days || '').trim() === '' ? undefined : _num(b.credit_days)),
             address: b.address || undefined,
             status: b.status || 'Active', is_tally_ledger: asBool(b.is_tally_ledger),
             custom_fields: assembleCustomFields(b),
@@ -7428,13 +8908,56 @@ router.get('/journals', async (req, res, next) => {
 });
 router.get('/journals/add', async (req, res, next) => {
     try {
-        const [custs, sups] = await Promise.all([fetchOptions(req, '/customers'), fetchOptions(req, '/suppliers')]);
+        const [custs, sups] = await Promise.all([fetchOptions(req, '/customers'), fetchSupplierInvoiceOptions(req)]);
         const ledgerNames = [...custs, ...sups].map((o) => o.name);
         res.render('journals/form', {
-            title: 'Add Journal Voucher', activeMenu: 'journals',
+            title: 'Add Journal Voucher', activeMenu: 'new-journal',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Journals', href: '/journals' }, { label: 'Add Journal' }],
             ledgerNames,
         });
+    } catch (err) { next(err); }
+});
+/* GET /journals/:id/edit + POST /journals/:id/update. The controller method
+ * (JournalController.update) already existed for contra — a contra is a journal
+ * with vch_type pinned — so only the route and this web layer were missing. */
+router.get('/journals/:id/edit', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const [jR, custs, sups] = await Promise.all([
+            api.get(req, `/journals/${id}`),
+            fetchOptions(req, '/customers'),
+            fetchSupplierInvoiceOptions(req),
+        ]);
+        const j = (jR.body && jR.body.data) || null;
+        if (!j || !j.id) {
+            setFlash(req, 'error', 'Journal voucher not found.');
+            return req.session.save(() => res.redirect('/journals'));
+        }
+        const ledgerNames = [...custs, ...sups].map((o) => o.name);
+        res.render('journals/form', {
+            title: 'Edit Journal Voucher', activeMenu: 'journals',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Journals', href: '/journals' }, { label: 'Edit Journal' }],
+            ledgerNames,
+            editJournal: j,
+        });
+    } catch (err) { next(err); }
+});
+router.post('/journals/:id/update', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const b = req.body;
+        const payload = {
+            vch_type: b.vch_type || 'Journal',
+            journal_date: b.journal_date || undefined, dr_ledger: b.dr_ledger || undefined,
+            cr_ledger: b.cr_ledger || undefined, amount: _num(b.amount), narration: b.narration || undefined,
+        };
+        const result = await api.put(req, `/journals/${id}`, payload);
+        if (apiOk(result)) {
+            setFlash(req, 'success', (result.body && result.body.message) || 'Journal updated.');
+            return req.session.save(() => res.redirect('/journals'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not update the journal voucher.'));
+        return req.session.save(() => res.redirect(`/journals/${id}/edit`));
     } catch (err) { next(err); }
 });
 router.post('/journals', async (req, res, next) => {
@@ -7478,10 +9001,51 @@ router.get('/contra/create', async (req, res, next) => {
     try {
         const ledgers = await fetchCashBankLedgerOptions(req);
         res.render('contra/form', {
-            title: 'Create Contra Voucher', activeMenu: 'contra',
+            title: 'Create Contra Voucher', activeMenu: 'new-contra',
             breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Contra', href: '/contra' }, { label: 'Create' }],
             ledgers,
         });
+    } catch (err) { next(err); }
+});
+/* GET /contra/:id/edit + POST /contra/:id/update. The api had no update for
+ * contra either — JournalController.update was added, which serves journals
+ * and contra alike (contra IS a journal with vch_type pinned). */
+router.get('/contra/:id/edit', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const [cR, ledgers] = await Promise.all([
+            api.get(req, `/contra/${id}`),
+            fetchCashBankLedgerOptions(req),
+        ]);
+        const c = (cR.body && cR.body.data) || null;
+        if (!c || !c.id) {
+            setFlash(req, 'error', 'Contra voucher not found.');
+            return req.session.save(() => res.redirect('/contra'));
+        }
+        res.render('contra/form', {
+            title: 'Edit Contra Voucher', activeMenu: 'contra',
+            breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: 'Contra', href: '/contra' }, { label: 'Edit' }],
+            ledgers,
+            editContra: c,
+        });
+    } catch (err) { next(err); }
+});
+router.post('/contra/:id/update', async (req, res, next) => {
+    try {
+        const id = Number(req.params.id);
+        const b = req.body;
+        const payload = {
+            vch_type: 'Contra',
+            journal_date: b.journal_date || undefined, dr_ledger: b.dr_ledger || undefined,
+            cr_ledger: b.cr_ledger || undefined, amount: _num(b.amount), narration: b.narration || undefined,
+        };
+        const result = await api.put(req, `/contra/${id}`, payload);
+        if (apiOk(result)) {
+            setFlash(req, 'success', (result.body && result.body.message) || 'Contra updated.');
+            return req.session.save(() => res.redirect('/contra'));
+        }
+        setFlash(req, 'error', apiError(result, 'Could not update the contra voucher.'));
+        return req.session.save(() => res.redirect(`/contra/${id}/edit`));
     } catch (err) { next(err); }
 });
 router.post('/contra', async (req, res, next) => {
@@ -7519,31 +9083,7 @@ router.post('/licenses/:id/delete', requireSuperAdmin, async (req, res, next) =>
     } catch (err) { next(err); }
 });
 
-/* ── Generic DELETE handler (POST /:resource/:id/delete) ─────────
- * Backs the custom Delete popup on every list page. Whitelisted to the
- * resources the api actually exposes a DELETE for, then forwards to
- * DELETE /api/v1/{resource}/{id}, flashes the result, and returns to the
- * list. Kept LAST so its catch-all params never shadow a specific route. */
-const DELETABLE = new Set([
-    'customers', 'suppliers', 'products', 'categories', 'locations', 'sales-persons',
-    'customer-groups', 'sales-invoices', 'purchase-invoices', 'payments', 'receipts', 'journals',
-    'contra',
-]);
-router.post('/:resource/:id/delete', async (req, res, next) => {
-    try {
-        const { resource } = req.params;
-        const id = Number(req.params.id);
-        const back = req.get('Referer') || '/' + resource;
-        if (!DELETABLE.has(resource) || !Number.isInteger(id)) {
-            setFlash(req, 'error', 'This record cannot be deleted here.');
-            return req.session.save(() => res.redirect(back));
-        }
-        const result = await api.del(req, `/${resource}/${id}`);
-        if (apiOk(result)) setFlash(req, 'success', 'Record deleted successfully.');
-        else setFlash(req, 'error', apiError(result, 'Could not delete the record.'));
-        return req.session.save(() => res.redirect('/' + resource));
-    } catch (err) { next(err); }
-});
+
 
 /* ── PLATFORM ADMIN · e-Invoice GSP (super-admin only) ───────────
  * Per-license GSP credentials (AES-encrypted server-side) + settings. */
@@ -8038,7 +9578,7 @@ router.post('/licenses/:id/edit', requireSuperAdmin, async (req, res, next) => {
 });
 
 /* ── PLATFORM ADMIN · Agent Updates (super-admin only) ───────────
- * Upload a freshly-built TallyCloudSync.exe from the browser and publish it as
+ * Upload a freshly-built agent exe from the browser and publish it as
  * the current agent release. Agents with auto_update=ON self-update; agents with
  * auto_update=OFF get a "new version available" bell notification on their sync
  * dashboard. The list/publish/upload api endpoints are super-admin guarded; we
@@ -8146,7 +9686,7 @@ router.post('/app-releases/upload', requireSuperAdmin, (req, res) => {
 
             const form = new FormData();
             form.append('file', req.file.buffer, {
-                filename:    req.file.originalname || `TallyCloudSync-${version}.apk`,
+                filename:    req.file.originalname || `${brand.shortName}-${version}.apk`,
                 contentType: 'application/vnd.android.package-archive',
                 knownLength: req.file.buffer.length,
             });
@@ -8211,7 +9751,7 @@ router.post('/agent-releases/upload', requireSuperAdmin, (req, res) => {
             // text fields ride alongside it.
             const form = new FormData();
             form.append('file', req.file.buffer, {
-                filename: req.file.originalname || `TallyCloudSync-${version}.exe`,
+                filename: req.file.originalname || `${brand.shortName}-${version}.exe`,
                 contentType: 'application/octet-stream',
                 knownLength: req.file.buffer.length,
             });
@@ -8261,12 +9801,17 @@ router.post('/agent-releases/upload', requireSuperAdmin, (req, res) => {
  * (one view file each, switching on `kind`). Client engine: /js/return-note.js.
  */
 const RETURN_NOTE_CFG = {
+    // activeMenu = the register entry; createMenu = the "Create Vouchers" entry.
+    // They are different menu items, so the create form must not claim the
+    // register's key — otherwise the row the user clicked never highlights.
     credit: {
-        apiPath: '/credit-notes', activeMenu: 'credit-notes', label: 'Credit Note',
+        apiPath: '/credit-notes', activeMenu: 'credit-notes', createMenu: 'new-credit-note',
+        label: 'Credit Note',
         partyLabel: 'Customer', billApiPath: '/sales-invoices',
     },
     debit: {
-        apiPath: '/debit-notes', activeMenu: 'debit-notes', label: 'Debit Note',
+        apiPath: '/debit-notes', activeMenu: 'debit-notes', createMenu: 'new-debit-note',
+        label: 'Debit Note',
         partyLabel: 'Supplier', billApiPath: '/purchase-invoices',
     },
 };
@@ -8388,7 +9933,7 @@ async function handleReturnNoteCreateForm(req, res, next, kind) {
     const cfg = RETURN_NOTE_CFG[kind];
     const isCredit = kind === 'credit';
     const [partyOptions, returnNoteProducts, ledgerOptions, ledgerGroupOptions, billsResult] = await Promise.all([
-        isCredit ? fetchCustomerInvoiceOptions(req) : fetchOptions(req, '/suppliers'),
+        isCredit ? fetchCustomerInvoiceOptions(req) : fetchSupplierInvoiceOptions(req),
         fetchInvoiceProducts(req, isCredit ? 'sales_price' : 'purchase_price'),
         isCredit ? fetchSalesLedgerOptions(req) : fetchPurchaseLedgerOptions(req),
         fetchLedgerGroupOptions(req),
@@ -8401,10 +9946,15 @@ async function handleReturnNoteCreateForm(req, res, next, kind) {
         party: (isCredit ? b.customer : b.supplier) || '',
     }));
 
+    // The rate card picker every other voucher create screen already carries.
+    const priceLevelOptions = await fetchPriceLevelOptions(req);
+    // Return notes never loaded locations, so the line's Godown box had no real
+    // godowns to suggest and nothing to prefill from.
+    const locationOptions = await fetchOptions(req, '/locations');
     res.render('return-notes/create', {
         title: `Create ${cfg.label}`,
         kind,
-        activeMenu: cfg.activeMenu,
+        activeMenu: cfg.createMenu,
         breadcrumb: [
             { label: 'Dashboard', href: '/' },
             { label: cfg.label + 's', href: cfg.apiPath },
@@ -8412,9 +9962,11 @@ async function handleReturnNoteCreateForm(req, res, next, kind) {
         ],
 
         partyOptions, returnNoteProducts, ledgerOptions, billOptions,
+        locationOptions,
+        priceLevelOptions,
         ledgerGroupOptions, gstRegistrationTypes: GST_REGISTRATION_TYPES,
 
-        pageScript: '<script src="/js/return-note.js" defer></script>',
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/return-note.js" defer></script>',
     });
   } catch (err) { next(err); }
 }
@@ -8496,6 +10048,92 @@ async function handleReturnNoteCreate(req, res, next, kind) {
         return req.session.save(() => res.redirect(`${cfg.apiPath}/create`));
     } catch (err) { next(err); }
 }
+/* Edit + update for BOTH return-note kinds. The list already linked to
+ * :id/edit and the api already exposes GET/PUT on each path, so only the web
+ * layer was missing. Written once and parameterised by kind, like the create
+ * pair above. */
+async function handleReturnNoteEditForm(req, res, next, kind) {
+  try {
+    const cfg = RETURN_NOTE_CFG[kind];
+    const isCredit = kind === 'credit';
+    const id = Number(req.params.id);
+    const [nR, partyOptions, returnNoteProducts, ledgerOptions, ledgerGroupOptions, billsResult] = await Promise.all([
+        api.get(req, `${cfg.apiPath}/${id}`),
+        isCredit ? fetchCustomerInvoiceOptions(req) : fetchSupplierInvoiceOptions(req),
+        fetchInvoiceProducts(req, isCredit ? 'sales_price' : 'purchase_price'),
+        isCredit ? fetchSalesLedgerOptions(req) : fetchPurchaseLedgerOptions(req),
+        fetchLedgerGroupOptions(req),
+        api.get(req, `${cfg.billApiPath}?per_page=100`).catch(() => null),
+    ]);
+    const n = (nR.body && nR.body.data) || null;
+    if (!n || !n.id) {
+        setFlash(req, 'error', `${cfg.label} not found.`);
+        return req.session.save(() => res.redirect(cfg.apiPath));
+    }
+    const billRows = (billsResult && billsResult.body && billsResult.body.data && Array.isArray(billsResult.body.data.data))
+        ? billsResult.body.data.data : [];
+    const billOptions = billRows.map((b) => ({
+        id: b.id, invoice_no: b.invoice_no,
+        party: (isCredit ? b.customer : b.supplier) || '',
+    }));
+    // The rate card picker every other voucher create screen already carries.
+    const priceLevelOptions = await fetchPriceLevelOptions(req);
+    // Return notes never loaded locations, so the line's Godown box had no real
+    // godowns to suggest and nothing to prefill from.
+    const locationOptions = await fetchOptions(req, '/locations');
+    res.render('return-notes/create', {
+        title: `Edit ${cfg.label}`,
+        kind,
+        activeMenu: cfg.activeMenu,
+        breadcrumb: [
+            { label: 'Dashboard', href: '/' },
+            { label: cfg.label + 's', href: cfg.apiPath },
+            { label: `Edit ${cfg.label}` },
+        ],
+        partyOptions, returnNoteProducts, ledgerOptions, billOptions,
+        locationOptions,
+        priceLevelOptions,
+        ledgerGroupOptions, gstRegistrationTypes: GST_REGISTRATION_TYPES,
+        editNote: n,
+        editItems: Array.isArray(n.items) ? n.items : [],
+        pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/return-note.js" defer></script>',
+    });
+  } catch (err) { next(err); }
+}
+
+async function handleReturnNoteUpdate(req, res, next, kind) {
+    try {
+        const cfg = RETURN_NOTE_CFG[kind];
+        const isCredit = kind === 'credit';
+        const id = Number(req.params.id);
+        const b = req.body;
+        const num = (v) => (v === '' || v == null ? undefined : Number(v));
+        const payload = {
+            customer_id:        isCredit ? num(b.customer_id) : undefined,
+            supplier_id:        isCredit ? undefined : num(b.supplier_id),
+            against_invoice_id: num(b.against_invoice_id),
+            note_no:            b.note_no || undefined,
+            invoice_date:       b.invoice_date || undefined,
+            ledger_name:        b.ledger_name || undefined,
+            supplier_bill_no:   b.supplier_bill_no || undefined,
+            notes:              b.notes || undefined,
+            items:              parseReturnNoteItems(b.items_json),
+        };
+        const result = await api.put(req, `${cfg.apiPath}/${id}`, payload);
+        if (apiOk(result)) {
+            setFlash(req, 'success', (result.body && result.body.message) || `${cfg.label} updated.`);
+            return req.session.save(() => res.redirect(cfg.apiPath));
+        }
+        setFlash(req, 'error', apiError(result, `Could not update ${cfg.label.toLowerCase()}.`));
+        return req.session.save(() => res.redirect(`${cfg.apiPath}/${id}/edit`));
+    } catch (err) { next(err); }
+}
+
+router.get('/credit-notes/:id/edit', (req, res, next) => handleReturnNoteEditForm(req, res, next, 'credit'));
+router.get('/debit-notes/:id/edit',  (req, res, next) => handleReturnNoteEditForm(req, res, next, 'debit'));
+router.post('/credit-notes/:id/update', (req, res, next) => handleReturnNoteUpdate(req, res, next, 'credit'));
+router.post('/debit-notes/:id/update',  (req, res, next) => handleReturnNoteUpdate(req, res, next, 'debit'));
+
 router.post('/credit-notes', (req, res, next) => handleReturnNoteCreate(req, res, next, 'credit'));
 router.post('/debit-notes',  (req, res, next) => handleReturnNoteCreate(req, res, next, 'debit'));
 
@@ -8592,6 +10230,114 @@ router.post('/collect-payments/:id/cancel', async (req, res, next) => {
         setFlash(req, apiOk(result) ? 'success' : 'error',
             apiOk(result) ? 'Payment request cancelled.' : apiError(result, 'Could not cancel this request.'));
         return req.session.save(() => res.redirect('/collect-payments'));
+    } catch (err) { next(err); }
+});
+
+
+/* ── Read-only voucher detail pages ──────────────────────────────
+ * One handler + one view (views/vouchers/detail.ejs) for every voucher
+ * module. Registered as explicit paths so none of them can shadow a more
+ * specific route (see the generic delete handler at the bottom of this file
+ * for what happens when a catch-all is registered too early). */
+const VOUCHER_VIEW_CFG = {
+    'quotations':        { label: 'Quotation',      noField: 'quotation_no', dateField: 'quotation_date',
+                           partyField: 'customer',  partyLabel: 'Customer',  hasPdf: true,
+                           extra: [{ label: 'Valid Till', field: 'valid_till', date: true }] },
+    'sales-orders':      { label: 'Sales Order',    noField: 'order_no',     dateField: 'order_date',
+                           partyField: 'customer',  partyLabel: 'Customer',  hasPdf: true,
+                           extra: [{ label: 'Due On', field: 'due_on', date: true }] },
+    'delivery-notes':    { label: 'Delivery Note',  noField: 'note_no',      dateField: 'note_date',
+                           partyField: 'customer',  partyLabel: 'Customer',  hasPdf: true,
+                           extra: [{ label: 'Dispatch Date', field: 'dispatch_date', date: true }] },
+    'purchase-orders':   { label: 'Purchase Order', noField: 'order_no',     dateField: 'order_date',
+                           partyField: 'supplier',  partyLabel: 'Supplier',  hasPdf: true,
+                           extra: [{ label: 'Due On', field: 'due_on', date: true }] },
+    'receipt-notes':     { label: 'Receipt Note',   noField: 'note_no',      dateField: 'note_date',
+                           partyField: 'supplier',  partyLabel: 'Supplier',  hasPdf: true,
+                           extra: [{ label: 'Received Date', field: 'received_date', date: true }] },
+    'credit-notes':      { label: 'Credit Note',    noField: 'invoice_no',   dateField: 'invoice_date',
+                           partyField: 'customer',  partyLabel: 'Customer',  hasPdf: true },
+    'debit-notes':       { label: 'Debit Note',     noField: 'invoice_no',   dateField: 'invoice_date',
+                           partyField: 'supplier',  partyLabel: 'Supplier',  hasPdf: true },
+    'sales-invoices':    { label: 'Invoice',        noField: 'invoice_no',   dateField: 'invoice_date',
+                           partyField: 'customer',  partyLabel: 'Customer',  hasPdf: true,
+                           extra: [{ label: 'Due Date', field: 'due_date', date: true }] },
+    'purchase-invoices': { label: 'Purchase',       noField: 'invoice_no',   dateField: 'invoice_date',
+                           partyField: 'supplier',  partyLabel: 'Supplier',  hasPdf: true,
+                           extra: [{ label: 'Supplier Bill No', field: 'supplier_bill_no' },
+                                   { label: 'Due Date', field: 'due_date', date: true }] },
+    /* Not invoice-shaped: a stock journal MOVES stock, so its lines are
+       product / direction / godown / qty with no tax and no money total. */
+    'stock-journals':    { label: 'Stock Journal', noField: 'voucher_no',  dateField: 'journal_date',
+                           partyField: '_none',    partyLabel: 'Narration', noTotals: true,
+                           columns: [
+                               { label: 'Item',      field: 'product_name', alt: 'description' },
+                               { label: 'Direction', field: 'direction' },
+                               { label: 'Godown',    field: 'godown' },
+                               { label: 'Qty',       field: 'quantity', num: true, kind: 'qty' },
+                               { label: 'Rate',      field: 'rate',     num: true, kind: 'money' },
+                           ] },
+    /* No line items at all — one Dr ledger, one Cr ledger, one amount. */
+    'journals':          { label: 'Journal', noField: 'voucher_no', dateField: 'journal_date',
+                           partyField: '_none', partyLabel: 'Voucher Type', partyAlt: 'vch_type',
+                           ledgerBlock: true, noTotals: true },
+    'contra':            { label: 'Contra',  noField: 'voucher_no', dateField: 'journal_date',
+                           partyField: '_none', partyLabel: 'Voucher Type', partyAlt: 'vch_type',
+                           ledgerBlock: true, noTotals: true },
+};
+
+function registerVoucherViewRoute(resource, cfg) {
+    router.get(`/${resource}/:id`, async (req, res, next) => {
+        try {
+            const id = Number(req.params.id);
+            if (!Number.isInteger(id) || id <= 0) return next();
+            const r = await api.get(req, `/${resource}/${id}`);
+            const v = (r.body && r.body.data) || null;
+            if (!v || !v.id) {
+                setFlash(req, 'error', `${cfg.label} not found.`);
+                return req.session.save(() => res.redirect(`/${resource}`));
+            }
+            res.render('vouchers/detail', {
+                title: `${cfg.label} ${v[cfg.noField] || v.id}`,
+                activeMenu: cfg.activeMenu || resource,
+                voucher: v,
+                items: Array.isArray(v.items) ? v.items : [],
+                cfg: { ...cfg, basePath: `/${resource}` },
+            });
+        } catch (err) { next(err); }
+    });
+}
+Object.keys(VOUCHER_VIEW_CFG).forEach((k) => registerVoucherViewRoute(k, VOUCHER_VIEW_CFG[k]));
+
+/* Generic DELETE, moved here from mid-file. It MUST stay last: as a
+ * catch-all it matches /<anything>/:id/delete, so any specific delete
+ * route registered after it is unreachable. Credit/debit notes hit
+ * exactly that — their own handlers were defined ~800 lines later and
+ * never ran, so deleting one answered "This record cannot be deleted
+ * here." from this handler's allow-list instead. */
+/* ── Generic DELETE handler (POST /:resource/:id/delete) ─────────
+ * Backs the custom Delete popup on every list page. Whitelisted to the
+ * resources the api actually exposes a DELETE for, then forwards to
+ * DELETE /api/v1/{resource}/{id}, flashes the result, and returns to the
+ * list. Kept LAST so its catch-all params never shadow a specific route. */
+const DELETABLE = new Set([
+    'customers', 'suppliers', 'products', 'categories', 'locations', 'sales-persons',
+    'customer-groups', 'sales-invoices', 'purchase-invoices', 'payments', 'receipts', 'journals',
+    'contra',
+]);
+router.post('/:resource/:id/delete', async (req, res, next) => {
+    try {
+        const { resource } = req.params;
+        const id = Number(req.params.id);
+        const back = req.get('Referer') || '/' + resource;
+        if (!DELETABLE.has(resource) || !Number.isInteger(id)) {
+            setFlash(req, 'error', 'This record cannot be deleted here.');
+            return req.session.save(() => res.redirect(back));
+        }
+        const result = await api.del(req, `/${resource}/${id}`);
+        if (apiOk(result)) setFlash(req, 'success', 'Record deleted successfully.');
+        else setFlash(req, 'error', apiError(result, 'Could not delete the record.'));
+        return req.session.save(() => res.redirect('/' + resource));
     } catch (err) { next(err); }
 });
 

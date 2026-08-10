@@ -319,6 +319,10 @@ async function cleanup(db) {
         if (argv[i].startsWith('--')) args[argv[i].slice(2)] = argv[++i];
     }
     const licenseId = Number(args.license || 2);
+    // This driver runs the REAL controller path, so it must connect exactly as
+    // the API does — through the licence's own restricted role, not the admin
+    // login. index.js does this at boot; a standalone run has to do it itself.
+    await require('../config/tenantCredentials').load();
     const db = getKnexForLicense(licenseId);
     let failures = 0;
     let companyId = null;

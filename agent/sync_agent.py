@@ -35,7 +35,7 @@ from constants import BRAND_NAME_AGENT, PUBLISHER_CN, PUBLISHER_THUMBPRINT
 from logger import get_logger
 from api_client import ApiClient, ActivationError, AgentError
 import tally_connector
-from tally_connector import TallyConnector, TallyUnavailable
+from tally_connector import TallyConnector, TallySkipped, TallyUnavailable
 import tally_control
 import backup_runner
 
@@ -216,7 +216,7 @@ def _activate(cfg: Config, logger, api: ApiClient) -> None:
     msg = (
         "This computer is not signed in yet, and sign-in needs a code emailed "
         "to you.\n"
-        "  Run TallyCloudSync.exe and sign in there, or run this agent from a "
+        f"  Run {_SLUG}.exe and sign in there, or run this agent from a "
         "terminal to be prompted."
     )
     logger.error("Non-interactive start with no token: sign-in required.")
@@ -763,6 +763,19 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
     ``False`` if it failed in a way the caller should count as a retry. Never
     raises - every external call is wrapped so the loop survives.
     """
+    # What earlier runs learned about requests that kill TallyPrime, loaded
+    # BEFORE anything can ask for one. This lives here, in the cycle, rather
+    # than in one caller of it: it used to be done only by run_sync_loop, so
+    # `--once` (and anything else entering a cycle directly) started with an
+    # empty quarantine and asked for the request the store already named —
+    # taking Tally down again on a machine that had known better for an hour.
+    # Cheap enough to repeat: one small file, once a cycle, and re-reading it
+    # picks up a store another process has since added to.
+    try:
+        tally_connector.use_skip_store(skip_store_path(cfg))
+    except Exception:                                       # noqa: BLE001
+        pass
+
     token = cfg.get_token()
     if not token:
         # Should not happen after _ensure_activated, but be defensive.
@@ -816,8 +829,17 @@ def _run_cycle(cfg: Config, logger, api: ApiClient) -> bool:
         logger.warning("Tally probe error (treating as unreachable): %s", exc)
         available = False
 
-    if available and VERBOSE:
-        echo("  [OK] Tally is up and reachable.")
+    if available:
+        # Same TallyPrime as the quarantine was learned on? A licence activated
+        # since the last cycle turns "this Tally cannot serve TDS" into a stale
+        # fact that would suppress real data forever. Best-effort, one small
+        # request. See TallyConnector.check_identity.
+        try:
+            tally.check_identity()
+        except Exception as exc:                            # noqa: BLE001
+            logger.debug("Tally identity check skipped: %s", exc)
+        if VERBOSE:
+            echo("  [OK] Tally is up and reachable.")
 
     if not available and cfg.tally_auto_start:
         if VERBOSE:
@@ -1546,24 +1568,14 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             except Exception as _pexc:
                 logger.warning("Pull[%s]: published reports read failed: %s", cname, _pexc)
                 extra_reports = {}
-            # Tally's OWN bill-wise outstanding — the independent check on the
-            # cloud's derived ageing. It is a PER-LEDGER report, so we first ask
-            # which ledgers are parties (walking the group tree); a company with
-            # no debtors/creditors simply yields nothing rather than erroring.
-            # Best-effort like every other report.
-            try:
-                parties = tally.party_ledger_names(company=cname)
-                outstandings = (tally.outstandings(company=cname, ledgers=parties)
-                                if parties else {})
-                if outstandings.get("failed"):
-                    logger.warning("Pull[%s]: outstanding unreadable for %d ledger(s): %s",
-                                   cname, len(outstandings["failed"]),
-                                   ", ".join(outstandings["failed"][:5]))
-            except TallyUnavailable:
-                raise
-            except Exception as _oexc:
-                logger.warning("Pull[%s]: outstandings read failed: %s", cname, _oexc)
-                outstandings = {}
+            # Tally's OWN bill-wise outstanding is read AFTER the upload below,
+            # not here. It is a PER-LEDGER report — one request per party — and
+            # on a 3,586-ledger company that is fifteen to twenty-five minutes
+            # with the send throttle. Reading it here put every master and every
+            # report behind it, so nothing at all reached the cloud until the
+            # last bill had answered, and any interruption in between threw the
+            # whole cycle away. See the second import further down.
+            outstandings = {}
             # Vouchers are NOT read here (Tally's Day Book is single-day). They are
             # pulled below via _pull_vouchers - a chunked, AlterID-incremental
             # Voucher COLLECTION backfill (first run = all history over a few
@@ -1675,6 +1687,42 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             if VERBOSE:
                 echo(f"  [x] '{cname}': cloud import failed ({exc})")
 
+        # ── Tally's OWN bill-wise outstanding — the independent check on the
+        #    cloud's derived ageing. Read HERE, after the masters are safely in
+        #    the cloud, because it is a per-ledger report: one request per party,
+        #    which on a large company is the longest thing the cycle does. It
+        #    used to run before the import and hold everything else hostage.
+        #
+        #    Its own upload is a SECOND, outstandings-only import. The server
+        #    replaces a side only when rows for that side arrived, so a post
+        #    carrying nothing else cannot disturb the masters already stored
+        #    (see AgentController.importFromTally). ──
+        try:
+            parties = tally.party_ledger_names(company=cname)
+            outstandings = (tally.outstandings(company=cname, ledgers=parties)
+                            if parties else {})
+            if outstandings.get("failed"):
+                logger.warning("Pull[%s]: outstanding unreadable for %d ledger(s): %s",
+                               cname, len(outstandings["failed"]),
+                               ", ".join(outstandings["failed"][:5]))
+            rows = (outstandings or {}).get("rows") or []
+            if rows:
+                api.import_from_tally(token, [], [], company_name=cname,
+                                      outstandings=outstandings)
+                logger.info("Pull[%s]: %d outstanding bill(s) uploaded.",
+                            cname, len(rows))
+        # TallySkipped FIRST: it subclasses TallyUnavailable, so the re-raise
+        # below would catch it too — and did, live. The masters had just
+        # uploaded when a quarantined outstandings report threw all the way out
+        # of this function and ended the cycle with a traceback. A request we
+        # deliberately did not send is the healthy case, not a failure.
+        except TallySkipped as _sexc:
+            logger.info("Pull[%s]: outstandings skipped: %s", cname, _sexc)
+        except TallyUnavailable:
+            raise
+        except Exception as _oexc:                          # noqa: BLE001
+            logger.warning("Pull[%s]: outstandings failed: %s", cname, _oexc)
+
         # ── Vouchers: chunked, AlterID-INCREMENTAL backfill (separate from the
         #    masters import above). Best-effort - never aborts the pull. ──
         try:
@@ -1682,7 +1730,7 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
             # (orders, delivery/receipt notes, stock journals, job work, payroll)
             # that a single generic Voucher collection does not reliably return,
             # and self-heals gaps a forward-only watermark can never revisit.
-            vsent = _pull_vouchers_by_type(cfg, logger, api, tally, token, cname)
+            vsent = _pull_voucher_changes(cfg, logger, api, tally, token, cname)
             if vsent and VERBOSE:
                 echo(f"  [OK] '{cname}': {vsent} voucher(s) pushed to cloud this cycle.")
         except TallyUnavailable:
@@ -1693,7 +1741,8 @@ def _pull_pass(cfg: Config, logger, api: ApiClient, tally: TallyConnector) -> No
         # ── DELETE detection. Periodic, not every cycle: it re-reads every
         #    master id, which is cheap but not free. Best-effort. ──
         try:
-            _reconcile_pass(cfg, logger, api, tally, token, cname)
+            _reconcile_pass(cfg, logger, api, tally, token, cname,
+                            features=(cmaster or {}).get("features"))
         except Exception as exc:
             logger.warning("Reconcile[%s] failed: %s", cname, exc)
 
@@ -1707,9 +1756,39 @@ RECONCILE_EVERY = 12
 # reconciles on its first cycle, which is the safe direction to err in.
 _reconcile_counter: dict[str, int] = {}
 
+# ── Voucher sweep cadence ────────────────────────────────────────────────────
+# The per-type id sweep is the same kind of full scan, and was the same mistake:
+# it ran EVERY cycle. Measured on a 11,038-voucher company it read the complete
+# {guid, alterid} list for all 24 voucher types — about 2.5 minutes of a 3
+# minute cycle — to compare the same unchanged ids and discard them, once a
+# minute, forever. TallyPrime was never idle and the Dashboard never stopped
+# saying "Uploading".
+#
+# What actually carries new and edited vouchers to the cloud is the cheap
+# AlterID-incremental pull, and that still runs every cycle. The sweep is kept
+# for the two things only it can do — heal a window a forward-only watermark
+# skipped, and notice deletes — which are not per-minute concerns. Same trade,
+# same reasoning, as RECONCILE_EVERY above.
+VOUCHER_SWEEP_EVERY = 12
+_voucher_sweep_counter: dict[str, int] = {}
+
+
+def _pull_voucher_changes(cfg, logger, api, tally, token: str, cname: str) -> int:
+    """Bring the cloud's vouchers up to date for one company.
+
+    Cheap path every cycle; full sweep every VOUCHER_SWEEP_EVERY cycles (and
+    always on the first cycle after a restart, so a fresh install does not wait
+    to discover the history it has never seen).
+    """
+    n = _voucher_sweep_counter.get(cname, 0)
+    _voucher_sweep_counter[cname] = n + 1
+    if n % VOUCHER_SWEEP_EVERY == 0:
+        return _pull_vouchers_by_type(cfg, logger, api, tally, token, cname)
+    return _pull_vouchers(cfg, logger, api, tally, token, cname)
+
 
 def _reconcile_pass(cfg, logger, api: ApiClient, tally: TallyConnector,
-                    token: str, cname: str) -> None:
+                    token: str, cname: str, features: "Optional[dict]" = None) -> None:
     """Tell the cloud which masters STILL EXIST in Tally, so it can delete the rest.
 
     Tally's XML API has no deletion feed: a deleted ledger just stops appearing
@@ -1740,6 +1819,15 @@ def _reconcile_pass(cfg, logger, api: ApiClient, tally: TallyConnector,
     by_collection: dict[str, list] = {}
 
     for kind, coll_type in TallyConnector.RECONCILE_TYPES.items():
+        # The SAME F11 gate the master pull uses. Without it this loop asked a
+        # payroll-less company for TSSRecEmployeeGroup and took TallyPrime down
+        # — the crash the gate on the other side exists to prevent, just moved
+        # here and made rarer (once every RECONCILE_EVERY cycles) and therefore
+        # harder to trace.
+        if not TallyConnector.feature_allows(kind, features):
+            logger.debug("Reconcile[%s/%s]: skipped, the company does not "
+                         "report that feature.", cname, kind)
+            continue
         if coll_type not in by_collection:
             try:
                 by_collection[coll_type] = tally.master_ids(kind, company=cname)
@@ -2308,13 +2396,16 @@ def _start_tally(cfg: Config, logger) -> bool:
 # --------------------------------------------------------------------------- #
 # The agent name on disk (matches build_exe.APP_NAME). The Startup VBS that
 # launches it hidden (install-autostart.ps1) uses the same base name.
-# IDENTITY — deliberately NOT rebranded: these are on-disk filenames an
-# existing install already has; renaming them would break self-update and
-# autostart for machines already in the field.
-_EXE_BASENAME = "TallyCloudSyncAgent.exe"
-_NEW_EXE_BASENAME = "TallyCloudSyncAgent.new.exe"
+# IDENTITY — built from brand.SLUG, the same constant build_exe.py names the
+# exe from and gui_agent/win_service build the install dir, registry key and
+# service name from. A slug change is a reinstall (an install made by an older
+# build keeps its old filenames and is not adopted), never a silent rename.
+from brand import CONSOLE_EXE_NAME as _CONSOLE_EXE, SLUG as _SLUG
+
+_EXE_BASENAME = f"{_CONSOLE_EXE}.exe"
+_NEW_EXE_BASENAME = f"{_CONSOLE_EXE}.new.exe"
 _UPDATER_BAT = "_agent_update.bat"
-_STARTUP_VBS = "TallyCloudSyncAgent.vbs"
+_STARTUP_VBS = f"{_CONSOLE_EXE}.vbs"
 
 
 def _version_tuple(v: str) -> tuple:
@@ -2467,7 +2558,7 @@ def _spawn_updater_bat(exe_dir: str, logger, exe_path: Optional[str] = None) -> 
         'set "VBS=' + vbs + '"',
         "rem Stop the Windows SERVICE (if installed) so it RELEASES its exe lock;",
         "rem a harmless no-op for a portable/GUI install (service simply not found).",
-        'net stop "TallyCloudSync" >nul 2>&1',
+        'net stop "' + _SLUG + '" >nul 2>&1',
         "rem Wait for the running agent to exit and release its exe.",
         "set /a tries=0",
         ":waitloop",
@@ -2481,7 +2572,7 @@ def _spawn_updater_bat(exe_dir: str, logger, exe_path: Optional[str] = None) -> 
         ":relaunch",
         "rem Prefer restarting the SERVICE (errorlevel 0 = it was started); else",
         "rem fall back to launching the portable exe hidden via the Startup VBS.",
-        'net start "TallyCloudSync" >nul 2>&1',
+        'net start "' + _SLUG + '" >nul 2>&1',
         "if %errorlevel%==0 goto cleanup",
         'if exist "%VBS%" (',
         '  start "" wscript.exe "%VBS%"',
@@ -2493,7 +2584,7 @@ def _spawn_updater_bat(exe_dir: str, logger, exe_path: Optional[str] = None) -> 
         "rem Could not replace the exe (lock never released). Drop the staged",
         "rem update and RELAUNCH the old exe so the agent is not left down.",
         'if exist "%NEW%" del /F /Q "%NEW%" >nul 2>&1',
-        'net start "TallyCloudSync" >nul 2>&1',
+        'net start "' + _SLUG + '" >nul 2>&1',
         "if %errorlevel%==0 goto cleanup",
         'if exist "%VBS%" (',
         '  start "" wscript.exe "%VBS%"',

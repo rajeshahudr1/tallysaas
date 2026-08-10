@@ -1829,6 +1829,13 @@ async function importFromTally(req, res) {
                 const row = {
                     company_id: cid, name: lname, parent: String(l.parent || ''),
                     opening_balance: opening, closing_balance: closing, gstin: l.gstin || null,
+                    // The agent has always sent these; the upsert used to drop
+                    // them, so Tally's own credit terms and tax classification
+                    // were thrown away on every sync. See the
+                    // ledger_credit_and_tax migration.
+                    credit_period_days: l.credit_period_days != null ? Number(l.credit_period_days) : null,
+                    tax_type: l.tax_type || null,
+                    tax_classification: l.tax_classification || null,
                     tally_alter_id: lalter, updated_at: now,
                 };
                 await upsertMaster('tally_ledgers', {
@@ -2616,11 +2623,41 @@ async function importFromTally(req, res) {
             // or a party that isn't a cloud customer/supplier) → NULL FK, but
             // the voucher is STILL recorded so the value is not lost.
             const partyTable = (isReceipt || isSales) ? 'customers' : 'suppliers';
-            let partyId = null;
-            if (partyName) {
-                const party = await db(partyTable).where('company_id', cid).whereNull('deleted_at')
-                    .whereRaw('lower(name) = ?', [partyName.toLowerCase()]).first('id');
-                if (party) partyId = party.id;
+            const findParty = async (name) => {
+                const n = String(name || '').trim();
+                if (!n) return null;
+                const row = await db(partyTable).where('company_id', cid).whereNull('deleted_at')
+                    .whereRaw('lower(name) = ?', [n.toLowerCase()]).first('id');
+                return row ? row.id : null;
+            };
+            let partyId = await findParty(partyName);
+
+            // Tally leaves PARTYLEDGERNAME EMPTY on most receipt and payment
+            // vouchers — the party is only visible in the postings. Without
+            // this fallback those vouchers land with a NULL party FK, and a
+            // receipt that never attaches to a customer can never settle their
+            // bills: Receivables then reports every invoice as fully
+            // outstanding. So when the header gives us no usable party, look
+            // for one among the voucher's own ledgers.
+            //
+            // Candidates are tried on the side the party normally sits (a
+            // receipt credits the customer, a payment debits the supplier, a
+            // sale debits the customer, a purchase credits the supplier) and
+            // only THEN on the other side. The second pass matters: Tally's
+            // is_debit flag is not consistently oriented across voucher
+            // classes in the pulled data, so side is treated as a preference
+            // for picking between two known ledgers, never as a filter that
+            // could reject the only party on the voucher. Round-off postings
+            // are never a party.
+            if (partyId == null && _vEntries.length) {
+                const wantDebit = isPayment || isSales;
+                const bySide = (want) => _vEntries
+                    .filter((e) => !!e.is_debit === want && !_isRound(e))
+                    .sort((a, b) => Math.abs(Number(b.amount) || 0) - Math.abs(Number(a.amount) || 0));
+                for (const e of [...bySide(wantDebit), ...bySide(!wantDebit)]) {
+                    partyId = await findParty(e.ledger);
+                    if (partyId != null) break;
+                }
             }
 
             if (isReceipt || isPayment) {

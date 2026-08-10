@@ -141,6 +141,11 @@ app.use(errorHandler);
 // ── Boot ─────────────────────────────────────────────────────────
 const { pingWithRetry } = require('./config/db');
 
+// Start the tenant-credential load BEFORE listen() so the window in which a
+// request could beat it is as small as possible (it is awaited in the callback
+// below, which runs before the first request can be handled in practice).
+const credentialsReady = require('./config/tenantCredentials').load();
+
 const server = app.listen(PORT, '0.0.0.0', async () => {
     console.log('');
     console.log(`  TallySaaS API running`);
@@ -169,6 +174,21 @@ const server = app.listen(PORT, '0.0.0.0', async () => {
         console.log(`              → Is PostgreSQL running and does database "${dbName}" exist?`);
         // Intentionally do NOT exit — /api/v1/ping stays alive for health probes.
     }
+    // Per-licence DB roles: load the credential directory BEFORE traffic can
+    // open a tenant pool (config/tenantCredentials.js explains the sync design).
+    try {
+        const credentials = require('./config/tenantCredentials');
+        const n = await credentialsReady;
+        const { strict } = credentials.stats();
+        console.log(`      Tenants: ${n} licence(s) on a dedicated DB role${strict ? ' (strict)' : ' — fallback ON'}`);
+        if (!strict) {
+            console.log(`              → Un-migrated licences still use the shared admin login.`);
+            console.log(`              → node db/scripts/upgrade-tenant-roles.js, then TENANT_DB_STRICT_ROLES=true`);
+        }
+    } catch (e) {
+        console.log(`      Tenants: credential load FAILED — ${e.message}`);
+    }
+
     // Automatic payment-reminder scheduler (per-licence hour + offset days).
     try { require('./jobs/reminderScheduler').startScheduler(); }
     catch (e) { console.log(`      Reminder scheduler: NOT started — ${e.message}`); }

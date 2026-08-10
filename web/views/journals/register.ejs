@@ -80,7 +80,7 @@ function _mlabel(ym) { var p = String(ym).split('-'); return (MN[Number(p[1])] |
                 <% } %>
                 <% _months.forEach(function (m) { %>
                     <tr class="reg-row" style="cursor:pointer" onclick="location.href='/journals?month=<%= m.month %>'">
-                        <td style="font-weight:600"><a href="/journals?month=<%= m.month %>" style="color:#2563EB;text-decoration:none"><%= _mlabel(m.month) %></a></td>
+                        <td style="font-weight:600"><a href="/journals?month=<%= m.month %>" style="color:var(--primary);text-decoration:none"><%= _mlabel(m.month) %></a></td>
                         <td style="text-align:right"><%= m.count %></td>
                         <td style="text-align:right"><%= _inr(m.total) %></td>
                         <td style="text-align:right;color:#475569"><%= _inr(m.closing) %></td>

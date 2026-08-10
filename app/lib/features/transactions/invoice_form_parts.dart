@@ -119,15 +119,32 @@ class LineItemCard extends StatelessWidget {
     required this.onChanged,
     this.onRemove,
     this.lockPricing = false,
+    this.rateFor,
   });
   final LineRow row;
   final VoidCallback onChanged;
   final VoidCallback? onRemove;
 
+  /// The active price level's rate for an item at a quantity, or null when the
+  /// level says nothing about it (or no level is chosen). Supplied by the form,
+  /// which owns the level and its loaded rate card.
+  final double? Function(String itemName, double qty)? rateFor;
+
   /// Customer-portal login: Rate + Disc % are LOCKED (the price list decides;
   /// the server ignores client values and recomputes — this keeps the on-screen
   /// preview honest).
   final bool lockPricing;
+
+  /// The active level's rate for THIS line, at its current quantity.
+  double? _levelRate() {
+    final name = row.productName;
+    if (rateFor == null || name == null || name.isEmpty) return null;
+    return rateFor!(name, double.tryParse(row.qty.text.trim()) ?? 0);
+  }
+
+  /// A rate as text, without a pointless trailing ".0".
+  static String _num(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
   @override
   Widget build(BuildContext context) {
@@ -148,13 +165,23 @@ class LineItemCard extends StatelessWidget {
                 row.productName = o?.name;
                 row.hsn = o?.hsn;
                 row.unit = o?.unit;
-                if (o?.rate != null) row.rate.text = o!.rate!.toString();
-                if (o?.gstRate != null) row.gst.text = o!.gstRate!.toString();
-                // Clamp a pre-typed qty to the fresh stock.
-                final q = double.tryParse(row.qty.text.trim()) ?? 0;
-                if (row.stock != null && q > row.stock!) {
-                  row.qty.text = row.stock!.toString();
+                // Rate: the chosen PRICE LEVEL wins where it covers this item —
+                // that is the whole point of picking a level — otherwise the
+                // item's own standard price.
+                final levelRate = _levelRate();
+                if (levelRate != null) {
+                  row.rate.text = _num(levelRate);
+                } else if (o?.rate != null) {
+                  row.rate.text = o!.rate!.toString();
                 }
+                if (o?.gstRate != null) row.gst.text = o!.gstRate!.toString();
+                // Stock on hand is a HINT, not a cap. This card is shared by
+                // every voucher form, and a quotation or an order is a promise
+                // about goods you may not hold yet — Tally itself allows a
+                // negative balance. Silently rewriting the typed quantity down
+                // to the stock (usually 0 on a freshly synced item) is how the
+                // Qty box appeared to be broken. Only the sales-invoice form
+                // enforces a limit, and it says so instead of retyping for you.
                 onChanged();
               },
             ),
@@ -178,14 +205,15 @@ class LineItemCard extends StatelessWidget {
                 Expanded(child: AppTextField(
                   controller: row.qty, hint: 'Qty',
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  // No live clamp — see the note on the product picker above.
+                  // Typing into a box that rewrites what you typed is worse
+                  // than an error message you can read.
                   onChanged: (_) {
-                    // Live clamp: can't type more than the stock on hand.
-                    final q = double.tryParse(row.qty.text.trim()) ?? 0;
-                    if (row.stock != null && q > row.stock!) {
-                      row.qty.text = row.stock!.toString();
-                      row.qty.selection = TextSelection.fromPosition(
-                          TextPosition(offset: row.qty.text.length));
-                    }
+                    // A price level can band its rate by quantity, so crossing
+                    // a band boundary has to re-rate the line — otherwise the
+                    // qty says one band and the rate still shows the other.
+                    final r = _levelRate();
+                    if (r != null) row.rate.text = _num(r);
                     onChanged();
                   },
                 )),

@@ -55,6 +55,40 @@ function _inr(v) {
     ],
 }) %>
 
+<%# ── Status tabs + voucher-type filter. Each family words its own status
+     differently (pending_tally / draft_cloud / open …), so these work on the
+     api's collapsed pending / completed / failed. ── %>
+<% var _stateTabs = (typeof stateTabs !== 'undefined' && stateTabs) ? stateTabs : [];
+   var _kindOptions = (typeof kindOptions !== 'undefined' && kindOptions) ? kindOptions : []; %>
+<div class="mye-bar">
+    <div class="mye-tabs">
+        <% _stateTabs.forEach(function (t) { %>
+            <a href="<%= t.href %>" class="mye-tab <%= t.active ? 'is-active' : '' %>"><%= t.label %></a>
+        <% }); %>
+    </div>
+    <% if (_kindOptions.length > 1) { %>
+    <form method="get" action="/my/vouchers">
+        <% _stateTabs.forEach(function (t) { if (t.active && t.k) { %>
+            <input type="hidden" name="state" value="<%= t.k %>">
+        <% } }); %>
+        <select name="kind" class="mye-select" aria-label="Voucher type" onchange="this.form.submit()">
+            <% _kindOptions.forEach(function (o) { %>
+                <option value="<%= o.value %>" <%= o.selected ? 'selected' : '' %>><%= o.label %></option>
+            <% }); %>
+        </select>
+    </form>
+    <% } %>
+</div>
+<style>
+    .mye-bar { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+    .mye-tabs { display:inline-flex; gap:8px; flex-wrap:wrap; }
+    .mye-tab { padding:7px 15px; border-radius:8px; border:1px solid #e2e8f0; background:#fff;
+        color:#475569; font-size:12.5px; font-weight:600; text-decoration:none; }
+    .mye-tab:hover { border-color:#cbd5e1; color:var(--primary); }
+    .mye-tab.is-active { background:var(--primary); border-color:var(--primary); color:#fff; }
+    .mye-select { padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; background:#fff; font-size:12.5px; color:#334155; }
+</style>
+
 <form id="my-vouchers-filters-form" autocomplete="off" method="get" action="/my/vouchers">
     <%- include('../partials/filter-card', {
         filterId: 'my-vouchers-filters',
@@ -86,6 +120,9 @@ function _inr(v) {
                     <th class="data-table-idx">#</th>
                     <th>Type</th>
                     <th>Date</th>
+                    <%# When the entry last changed — the column that tells you
+                        whether a stuck voucher has moved at all. %>
+                    <th>Modified Date</th>
                     <th>Voucher No</th>
                     <th>Party</th>
                     <th class="text-end">Amount</th>
@@ -95,7 +132,7 @@ function _inr(v) {
             <tbody>
                 <% if (!_rows.length) { %>
                     <tr>
-                        <td class="data-table-empty text-center text-muted py-5" colspan="7">
+                        <td class="data-table-empty text-center text-muted py-5" colspan="8">
                             <i class="fa-regular fa-folder-open d-block mb-2 fs-3"></i>
                             You haven't created any vouchers yet.
                         </td>
@@ -106,6 +143,7 @@ function _inr(v) {
                         <td class="data-table-idx text-muted"><%= i + 1 %></td>
                         <td><a class="pill-status <%= _kindPillClass(r.kind) %>" href="<%= r.href %>"><%= r.label %></a></td>
                         <td><%= r.date %></td>
+                        <td class="text-muted"><%= r.modified_at %></td>
                         <td><a href="<%= r.href %>"><%= r.voucher_no %></a></td>
                         <td><%= r.party %></td>
                         <td class="text-end"><span class="data-table-money"><%= _inr(r.amount) %></span></td>

@@ -247,6 +247,165 @@ async function create(req, res) {
     }
 }
 
+/**
+ * PUT /stock-journals/:id — replace a journal's lines.
+ *
+ * A stock journal is not just a record: creating one moves stock. Editing it
+ * therefore REVERSES the stock effect of the existing lines, then APPLIES the
+ * new ones — the same rules destroy() and create() use — inside a single
+ * transaction, so a failure part-way cannot leave stock half-moved.
+ *
+ * Every movement still writes its own stock_adjustments row (reason says
+ * "edited"), so the audit trail explains the change instead of the numbers
+ * appearing to shift on their own.
+ */
+async function update(req, res) {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+    try {
+        const body  = req.body;
+        const items = body.items || [];
+
+        if (!isBalanced(items)) {
+            return R.errorResponse(res, 'Stock journal is not balanced: source quantity must equal destination quantity (or have no destination for pure consumption).', 422);
+        }
+
+        const existing = await db('stock_journals')
+            .where({ id, company_id: req.companyId })
+            .whereNull('deleted_at')
+            .first('*');
+        if (!existing) return R.errorResponse(res, NOT_FOUND_MSG, 404);
+
+        const oldItems = await db('stock_journal_items')
+            .where({ company_id: req.companyId, stock_journal_id: id })
+            .select('*');
+
+        const effectiveLocationId = req.locationId != null
+            ? req.locationId
+            : (body.location_id || null);
+        const createdBy = req.user && req.user.sub ? req.user.sub : null;
+
+        const result = await db.transaction(async (trx) => {
+            const now = new Date();
+            const voucherNo = existing.voucher_no;
+
+            // ── 1. Undo the old lines (destroy()'s rules) ──
+            for (const it of oldItems) {
+                const product = await trx('products')
+                    .where({ id: it.product_id, company_id: req.companyId })
+                    .whereNull('deleted_at')
+                    .forUpdate()
+                    .first('id', 'opening_stock');
+                if (!product) continue;
+
+                const before = num(product.opening_stock);
+                const qty    = num(it.quantity);
+                const isReversalAdd = it.direction === 'source';
+                const after = isReversalAdd ? before + qty : Math.max(0, before - qty);
+
+                await trx('products').where('id', product.id)
+                    .update({ opening_stock: after, updated_at: now });
+
+                await trx('stock_adjustments').insert({
+                    company_id:      req.companyId,
+                    product_id:      product.id,
+                    location_id:     effectiveLocationId,
+                    type:            isReversalAdd ? 'add' : 'remove',
+                    quantity:        qty,
+                    before_qty:      before,
+                    after_qty:       after,
+                    reason:          'Stock Journal edited (reversal of previous lines)',
+                    voucher_no:      voucherNo,
+                    voucher_kind:    'stock_journal',
+                    adjustment_date: now.toISOString().slice(0, 10),
+                    created_by:      createdBy,
+                });
+            }
+
+            // ── 2. Swap the lines ──
+            await trx('stock_journal_items')
+                .where({ company_id: req.companyId, stock_journal_id: id })
+                .del();
+
+            await trx('stock_journals').where('id', id).update({
+                journal_date: body.journal_date || existing.journal_date,
+                narration:    body.narration != null ? body.narration : existing.narration,
+                updated_at:   now,
+            });
+
+            const itemRows = items.map((it) => ({
+                company_id:        req.companyId,
+                stock_journal_id:  id,
+                product_id:        it.product_id,
+                direction:         it.direction,
+                godown:            it.godown || null,
+                quantity:          Number(it.quantity) || 0,
+                rate:              it.rate != null && it.rate !== '' ? Number(it.rate) : null,
+            }));
+            const insertedItems = itemRows.length
+                ? await trx('stock_journal_items').insert(itemRows).returning('*') : [];
+
+            // ── 3. Apply the new lines (create()'s rules) ──
+            for (const it of insertedItems) {
+                const product = await trx('products')
+                    .where({ id: it.product_id, company_id: req.companyId })
+                    .whereNull('deleted_at')
+                    .forUpdate()
+                    .first('id', 'name', 'opening_stock');
+                if (!product) {
+                    throw Object.assign(new Error('Product not found for stock journal line.'), { statusCode: 422 });
+                }
+
+                const before = num(product.opening_stock);
+                const qty    = num(it.quantity);
+                let after, adjType;
+                if (it.direction === 'source') {
+                    after = before - qty;
+                    adjType = 'remove';
+                    if (after < 0) {
+                        throw Object.assign(
+                            new Error(`Insufficient stock for "${product.name}": have ${before}, need ${qty}.`),
+                            { statusCode: 422 },
+                        );
+                    }
+                } else {
+                    after = before + qty;
+                    adjType = 'add';
+                }
+
+                await trx('products').where('id', product.id)
+                    .update({ opening_stock: after, updated_at: now });
+
+                await trx('stock_adjustments').insert({
+                    company_id:      req.companyId,
+                    product_id:      product.id,
+                    location_id:     effectiveLocationId,
+                    type:            adjType,
+                    quantity:        qty,
+                    before_qty:      before,
+                    after_qty:       after,
+                    reason:          'Stock Journal edited',
+                    voucher_no:      voucherNo,
+                    voucher_kind:    'stock_journal',
+                    adjustment_date: body.journal_date || existing.journal_date || null,
+                    created_by:      createdBy,
+                });
+            }
+
+            const header = await trx('stock_journals').where('id', id).first('*');
+            return { ...header, items: insertedItems };
+        });
+
+        return R.successResponse(res, result, 'Stock journal updated.');
+    } catch (err) {
+        if (err && err.statusCode === 422) {
+            return R.errorResponse(res, err.message, 422);
+        }
+        console.error('stockJournals.update error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 async function destroy(req, res) {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) return R.errorResponse(res, NOT_FOUND_MSG, 404);
@@ -312,4 +471,4 @@ async function destroy(req, res) {
     }
 }
 
-module.exports = { list, get, create, destroy, isBalanced };
+module.exports = { list, get, create, update, destroy, isBalanced };

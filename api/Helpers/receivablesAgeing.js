@@ -44,6 +44,25 @@ function daysBetween(a, b) {
 }
 
 /**
+ * When a bill is due.
+ *
+ * A bill with no due date is due ON ITS INVOICE DATE — a party with no agreed
+ * credit period owes the money immediately. That is what Tally does with a
+ * zero credit period, and what LiveKeeping shows (a party whose bills carry
+ * no terms reports Overdue equal to Outstanding). Treating a missing due date
+ * as "never overdue" instead would quietly hide the oldest debts on the very
+ * screen built to surface them.
+ *
+ * Note this is deliberately NOT symmetric with `credit_days`, which stays
+ * null for such a bill: we know the money is due, we do NOT know the party
+ * was ever granted terms, and reporting "0 days credit" would read as a
+ * negotiated term rather than as missing data.
+ */
+function dueDateOf(row) {
+    return asDate(row.due_date) || asDate(row.invoice_date);
+}
+
+/**
  * Which ageing band a given age (in days) falls into. A boundary day belongs
  * to the LOWER band — 45 days is "0 - 45", 46 days is "45 - 90".
  */
@@ -131,9 +150,9 @@ function buildReceivables(invoices, receipts, now) {
             const age = issued ? Math.max(0, daysBetween(issued, today)) : 0;
             buckets[bucketIndexForDays(age)].amount += open;
 
-            // Overdue + projections are due-date driven. An invoice with no due
-            // date is neither overdue nor projected — we have no date to judge.
-            const due = asDate(row.due_date);
+            // Overdue + projections are due-date driven; a bill with no stated
+            // due date falls due on its invoice date (see dueDateOf).
+            const due = dueDateOf(row);
             if (!due) continue;
             const daysToDue = daysBetween(today, due);
             if (daysToDue < 0) {
@@ -178,18 +197,18 @@ function buildReceivables(invoices, receipts, now) {
  *          per-customer grouping, not sorted by age — callers that need a
  *          particular order (e.g. oldest first) should sort themselves.
  */
-function buildReceivablesRows(invoices, receipts, now) {
+function buildReceivablesRows(invoices, receipts, now, partyKey = 'customer_id') {
     const today = asDate(now instanceof Date ? now : new Date());
 
     const receivedBy = new Map();
     for (const r of receipts || []) {
-        const key = String(r.customer_id);
+        const key = String(r[partyKey]);
         receivedBy.set(key, (receivedBy.get(key) || 0) + Number(r.amount || 0));
     }
 
     const byCustomer = new Map();
     for (const v of invoices || []) {
-        const key = String(v.customer_id);
+        const key = String(v[partyKey]);
         if (!byCustomer.has(key)) byCustomer.set(key, []);
         byCustomer.get(key).push(v);
     }
@@ -218,6 +237,154 @@ function buildReceivablesRows(invoices, receipts, now) {
     return out;
 }
 
+/**
+ * PARTY-WISE receivables — one row per customer, the way the Receivables
+ * screen lists them (LiveKeeping parity).
+ *
+ * Built on the SAME FIFO walk as buildReceivablesRows(), so a party's
+ * `outstanding` is exactly the sum of that party's open bills and the page
+ * total always equals the dashboard's Total Receivables.
+ *
+ * Two derived columns need explaining:
+ *
+ *   credit_days   The credit period the party actually gets, read off the
+ *                 bills themselves as the MEDIAN of (due_date - invoice_date).
+ *                 The median rather than the mean so one odd bill with a
+ *                 far-out due date cannot drag the whole party's terms.
+ *                 null when no bill carries a due date.
+ *
+ *   avg_pay_days  How long this party takes to pay, in days. Receipts are
+ *                 allocated to bills oldest-first (the same convention the
+ *                 rest of this file uses, because a receipt records a PARTY
+ *                 not a bill), and each settled rupee is weighted by how
+ *                 long it took. Weighting by amount rather than by bill
+ *                 count stops a stack of tiny fast-paid bills from hiding a
+ *                 large slow one. null when nothing has been settled.
+ *
+ * PURE — no db access.
+ *
+ * The same walk serves PAYABLES: pass the purchase bills, the payment
+ * vouchers and partyKey 'supplier_id'. Money owed to a supplier ages exactly
+ * the way money owed by a customer does, so the two screens share this rather
+ * than growing a near-identical second copy that can drift.
+ *
+ * @param {Array} invoices  every OPEN bill, already scoped
+ * @param {Array<{amount, payment_date}>} receipts  settlement vouchers
+ * @param {Date} now
+ * @param {string} [partyKey='customer_id']  'customer_id' | 'supplier_id'
+ * @returns {Array<{party_id, outstanding, overdue, oldest_age_days,
+ *                  bills, credit_days, avg_pay_days}>}
+ */
+function buildReceivablesParties(invoices, receipts, now, partyKey = 'customer_id') {
+    const today = asDate(now instanceof Date ? now : new Date());
+
+    // Receipts per customer: the running total (for FIFO settlement) and the
+    // dated list (for avg_pay_days).
+    const receivedBy = new Map();
+    const receiptsBy = new Map();
+    for (const r of receipts || []) {
+        const key = String(r[partyKey]);
+        receivedBy.set(key, (receivedBy.get(key) || 0) + Number(r.amount || 0));
+        if (!receiptsBy.has(key)) receiptsBy.set(key, []);
+        receiptsBy.get(key).push({ date: asDate(r.payment_date), amount: Number(r.amount || 0) });
+    }
+
+    const byCustomer = new Map();
+    for (const v of invoices || []) {
+        const key = String(v[partyKey]);
+        if (!byCustomer.has(key)) byCustomer.set(key, []);
+        byCustomer.get(key).push(v);
+    }
+
+    const out = [];
+    for (const [key, list] of byCustomer.entries()) {
+        const settled = allocateFifo(list, receivedBy.get(key) || 0);
+
+        let outstanding = 0;
+        let overdue = 0;
+        let oldest = 0;
+        let bills = 0;
+        const creditDays = [];
+
+        for (const row of settled) {
+            const issued = asDate(row.invoice_date);
+            // credit_days reports only STATED terms — a synthesised due date
+            // (see dueDateOf) is not evidence the party was granted credit.
+            const stated = asDate(row.due_date);
+            if (issued && stated) creditDays.push(daysBetween(issued, stated));
+
+            const open = row.outstanding;
+            if (open <= 0) continue;
+            outstanding += open;
+            bills += 1;
+            if (issued) oldest = Math.max(oldest, Math.max(0, daysBetween(issued, today)));
+            const due = dueDateOf(row);
+            if (due && daysBetween(today, due) < 0) overdue += open;
+        }
+
+        if (outstanding <= 0) continue;
+
+        out.push({
+            // `party_id` is the generic name; `customer_id` is kept so the
+            // Receivables callers that already read it keep working.
+            party_id: list[0][partyKey],
+            customer_id: list[0][partyKey],
+            outstanding,
+            overdue,
+            oldest_age_days: oldest,
+            bills,
+            credit_days: creditDays.length ? median(creditDays) : null,
+            avg_pay_days: avgPayDays(list, receiptsBy.get(key) || []),
+        });
+    }
+    return out;
+}
+
+function median(nums) {
+    const s = [...nums].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+}
+
+/**
+ * Amount-weighted average settlement time, in days, rounded to 2dp.
+ * Walks bills oldest-first and receipts oldest-first, paying each bill down
+ * with whatever receipts are still unspent. A receipt dated BEFORE the bill
+ * (an advance) contributes 0 days rather than a negative, which would
+ * otherwise let advances cancel out genuinely late payments.
+ */
+function avgPayDays(invoices, receipts) {
+    const bills = (invoices || [])
+        .map((v) => ({ d: asDate(v.invoice_date), left: Number(v.total || 0) }))
+        .filter((b) => b.d && b.left > 0)
+        .sort((a, b) => a.d - b.d);
+    // Accepts either the pre-parsed { date } shape this file builds internally
+    // or a raw receipt row straight from the db ({ payment_date }).
+    const pays = (receipts || [])
+        .map((r) => ({ d: r.date ? asDate(r.date) : asDate(r.payment_date), left: Number(r.amount || 0) }))
+        .filter((p) => p.d && p.left > 0)
+        .sort((a, b) => a.d - b.d);
+    if (!bills.length || !pays.length) return null;
+
+    let weighted = 0;
+    let paid = 0;
+    let bi = 0;
+    let pi = 0;
+    while (bi < bills.length && pi < pays.length) {
+        const take = Math.min(bills[bi].left, pays[pi].left);
+        const days = Math.max(0, daysBetween(bills[bi].d, pays[pi].d));
+        weighted += take * days;
+        paid += take;
+        bills[bi].left -= take;
+        pays[pi].left -= take;
+        if (bills[bi].left <= 0) bi += 1;
+        if (pays[pi].left <= 0) pi += 1;
+    }
+    if (paid <= 0) return null;
+    return Math.round((weighted / paid) * 100) / 100;
+}
+
 module.exports = {
     BUCKETS, bucketIndexForDays, allocateFifo, buildReceivables, buildReceivablesRows,
+    buildReceivablesParties, avgPayDays,
 };

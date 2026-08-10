@@ -213,10 +213,19 @@ class _LedgerStatementScreenState extends ConsumerState<LedgerStatementScreen> {
               children: [
                 Text(e.voucherNo ?? e.voucherType ?? '—',
                     style: theme.textTheme.titleMedium),
+                // Who this ledger moved money with — the line that turns a
+                // list of amounts into a readable statement.
+                if (e.counterLedger != null) ...[
+                  const SizedBox(height: 2),
+                  Text(e.counterLedger!,
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                ],
                 const SizedBox(height: 3),
                 Text(
                   [
                     if (e.voucherType != null) e.voucherType!,
+                    if (e.referenceNo != null) 'Ref ${e.referenceNo}',
                     if (date != null) Fmt.date(date),
                   ].join('  •  '),
                   style: theme.textTheme.bodySmall,

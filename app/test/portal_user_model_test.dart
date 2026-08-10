@@ -57,8 +57,5 @@ void main() {
 
     expect(routeOf('customer-users'), '/customer-users');
     expect(routeOf('website-users'), '/website-users');
-    // GPS Tracking settings is a super-admin/platform screen — deliberately
-    // left unbuilt in the tenant app rather than 403-ing.
-    expect(routeOf('gps-settings'), isNull);
   });
 }

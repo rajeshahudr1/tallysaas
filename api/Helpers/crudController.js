@@ -263,7 +263,16 @@ function build(config) {
             const sortKey = (req.query.sort || '').trim();
             const order   = String(req.query.order || '').toLowerCase() === 'asc' ? 'asc' : 'desc';
             if (sortKey && sortMap[sortKey]) {
-                rowQb = rowQb.orderBy(sortMap[sortKey], order).orderBy(idColQualified, 'desc');
+                // NULLS LAST in BOTH directions.
+                //
+                // Postgres puts NULLs first on a DESC sort, so "most recently
+                // sold" opened with every party that has never bought anything
+                // — the rows with no answer crowding out the ones the sort was
+                // asked about. "Not applicable" belongs at the end whichever
+                // way the column is pointing.
+                rowQb = rowQb
+                    .orderByRaw(`?? ${order === 'asc' ? 'asc' : 'desc'} nulls last`, [sortMap[sortKey]])
+                    .orderBy(idColQualified, 'desc');
             } else {
                 for (const [col, dir] of listOrder) rowQb = rowQb.orderBy(col, dir);
             }

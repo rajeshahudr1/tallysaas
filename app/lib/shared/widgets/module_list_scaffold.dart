@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/theme.dart';
 import '../../core/module_info.dart';
+import '../../features/registers/grouped_register_screen.dart';
 import 'app_text_field.dart';
 import 'empty_state.dart';
 import 'error_state.dart';
@@ -39,6 +40,8 @@ class ModuleListScaffold<T> extends StatefulWidget {
     this.searchHint = 'Search…',
     this.emptyMessage = 'Nothing here yet.',
     this.emptyIcon = Icons.inbox_outlined,
+    this.registerBasePath,
+    this.registerHasStock = true,
     this.loading = false,
     this.loadingMore = false,
     this.hasMore = false,
@@ -68,6 +71,13 @@ class ModuleListScaffold<T> extends StatefulWidget {
   final String searchHint;
   final String emptyMessage;
   final IconData emptyIcon;
+
+  /// When set, the app bar offers the module's GROUPED register — the same
+  /// period regrouped by Ledger, Voucher Type, Ledger Group and (for a family
+  /// that carries inventory) Stock Item / Group / Category. Leave null for a
+  /// master list that has no register behind it.
+  final String? registerBasePath;
+  final bool registerHasStock;
 
   final bool loading;
   final bool loadingMore;
@@ -118,6 +128,18 @@ class _ModuleListScaffoldState<T> extends State<ModuleListScaffold<T>> {
         title: Text(widget.title),
         actions: [
           ModuleInfoButton(widget.infoKey),
+          if (widget.registerBasePath != null)
+            IconButton(
+              icon: const Icon(Icons.pivot_table_chart_outlined),
+              tooltip: 'Grouped register',
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => GroupedRegisterScreen(
+                  basePath: widget.registerBasePath!,
+                  title: widget.title,
+                  hasStock: widget.registerHasStock,
+                ),
+              )),
+            ),
           if (widget.onFilter != null)
             IconButton(
               icon: Icon(widget.hasActiveFilter ? Icons.filter_alt : Icons.tune),

@@ -16,7 +16,7 @@
  * Bump CACHE_VERSION to invalidate the old precache on deploy.
  * ─────────────────────────────────────────────────────────── */
 
-const CACHE_VERSION = 'tallysync-v5';
+const CACHE_VERSION = 'tallysync-v30';
 
 // Core shell assets worth precaching (all same-origin / CDN-independent).
 const PRECACHE = [
@@ -27,6 +27,9 @@ const PRECACHE = [
     '/js/app.js',
     '/js/dashboard.js',
     '/img/logo.svg',
+    '/img/logo-mark.png',
+    '/img/logo-full.png',
+    '/img/logo-wordmark.png',
     '/img/avatar.svg',
     '/icons/icon-192.svg',
     '/icons/icon-512.svg',

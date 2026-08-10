@@ -227,6 +227,30 @@ app.use(async (req, res, next) => {
     // compiled EJS template). A fresh deep copy per render: the sidebar's
     // role logic below mutates the array (Roles inject, super-admin strip).
     res.locals.menuTree = JSON.parse(JSON.stringify(require('./lib/menuTree').MENU_TREE));
+    // Font Awesome class -> line-icon symbol id (views/partials/icon-sprite.ejs).
+    // Shared, never mutated by a view, so it is passed by reference.
+    res.locals.menuIcons = require('./lib/menuIcons');
+
+    /* A <input type="date"> needs YYYY-MM-DD in the user's OWN date, not UTC.
+       The api returns timestamps, and taking String(v).slice(0,10) reads the
+       UTC day — which is the PREVIOUS day for any timezone east of UTC (IST
+       included). That made every edit screen show the date one day early, and
+       saving without touching the field wrote that wrong date back. */
+    res.locals.ymd = function (v) {
+        if (!v) return '';
+        var str = String(v);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;   // already a plain date
+        var d = new Date(str);
+        if (isNaN(d.getTime())) return str.slice(0, 10);
+        var mm = String(d.getMonth() + 1).padStart(2, '0');
+        var dd = String(d.getDate()).padStart(2, '0');
+        return d.getFullYear() + '-' + mm + '-' + dd;
+    };
+
+    // The current querystring, for partials that need to build a link which
+    // keeps the filters already applied (the Parties tab strip, for one).
+    // Read-only by convention — nothing should mutate it.
+    res.locals.query = req.query || {};
 
     // One-shot flash message (set by POST handlers, shown on the next page).
     res.locals.flash = (req.session && req.session.flash) || null;

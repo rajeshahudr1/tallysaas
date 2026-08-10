@@ -62,6 +62,12 @@ var _canDeleteReturnNote = _canPath4(_basePath, 'delete');
     ],
 }) %>
 
+<%# Register view switcher — the same period regrouped by Ledger, Stock Item,
+    Voucher Type, Ledger Group, Stock Group or Stock Category. %>
+<%- include('../partials/register-tabs', {
+    basePath: _basePath, active: 'bill', hasStock: true, showMode: false, query: '',
+}) %>
+
 <form id="return-note-filters-form" autocomplete="off" method="get" action="<%= _basePath %>">
     <%- include('../partials/filter-card', {
         filterId: 'return-note-filters',

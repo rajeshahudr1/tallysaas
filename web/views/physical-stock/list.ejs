@@ -23,6 +23,11 @@ var tableColumns = [
     { key: 'voucher_no', label: 'Voucher No',    sortable: false, type: 'text' },
     { key: 'items',      label: 'Items Counted', sortable: false, type: 'text', align: 'center' },
     { key: 'created_by', label: 'Created By',    sortable: false, type: 'text' },
+    /* Recount, not Edit: a count is superseded by a newer count, never
+       rewritten (stock_adjustments is append-only). Rendered as a column
+       because these rows are keyed by voucher_no, not an id, so the shared
+       row-action menu — which builds /:id/... links — cannot serve them. */
+    { key: 'recount',    label: '',              sortable: false, type: 'text', hrefKey: 'recount_url' },
 ];
 
 var filterFields = [

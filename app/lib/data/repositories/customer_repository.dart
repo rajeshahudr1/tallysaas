@@ -29,6 +29,11 @@ class CustomerRepository {
     String? gst,             // customers.gst_number ILIKE
     String? createdFrom,     // YYYY-MM-DD
     String? createdTo,
+    /// The Parties screen tabs.  is the starred shortlist;
+    ///  is its mirror of the Inactive tile — parties WITH a sale
+    /// in the last N days.
+    bool favourite = false,
+    int? activeDays,
   }) async {
     final query = <String, dynamic>{'page': page, 'per_page': perPage};
     if (search != null && search.trim().isNotEmpty) query['search'] = search.trim();
@@ -39,6 +44,8 @@ class CustomerRepository {
     if (gst != null && gst.trim().isNotEmpty) query['gst'] = gst.trim();
     if (createdFrom != null) query['created_from'] = createdFrom;
     if (createdTo != null) query['created_to'] = createdTo;
+    if (favourite) query['favourite'] = 1;
+    if (activeDays != null) query['active'] = activeDays;
     final data = await _api.get(Endpoints.customers, query: query);
     return PagedResult<Customer>.fromData(data, Customer.fromJson);
   }
@@ -62,6 +69,12 @@ class CustomerRepository {
   Future<dynamic> update(int id, Map<String, dynamic> body) =>
       _api.put('${Endpoints.customers}/$id', body: body);
 
+  /// Star / unstar a party. A one-field PUT through the normal update
+  /// route, so the same permission check applies as to any other edit —
+  /// and because it is cloud-only metadata, the server does NOT mark the
+  /// ledger dirty for Tally.
+  Future<dynamic> setFavourite(int id, bool on) =>
+      _api.put('${Endpoints.customers}/$id', body: {'is_favourite': on});
   Future<void> delete(int id) => _api.delete('${Endpoints.customers}/$id');
 }
 

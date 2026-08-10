@@ -39,6 +39,7 @@ class _SupplierFormScreenState extends ConsumerState<SupplierFormScreen> {
   final _pan = TextEditingController();
   final _address = TextEditingController();
   final _opening = TextEditingController();
+  final _creditDays = TextEditingController();
 
   String _status = 'Active';
   int? _locationId;
@@ -59,7 +60,8 @@ class _SupplierFormScreenState extends ConsumerState<SupplierFormScreen> {
 
   @override
   void dispose() {
-    for (final c in [_name, _mobile, _altMobile, _email, _gst, _pan, _address, _opening]) {
+    for (final c in [_name, _mobile, _altMobile, _email, _gst, _pan, _address,
+                     _opening, _creditDays]) {
       c.dispose();
     }
     for (final r in _customFields) {
@@ -80,6 +82,7 @@ class _SupplierFormScreenState extends ConsumerState<SupplierFormScreen> {
       _pan.text = s.panNumber ?? '';
       _address.text = s.address ?? '';
       _opening.text = s.openingBalance?.toString() ?? '';
+      _creditDays.text = s.creditDays?.toString() ?? '';
       _status = s.status ?? 'Active';
       _locationId = s.locationId;
       _supplierGroup = s.supplierGroup;
@@ -112,6 +115,9 @@ class _SupplierFormScreenState extends ConsumerState<SupplierFormScreen> {
       if (_supplierGroup != null) 'supplier_group': _supplierGroup,
       if (_locationId != null) 'location_id': _locationId,
       if (_num(_opening.text) != null) 'opening_balance': _num(_opening.text),
+      // Only sent when filled: an empty box means no agreed terms, and
+      // sending 0 would record a same-day term nobody agreed to.
+      if (_num(_creditDays.text) != null) 'credit_days': _num(_creditDays.text),
       if (_paymentTerms != null) 'payment_terms': _paymentTerms,
       'status': _status,
       'is_tally_ledger': _isTallyLedger,
@@ -239,6 +245,13 @@ class _SupplierFormScreenState extends ConsumerState<SupplierFormScreen> {
           ConfigDropdown(
             label: 'Payment Terms', configKey: 'payment_terms',
             value: _paymentTerms, onChanged: (v) => setState(() => _paymentTerms = v),
+          ),
+          gap,
+          // The credit period as a NUMBER, alongside the free-text terms.
+          // Blank means "no agreed terms" — not zero days.
+          AppTextField(
+            controller: _creditDays, label: 'Credit Days',
+            keyboardType: TextInputType.number,
           ),
 
           // ════ Custom Fields ════

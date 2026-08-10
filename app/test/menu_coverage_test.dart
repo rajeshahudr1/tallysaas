@@ -24,15 +24,21 @@ void main() {
     expect(routeOf('einvoice-dash'), '/einvoices/dashboard');
   });
 
-  test('only the known platform screens are still unbuilt', () {
+  test('every menu entry now has a screen', () {
     final unbuilt = [
       for (final g in kAppMenu)
         for (final e in g.items)
           if (e.route == null) e.key
     ];
+    expect(unbuilt, isEmpty, reason: 'menu entries without a screen: $unbuilt');
+  });
 
-    // GPS Tracking settings lives behind /super-admin on the API and is
-    // super-admin gated on the web, so the tenant app deliberately skips it.
-    expect(unbuilt, ['gps-settings']);
+  test('GPS Tracking is gated to the platform operator', () {
+    // Its endpoint lives under /super-admin, so a company admin has nothing to
+    // call — the menu must not offer it to them.
+    final gps = entries.firstWhere((e) => e.key == 'gps-settings');
+    expect(gps.route, '/gps-settings');
+    expect(gps.superOnly, isTrue);
+    expect(gps.adminOnly, isFalse);
   });
 }

@@ -206,7 +206,7 @@ document.querySelectorAll('.db-skip-toggle').forEach(function (btn) {
 
 <style>
     .card.db-card { padding:20px; margin-bottom:18px; }
-    .db-help { background:#EFF6FF; border:1px solid #BFDBFE; color:#1D4ED8; border-radius:10px; padding:10px 14px; font-size:13px; margin:0 0 18px; }
+    .db-help { background:#EFF6FF; border:1px solid #BFDBFE; color:var(--primary-700); border-radius:10px; padding:10px 14px; font-size:13px; margin:0 0 18px; }
     .db-grid { display:grid; grid-template-columns:repeat(3, 1fr); gap:18px 20px; }
     .db-field { display:flex; flex-direction:column; gap:6px; }
     .db-field--wide { grid-column:1 / -1; }
@@ -223,7 +223,7 @@ document.querySelectorAll('.db-skip-toggle').forEach(function (btn) {
     .db-toggle-label { font-weight:700; font-size:13.5px; color:#111827; }
     .db-actions { display:flex; gap:10px; margin-top:22px; }
     .form-section-title { margin:0 0 16px; }
-    .db-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .db-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:var(--primary); font-size:12px; font-weight:700; vertical-align:middle; }
     .db-empty { text-align:center; padding:34px 12px; color:#9CA3AF; }
     .db-empty i { font-size:36px; opacity:.5; }
     .db-empty p { margin:12px 0 0; }
@@ -237,7 +237,7 @@ document.querySelectorAll('.db-skip-toggle').forEach(function (btn) {
     .db-status--success { background:rgba(22,163,74,.12); color:#16A34A; }
     .db-status--partial { background:rgba(217,119,6,.14); color:#B45309; }
     .db-status--failed  { background:rgba(220,38,38,.12); color:#DC2626; }
-    .db-status--running { background:rgba(37,99,235,.12); color:#2563EB; }
+    .db-status--running { background:rgba(37,99,235,.12); color:var(--primary); }
     .db-status--muted   { background:rgba(107,114,128,.14); color:#6B7280; }
     .db-row-note { margin-top:4px; font-size:12px; color:#DC2626; }
     .db-skip-count { font-weight:700; color:#B45309; }

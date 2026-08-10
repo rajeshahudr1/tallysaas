@@ -8,6 +8,16 @@ var _ch    = (typeof channels !== 'undefined' && channels) ? channels : { email:
 var _total = (typeof totalOutstanding !== 'undefined' && totalOutstanding) ? totalOutstanding : 0;
 function _money(n) { return '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 var _anyChannel = _ch.email || _ch.whatsapp;
+var _tpl = (typeof reminderTemplate !== 'undefined' && reminderTemplate) ? reminderTemplate : '';
+// What a custom template may reference. Mirrors reminders.TEMPLATE_TOKENS on
+// the api side — showing people the list beats making them guess it.
+var _tokens = [
+    { t: '{customer}',    d: "the party's name" },
+    { t: '{company}',     d: 'your company name' },
+    { t: '{outstanding}', d: 'total outstanding' },
+    { t: '{overdue}',     d: 'number of overdue invoices' },
+    { t: '{due_date}',    d: 'oldest overdue due date' },
+];
 %>
 
 <%- include('../partials/page-head', {
@@ -40,6 +50,28 @@ var _anyChannel = _ch.email || _ch.whatsapp;
     <% } %>
 </div>
 
+<!-- Customise the wording. Collapsed by default: most companies never touch
+     it, and an always-open textarea would push the actual work down the page. -->
+<div class="card pr-card">
+    <button type="button" class="pr-collapse-head" data-bs-toggle="collapse" data-bs-target="#pr-template" aria-expanded="false">
+        <span><i class="fa-regular fa-pen-to-square me-2"></i>Customise Template</span>
+        <i class="fa-solid fa-chevron-down"></i>
+    </button>
+    <div class="collapse <%= _tpl ? 'show' : '' %>" id="pr-template">
+        <form method="post" action="/reminders/template" class="pr-tpl-form">
+            <p class="pr-tpl-help">
+                Leave this empty to use the standard message. Available placeholders:
+                <% _tokens.forEach(function (k) { %><code class="pr-token"><%= k.t %></code><% }); %>
+            </p>
+            <textarea name="template" class="form-control" rows="7"
+                      placeholder="Dear {customer},&#10;&#10;Your outstanding balance with {company} is {outstanding} across {overdue} invoice(s), oldest due {due_date}.&#10;&#10;Thank you."><%= _tpl %></textarea>
+            <div class="pr-tpl-actions">
+                <button type="submit" class="btn-gradient">Save Template</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Overdue customers -->
 <div class="card pr-card">
     <h2 class="form-section-title">Overdue Customers <span class="pr-count"><%= _list.length %></span></h2>
@@ -49,14 +81,33 @@ var _anyChannel = _ch.email || _ch.whatsapp;
             <p>No overdue customers — you're all caught up! 🎉</p>
         </div>
     <% } else { %>
+        <%# The whole table is ONE bulk form. The per-party Email/WhatsApp
+            buttons below are their own little forms, which is why they sit
+            outside this one — nested forms are not valid HTML and the browser
+            silently drops the inner one. %>
+        <form method="post" action="/reminders/send-bulk" id="pr-bulk-form"
+              onsubmit="return prConfirmBulk(this);"></form>
+
         <div class="table-wrap">
             <table class="pr-table">
                 <thead>
-                    <tr><th>Customer</th><th>Contact</th><th>Overdue</th><th>Outstanding</th><th class="pr-right">Send Reminder</th></tr>
+                    <tr>
+                        <th class="pr-tick">
+                            <input type="checkbox" id="pr-check-all" aria-label="Select all overdue customers">
+                        </th>
+                        <th>Customer</th><th>Contact</th><th>Overdue</th><th>Outstanding</th><th class="pr-right">Send Reminder</th>
+                    </tr>
                 </thead>
                 <tbody>
                     <% _list.forEach(function (r) { %>
                         <tr>
+                            <td class="pr-tick">
+                                <%# form= attaches these to the bulk form above without
+                                    nesting them inside it. %>
+                                <input type="checkbox" form="pr-bulk-form" name="customer_ids"
+                                       value="<%= r.id %>" class="pr-row-tick"
+                                       aria-label="Select <%= r.name %>">
+                            </td>
                             <td>
                                 <div class="pr-person">
                                     <span class="pr-avatar"><%= (r.name || '?').charAt(0).toUpperCase() %></span>
@@ -97,8 +148,66 @@ var _anyChannel = _ch.email || _ch.whatsapp;
                 </tbody>
             </table>
         </div>
+
+        <%# Bulk send. Only offered for channels the licence actually has —
+            a button that always answers "not enabled on your plan" is not a
+            button. %>
+        <% if (_anyChannel) { %>
+            <div class="pr-bulk-bar">
+                <span class="pr-bulk-note" id="pr-bulk-count">No parties selected — sending will chase all <%= _list.length %>.</span>
+                <div class="pr-bulk-btns">
+                    <% if (_ch.email) { %>
+                        <button type="submit" form="pr-bulk-form" name="channel" value="email" class="pr-btn pr-btn-email">
+                            <i class="fa-solid fa-envelope"></i> Bulk Email
+                        </button>
+                    <% } %>
+                    <% if (_ch.whatsapp) { %>
+                        <button type="submit" form="pr-bulk-form" name="channel" value="whatsapp" class="pr-btn pr-btn-wa">
+                            <i class="fa-brands fa-whatsapp"></i> Bulk WhatsApp
+                        </button>
+                    <% } %>
+                </div>
+            </div>
+        <% } %>
     <% } %>
 </div>
+
+<script>
+    /* Bulk reminders go to real customers and cannot be recalled, so the
+       count is stated plainly and confirmed before anything is sent. */
+    (function () {
+        var all = document.getElementById('pr-check-all');
+        var form = document.getElementById('pr-bulk-form');
+        var note = document.getElementById('pr-bulk-count');
+        if (!form) return;
+        var ticks = [].slice.call(document.querySelectorAll('.pr-row-tick'));
+
+        function selected() { return ticks.filter(function (t) { return t.checked; }); }
+        function refresh() {
+            var n = selected().length;
+            if (note) {
+                note.textContent = n
+                    ? n + ' party(ies) selected.'
+                    : 'No parties selected — sending will chase all ' + ticks.length + '.';
+            }
+            if (all) {
+                all.checked = n > 0 && n === ticks.length;
+                all.indeterminate = n > 0 && n < ticks.length;
+            }
+        }
+        if (all) all.addEventListener('change', function () {
+            ticks.forEach(function (t) { t.checked = all.checked; });
+            refresh();
+        });
+        ticks.forEach(function (t) { t.addEventListener('change', refresh); });
+        refresh();
+
+        window.prConfirmBulk = function () {
+            var n = selected().length || ticks.length;
+            return window.confirm('Send a payment reminder to ' + n + ' party(ies)? This cannot be undone.');
+        };
+    })();
+</script>
 
 <style>
     .card.pr-card { padding:20px; margin-bottom:18px; }
@@ -113,10 +222,23 @@ var _anyChannel = _ch.email || _ch.whatsapp;
     .pr-ch.is-off { background:rgba(107,114,128,.14); color:#6B7280; }
     .pr-note { margin:14px 0 0; color:#B45309; background:#FFFBEB; border:1px solid #FDE68A; border-radius:10px; padding:10px 14px; font-size:13px; }
     .form-section-title { margin:0 0 16px; }
-    .pr-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .pr-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:var(--primary); font-size:12px; font-weight:700; vertical-align:middle; }
     .pr-empty { text-align:center; padding:34px 12px; color:#9CA3AF; }
     .pr-empty i { font-size:36px; opacity:.5; }
     .pr-empty p { margin:12px 0 0; }
+    .pr-collapse-head { display:flex; align-items:center; justify-content:space-between; width:100%;
+                        background:none; border:none; padding:0; font-size:15px; font-weight:700;
+                        color:#111827; cursor:pointer; }
+    .pr-tpl-form { margin-top:14px; }
+    .pr-tpl-help { margin:0 0 10px; font-size:13px; color:#6B7280; }
+    .pr-token { display:inline-block; margin-left:6px; padding:2px 7px; border-radius:6px;
+                background:#F1F5F9; color:#334155; font-size:12.5px; }
+    .pr-tpl-actions { margin-top:12px; display:flex; justify-content:flex-end; }
+    .pr-tick { width:34px; text-align:center; }
+    .pr-bulk-bar { display:flex; align-items:center; justify-content:space-between; gap:14px;
+                   flex-wrap:wrap; margin-top:16px; padding-top:14px; border-top:1px solid #E5E7EB; }
+    .pr-bulk-note { font-size:13px; color:#6B7280; }
+    .pr-bulk-btns { display:flex; gap:8px; }
     .pr-table { width:100%; border-collapse:collapse; }
     .pr-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 14px 12px; border-bottom:1px solid #EEF1F5; }
     .pr-table td { padding:14px; border-bottom:1px solid #F3F4F6; vertical-align:middle; }
@@ -125,14 +247,14 @@ var _anyChannel = _ch.email || _ch.whatsapp;
     .pr-muted { color:#6B7280; }
     .pr-sub { font-size:12px; color:#9CA3AF; }
     .pr-person { display:flex; align-items:center; gap:10px; }
-    .pr-avatar { width:34px; height:34px; border-radius:50%; background:#2563EB; color:#fff; display:grid; place-items:center; font-weight:800; font-size:14px; }
+    .pr-avatar { width:34px; height:34px; border-radius:50%; background:var(--primary); color:#fff; display:grid; place-items:center; font-weight:800; font-size:14px; }
     .pr-name { font-weight:700; color:#111827; }
     .pr-badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; background:rgba(234,88,12,.10); color:#EA580C; }
     .pr-actions { display:inline-flex; gap:8px; justify-content:flex-end; }
     .pr-form { display:inline; margin:0; }
     .pr-btn { border:1px solid transparent; font-weight:600; font-size:13px; padding:7px 13px; border-radius:9px; cursor:pointer; transition:.15s; display:inline-flex; align-items:center; gap:6px; }
     .pr-btn:disabled { opacity:.5; cursor:not-allowed; }
-    .pr-btn-email { border-color:#BFDBFE; background:#EFF6FF; color:#2563EB; }
+    .pr-btn-email { border-color:#BFDBFE; background:#EFF6FF; color:var(--primary); }
     .pr-btn-email:not(:disabled):hover { background:#DBEAFE; }
     .pr-btn-wa { border-color:#BBF7D0; background:#F0FDF4; color:#16A34A; }
     .pr-btn-wa:not(:disabled):hover { background:#DCFCE7; }

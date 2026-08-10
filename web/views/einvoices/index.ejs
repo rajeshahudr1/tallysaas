@@ -230,7 +230,7 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
     .ei-head { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
     .ei-search { display:flex; gap:6px; align-items:center; }
     .ei-search .form-control { max-width:260px; }
-    .ei-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:#2563EB; font-size:12px; font-weight:700; vertical-align:middle; }
+    .ei-count { display:inline-grid; place-items:center; min-width:24px; height:22px; padding:0 7px; margin-left:6px; border-radius:11px; background:rgba(37,99,235,.12); color:var(--primary); font-size:12px; font-weight:700; vertical-align:middle; }
     .ei-empty { text-align:center; padding:32px 12px; color:#9CA3AF; } .ei-empty i { font-size:34px; opacity:.5; } .ei-empty p { margin:12px 0 0; }
     .ei-table { width:100%; border-collapse:collapse; }
     .ei-table th { text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; padding:0 12px 12px; border-bottom:1px solid #EEF1F5; }
@@ -238,10 +238,10 @@ function _date(d) { return d ? String(d).slice(0, 10).split('-').reverse().join(
     .ei-table tr:last-child td { border-bottom:none; }
     .ei-right { text-align:right; } .ei-muted { color:#6B7280; } .ei-sub { font-size:12px; color:#9CA3AF; }
     .ei-pill { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; }
-    .ei-p-ok { background:rgba(22,163,74,.12); color:#16A34A; } .ei-p-pending { background:rgba(37,99,235,.12); color:#2563EB; }
-    .ei-p-cancel { background:rgba(107,114,128,.14); color:#6B7280; } .ei-p-fail { background:rgba(220,38,38,.12); color:#DC2626; } .ei-p-ewb { background:rgba(109,40,217,.10); color:#6D28D9; }
+    .ei-p-ok { background:rgba(22,163,74,.12); color:#16A34A; } .ei-p-pending { background:rgba(37,99,235,.12); color:var(--primary); }
+    .ei-p-cancel { background:rgba(107,114,128,.14); color:#6B7280; } .ei-p-fail { background:rgba(220,38,38,.12); color:#DC2626; } .ei-p-ewb { background:rgba(109,40,217,.10); color:var(--secondary); }
     .ei-icon-btn { border:1px solid var(--border); background:#fff; color:#4B5563; width:31px; height:31px; border-radius:8px; cursor:pointer; margin-left:3px; }
-    .ei-icon-btn:hover { background:#F8FAFC; } .ei-gen { color:#2563EB; border-color:#BFDBFE; } .ei-del { color:#DC2626; border-color:#FECACA; } .ei-ewb-btn { color:#6D28D9; border-color:#DDD6FE; }
+    .ei-icon-btn:hover { background:#F8FAFC; } .ei-gen { color:var(--primary); border-color:#BFDBFE; } .ei-del { color:#DC2626; border-color:#FECACA; } .ei-ewb-btn { color:var(--secondary); border-color:#DDD6FE; }
     .ei-overlay { position:fixed; inset:0; background:rgba(17,24,39,.45); display:none; align-items:center; justify-content:center; z-index:2000; }
     .ei-overlay.open { display:flex; }
     .ei-modal { background:#fff; border-radius:16px; padding:24px; max-width:680px; width:92%; box-shadow:0 24px 70px rgba(0,0,0,.25); max-height:88vh; overflow:auto; }

@@ -34,6 +34,29 @@ const LIST_COLUMNS = [
     'locations.name as location',
     'sales_persons.name as sales_person',
     'customer_groups.name as customer_group',
+    // Closing balance comes from the Tally ledger master, not from
+    // customers.opening_balance: the opening figure is where the party STARTED,
+    // and a Parties list that shows it in a "Closing Balance" column would be
+    // stale the moment the first voucher lands.
+    'tl.closing_balance as closing_balance',
+    // Credit term: what was set HERE wins, else what Tally already knows
+    // (BILLCREDITPERIOD on the ledger). Asking a user to retype a term Tally
+    // is already holding is how the column ended up blank for everyone.
+    db.raw('coalesce(customers.credit_days, tl.credit_period_days) as credit_days'),
+    // NOT aliased `ledger_group`: customers already has a column of that name
+    // (the group the user typed on the form). Two columns with one alias means
+    // whichever the driver returns last silently wins.
+    'tl.parent as tally_ledger_group',
+    // When this party last bought anything — the column that tells you who has
+    // gone quiet. Only APPROVED sales count, the same basis the registers use.
+    db.raw(`(select max(i.invoice_date) from invoices i
+              where i.company_id = customers.company_id
+                and i.customer_id = customers.id
+                and i.type = 'sales'
+                and i.deleted_at is null
+                and (i.approval_status not in ('pending','draft','rejected')
+                     or i.approval_status is null)
+            ) as last_sold_date`),
 ];
 
 // Free-text search targets (qualified — the base query has joins, so bare column
@@ -57,7 +80,14 @@ function baseQuery(database) {
     return database('customers')
         .leftJoin('locations',       'locations.id',       'customers.location_id')
         .leftJoin('sales_persons',   'sales_persons.id',   'customers.sales_person_id')
-        .leftJoin('customer_groups', 'customer_groups.id', 'customers.customer_group_id');
+        .leftJoin('customer_groups', 'customer_groups.id', 'customers.customer_group_id')
+        // The synced Tally ledger of the same name — its closing balance and
+        // its Tally group. Matched by name because the sync does not write a
+        // ledger FK back onto the cloud party row.
+        .leftJoin('tally_ledgers as tl', function join() {
+            this.on('tl.company_id', '=', 'customers.company_id')
+                .andOn(database.raw('lower(tl.name) = lower(customers.name)'));
+        });
 }
 
 /**
@@ -82,6 +112,7 @@ function buildInsert(body) {
         customer_group_id: body.customer_group_id,
         opening_balance:   body.opening_balance,
         credit_limit:      body.credit_limit,
+        credit_days:       body.credit_days,
         status:            body.status,
         billing_address:   body.billing_address,
         shipping_address:  body.shipping_address,
@@ -104,10 +135,10 @@ function buildInsert(body) {
 const UPDATABLE = [
     'name', 'mobile', 'alternate_mobile', 'email', 'gst_number', 'pan_number',
     'location_id', 'sales_person_id', 'customer_group_id',
-    'opening_balance', 'credit_limit', 'status',
+    'opening_balance', 'credit_limit', 'credit_days', 'status',
     'billing_address', 'shipping_address', 'is_tally_ledger',
     'ledger_group', 'opening_balance_type', 'country', 'state', 'city', 'pincode', 'gst_registration_type',
-    'notes', 'internal_remarks', 'custom_fields',
+    'notes', 'internal_remarks', 'custom_fields', 'is_favourite',
 ];
 
 /**
@@ -126,7 +157,13 @@ function buildUpdate(body) {
     if (patch.custom_fields && typeof patch.custom_fields === 'object') {
         patch.custom_fields = JSON.stringify(patch.custom_fields);
     }
-    patch.tally_dirty = true;   // cloud edit → re-push to Tally (ALTER)
+    // Cloud edit → re-push to Tally (ALTER). EXCEPT when the only thing that
+    // changed is cloud-only metadata: a star is our own shortlist, Tally has
+    // no field for it, so flagging the ledger dirty would queue a pointless
+    // ALTER for every party someone happens to star.
+    const CLOUD_ONLY = new Set(['is_favourite']);
+    const touchesTally = Object.keys(patch).some((k) => !CLOUD_ONLY.has(k));
+    if (touchesTally) patch.tally_dirty = true;
     return patch;
 }
 
@@ -189,7 +226,11 @@ const controller = crud.build({
         gst:             'customers.gst_number',
         opening_balance: 'customers.opening_balance',
         credit_limit:    'customers.credit_limit',
+        credit_days:     'customers.credit_days',
+        closing_balance: 'tl.closing_balance',
+        last_sold_date:  'last_sold_date',
         sales_person:    'sales_persons.name',
+        favourite:       'customers.is_favourite',
     },
     // Filter dropdowns (?key=value) → WHERE. Names match the joined label cols.
     filters: {
@@ -203,6 +244,28 @@ const controller = crud.build({
             const cutoff = cutoffFromDays(v);
             if (!cutoff) return qb;
             return qb.whereNotExists(function () {
+                this.select(db.raw('1')).from('invoices')
+                    .whereRaw('invoices.customer_id = customers.id')
+                    .whereNull('invoices.deleted_at')
+                    .where('invoices.type', 'sales')
+                    .where('invoices.invoice_date', '>=', cutoff);
+            });
+        },
+        // ?favourite=1 — the starred shortlist (the Parties screen's
+        // "Favourite" tab). Any other value is ignored rather than treated as
+        // "not favourite": a tab that silently inverts on a typo is worse than
+        // one that does nothing.
+        favourite: (qb, v) => (String(v) === '1' || String(v) === 'true'
+            ? qb.where('customers.is_favourite', true)
+            : qb),
+        // ?active=90 — the mirror of `inactive`: customers WITH a sale in the
+        // last N days, which is the "Recent Active" tab. Shares the same
+        // cutoff parsing so the two tabs can never disagree about what 90 days
+        // means.
+        active: (qb, v) => {
+            const cutoff = cutoffFromDays(v);
+            if (!cutoff) return qb;
+            return qb.whereExists(function () {
                 this.select(db.raw('1')).from('invoices')
                     .whereRaw('invoices.customer_id = customers.id')
                     .whereNull('invoices.deleted_at')

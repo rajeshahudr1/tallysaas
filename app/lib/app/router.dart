@@ -61,6 +61,7 @@ import '../features/stock_vouchers/stock_journal_form_screen.dart';
 import '../features/stock_vouchers/stock_journals_screen.dart';
 import '../features/ledgers/ledger_statement_screen.dart';
 import '../features/ledgers/ledgers_screen.dart';
+import '../features/receivables/receivables_parties_screen.dart';
 import '../features/collect_payments/collect_payment_new_screen.dart';
 import '../features/collect_payments/collect_payment_settings_screen.dart';
 import '../features/collect_payments/collect_payments_screen.dart';
@@ -72,6 +73,7 @@ import '../features/portals/website_user_form_screen.dart';
 import '../features/portals/website_users_screen.dart';
 import '../features/einvoices/einvoice_dashboard_screen.dart';
 import '../features/tools/data_backup_screen.dart';
+import '../features/tools/gps_settings_screen.dart';
 import '../features/tools/gst_search_screen.dart';
 import '../features/menu/more_menu_screen.dart';
 import '../features/payments/voucher_detail_screen.dart';
@@ -665,12 +667,17 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/payables',
         name: 'payables',
-        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.payables),
+        // Party-wise by default (Due / Credit Days / Avg Pay Days), matching
+        // the web screen; the ledger-BALANCE view stays on the dashboard tile.
+        builder: (_, __) => const ReceivablesPartiesScreen(payable: true),
       ),
       GoRoute(
         path: '/receivables',
         name: 'receivables',
-        builder: (_, __) => const LedgersScreen(bucket: LedgerBucket.receivables),
+        // Party-wise by default (Outstanding / Overdue / Credit Days / Avg Pay
+        // Days), matching the web screen. The ledger-BALANCE view of the same
+        // bucket is still reachable from the dashboard's Receivables tile.
+        builder: (_, __) => const ReceivablesPartiesScreen(),
       ),
       GoRoute(
         path: '/ledgers/:name',
@@ -755,6 +762,11 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
 
       // ─── Tools + the e-Invoice dashboard ───────────────────────
+      GoRoute(
+        path: '/gps-settings',
+        name: 'gps-settings',
+        builder: (_, __) => const GpsSettingsScreen(),
+      ),
       GoRoute(
         path: '/gst-search',
         name: 'gst-search',

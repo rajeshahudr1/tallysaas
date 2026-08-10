@@ -16,14 +16,14 @@ const MENU_TREE = [
     { label: null, items: [
         { key: 'dashboard', label: 'Dashboard', icon: 'fa-gauge-high', href: '/', module: 'dashboard' },
     ]},
-    { label: 'Create Vouchers', icon: 'fa-plus', items: [
+    { section: 'MAIN', label: 'Create Vouchers', icon: 'fa-plus', items: [
         { key: 'new-quotation',   label: 'Quotation',        icon: 'fa-file-lines',        href: '/quotations/create', module: 'quotations' },
         { key: 'new-sales-inv',   label: 'Sales Invoice',    icon: 'fa-file-invoice',      href: '/sales-invoices/create',    module: 'sales-invoices' },
         { key: 'new-receipt',     label: 'Receipt',          icon: 'fa-receipt',           href: '/receipts/add',             module: 'receipts' },
         { key: 'new-payment',     label: 'Payment',          icon: 'fa-money-bill-wave',   href: '/payments/add',             module: 'payments' },
         { key: 'new-sales-order', label: 'Sales Order',      icon: 'fa-cart-shopping',     href: '/sales-orders/create', module: 'sales-orders' },
         { key: 'new-purchase',    label: 'Purchase Invoice', icon: 'fa-file-import',       href: '/purchase-invoices/create', module: 'purchase-invoices' },
-        { key: 'new-journal',     label: 'Journal',          icon: 'fa-book',              href: '/journals',                 module: 'journals' },
+        { key: 'new-journal',     label: 'Journal',          icon: 'fa-book',              href: '/journals/add',                 module: 'journals' },
         { key: 'new-contra',      label: 'Contra',           icon: 'fa-right-left',        href: '/contra/create', module: 'contra' },
         { key: 'new-po',          label: 'Purchase Order',   icon: 'fa-cart-flatbed',      href: '/purchase-orders/create', module: 'purchase-orders' },
         { key: 'new-credit-note', label: 'Credit Note',      icon: 'fa-file-circle-minus', href: '/credit-notes/create', module: 'credit-notes' },
@@ -33,7 +33,7 @@ const MENU_TREE = [
         { key: 'new-recpt-note',  label: 'Receipt Note',     icon: 'fa-dolly',             href: '/receipt-notes/create', module: 'receipt-notes' },
         { key: 'new-dely-note',   label: 'Delivery Note',    icon: 'fa-truck-fast',        href: '/delivery-notes/create', module: 'delivery-notes' },
     ]},
-    { label: 'Sales', icon: 'fa-chart-line', items: [
+    { section: 'MAIN', label: 'Sales', icon: 'fa-chart-line', items: [
         { key: 'sales-inv',     label: 'Sales',                icon: 'fa-file-invoice',      href: '/sales-invoices',           module: 'sales-invoices' },
         { key: 'credit-notes',  label: 'Credit Note',          icon: 'fa-file-circle-minus', href: '/credit-notes', module: 'credit-notes' },
         { key: 'receipts',      label: 'Receipt',              icon: 'fa-receipt',           href: '/receipts',                 module: 'receipts' },
@@ -46,7 +46,7 @@ const MENU_TREE = [
         { key: 'einvoice-dash', label: 'e-Invoice Dashboard',  icon: 'fa-gauge-high',        href: '/einvoices/dashboard',      module: 'einvoice' },
         { key: 'reminders',     label: 'Payment Reminders',    icon: 'fa-bell',              href: '/reminders',                module: 'payments' },
     ]},
-    { label: 'Purchase', icon: 'fa-cart-flatbed', items: [
+    { section: 'MAIN', label: 'Purchase', icon: 'fa-cart-flatbed', items: [
         { key: 'purchase-inv', label: 'Purchase',       icon: 'fa-file-import',      href: '/purchase-invoices', module: 'purchase-invoices' },
         { key: 'debit-notes',  label: 'Debit Note',     icon: 'fa-file-circle-plus', href: '/debit-notes', module: 'debit-notes' },
         { key: 'payments',     label: 'Payment',        icon: 'fa-money-bill-wave',  href: '/payments',          module: 'payments' },
@@ -55,7 +55,7 @@ const MENU_TREE = [
         { key: 'recpt-notes',  label: 'Receipt Note',   icon: 'fa-dolly',            href: '/receipt-notes', module: 'receipt-notes' },
         { key: 'expenses',     label: 'Expenses',       icon: 'fa-wallet',           href: '/expenses',          module: 'expenses' },
     ]},
-    { label: 'Cash & Bank', icon: 'fa-sack-dollar', items: [
+    { section: 'MAIN', label: 'Cash & Bank', icon: 'fa-sack-dollar', items: [
         { key: 'cash',         label: 'Cash',                icon: 'fa-money-bill-1',     href: '/cash',                module: 'cash-bank' },
         { key: 'bank-ledgers', label: 'Bank',                icon: 'fa-building-columns', href: '/bank',                module: 'cash-bank' },
         { key: 'bank',         label: 'Bank Reconciliation', icon: 'fa-scale-balanced',   href: '/bank-reconciliation', module: 'bank-reconciliation' },
@@ -65,22 +65,22 @@ const MENU_TREE = [
     { label: null, items: [
         { key: 'collect-payments', label: 'Collect Payments', icon: 'fa-credit-card', href: '/collect-payments', module: 'collect-payments' },
     ]},
-    { label: 'Customers', icon: 'fa-address-book', items: [
+    { section: 'MANAGE', label: 'Customers', icon: 'fa-address-book', items: [
         { key: 'customers', label: 'Customers', icon: 'fa-user-group',  href: '/customers', module: 'customers' },
         { key: 'suppliers', label: 'Suppliers', icon: 'fa-truck-field', href: '/suppliers', module: 'suppliers' },
     ]},
-    { label: 'Items', icon: 'fa-box', items: [
+    { section: 'MANAGE', label: 'Items', icon: 'fa-box', items: [
         { key: 'products',   label: 'Products',   icon: 'fa-box',       href: '/products',   module: 'products' },
         { key: 'categories', label: 'Categories', icon: 'fa-tags',      href: '/categories', module: 'categories' },
         { key: 'inventory',  label: 'Inventory',  icon: 'fa-warehouse', href: '/inventory',  module: 'inventory' },
         { key: 'stock-journals', label: 'Stock Journal',  icon: 'fa-boxes-packing',  href: '/stock-journals', module: 'stock-journal' },
         { key: 'physical-stock', label: 'Physical Stock', icon: 'fa-clipboard-list', href: '/physical-stock', module: 'physical-stock' },
     ]},
-    { label: 'Reports', icon: 'fa-chart-simple', items: [
+    { section: 'MANAGE', label: 'Reports', icon: 'fa-chart-simple', items: [
         { key: 'reports',   label: 'Reports',            icon: 'fa-chart-column', href: '/reports',   module: 'reports' },
         { key: 'analytics', label: 'Business Analytics', icon: 'fa-chart-pie',    href: '/analytics', module: 'reports' },
     ]},
-    { label: 'My Entries', icon: 'fa-square-check', items: [
+    { section: 'MANAGE', label: 'My Entries', icon: 'fa-square-check', items: [
         { key: 'my-vouchers',   label: 'My Vouchers',    icon: 'fa-file-lines',        href: '/my/vouchers', module: 'field-sales' },
         { key: 'my-quotations', label: 'My Quotations',  icon: 'fa-file-signature',    href: '/quotations?mine=1', module: 'quotations' },
         { key: 'my-eway',       label: 'My eWay Bills',  icon: 'fa-truck-fast',        href: '/einvoices?mine=1&kind=eway', module: 'field-sales' },
@@ -89,21 +89,21 @@ const MENU_TREE = [
         { key: 'my-stock',      label: 'My Stock Items', icon: 'fa-boxes-stacked',     href: '/products?mine=1', module: 'field-sales' },
         { key: 'field-tracking', label: 'Tracking Report', icon: 'fa-map-location-dot', href: '/field-tracking', approve: true, module: 'field-sales' },
     ]},
-    { label: 'Field Sales', icon: 'fa-location-dot', items: [
+    { section: 'MANAGE', label: 'Field Sales', icon: 'fa-location-dot', items: [
         { key: 'my-field',     label: 'My Dashboard',  icon: 'fa-location-dot',        href: '/my-field',     salesmanOnly: true, module: 'field-sales' },
         { key: 'sales',        label: 'Sales Persons', icon: 'fa-user-tie',            href: '/sales-persons', module: 'sales-persons' },
         { key: 'gps-settings', label: 'GPS Tracking',  icon: 'fa-location-crosshairs', href: '/gps-settings',  adminOnly: true, module: 'gps-tracking' },
     ]},
-    { label: 'Portals', icon: 'fa-globe', items: [
+    { section: 'MANAGE', label: 'Portals', icon: 'fa-globe', items: [
         { key: 'customer-users', label: 'Customer Users', icon: 'fa-user-lock', href: '/customer-users', module: 'customer-users' },
         { key: 'website-users',  label: 'Website Users',  icon: 'fa-globe',     href: '/website-users',  module: 'website-users' },
     ]},
-    { label: 'Tally Sync', icon: 'fa-rotate', items: [
+    { section: 'MANAGE', label: 'Tally Sync', icon: 'fa-rotate', items: [
         { key: 'sync-dash', label: 'Sync Dashboard', icon: 'fa-rotate',            href: '/sync-dashboard', adminOnly: true, module: 'tally-sync' },
         { key: 'sync-logs', label: 'Sync Logs',      icon: 'fa-list-check',        href: '/sync-logs',      adminOnly: true, module: 'tally-sync' },
         { key: 'history',   label: 'Change History', icon: 'fa-clock-rotate-left', href: '/history',        adminOnly: true, module: 'tally-sync' },
     ]},
-    { label: 'Configurations', icon: 'fa-sliders', items: [
+    { section: 'SETTINGS', label: 'Configurations', icon: 'fa-sliders', items: [
         { key: 'settings',     label: 'Settings',           icon: 'fa-gear',         href: '/settings',           module: 'settings' },
         { key: 'users',        label: 'Users',              icon: 'fa-users',        href: '/users',              module: 'users' },
         { key: 'accountant',   label: 'Accountant Access',  icon: 'fa-user-tie',     href: '/accountant-access',  module: 'accountant' },

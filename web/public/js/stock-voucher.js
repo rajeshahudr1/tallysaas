@@ -388,6 +388,64 @@ window.StockVoucherCalc = { totalQty, buildVoucherNo };
             });
         })();
 
+        // ── EDIT MODE ── set by the view for /stock-journals/:id/edit.
+        // Rebuild the saved lines; do NOT run the keyboard-first walk-through,
+        // which is for a blank voucher.
+        var EDIT = window.STOCK_JOURNAL_EDIT || null;
+        if (EDIT) {
+            var noEl = document.getElementById('sv-no');
+            if (noEl && EDIT.voucher_no) noEl.value = EDIT.voucher_no;
+            var notesEl = document.getElementById('sv-notes');
+            if (notesEl && EDIT.narration) notesEl.value = EDIT.narration;
+
+            var lines = Array.isArray(EDIT.items) ? EDIT.items : [];
+            if (!lines.length) { addRow(); }
+            lines.forEach(function (it) {
+                var row = addRow();
+                var prod = PRODUCTS.filter(function (p) { return String(p.id) === String(it.product_id); })[0];
+                var si = row.querySelector('.sv-item-search');
+                var hid = row.querySelector('.sv-item');
+                if (prod) {
+                    if (si) si.value = prod.name;
+                    if (hid) hid.value = prod.id;
+                } else if (si) {
+                    si.value = it.product_name || '';
+                }
+                var dir = row.querySelector('.sv-dir');
+                if (dir && it.direction) dir.value = it.direction;
+                var godown = row.querySelector('.sv-godown');
+                if (godown && it.godown) godown.value = it.godown;
+                row.querySelector('.sv-qty').value = it.quantity != null ? it.quantity : 0;
+            });
+            recalcTotals();
+            return;
+        }
+
+        // ── RECOUNT (physical stock) ── a previous sheet's lines, so the
+        // user re-counts rather than re-types. The counted qty is left as it
+        // WAS, to be corrected — this saves as a new sheet, not an edit.
+        var RECOUNT = window.PHYSICAL_STOCK_RECOUNT || null;
+        if (RECOUNT && RECOUNT.length) {
+            RECOUNT.forEach(function (it) {
+                var row = addRow();
+                var prod = PRODUCTS.filter(function (p) { return String(p.id) === String(it.product_id); })[0];
+                var si = row.querySelector('.sv-item-search');
+                var hid = row.querySelector('.sv-item');
+                if (prod) {
+                    if (si) si.value = prod.name;
+                    if (hid) hid.value = prod.id;
+                } else if (si) {
+                    si.value = it.product_name || '';
+                }
+                var godown = row.querySelector('.sv-godown');
+                if (godown && it.godown) godown.value = it.godown;
+                var qty = row.querySelector('.sv-qty');
+                if (qty) qty.value = it.counted_qty != null ? it.counted_qty : 0;
+            });
+            recalcTotals();
+            return;
+        }
+
         // Seed the table with a single empty row, then open Date → first
         // row's item picker (keyboard-first: Date, Voucher No is optional).
         addRow();

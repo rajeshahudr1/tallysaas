@@ -19,9 +19,13 @@ var _ledgers = (typeof ledgers !== 'undefined' && ledgers) ? ledgers : [];
 var _hasLedgers = _ledgers.length > 0;
 var _ledgersJson = JSON.stringify(_ledgers.map(function (l) { return { id: l.id, name: l.name, parent: l.parent || '' }; }));
 var _today = new Date().toISOString().slice(0, 10);
+
+/* EDIT MODE — one form serves create and edit. */
+var _edit    = (typeof editContra !== 'undefined' && editContra) ? editContra : null;
+var _dateVal = _edit ? ymd(_edit.journal_date) : _today;
 %>
 
-<form id="contra-form" class="card mb-3 q-voucher" method="post" action="/contra" autocomplete="off" novalidate>
+<form id="contra-form" class="card mb-3 q-voucher" method="post" action="<%= _edit ? ('/contra/' + _edit.id + '/update') : '/contra' %>" autocomplete="off" novalidate>
 
     <div class="voucher-head">
         <a class="q-back" href="/contra" title="Back to Contra" aria-label="Back to Contra">
@@ -44,13 +48,13 @@ var _today = new Date().toISOString().slice(0, 10);
         <div class="form-grid">
             <div class="form-group">
                 <label class="form-label" for="ct-date">Date<span class="req">*</span></label>
-                <input type="date" class="form-control" id="ct-date" name="journal_date" value="<%= _today %>" required>
+                <input type="date" class="form-control" id="ct-date" name="journal_date" value="<%= _dateVal %>" required>
             </div>
 
             <div class="form-group">
                 <label class="form-label" for="ct-from">From (Cr)<span class="req">*</span></label>
                 <div class="li-prod-cell">
-                    <input type="text" class="form-control li-product-search" id="ct-from" name="cr_ledger"
+                    <input type="text" class="form-control li-product-search" id="ct-from" name="cr_ledger" value="<%= _edit ? (_edit.cr_ledger || '') : '' %>"
                            placeholder="<%= _hasLedgers ? 'Search cash/bank ledger…' : 'No cash or bank ledgers synced yet' %>"
                            autocomplete="off" required <%= _hasLedgers ? '' : 'disabled' %>>
                     <div class="li-prod-menu" id="ct-from-menu" hidden></div>
@@ -61,7 +65,7 @@ var _today = new Date().toISOString().slice(0, 10);
             <div class="form-group">
                 <label class="form-label" for="ct-to">To (Dr)<span class="req">*</span></label>
                 <div class="li-prod-cell">
-                    <input type="text" class="form-control li-product-search" id="ct-to" name="dr_ledger"
+                    <input type="text" class="form-control li-product-search" id="ct-to" name="dr_ledger" value="<%= _edit ? (_edit.dr_ledger || '') : '' %>"
                            placeholder="<%= _hasLedgers ? 'Search cash/bank ledger…' : 'No cash or bank ledgers synced yet' %>"
                            autocomplete="off" required disabled>
                     <div class="li-prod-menu" id="ct-to-menu" hidden></div>
@@ -71,7 +75,7 @@ var _today = new Date().toISOString().slice(0, 10);
 
             <div class="form-group">
                 <label class="form-label" for="ct-amount">Amount<span class="req">*</span></label>
-                <input type="number" class="form-control" id="ct-amount" name="amount" min="0" step="0.01" placeholder="0.00" required disabled>
+                <input type="number" class="form-control" id="ct-amount" name="amount" min="0" step="0.01" placeholder="0.00" value="<%= _edit ? (_edit.amount || '') : '' %>" required<%= _edit ? '' : ' disabled' %>>
             </div>
         </div>
 
@@ -80,7 +84,7 @@ var _today = new Date().toISOString().slice(0, 10);
             <div class="col-12">
                 <label class="form-label" for="ct-narration">Narration</label>
                 <textarea class="form-control" id="ct-narration" name="narration" rows="2" maxlength="300"
-                          placeholder="Being…" data-counter="ct-narration-count"></textarea>
+                          placeholder="Being…" data-counter="ct-narration-count"><%= _edit ? (_edit.narration || "") : "" %></textarea>
                 <div class="char-counter"><span id="ct-narration-count">0/300</span></div>
             </div>
         </div>
@@ -89,7 +93,7 @@ var _today = new Date().toISOString().slice(0, 10);
     <div class="form-card-footer">
         <a class="btn btn-light" href="/contra">Cancel</a>
         <button type="submit" class="btn btn-primary" id="ct-submit" <%= _hasLedgers ? '' : 'disabled' %>>
-            <i class="fa-solid fa-cloud-arrow-up me-1"></i>Create Voucher
+            <i class="fa-solid fa-cloud-arrow-up me-1"></i><%= _edit ? 'Update Voucher' : 'Create Voucher' %>
         </button>
     </div>
 </form>
@@ -112,12 +116,12 @@ var _today = new Date().toISOString().slice(0, 10);
     .li-prod-menu {
         position: fixed; z-index: 1080;
         max-height: 240px; overflow-y: auto; background: #fff;
-        border: 1px solid var(--border, #d1d5db); border-radius: 6px;
-        box-shadow: 0 8px 24px rgba(0,0,0,.12);
+        border: 1px solid var(--border, #E9EDF3); border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(16,24,40,.10); padding: 4px;
     }
     .li-prod-item { padding: 7px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .li-prod-item:hover, .li-prod-item.is-active { background: #eef2ff; }
+    .li-prod-item:hover, .li-prod-item.is-active { background: #EAF1FE; }
     .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
     .li-prod-item .li-prod-sub { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; flex: 0 0 auto; text-align: right; }
 

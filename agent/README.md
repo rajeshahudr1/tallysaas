@@ -18,9 +18,9 @@ fourteen voucher types created in the web app into Tally (see
 `build_exe.py` produces two different executables from the same sync engine
 (`sync_agent.py`'s `run_sync_loop`, never duplicated):
 
-- **Console agent** (`sync_agent.py` → `TallyCloudSyncAgent.exe`) — the
+- **Console agent** (`sync_agent.py` → `TelooraAgent.exe`) — the
   headless CLI described below. No window, driven entirely by flags/config.
-- **Windowed agent** (`gui_agent.py` → `TallyCloudSync.exe`, `--windowed`) —
+- **Windowed agent** (`gui_agent.py` → `Teloora.exe`, `--windowed`) —
   a self-installing desktop app with a Setup wizard (first run) and a
   Dashboard (status, Start/Stop, Sync-now, logs, uninstall). Its UI is a
   server-served page (`web/views/agent-app/`) hosted in a window by
@@ -130,10 +130,10 @@ So the customer needs no Python install:
 ```bash
 pip install pyinstaller
 python build_exe.py
-# (equivalent to: pyinstaller --onefile --name TallyCloudSyncAgent sync_agent.py)
+# (equivalent to: pyinstaller --onefile --name TelooraAgent sync_agent.py)
 ```
 
-The binary lands in `dist/TallyCloudSyncAgent.exe`. Ship it together with
+The binary lands in `dist/TelooraAgent.exe`. Ship it together with
 `config.example.ini`; the customer copies it to `config.ini`, sets `api_url`
 and `license_key`, runs the exe once to activate, then leaves it running.
 
@@ -142,17 +142,17 @@ and `license_key`, runs the exe once to activate, then leaves it running.
 **Option A — Startup folder (simplest):**
 
 1. Press `Win+R`, type `shell:startup`, press Enter.
-2. Drop a shortcut to `TallyCloudSyncAgent.exe` into that folder.
+2. Drop a shortcut to `TelooraAgent.exe` into that folder.
 
 **Option B — Task Scheduler (robust, restarts on failure):**
 
 ```bat
-schtasks /Create /TN "TallyCloudSyncAgent" ^
-    /TR "C:\TallyAgent\TallyCloudSyncAgent.exe" ^
+schtasks /Create /TN "TelooraAgent" ^
+    /TR "C:\TallyAgent\TelooraAgent.exe" ^
     /SC ONLOGON /RL HIGHEST /F
 ```
 
-Remove with `schtasks /Delete /TN "TallyCloudSyncAgent" /F`.
+Remove with `schtasks /Delete /TN "TelooraAgent" /F`.
 
 ---
 

@@ -1,0 +1,35 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/brand-vars.ejs — turns web/config/brand.js into CSS
+ * custom properties, so the ENTIRE UI colour scheme follows the
+ * logo from that one file. Include this AFTER theme.css on every
+ * page (app layout + the standalone auth pages) — it overrides
+ * the defaults baked into :root there.
+ *
+ * Change a colour in web/config/brand.js → every page updates.
+ * ─────────────────────────────────────────────────────────── */
+var _b = (typeof brand !== 'undefined' && brand) ? brand : {};
+var _c = _b.colors || {};
+var _t = _b.theme  || {};
+var v = {
+    primary:     _t.primary     || _c.blue  || '#1560E0',
+    primaryDark: _t.primaryDark || '#0F4CB8',
+    secondary:   _t.secondary   || _c.green || '#45B649',
+    navy:        _c.navy        || '#17265E',
+    green:       _c.green       || '#45B649',
+    gradient:    _c.gradient    || 'linear-gradient(135deg, #1560E0, #45B649)',
+};
+%><style>
+:root {
+    --primary:        <%= v.primary %>;
+    --primary-700:    <%= v.primaryDark %>;
+    --secondary:      <%= v.secondary %>;
+    --brand-navy:     <%= v.navy %>;
+    --brand-green:    <%= v.green %>;
+    --brand-gradient: <%= v.gradient %>;
+}
+/* NOTE: --sidebar-bg is deliberately NOT emitted here. The sidebar is app
+   chrome, not brand colour — it lives in theme.css. Emitting it meant a stale
+   value in the running server's require cache could paint the panel dark long
+   after the stylesheet said white. */
+</style>

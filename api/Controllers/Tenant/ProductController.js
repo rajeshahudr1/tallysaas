@@ -27,6 +27,7 @@ const crud = require('../../Helpers/crudController');
 const db   = require('../../config/db').db;
 const { fullUrl } = require('../../Helpers/uploads');
 const { cutoffFromDays } = require('../../Helpers/inactiveCutoff');
+const { MOVEMENT_SUBQUERY, closingStockSql, AVG_PURCHASE_RATE_SQL } = require('../../Helpers/stockMovement');
 const customerUsers = require('./CustomerUserController');
 
 /**
@@ -68,7 +69,16 @@ async function decorate(rows, req) {
     }
     let out = rows.map((r) => {
         const gallery = byProduct[r.id] || [];
-        return { ...r, images: gallery, image_url: gallery.length ? gallery[0].url : null };
+        return {
+            ...r,
+            // An HSN is a numeric code. Some Tally masters carry a literal
+            // placeholder ("Not Found", "NA", "-") where the code is missing,
+            // and printing that into an invoice's HSN column puts a made-up
+            // value on a tax document. Anything non-numeric reads as absent.
+            hsn_code: /^\d+$/.test(String(r.hsn_code || '').trim()) ? r.hsn_code : null,
+            images: gallery,
+            image_url: gallery.length ? gallery[0].url : null,
+        };
     });
     // Customer-portal login: replace the price with the LOCKED adjusted rate
     // (sales_price × category discount/addition %) and hide the buy price. The
@@ -89,9 +99,46 @@ async function decorate(rows, req) {
 
 // Columns returned by list/get. `products.*` gives every base column; the
 // aliased join adds a human-readable label for the category FK.
+/**
+ * Per-item stock movement, aggregated ONCE from Tally's inventory mirror and
+ * joined by item name.
+ *
+ * Written as a joined aggregate rather than correlated subqueries: the list
+ * needs four figures per row (in/out quantity and in value), and evaluating
+ * those per product turned a 5,000-item page into a query that never
+ * returned. One grouped pass over the entries costs the same for one row or
+ * all of them.
+ *
+ * Direction comes from the VOUCHER, never from the sign of qty — Tally records
+ * an inventory quantity as a positive magnitude on both sides:
+ *   in  = Purchase, Receipt Note, Credit Note (a sales return coming BACK IN)
+ *   out = Sales, Delivery Note, Debit Note (a purchase return going BACK OUT)
+ * `i.type` is also consulted because custom sales classes (RETAIL CASH SALES
+ * and the like) do not call themselves "Sales".
+ */
+// company_id is GROUPED and joined on, rather than filtered by a bind: the
+// factory calls baseQuery() without the request, and a tenant db can hold more
+// than one company — dropping the company from the key would let one company's
+// movement leak into another's closing stock.
+// Stock movement + the figures derived from it live in one place, shared with
+// the sales-invoice stock guard — see Helpers/stockMovement.js for why.
+const CLOSING_STOCK_SQL = closingStockSql('products');
+
+// Columns returned by list/get. `products.*` gives every base column; the
+// aliased join adds a human-readable label for the category FK.
 const LIST_COLUMNS = [
     'products.*',
     'categories.name as category',
+    // Reported per ITEM (not per godown) — the godown split is its own view.
+    db.raw(`${CLOSING_STOCK_SQL} as closing_stock`),
+    db.raw(`${AVG_PURCHASE_RATE_SQL} as avg_purchase_rate`),
+    // What the stock on hand is WORTH — closing quantity at the average rate
+    // we actually paid, which is how the Inventory Amount on the dashboard is
+    // reckoned. NULL rather than 0 when the item has never been purchased:
+    // there is no rate to value it at, and a 0 would read as worthless stock
+    // instead of unvalued stock.
+    db.raw(`(case when ${AVG_PURCHASE_RATE_SQL} is null then null
+                  else ${CLOSING_STOCK_SQL} * ${AVG_PURCHASE_RATE_SQL} end) as stock_value`),
 ];
 
 // Free-text search targets (qualified — the base query has a join, so bare
@@ -110,7 +157,13 @@ const SEARCH_COLS = [
  */
 function baseQuery(database) {
     return database('products')
-        .leftJoin('categories', 'categories.id', 'products.category_id');
+        .leftJoin('categories', 'categories.id', 'products.category_id')
+        // Tally's inventory movement, aggregated once (see MOVEMENT_SUBQUERY)
+        // and matched by item NAME — the mirror carries no product FK.
+        .leftJoin(
+            database.raw(`(${MOVEMENT_SUBQUERY}) as mv`),
+            database.raw('mv.company_id = products.company_id and mv.item_key = lower(products.name)'),
+        );
 }
 
 /**
@@ -185,6 +238,9 @@ const controller = crud.build({
         purchase_price: 'products.purchase_price',
         sales_price:    'products.sales_price',
         stock:          'products.opening_stock',
+        closing_stock:  'closing_stock',
+        avg_purchase_rate: 'avg_purchase_rate',
+        stock_value:    'stock_value',
     },
     // Filter dropdowns (?key=value) → WHERE.
     filters: {
@@ -197,6 +253,16 @@ const controller = crud.build({
         },
         gst_rate: (qb, v) => qb.where('products.gst_rate', v),
         hsn:      (qb, v) => qb.where('products.hsn_code', 'ilike', `%${v}%`),
+        // ?stock=in|out|negative — the stock-position tabs. "out" means exactly
+        // zero; a NEGATIVE closing stock is its own case (Tally allows it, and
+        // it usually means a sale was booked before its purchase), so it gets
+        // its own filter rather than being lumped in with "not in stock".
+        stock: (qb, v) => {
+            if (v === 'in')       return qb.whereRaw(`${CLOSING_STOCK_SQL} > 0`);
+            if (v === 'out')      return qb.whereRaw(`${CLOSING_STOCK_SQL} = 0`);
+            if (v === 'negative') return qb.whereRaw(`${CLOSING_STOCK_SQL} < 0`);
+            return qb;
+        },
         // ?inactive=90 — products not sold in the last N days. Drives the
         // dashboard's "Inactive Stocks" tile.
         inactive: (qb, v) => {

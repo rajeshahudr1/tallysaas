@@ -15,6 +15,7 @@ class MenuEntry {
     required this.module,
     this.route,
     this.adminOnly = false,
+    this.superOnly = false,
     this.salesmanOnly = false,
     this.approverOnly = false,
     this.create = false,
@@ -32,6 +33,10 @@ class MenuEntry {
 
   /// Company/super admin only (the web's `adminOnly`).
   final bool adminOnly;
+
+  /// PLATFORM operator only (the web's `superOnly`) — the endpoint behind it
+  /// lives under /super-admin, so a company admin has nothing to call.
+  final bool superOnly;
 
   /// Only a LINKED field salesman sees it (the web's `salesmanOnly`).
   final bool salesmanOnly;
@@ -127,7 +132,9 @@ const List<MenuGroup> kAppMenu = [
   MenuGroup(label: 'Field Sales', icon: Icons.place_outlined, items: [
     MenuEntry(key: 'my-field', label: 'My Dashboard', icon: Icons.place_outlined, module: 'field-sales', route: '/my-field', salesmanOnly: true),
     MenuEntry(key: 'sales', label: 'Sales Persons', icon: Icons.badge_outlined, module: 'sales-persons', route: '/sales-persons'),
-    MenuEntry(key: 'gps-settings', label: 'GPS Tracking', icon: Icons.my_location, module: 'gps-tracking', adminOnly: true), // super-admin only (web)
+    // GPS config is per-LICENCE and only exposed under /super-admin, so a company
+    // admin would have nothing to call — gate it the way the API actually is.
+    MenuEntry(key: 'gps-settings', label: 'GPS Tracking', icon: Icons.my_location, module: 'gps-tracking', route: '/gps-settings', superOnly: true),
   ]),
   MenuGroup(label: 'Portals', icon: Icons.public, items: [
     MenuEntry(key: 'customer-users', label: 'Customer Users', icon: Icons.lock_person_outlined, module: 'customer-users', route: '/customer-users'),
@@ -155,6 +162,7 @@ const List<MenuGroup> kAppMenu = [
 /// True when [user] may see [e] — mirrors the web sidebar's filter rules.
 bool _visible(MenuEntry e, AppUser? user) {
   if (user == null) return true; // pre-login render; the router gates access
+  if (e.superOnly) return user.isSuperAdmin;
   if (e.salesmanOnly) return user.isSalesman;
   if (e.adminOnly) return user.isSuperAdmin || user.can(e.module, 'edit');
   if (e.approverOnly) {

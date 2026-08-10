@@ -200,10 +200,26 @@ async function statement(req, res) {
 
         // Every posting on this ledger — the opening replay needs the ones
         // BEFORE the range too, so the range filter is applied in memory.
+        // `counter_ledger` is the OTHER side of each voucher — the party a bank
+        // or cash row actually moved money with, which is the column that makes
+        // a statement readable. It is taken as the largest posting on the same
+        // voucher that is not this ledger and not a round-off balancing entry;
+        // `v.party_ledger` alone will not do, because Tally leaves it empty on
+        // most receipt and payment vouchers.
         const allEntries = await liveVoucherEntries(db, companyId)
             .whereRaw('lower(e.ledger_name) = ?', [ledger.name.toLowerCase()])
             .select('e.voucher_guid', 'e.voucher_no', 'e.voucher_type', 'e.voucher_date',
-                'e.amount', 'e.is_debit');
+                'e.amount', 'e.is_debit')
+            .select('v.reference as reference_no')
+            .select(db.raw(`coalesce(
+                nullif(v.party_ledger, ''),
+                (select o.ledger_name from tally_voucher_entries o
+                  where o.company_id = e.company_id
+                    and o.voucher_guid = e.voucher_guid
+                    and lower(o.ledger_name) <> lower(e.ledger_name)
+                    and o.ledger_name !~* 'round'
+                  order by abs(o.amount) desc limit 1)
+            ) as counter_ledger`));
 
         const balance = periodBalance({
             opening: accountingBalance(ledger.opening_balance),
@@ -238,6 +254,8 @@ async function statement(req, res) {
                 voucher_no:   e.voucher_no || '',
                 voucher_type: e.voucher_type || '',
                 voucher_date: e.voucher_date,
+                counter_ledger: e.counter_ledger || '',
+                reference_no: e.reference_no || '',
                 amount:       mag,
                 dc:           e.is_debit ? 'Dr' : 'Cr',
             };
@@ -371,10 +389,69 @@ async function salesLedgerOptions(req, res) {
             .where('company_id', companyId).whereNull('deleted_at')
             .whereRaw('lower(parent) = ?', ['sales accounts'])
             .orderBy('name', 'asc')
-            .select('id', 'name', 'parent');
+            .select('id', 'name', 'parent', 'tax_type', 'tax_classification');
         return R.successResponse(res, { data: rows });
     } catch (err) {
         console.error('tallyLedgers.salesLedgerOptions error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * GET /tally/price-levels — the company's Tally price levels, as options for
+ * the voucher forms' "Price Level" picker.
+ *
+ * A price level is Tally's per-customer-tier rate card ("Wholesale",
+ * "Retail"). Choosing one on a voucher is what makes the line rate come out
+ * as that tier's rate rather than the item's standard price. Empty when the
+ * company does not use price levels — which is not an error, just a company
+ * that prices everyone the same.
+ */
+async function priceLevelOptions(req, res) {
+    try {
+        const rows = await db('tally_price_levels')
+            .where('company_id', req.companyId).whereNull('deleted_at')
+            .orderBy('name', 'asc')
+            .select('id', 'name');
+        return R.successResponse(res, { data: rows });
+    } catch (err) {
+        console.error('tallyLedgers.priceLevelOptions error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+/**
+ * GET /tally/price-list?level=&item= — the rate a price level sets.
+ *
+ * Returns the matching price-list rows so the form can apply a tier rate when
+ * an item is picked. Filtered by level and/or item; the caller decides which
+ * of the two it knows.
+ */
+async function priceListRates(req, res) {
+    try {
+        const level = String(req.query.level || '').trim();
+        const item  = String(req.query.item || '').trim();
+        let qb = db('tally_price_lists')
+            .where('company_id', req.companyId).whereNull('deleted_at');
+        if (level) qb = qb.whereRaw('lower(price_level) = ?', [level.toLowerCase()]);
+        if (item)  qb = qb.whereRaw('lower(stock_item) = ?', [item.toLowerCase()]);
+        const rows = await qb
+            .orderBy('stock_item', 'asc').orderBy('from_qty', 'asc')
+            .select('stock_item', 'price_level', 'from_qty', 'to_qty', 'rate', 'discount');
+        return R.successResponse(res, {
+            data: rows.map((r) => ({
+                stock_item: r.stock_item,
+                price_level: r.price_level,
+                // A slab applies from from_qty up to to_qty; nulls mean the
+                // slab is open-ended on that side.
+                from_qty: r.from_qty != null ? Number(r.from_qty) : null,
+                to_qty: r.to_qty != null ? Number(r.to_qty) : null,
+                rate: r.rate != null ? Number(r.rate) : null,
+                discount: r.discount != null ? Number(r.discount) : null,
+            })),
+        });
+    } catch (err) {
+        console.error('tallyLedgers.priceListRates error:', err);
         return R.errorResponse(res, OOPS_MSG, 500);
     }
 }
@@ -420,7 +497,7 @@ async function purchaseLedgerOptions(req, res) {
             .where('company_id', companyId).whereNull('deleted_at')
             .whereRaw('lower(parent) = ?', ['purchase accounts'])
             .orderBy('name', 'asc')
-            .select('id', 'name', 'parent');
+            .select('id', 'name', 'parent', 'tax_type', 'tax_classification');
         return R.successResponse(res, { data: rows });
     } catch (err) {
         console.error('tallyLedgers.purchaseLedgerOptions error:', err);
@@ -428,4 +505,8 @@ async function purchaseLedgerOptions(req, res) {
     }
 }
 
-module.exports = { list, statement, voucher, salesLedgerOptions, ledgerGroupOptions, purchaseLedgerOptions };
+module.exports = {
+    list, statement, voucher,
+    salesLedgerOptions, ledgerGroupOptions, purchaseLedgerOptions,
+    priceLevelOptions, priceListRates,
+};

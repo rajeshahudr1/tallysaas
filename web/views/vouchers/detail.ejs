@@ -1,0 +1,166 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * views/vouchers/detail.ejs — READ-ONLY view of any voucher.
+ *
+ * Until now no voucher module had a detail page at all: "View" either opened
+ * the PDF or dropped the user into the EDIT form, where a stray keystroke could
+ * change a saved record. This is the page that just shows it.
+ *
+ * ONE view serves every module, because they share a shape (party + dates +
+ * line items + totals). What differs is supplied by the route through `cfg`,
+ * so adding a module is a config entry, not another near-identical template.
+ *
+ * Expected locals:
+ *   voucher  object  — the api record (header fields at the root, items nested)
+ *   items    array   — line items
+ *   cfg      { basePath, label, noField, dateField, partyField, partyLabel,
+ *              extra?: [{label, field}], canEdit?: bool, hasPdf?: bool }
+ * ─────────────────────────────────────────────────────────── */
+var v     = (typeof voucher !== 'undefined' && voucher) ? voucher : {};
+var _rows = (typeof items !== 'undefined' && items) ? items : [];
+var c     = (typeof cfg !== 'undefined' && cfg) ? cfg : {};
+
+var _base   = c.basePath || '/';
+var _label  = c.label || 'Voucher';
+var _no     = v[c.noField] || v.voucher_no || v.invoice_no || ('#' + (v.id || ''));
+var _party  = v[c.partyField] || (c.partyAlt ? v[c.partyAlt] : null)
+    || v.customer || v.supplier || v.customer_name || v.supplier_name
+    || v.narration || '—';
+
+/* Money/qty come back as numeric strings ("1234.00"); format for reading. */
+function _money(x) {
+    var n = Number(x);
+    if (!isFinite(n)) return '—';
+    return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function _qty(x) {
+    var n = Number(x);
+    return isFinite(n) ? String(n) : (x == null ? '—' : String(x));
+}
+function _date(x) { return x ? ymd(x) : '—'; }
+
+/* Default columns = the invoice shape the first nine modules use. A module
+   supplies its own set when its lines mean something different. */
+var _cols = c.columns || [
+    { label: 'Item',    field: 'product_name', alt: 'description' },
+    { label: 'HSN',     field: 'hsn' },
+    { label: 'Qty',     field: 'quantity',     num: true, kind: 'qty' },
+    { label: 'Unit',    field: 'unit' },
+    { label: 'Rate',    field: 'rate',         num: true, kind: 'money' },
+    { label: 'Disc %',  field: 'discount_pct', num: true, kind: 'qty' },
+    { label: 'Taxable', field: 'taxable',      num: true, kind: 'money' },
+    { label: 'GST %',   field: 'gst_rate',     num: true, kind: 'qty' },
+    { label: 'Amount',  field: 'amount',       num: true, kind: 'money' },
+];
+function _cell(row, col) {
+    var raw = row[col.field];
+    if ((raw == null || raw === '') && col.alt) raw = row[col.alt];
+    if (raw == null || raw === '') return '—';
+    if (col.kind === 'money') return _money(raw);
+    if (col.kind === 'qty')   return _qty(raw);
+    return String(raw);
+}
+
+var _actions = [];
+if (c.hasPdf) _actions.push({ label: 'PDF', icon: 'fa-file-pdf', href: _base + '/' + v.id + '/pdf', requires: false });
+if (c.canEdit !== false) _actions.push({ label: 'Edit', icon: 'fa-pen', href: _base + '/' + v.id + '/edit', requires: false });
+%>
+
+<%- include('../partials/page-head', {
+    title: _label + ' ' + _no,
+    subtitle: 'Read-only view — use Edit to change anything.',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _label + 's', href: _base },
+        { label: String(_no) },
+    ],
+    actions: _actions,
+}) %>
+
+<div class="card mb-3">
+    <div class="voucher-head"><%= _label %> <%= _no %></div>
+    <div class="inv-body">
+        <div class="form-grid">
+            <div class="form-group">
+                <label class="form-label"><%= c.partyLabel || 'Party' %></label>
+                <div class="vd-value"><%= _party %></div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Date</label>
+                <div class="vd-value"><%= _date(v[c.dateField]) %></div>
+            </div>
+            <div class="form-group">
+                <label class="form-label"><%= _label %> No</label>
+                <div class="vd-value"><%= _no %></div>
+            </div>
+            <% (c.extra || []).forEach(function (f) { %>
+                <div class="form-group">
+                    <label class="form-label"><%= f.label %></label>
+                    <div class="vd-value"><%= f.date ? _date(v[f.field]) : (v[f.field] || '—') %></div>
+                </div>
+            <% }); %>
+        </div>
+    </div>
+
+    <%# Line columns come from cfg. A stock journal has no GST or money, and a
+        journal/contra has no lines at all — so the table adapts rather than
+        showing columns of em dashes. %>
+    <% if (c.ledgerBlock) { %>
+        <div class="inv-body" style="padding-top:0">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label class="form-label">To (Dr)</label>
+                    <div class="vd-value"><%= v.dr_ledger || '—' %></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">From (Cr)</label>
+                    <div class="vd-value"><%= v.cr_ledger || '—' %></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Amount</label>
+                    <div class="vd-value"><%= _money(v.amount) %></div>
+                </div>
+            </div>
+        </div>
+    <% } else if (_rows.length) { %>
+        <div class="li-table-wrap">
+            <table class="li-table">
+                <thead>
+                    <tr>
+                        <% _cols.forEach(function (col) { %>
+                            <th class="<%= col.num ? 'num' : '' %>"><%= col.label %></th>
+                        <% }); %>
+                    </tr>
+                </thead>
+                <tbody>
+                    <% _rows.forEach(function (r) { %>
+                        <tr>
+                            <% _cols.forEach(function (col) { %>
+                                <td class="<%= col.num ? 'num' : '' %>"><%= _cell(r, col) %></td>
+                            <% }); %>
+                        </tr>
+                    <% }); %>
+                </tbody>
+            </table>
+        </div>
+    <% } %>
+
+    <div class="inv-foot">
+        <div>
+            <% var _narr = v.notes || v.narration; if (_narr) { %>
+                <label class="form-label">Narration</label>
+                <div class="vd-value"><%= _narr %></div>
+            <% } %>
+        </div>
+        <% if (!c.noTotals) { %>
+        <div class="inv-totals">
+            <div class="inv-total-row"><span class="lbl">Sub Total</span><span class="val"><%= _money(v.subtotal) %></span></div>
+            <% if (Number(v.discount)) { %>
+                <div class="inv-total-row"><span class="lbl">Discount</span><span class="val"><%= _money(v.discount) %></span></div>
+            <% } %>
+            <div class="inv-total-row"><span class="lbl">Taxes</span><span class="val"><%= _money(v.tax_amount) %></span></div>
+            <div class="inv-total-row grand"><span class="lbl">Grand Total</span><span class="val"><%= _money(v.total) %></span></div>
+        </div>
+        <% } %>
+    </div>
+</div>

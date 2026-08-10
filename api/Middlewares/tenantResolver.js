@@ -15,6 +15,13 @@
  * 401 as an unauthenticated caller (no info leak). Super-admin cross-tenant
  * work uses the separate super-admin bridge (Phase 2) which resolves the tenant
  * db from an explicit ?license_id / X-License-Id.
+ *
+ * Two rollout flags gate the strictness here (both default OFF, see .env.example):
+ *   TENANT_STRICT_DB_NAME=true   — reject a non-super-admin token that carries
+ *                                  no db_name instead of falling through to the
+ *                                  shared global pool.
+ *   TENANT_DB_STRICT_ROLES=true  — (config/tenantCredentials) refuse to open a
+ *                                  tenant pool under the shared admin login.
  */
 
 const R      = require('../Helpers/response');
@@ -27,13 +34,26 @@ function resolveTenant(req, res, next) {
     const u = req.user;
     if (!u || typeof u !== 'object') return R.errorResponse(res, AUTH_FAIL, 401);
 
-    // TRANSITION-TOLERANT: until the flip, JWTs carry no `db_name` — fall through
-    // so `db(...)` uses the global (old single-DB) fallback and the app keeps
-    // working. Super-admin also falls through (they use the global master pool /
-    // an explicit super-admin bridge, never a single tenant db). Post-flip, when
-    // every token carries db_name, the else-branch below always runs.
-    // (To make this STRICT after the flip, reject when !u.db_name.)
-    if (u.role_slug === 'super-admin' || !u.db_name || typeof u.db_name !== 'string') {
+    // Super-admin legitimately carries no db_name: they work on the master pool
+    // or go through the explicit super-admin bridge (?license_id / X-License-Id).
+    if (u.role_slug === 'super-admin') return next();
+
+    const hasDbName = !!u.db_name && typeof u.db_name === 'string';
+
+    // TRANSITION-TOLERANT (default): a token minted before the per-licence split
+    // carries no `db_name` — fall through so `db(...)` uses the global single-DB
+    // pool and old sessions keep working.
+    //
+    // TENANT_STRICT_DB_NAME=true closes that door. It matters because the
+    // fall-through is reachable by simply OMITTING the claim: anyone able to
+    // mint or replay a db_name-less token lands on the shared global pool
+    // instead of their own tenant. Turn it on once every live session has been
+    // re-issued (they expire on their own; forcing a re-login is faster).
+    if (!hasDbName) {
+        if (String(process.env.TENANT_STRICT_DB_NAME || '').toLowerCase() === 'true') {
+            console.warn(`tenantResolver: rejecting token without db_name (user ${u.id || '?'}) — strict mode.`);
+            return R.errorResponse(res, AUTH_FAIL, 401);
+        }
         return next();
     }
 

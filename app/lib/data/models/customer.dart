@@ -21,6 +21,11 @@ class Customer {
     this.billingAddress,
     this.openingBalance,
     this.creditLimit,
+    this.creditDays,
+    this.closingBalance,
+    this.isFavourite = false,
+    this.lastSoldDate,
+    this.tallyLedgerGroup,
     this.notes,
     this.internalRemarks,
     this.isTallyLedger,
@@ -52,6 +57,26 @@ class Customer {
   final String? billingAddress;
   final num? openingBalance;
   final num? creditLimit;
+
+  /// Credit PERIOD, in days. The limit caps how much a party may owe, this
+  /// caps how long. NULL means "no agreed terms" — deliberately NOT 0, which
+  /// would read as a negotiated same-day term.
+  final int? creditDays;
+
+  /// Where the party stands TODAY, read from the synced Tally ledger —
+  /// as opposed to [openingBalance], which is where they started.
+  final num? closingBalance;
+
+  /// Starred on the Parties screen. Cloud-only — Tally has no such field,
+  /// so changing it never marks the ledger for re-push.
+  final bool isFavourite;
+
+  /// When this customer last bought anything; null when they never have.
+  final String? lastSoldDate;
+
+  /// The party's group in Tally. Kept apart from [ledgerGroup] (what the user
+  /// typed on the form) so neither silently overwrites the other.
+  final String? tallyLedgerGroup;
   final String? notes;
   final String? internalRemarks;
   final bool? isTallyLedger;
@@ -74,6 +99,39 @@ class Customer {
   final Map<String, dynamic> customFields;
   final String? createdAt;
 
+  /// Deliberately narrow: the ONE field a list row flips in place, when the
+  /// star is tapped and the row must redraw before the server answers. A full
+  /// copyWith over thirty fields would be dead code — everything else on this
+  /// model is only ever replaced by a fresh fetch.
+  Customer copyWith({bool? isFavourite}) => Customer(
+        id: id,
+        name: name,
+        mobile: mobile,
+        alternateMobile: alternateMobile,
+        email: email,
+        gstNumber: gstNumber,
+        panNumber: panNumber,
+        location: location,
+        salesPerson: salesPerson,
+        locationId: locationId,
+        salesPersonId: salesPersonId,
+        customerGroupId: customerGroupId,
+        shippingAddress: shippingAddress,
+        billingAddress: billingAddress,
+        openingBalance: openingBalance,
+        creditLimit: creditLimit,
+        creditDays: creditDays,
+        closingBalance: closingBalance,
+        isFavourite: isFavourite ?? this.isFavourite,
+        country: country,
+        state: state,
+        city: city,
+        pincode: pincode,
+        status: status,
+        customFields: customFields,
+        createdAt: createdAt,
+      );
+
   factory Customer.fromJson(Map<String, dynamic> j) => Customer(
         id: _toInt(j['id']) ?? 0,
         name: _s(j['name']),
@@ -91,6 +149,13 @@ class Customer {
         billingAddress: _sn(j['billing_address']),
         openingBalance: _toNum(j['opening_balance']),
         creditLimit: _toNum(j['credit_limit']),
+        creditDays: _toInt(j['credit_days']),
+        closingBalance: _toNum(j['closing_balance']),
+        isFavourite: j['is_favourite'] == true
+            || j['is_favourite'] == 1
+            || j['is_favourite'] == 'true',
+        lastSoldDate: _sn(j['last_sold_date']),
+        tallyLedgerGroup: _sn(j['tally_ledger_group']),
         notes: _sn(j['notes']),
         internalRemarks: _sn(j['internal_remarks']),
         isTallyLedger: _toBool(j['is_tally_ledger']),

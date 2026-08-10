@@ -14,6 +14,9 @@
 var _title      = (typeof title !== 'undefined' && title) ? title : '';
 var _breadcrumb = (typeof breadcrumb !== 'undefined' && breadcrumb) ? breadcrumb : [];
 var _actions    = (typeof actions !== 'undefined') ? actions : null;
+// Optional one-line explanation under the title. Pages that don't pass one
+// simply render the title alone, exactly as before.
+var _subtitle   = (typeof subtitle !== 'undefined' && subtitle) ? subtitle : '';
 
 /* RBAC: hide an "Add"/create button the role can't perform. A button is a
  * create action when its href ends in /add|/create|/new, its label starts with
@@ -60,6 +63,7 @@ var _infoId  = 'modinfo-' + _infoKey.replace(/[^a-z0-9]/gi, '');
                 </button>
             <% } %>
         </h1>
+        <% if (_subtitle) { %><p class="page-subtitle"><%= _subtitle %></p><% } %>
         <% if (_breadcrumb.length) { %>
             <nav aria-label="breadcrumb">
                 <ol class="breadcrumb page-breadcrumb mb-0">
@@ -126,7 +130,7 @@ var _infoId  = 'modinfo-' + _infoKey.replace(/[^a-z0-9]/gi, '');
 </div>
 <style>
     .modinfo-btn { border:0; background:transparent; color:#9ca3af; cursor:pointer; padding:0 0 0 8px; font-size:.7em; vertical-align:middle; line-height:1; }
-    .modinfo-btn:hover { color:#2563eb; }
+    .modinfo-btn:hover { color:var(--primary); }
     .modinfo-intro { font-size:14px; color:#374151; margin-bottom:14px; }
     .modinfo-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
     .modinfo-list li { display:flex; gap:10px; font-size:13.5px; color:#334155; line-height:1.5; }

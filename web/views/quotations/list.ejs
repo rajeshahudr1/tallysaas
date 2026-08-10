@@ -136,8 +136,10 @@ var _canDeleteQuotation = _canPath3('/quotations', 'delete');
                                     <i class="fa-solid fa-ellipsis-vertical"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/quotations/<%= r.id %>/edit">
-                                        <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
+                                    <% if (_canEditQuotation) { %>
+                                        <li><a class="dropdown-item" href="/quotations/<%= r.id %>/edit">
+                                            <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</a></li>
+                                    <% } %>
                                     <li><a class="dropdown-item" href="/quotations/<%= r.id %>/pdf" target="_blank">
                                         <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
                                     <% if (_convertible && _canEditQuotation) { %>

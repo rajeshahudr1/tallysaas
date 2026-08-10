@@ -45,6 +45,11 @@ class ProductDetailScreen extends ConsumerWidget {
         DetailRow('Sales Price', p.salesPrice == null ? null : Fmt.inr(p.salesPrice)),
         const DetailSection('Stock & Inventory'),
         DetailRow('Opening Stock', p.openingStock?.toString()),
+        // Opening plus everything received, less everything issued.
+        DetailRow('Closing Stock', p.closingStock?.toString()),
+        // Null prints as a dash, not ₹0 — we have never bought this item.
+        DetailRow('Avg Purchase Rate',
+            p.avgPurchaseRate == null ? null : Fmt.inr(p.avgPurchaseRate)),
         const DetailSection('Product Images'),
         ProductImagesSection(productId: p.id, initial: p.images, canEdit: canEdit),
         if (p.customFields.isNotEmpty) ...[

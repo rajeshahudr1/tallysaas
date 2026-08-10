@@ -71,6 +71,12 @@ var _canDeletePurchaseOrder = _canPath3('/purchase-orders', 'delete');
     ],
 }) %>
 
+<%# Register view switcher — the same period regrouped by Ledger, Voucher
+    Type, Ledger Group, Stock Item, Stock Group or Stock Category. %>
+<%- include('../partials/register-tabs', {
+    basePath: '/purchase-orders', active: 'bill', hasStock: true, showMode: false, query: '',
+}) %>
+
 <form id="purchase-order-filters-form" autocomplete="off" method="get" action="/purchase-orders">
     <%- include('../partials/filter-card', {
         filterId: 'purchase-order-filters',
@@ -135,8 +141,10 @@ var _canDeletePurchaseOrder = _canPath3('/purchase-orders', 'delete');
                                     <i class="fa-solid fa-ellipsis-vertical"></i>
                                 </button>
                                 <ul class="dropdown-menu dropdown-menu-end">
-                                    <li><a class="dropdown-item" href="/purchase-orders/<%= r.id %>/edit">
-                                        <i class="fa-regular fa-eye me-2 text-muted"></i>View</a></li>
+                                    <% if (_canEditPurchaseOrder) { %>
+                                        <li><a class="dropdown-item" href="/purchase-orders/<%= r.id %>/edit">
+                                            <i class="fa-solid fa-pen me-2 text-muted"></i>Edit</a></li>
+                                    <% } %>
                                     <li><a class="dropdown-item" href="/purchase-orders/<%= r.id %>/pdf" target="_blank">
                                         <i class="fa-regular fa-file-pdf me-2 text-muted"></i>PDF</a></li>
                                     <% if (_convertible && _canEditPurchaseOrder) { %>

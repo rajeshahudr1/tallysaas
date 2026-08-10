@@ -93,7 +93,7 @@ var _tpMax = _tp.reduce(function (m, x) { return Math.max(m, Number(x.value || 0
         var st = A.sales_trend || { labels: [], data: [] };
         new Chart(document.getElementById('salesTrendChart'), {
             type: 'line',
-            data: { labels: st.labels, datasets: [{ label: 'Sales', data: st.data, borderColor: '#2563EB',
+            data: { labels: st.labels, datasets: [{ label: 'Sales', data: st.data, borderColor: 'var(--primary)',
                 backgroundColor: 'rgba(37,99,235,.12)', fill: true, tension: 0.35, pointRadius: 2 }] },
             options: baseOpts,
         });
@@ -125,7 +125,7 @@ var _tpMax = _tp.reduce(function (m, x) { return Math.max(m, Number(x.value || 0
     .an-kpi { background:#fff; border:1px solid var(--border); border-radius:14px; padding:16px 18px; display:flex; flex-direction:column; gap:4px; }
     .an-kpi-label { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:#9CA3AF; }
     .an-kpi-val { font-size:22px; font-weight:800; color:#111827; }
-    .an-blue { color:#2563EB; } .an-green { color:#16A34A; } .an-red { color:#DC2626; }
+    .an-blue { color:var(--primary); } .an-green { color:#16A34A; } .an-red { color:#DC2626; }
     .card.an-card { padding:20px; margin-bottom:18px; }
     .form-section-title { margin:0 0 14px; }
     .an-sub { font-size:12px; font-weight:500; color:#9CA3AF; margin-left:6px; }
@@ -143,7 +143,7 @@ var _tpMax = _tp.reduce(function (m, x) { return Math.max(m, Number(x.value || 0
     .an-bar-name { flex:0 0 34%; font-weight:600; color:#111827; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .an-bar-track { flex:1; height:10px; background:#F1F5F9; border-radius:999px; overflow:hidden; }
     .an-bar-fill { display:block; height:100%; border-radius:999px; }
-    .an-bar-blue { background:linear-gradient(90deg,#2563EB,#6D28D9); }
+    .an-bar-blue { background:linear-gradient(90deg,var(--primary),var(--secondary)); }
     .an-bar-green { background:linear-gradient(90deg,#16A34A,#22C55E); }
     .an-bar-val { flex:0 0 auto; font-weight:700; color:#111827; font-size:13px; min-width:72px; text-align:right; }
     @media (max-width: 900px) {

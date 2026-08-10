@@ -257,6 +257,18 @@ var headActions =
                     </div>
                 </div>
                 <div class="form-group">
+                    <%# Credit PERIOD, alongside the limit: the limit caps how
+                        much they may owe, this caps how long. Left blank means
+                        "no agreed terms" — NOT zero days — so a voucher form
+                        takes no default due date from it. %>
+                    <label class="form-label" for="cust-credit-days">Credit Days</label>
+                    <div class="input-affix">
+                        <input type="number" class="form-control has-suffix" id="cust-credit-days" name="credit_days"
+                               placeholder="No agreed terms" value="<%= _v('credit_days') %>" min="0" max="3650" step="1">
+                        <span class="affix affix--suffix">days</span>
+                    </div>
+                </div>
+                <div class="form-group">
                     <label class="form-label" for="cust-opening-balance">Opening Balance</label>
                     <div class="input-group">
                         <span class="input-group-text">₹</span>

@@ -33,6 +33,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import ui_signin as U          # palette, icons, canvas primitives, dialogs
+import ui_theme                # the single amber/red/green signal set
 import brand
 
 # --------------------------------------------------------------------------- #
@@ -48,8 +49,8 @@ BODY = U.BODY
 MUTED = U.MUTED
 BLUE = U.BLUE
 GREEN = U.GREEN
-AMBER = "#d97706"
-RED = "#dc2626"
+AMBER = ui_theme.STAMP      # one amber for the whole app
+RED = ui_theme.VARIANCE     # one red for the whole app
 FACE = U.FACE
 
 # Sized to fit a 1366x768 laptop with its taskbar — the machine this actually
@@ -159,14 +160,22 @@ class Chrome:
         side.pack_propagate(False)
         tk.Frame(self.outer, bg=LINE, width=1).pack(side="left", fill="y")
 
-        brand = tk.Frame(side, bg=SIDEBAR)
-        brand.pack(fill="x", padx=18, pady=(18, 22))
-        mark = tk.Canvas(brand, width=38, height=38, bg=SIDEBAR,
+        # NOT named `brand` -- that is the imported brand module, and shadowing
+        # it here made brand.NAME below resolve against a Frame.
+        brand_box = tk.Frame(side, bg=SIDEBAR)
+        brand_box.pack(fill="x", padx=18, pady=(18, 22))
+        mark = tk.Canvas(brand_box, width=38, height=38, bg=SIDEBAR,
                          highlightthickness=0, bd=0)
         mark.pack(side="left")
-        U.round_rect(mark, 0, 0, 38, 38, 11, fill=BLUE, outline="")
-        U.icon(mark, "cloud", 19, 20, color=U.WHITE, size=19)
-        txt = tk.Frame(brand, bg=SIDEBAR)
+        # The real logo, not a generic cloud glyph — the sidebar is white, so
+        # the mark's own gradient reads exactly as it does on the web app.
+        logo = U.mark_image(38)
+        if logo:
+            mark.create_image(19, 19, image=logo)
+        else:
+            U.round_rect(mark, 0, 0, 38, 38, 11, fill=BLUE, outline="")
+            U.icon(mark, "cloud", 19, 20, color=U.WHITE, size=19)
+        txt = tk.Frame(brand_box, bg=SIDEBAR)
         txt.pack(side="left", padx=(10, 0))
         label(txt, brand.NAME, size=11, bold=True, fg=INK, bg=SIDEBAR,
               anchor="w")

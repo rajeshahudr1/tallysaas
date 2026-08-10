@@ -81,6 +81,13 @@ const createQuotationSchema = Joi.object({
     ledger_name:     optText(120),
     notes:           optText(2000),
 
+    /* Buyer / consignee / dispatch / order block — the fields a PRINTED
+     * voucher needs but the ledger does not. Free-form on purpose: Tally keeps
+     * adding optional voucher fields, and pinning every key here would mean a
+     * validator change for each one. The controller stringifies it into the
+     * jsonb column; nothing here is trusted for money. */
+    voucher_details: Joi.object().unknown(true).allow(null),
+
     items:           itemsArray,
 });
 

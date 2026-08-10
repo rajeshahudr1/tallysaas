@@ -56,6 +56,7 @@ class _PurchaseOrdersScreenState extends ConsumerState<PurchaseOrdersScreen> {
     return ModuleListScaffold<PurchaseOrder>(
       title: 'Purchase Orders',
       infoKey: 'purchase-orders',
+      registerBasePath: '/purchase-orders',
       searchHint: 'Search by order no, supplier…',
       emptyMessage: 'No purchase orders yet.',
       emptyIcon: Icons.local_shipping_outlined,

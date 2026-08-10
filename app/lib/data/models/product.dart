@@ -18,6 +18,9 @@ class Product {
     this.purchasePrice,
     this.salesPrice,
     this.openingStock,
+    this.closingStock,
+    this.avgPurchaseRate,
+    this.stockValue,
     this.category,
     this.categoryId,
     this.description,
@@ -38,6 +41,19 @@ class Product {
   final num? purchasePrice;
   final num? salesPrice;
   final num? openingStock;
+
+  /// Where the item stands TODAY: opening plus everything received, less
+  /// everything issued. [openingStock] alone is only where it started.
+  final num? closingStock;
+
+  /// Total spent on this item divided by the quantity bought. NULL (not 0)
+  /// when we have never bought it — a zero would read as "we get it free".
+  final num? avgPurchaseRate;
+
+  /// What the stock on hand is WORTH: closing quantity at that average rate.
+  /// NULL rather than 0 for an item never purchased — there is no rate to
+  /// value it at, and 0 would read as worthless stock, not unvalued stock.
+  final num? stockValue;
   final String? category;   // joined category name (list)
   final int? categoryId;    // FK id (detail) — drives the Edit form dropdown
   final String? description;
@@ -58,6 +74,9 @@ class Product {
         purchasePrice: _toNum(j['purchase_price']),
         salesPrice: _toNum(j['sales_price']),
         openingStock: _toNum(j['opening_stock']),
+        closingStock: _toNum(j['closing_stock']),
+        avgPurchaseRate: _toNum(j['avg_purchase_rate']),
+        stockValue: _toNum(j['stock_value']),
         category: _sn(j['category']),
         categoryId: _toInt(j['category_id']),
         description: _sn(j['description']),

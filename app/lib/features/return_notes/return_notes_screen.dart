@@ -56,6 +56,7 @@ class _ReturnNotesScreenState extends ConsumerState<ReturnNotesScreen> {
     return ModuleListScaffold<ReturnNote>(
       title: _kind.title,
       infoKey: _kind.slug,
+      registerBasePath: _kind.path,
       searchHint: 'Search by note no, ${_kind.partyLabel.toLowerCase()}…',
       emptyMessage: 'No ${_kind.title.toLowerCase()} yet.',
       emptyIcon: _kind.isCredit

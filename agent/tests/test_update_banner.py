@@ -262,36 +262,49 @@ class UpdateCheckTests(unittest.TestCase):
 class UpdateApplyTests(unittest.TestCase):
     """Reason 2 in the module docstring."""
 
+    # The dialogs are ui_signin's, not tkinter's messagebox. The app moved to
+    # its own drawn dialogs (see ui_signin.Dialog) and this harness kept faking
+    # messagebox, so on_update_now's real confirm() ran unpatched, returned
+    # None, and every test here failed on the button state instead of on
+    # anything it meant to check.
     def setUp(self):
         self._orig_build_api = gui_agent.sync_agent.build_api
         self._orig_update = gui_agent.sync_agent.maybe_self_update
-        self._orig_box = gui_agent.messagebox
+        self._orig_confirm = gui_agent.ui_signin.confirm
+        self._orig_alert = gui_agent.ui_signin.alert
         gui_agent.sync_agent.build_api = lambda *_a, **_k: object()
 
     def tearDown(self):
         gui_agent.sync_agent.build_api = self._orig_build_api
         gui_agent.sync_agent.maybe_self_update = self._orig_update
-        gui_agent.messagebox = self._orig_box
+        gui_agent.ui_signin.confirm = self._orig_confirm
+        gui_agent.ui_signin.alert = self._orig_alert
 
     class _Box:
+        """Stands in for ui_signin.confirm + ui_signin.alert.
+
+        ``warnings`` collects the kind="warning" alerts and ``errors`` the rest,
+        which is the distinction the assertions below care about: a failed
+        update and an update that simply did not happen are different things to
+        tell somebody.
+        """
+
         def __init__(self, answer=True):
             self.answer = answer
             self.errors = []
             self.warnings = []
             self.asked = 0
 
-        def askyesno(self, *_a, **_k):
+        def confirm(self, *_a, **_k):
             self.asked += 1
             return self.answer
 
-        def showerror(self, _t, msg):
-            self.errors.append(msg)
-
-        def showwarning(self, _t, msg):
-            self.warnings.append(msg)
+        def alert(self, _parent, msg, *, kind="error", title=""):
+            (self.warnings if kind == "warning" else self.errors).append(msg)
 
     def _apply(self, dash, box):
-        gui_agent.messagebox = box
+        gui_agent.ui_signin.confirm = box.confirm
+        gui_agent.ui_signin.alert = box.alert
         real_thread = gui_agent.threading.Thread
         try:
             gui_agent.threading.Thread = _InlineThread

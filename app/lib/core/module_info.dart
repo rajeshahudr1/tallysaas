@@ -244,6 +244,16 @@ const Map<String, ModuleInfo> kModuleInfo = {
       'Pending until invoiced; cancel it if the goods are returned outright.',
     ],
   ),
+  'gps-tracking': ModuleInfo(
+    'GPS Tracking',
+    'How often a salesman phone reports its location, and during which hours. Configured per LICENCE by the platform operator.',
+    [
+      'The master switch decides whether the app captures anything at all.',
+      'Periodic pings report on a timer; part-visit and voucher-create capture a single fix each.',
+      'Outside the active hours the phone stops reporting, and a fix closer than the minimum movement is dropped — both save battery and data.',
+      'What gets captured shows up under Tracking Report.',
+    ],
+  ),
   'gst-search': ModuleInfo(
     'GST Search',
     'Check a GSTIN before you trust it — the app decodes the number offline and, when a lookup provider is configured, fetches the registration details.',

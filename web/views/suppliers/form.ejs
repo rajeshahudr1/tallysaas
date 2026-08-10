@@ -197,6 +197,17 @@ var headActions =
                         <%- _selOpts('Select terms', _terms, _v('payment_terms')) %>
                     </select>
                 </div>
+                <div class="form-group">
+                    <%# The credit PERIOD as a number, alongside the free-text
+                        terms. Blank means "no agreed terms" — NOT zero days —
+                        so a bill takes no default due date from it. %>
+                    <label class="form-label" for="sup-credit-days">Credit Days</label>
+                    <div class="input-affix">
+                        <input type="number" class="form-control has-suffix" id="sup-credit-days" name="credit_days"
+                               placeholder="No agreed terms" value="<%= _v('credit_days') %>" min="0" max="3650" step="1">
+                        <span class="affix affix--suffix">days</span>
+                    </div>
+                </div>
             </div>
         </div><!-- /#other -->
 

@@ -106,11 +106,26 @@ test('empty input yields a zeroed structure, not a crash', () => {
     assert.strictEqual(out.buckets.length, 6);
 });
 
-test('an invoice with no due date is never overdue and never projected', () => {
-    const one = inv(1, 10, 300, 1000);
-    one.due_date = null;
-    const out = buildReceivables([one], [], TODAY);
+test('an invoice with no due date falls due on its invoice date', () => {
+    // Tally's zero-credit-period rule, matching what LiveKeeping reports: a
+    // party with no agreed terms owes the money immediately. This test used
+    // to assert the opposite (never overdue, never projected), which hid the
+    // oldest untermed debts from the dashboard's Overdue figure — and it
+    // disagreed with billwiseOutstanding's "a bill with no credit terms is
+    // overdue from its own date". Both now follow the same rule.
+    const old = inv(1, 10, 300, 1000);   // issued 300 days ago
+    old.due_date = null;
+    const out = buildReceivables([old], [], TODAY);
     assert.strictEqual(out.total, 1000);
-    assert.strictEqual(out.overdue, 0);
+    assert.strictEqual(out.overdue, 1000);
+    // Already past due, so it is not a future projection either.
     assert.strictEqual(out.projection_60, 0);
+});
+
+test('a no-due-date invoice issued today is projected, not overdue', () => {
+    const fresh = inv(1, 11, 0, 1000);   // issued today
+    fresh.due_date = null;
+    const out = buildReceivables([fresh], [], TODAY);
+    assert.strictEqual(out.overdue, 0);
+    assert.strictEqual(out.projection_15, 1000);
 });

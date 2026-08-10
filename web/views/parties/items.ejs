@@ -1,0 +1,107 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * parties/items.ejs — "Items Sold" / "Items Purchased" for one party.
+ *
+ * What this customer took from us, or what we took from this supplier,
+ * rolled up per stock item. LiveKeeping parity (the two tabs on its
+ * party detail page).
+ *
+ * Locals:
+ *   party  { id, name }
+ *   rows   [ { name, unit, qty, amount, vouchers, last_date } ]
+ *   meta   { direction, items, total_qty, total_amount }
+ *   backHref, title
+ * ─────────────────────────────────────────────────────────── */
+var _rows = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _meta = (typeof meta !== 'undefined' && meta) ? meta : {};
+var _party = (typeof party !== 'undefined' && party) ? party : { id: null, name: '' };
+var _sold = _meta.direction !== 'purchased';
+function _inr(v) { return Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _qty(v) { return Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+%>
+
+<%- include('../partials/page-head', {
+    title: _party.name + ' · ' + (_sold ? 'Items Sold' : 'Items Purchased'),
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _sold ? 'Customers' : 'Suppliers', href: _sold ? '/customers' : '/suppliers' },
+        { label: _party.name },
+    ],
+}) %>
+
+<div class="pit-summary">
+    <div class="pit-card pit-card--primary">
+        <div class="pit-label">Total Value</div>
+        <div class="pit-value">₹ <%= _inr(_meta.total_amount) %></div>
+    </div>
+    <div class="pit-card">
+        <div class="pit-label">Total Quantity</div>
+        <div class="pit-value"><%= _qty(_meta.total_qty) %></div>
+    </div>
+    <div class="pit-card">
+        <div class="pit-label">Distinct Items</div>
+        <div class="pit-value"><%= _meta.items || 0 %></div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="data-table-wrap">
+        <table class="data-table pit-table" style="width:100%">
+            <thead>
+                <tr>
+                    <th style="text-align:left;width:44px">#</th>
+                    <th style="text-align:left">Item Name</th>
+                    <th style="text-align:right">Quantity</th>
+                    <th style="text-align:left">Unit</th>
+                    <th style="text-align:right">Vouchers</th>
+                    <th style="text-align:left"><%= _sold ? 'Last Sold' : 'Last Purchased' %></th>
+                    <th style="text-align:right">Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr><td colspan="7" style="text-align:center;padding:26px;color:#94a3b8">
+                        No items <%= _sold ? 'sold to' : 'purchased from' %> this party.
+                    </td></tr>
+                <% } %>
+                <% _rows.forEach(function (r, i) { %>
+                    <tr>
+                        <td style="color:#94a3b8"><%= i + 1 %></td>
+                        <td style="font-weight:600">
+                            <a href="/products?search=<%= encodeURIComponent(r.name) %>"
+                               style="color:var(--primary);text-decoration:none"><%= r.name %></a>
+                        </td>
+                        <td style="text-align:right"><%= _qty(r.qty) %></td>
+                        <td style="color:#64748b"><%= r.unit || '—' %></td>
+                        <td style="text-align:right;color:#475569"><%= r.vouchers %></td>
+                        <td><%= r.last_date %></td>
+                        <td style="text-align:right;font-weight:600">₹ <%= _inr(r.amount) %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+            <% if (_rows.length) { %>
+            <tfoot>
+                <tr style="font-weight:800;border-top:2px solid #cbd5e1;background:#f8fafc">
+                    <td colspan="2">Total</td>
+                    <td style="text-align:right"><%= _qty(_meta.total_qty) %></td>
+                    <td colspan="3"></td>
+                    <td style="text-align:right">₹ <%= _inr(_meta.total_amount) %></td>
+                </tr>
+            </tfoot>
+            <% } %>
+        </table>
+    </div>
+</div>
+
+<style>
+    .pit-summary { display:flex; gap:14px; margin-bottom:14px; flex-wrap:wrap; }
+    .pit-card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:12px 18px; min-width:160px; }
+    .pit-card--primary { background:linear-gradient(135deg,var(--primary),#7c3aed); border:0; color:#fff; }
+    .pit-label { font-size:11px; text-transform:uppercase; letter-spacing:.4px; opacity:.85; }
+    .pit-card:not(.pit-card--primary) .pit-label { color:#6b7280; }
+    .pit-value { font-size:20px; font-weight:800; margin-top:2px; }
+    .pit-table th { padding:10px 14px; font-size:11px; text-transform:uppercase; letter-spacing:.4px;
+        color:#6b7280; border-bottom:1px solid #e5e7eb; }
+    .pit-table td { padding:11px 14px; font-size:13.5px; border-bottom:1px solid #f1f5f9; }
+    .pit-table tbody tr:hover { background:#f8fafc; }
+</style>

@@ -1,0 +1,55 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/branding-upload.ejs — one company image (logo / signature).
+ *
+ * Its OWN form, deliberately: the Settings page posts urlencoded, and a file
+ * needs multipart. Nesting it inside the settings form would also be invalid
+ * HTML — the browser drops the inner form and the upload button silently
+ * submits the whole settings page instead.
+ *
+ * Locals:
+ *   kind  'logo' | 'signature'
+ *   url   absolute URL of the current image, or null
+ *   hint  one line explaining where it gets printed
+ * ─────────────────────────────────────────────────────────── */
+var _kind = kind;
+var _url  = (typeof url !== 'undefined' && url) ? url : null;
+var _hint = (typeof hint !== 'undefined' && hint) ? hint : '';
+%>
+
+<div class="brand-up">
+    <% if (_url) { %>
+        <div class="brand-up-preview">
+            <img src="<%= _url %>" alt="Current <%= _kind %>">
+        </div>
+    <% } %>
+
+    <form method="post" action="/settings/branding/<%= _kind %>" enctype="multipart/form-data" class="brand-up-form">
+        <input type="file" class="form-control form-control-sm" name="image" accept="image/*" required>
+        <button type="submit" class="brand-up-btn"><%= _url ? 'Replace' : 'Upload' %></button>
+    </form>
+
+    <% if (_url) { %>
+        <%# Removing is destructive and one click away from Replace, so it
+            confirms rather than trusting the aim. %>
+        <form method="post" action="/settings/branding/<%= _kind %>/remove" class="brand-up-remove"
+              onsubmit="return confirm('Remove the current <%= _kind %>?');">
+            <button type="submit" class="brand-up-link">Remove</button>
+        </form>
+    <% } %>
+
+    <div class="form-hint"><%= _hint %> Max 5 MB.</div>
+</div>
+
+<style>
+    .brand-up { display:flex; flex-direction:column; gap:8px; align-items:flex-start; }
+    .brand-up-preview { padding:6px 10px; border:1px solid #e2e8f0; border-radius:8px; background:#fff; }
+    .brand-up-preview img { max-height:52px; max-width:190px; display:block; }
+    .brand-up-form { display:flex; gap:8px; align-items:center; width:100%; }
+    .brand-up-btn { padding:7px 14px; border:none; border-radius:8px; font-size:.82rem; cursor:pointer;
+                    color:#fff; white-space:nowrap;
+                    background:linear-gradient(90deg, var(--brand-a, #2563eb), var(--brand-b, #16a34a)); }
+    .brand-up-remove { margin:0; }
+    .brand-up-link { border:none; background:none; padding:0; font-size:.8rem; color:#dc2626; cursor:pointer; }
+    .brand-up-link:hover { text-decoration:underline; }
+</style>

@@ -29,6 +29,22 @@ TAGLINE = "Connected Accounting"
 # Primary accent (matches web/config/brand.js color). One knob for the brand colour.
 COLOR = "#1560E0"
 
+# ── Windows identity ─────────────────────────────────────────────────
+# SLUG is the filesystem/registry-safe name every Windows artefact is built
+# from: the exe, the Windows service, the startup .vbs, the install folder and
+# the HKCU key. Change SLUG and a REBUILT agent installs itself under the new
+# identity end to end -- but an install made by an OLDER build keeps the old
+# name, so bumping this means the customer uninstalls the old agent and runs
+# the new exe once. That is deliberate: the alternative is a rename that
+# silently orphans a running service.
+SLUG = "Teloora"
+
+# The windowed (primary) build, the headless console build, and the publisher
+# shown in the exe's Properties dialog.
+GUI_EXE_NAME = SLUG                 # -> Teloora.exe
+CONSOLE_EXE_NAME = SLUG + "Agent"   # -> TelooraAgent.exe
+PUBLISHER = "Dukansetu"
+
 # Full brand palette -- the logo's blue->green gradient and its deep navy
 # wordmark colour. Used by the GUI theme (ui_theme.py) and any drawn assets.
 COLORS = {

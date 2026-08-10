@@ -14,6 +14,7 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/form_dropdowns.dart';
 import '../transactions/invoice_form_parts.dart';
+import '../transactions/price_level.dart';
 
 /// New Sales Invoice form. Header (customer*, location, sales person, dates,
 /// notes) + a dynamic list of line items. A live totals preview mirrors the
@@ -39,6 +40,12 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
   DateTime _invoiceDate = _today();
   DateTime? _dueDate;
   final _notes = TextEditingController();
+  /// Tally's per-tier rate card, when the company uses them. Null = the
+  /// item's own standard price.
+  String? _priceLevel;
+
+  /// The chosen party's synced closing balance, shown under the picker.
+  double? _partyBalance;
 
   final List<LineRow> _rows = [LineRow()];
   bool _busy = false;
@@ -124,6 +131,30 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
       r.dispose();
     }
     super.dispose();
+  }
+  /// Re-price every line that already has an item. Changing the level
+  /// after the lines are entered has to move their rates too, or the
+  /// voucher says one thing at the top and another in the middle.
+  void _reapplyPriceLevel() {
+    var changed = false;
+    for (final r in _rows) {
+      final name = r.productName;
+      if (name == null || name.isEmpty) continue;
+      final rate = _levelRateFor(name, double.tryParse(r.qty.text.trim()) ?? 0);
+      if (rate == null) continue;
+      final text = rate == rate.roundToDouble() ? rate.toInt().toString() : rate.toString();
+      if (r.rate.text != text) { r.rate.text = text; changed = true; }
+    }
+    if (changed && mounted) setState(() {});
+  }
+
+  /// The active price level's rate for an item at a quantity, or null when
+  /// no level is chosen or the level says nothing about that item.
+  double? _levelRateFor(String itemName, double qty) {
+    final level = _priceLevel;
+    if (level == null || level.isEmpty) return null;
+    final card = ref.read(priceCardProvider(level)).valueOrNull;
+    return card?.rateFor(itemName, qty);
   }
 
   void _addRow() => setState(() => _rows.add(LineRow()));
@@ -226,6 +257,16 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // WATCH (not read) the chosen level: a FutureProvider only fetches
+    // once something is listening, and the rows are re-rated the moment
+    // the card lands.
+    final level = _priceLevel;
+    if (level != null && level.isNotEmpty) {
+      ref.listen(priceCardProvider(level), (_, next) {
+        if (next.hasValue) _reapplyPriceLevel();
+      });
+      ref.watch(priceCardProvider(level));
+    }
     final t = computeInvoiceTotals(_rows);
     final session = ref.watch(sessionProvider);
     final user = session is SessionSignedIn ? session.user : null;
@@ -267,12 +308,18 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
               value: _customerId,
               onChanged: (v) => setState(() => _customerId = v),
               onItem: (o) => setState(() {
+                _partyBalance = o?.balance;
                 if (o?.locationId != null) {
                   _locationId = o!.locationId;
                   _locationName = o.locationName;
                 }
               }),
             ),
+          PartyBalanceLine(balance: _partyBalance),
+          PriceLevelPicker(
+            value: _priceLevel,
+            onChanged: (v) => setState(() => _priceLevel = v),
+          ),
           const SizedBox(height: AppSpacing.md12),
           Row(
             children: [
@@ -333,6 +380,7 @@ class _SalesInvoiceFormScreenState extends ConsumerState<SalesInvoiceFormScreen>
           for (final row in _rows)
             LineItemCard(
               row: row,
+              rateFor: _levelRateFor,
               // Customer-portal: the rate comes from THEIR price list and the
               // per-line Disc % doesn't apply — both locked; the server ignores
               // client values and recomputes anyway (tamper-proof).

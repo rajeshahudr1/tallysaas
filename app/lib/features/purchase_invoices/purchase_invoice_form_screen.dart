@@ -12,6 +12,7 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/form_dropdowns.dart';
 import '../transactions/invoice_form_parts.dart';
+import '../transactions/price_level.dart';
 
 /// New Purchase Invoice form. Same shape as the sales form but keyed on a
 /// supplier (required), carries an optional supplier bill no, and has no sales
@@ -31,6 +32,12 @@ class _PurchaseInvoiceFormScreenState extends ConsumerState<PurchaseInvoiceFormS
   DateTime? _dueDate;
   final _billNo = TextEditingController();
   final _notes = TextEditingController();
+  /// Tally's per-tier rate card, when the company uses them. Null = the
+  /// item's own standard price.
+  String? _priceLevel;
+
+  /// The chosen party's synced closing balance, shown under the picker.
+  double? _partyBalance;
 
   final List<LineRow> _rows = [LineRow()];
   bool _busy = false;
@@ -48,6 +55,30 @@ class _PurchaseInvoiceFormScreenState extends ConsumerState<PurchaseInvoiceFormS
       r.dispose();
     }
     super.dispose();
+  }
+  /// Re-price every line that already has an item. Changing the level
+  /// after the lines are entered has to move their rates too, or the
+  /// voucher says one thing at the top and another in the middle.
+  void _reapplyPriceLevel() {
+    var changed = false;
+    for (final r in _rows) {
+      final name = r.productName;
+      if (name == null || name.isEmpty) continue;
+      final rate = _levelRateFor(name, double.tryParse(r.qty.text.trim()) ?? 0);
+      if (rate == null) continue;
+      final text = rate == rate.roundToDouble() ? rate.toInt().toString() : rate.toString();
+      if (r.rate.text != text) { r.rate.text = text; changed = true; }
+    }
+    if (changed && mounted) setState(() {});
+  }
+
+  /// The active price level's rate for an item at a quantity, or null when
+  /// no level is chosen or the level says nothing about that item.
+  double? _levelRateFor(String itemName, double qty) {
+    final level = _priceLevel;
+    if (level == null || level.isEmpty) return null;
+    final card = ref.read(priceCardProvider(level)).valueOrNull;
+    return card?.rateFor(itemName, qty);
   }
 
   void _addRow() => setState(() => _rows.add(LineRow()));
@@ -120,6 +151,16 @@ class _PurchaseInvoiceFormScreenState extends ConsumerState<PurchaseInvoiceFormS
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // WATCH (not read) the chosen level: a FutureProvider only fetches
+    // once something is listening, and the rows are re-rated the moment
+    // the card lands.
+    final level = _priceLevel;
+    if (level != null && level.isNotEmpty) {
+      ref.listen(priceCardProvider(level), (_, next) {
+        if (next.hasValue) _reapplyPriceLevel();
+      });
+      ref.watch(priceCardProvider(level));
+    }
     final t = computeInvoiceTotals(_rows);
     return Scaffold(
       appBar: AppBar(title: const Text('New Purchase Invoice')),
@@ -129,6 +170,11 @@ class _PurchaseInvoiceFormScreenState extends ConsumerState<PurchaseInvoiceFormS
           FkDropdown(
             label: 'Supplier *', endpoint: '/suppliers',
             value: _supplierId, onChanged: (v) => setState(() => _supplierId = v),
+          ),
+          PartyBalanceLine(balance: _partyBalance),
+          PriceLevelPicker(
+            value: _priceLevel,
+            onChanged: (v) => setState(() => _priceLevel = v),
           ),
           const SizedBox(height: AppSpacing.md12),
           AppTextField(controller: _billNo, label: 'Supplier Bill No'),
@@ -168,6 +214,7 @@ class _PurchaseInvoiceFormScreenState extends ConsumerState<PurchaseInvoiceFormS
           for (final row in _rows)
             LineItemCard(
               row: row,
+              rateFor: _levelRateFor,
               onChanged: () => setState(() {}),
               onRemove: _rows.length > 1 ? () => _removeRow(row) : null,
             ),

@@ -83,6 +83,15 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
 </div>
 <% } %>
 
+<%# ── Register view switcher. Only on the cross-period Bill view — inside a
+     month drill-down the tabs would jump the user out of that month. ── %>
+<% if (typeof monthMode === 'undefined' || !monthMode) { %>
+<%- include('../partials/register-tabs', {
+    basePath: '/sales-invoices', active: 'bill', hasStock: true,
+    mode: 'gross', showMode: true, query: '',
+}) %>
+<% } %>
+
 <%# ── SFA approval tabs — only APPROVED invoices are the real, counted sales;
      PENDING are awaiting a company-admin's approval (not counted). Works with or
      without a month (a non-approved tab shows a flat cross-month list). ── %>
@@ -124,7 +133,7 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
         <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.4px">Total Vouchers</div>
         <div style="font-size:20px;font-weight:700;color:#111;margin-top:2px"><%= _cnt %></div>
     </div>
-    <div style="background:linear-gradient(135deg,#2563EB,#7c3aed);color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
+    <div style="background:linear-gradient(135deg,var(--primary),#7c3aed);color:#fff;border-radius:10px;padding:12px 18px;min-width:200px">
         <div style="font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.4px">Grand Total (Sales)</div>
         <div style="font-size:20px;font-weight:700;margin-top:2px">₹ <%= _inrG(_gt) %></div>
     </div>
@@ -173,8 +182,8 @@ var sortOptions = ['Date', 'Invoice No', 'Customer', 'Total', 'Status'];
         font-size:13px; font-weight:600; text-decoration:none;
         color:#475569; background:#fff; border:1px solid #e5e7eb;
     }
-    .appr-tab:hover { background:#f8fafc; color:#2563EB; }
-    .appr-tab.is-active { background:#2563EB; border-color:#2563EB; color:#fff; }
+    .appr-tab:hover { background:#f8fafc; color:var(--primary); }
+    .appr-tab.is-active { background:var(--primary); border-color:var(--primary); color:#fff; }
     @media (min-width: 992px) {
         .filter-grid > .filter-col-fifth { flex: 0 0 auto; width: 20%; }
     }

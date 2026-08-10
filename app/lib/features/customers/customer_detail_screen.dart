@@ -12,6 +12,8 @@ import '../../shared/widgets/confirm_dialog.dart';
 import '../../shared/widgets/error_state.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
+import '../registers/party_activity_screen.dart';
+import '../registers/party_items_screen.dart';
 
 /// Customer detail (View) — read-only mirror of the form, grouped into the same
 /// sections. Edit + Delete in the app bar are gated by the role's permissions
@@ -29,15 +31,25 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
   late Future<Customer> _future;
   bool _deleting = false;
 
+  /// Remembered as the row loads, purely so the Items screen can show a title.
+  /// No setState — nothing on THIS screen renders from it.
+  String _name = '';
+
   @override
   void initState() {
     super.initState();
-    _future = ref.read(customerRepositoryProvider).get(widget.customerId);
+    _future = _fetch();
+  }
+
+  Future<Customer> _fetch() async {
+    final c = await ref.read(customerRepositoryProvider).get(widget.customerId);
+    _name = c.name;
+    return c;
   }
 
   void _reload() {
     setState(() {
-      _future = ref.read(customerRepositoryProvider).get(widget.customerId);
+      _future = _fetch();
     });
   }
 
@@ -85,6 +97,30 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
       appBar: AppBar(
         title: const Text('Customer'),
         actions: [
+          // What was SAID, as opposed to what was billed.
+          IconButton(
+            icon: const Icon(Icons.forum_outlined),
+            tooltip: 'Activity',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => PartyActivityScreen(
+                partyId: widget.customerId,
+                partyName: _name,
+                supplier: false,
+              ),
+            )),
+          ),
+          // What this customer has bought, rolled up per stock item.
+          IconButton(
+            icon: const Icon(Icons.inventory_2_outlined),
+            tooltip: 'Items sold',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => PartyItemsScreen(
+                partyId: widget.customerId,
+                partyName: _name,
+                purchased: false,
+              ),
+            )),
+          ),
           if (canEdit)
             IconButton(
               icon: const Icon(Icons.edit_outlined),
@@ -161,6 +197,12 @@ class _CustomerDetailScreenState extends ConsumerState<CustomerDetailScreen> {
 
         _section('Other Details'),
         _row('Credit Limit', c.creditLimit == null ? null : Fmt.inr(c.creditLimit)),
+        // Null prints as a dash, not "0 days" — we do not know the terms.
+        _row('Credit Days', c.creditDays == null ? null : '${c.creditDays} days'),
+        // Where they stand today (synced from Tally), beside where they began.
+        _row('Closing Balance', c.closingBalance == null ? null : Fmt.inr(c.closingBalance)),
+        _row('Last Sold Date', c.lastSoldDate == null ? null : Fmt.date(c.lastSoldDate)),
+        _row('Tally Ledger Group', c.tallyLedgerGroup),
         // The side matters: a Dr opening is money owed TO you, Cr is the other way.
         _row(
           'Opening Balance',

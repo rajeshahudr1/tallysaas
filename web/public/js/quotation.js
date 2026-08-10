@@ -34,17 +34,38 @@ function lineAmount(l) {
     return Math.round((net + net * gst / 100 + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Totals for the on-screen panel.
+ *
+ * `subtotal` is the TAXABLE value — after discount, with GST taken back out of
+ * a tax-inclusive rate — so the panel always reads as an arithmetic you can
+ * follow: Sub Total + Taxes = Grand Total.
+ *
+ * It used to be the GROSS, which broke the display in two ways nobody had
+ * noticed: a discounted bill showed 250 + 32.40 against a stated 262.40, and a
+ * tax-inclusive line showed 118 + 18 against a stated 118 — the GST counted
+ * twice on screen. `gross` and `discount` are still returned so the panel can
+ * show those rows too; the stored figures (QuotationController.computeTotals)
+ * are unchanged, this is presentation only.
+ */
 function formTotals(lines) {
-    let subtotal = 0, taxes = 0, grand = 0;
+    let gross = 0, discount = 0, taxable = 0, taxes = 0;
     for (const l of lines) {
-        const gross = (Number(l.qty) || 0) * (Number(l.rate) || 0);
-        const net0  = gross - gross * (Number(l.disc) || 0) / 100;
+        const lineGross = (Number(l.qty) || 0) * (Number(l.rate) || 0);
+        const disc  = lineGross * (Number(l.disc) || 0) / 100;
+        const net0  = lineGross - disc;
         const gst   = Number(l.gst) || 0;
         const net   = l.taxIncl ? net0 / (1 + gst / 100) : net0;
-        subtotal += gross; taxes += net * gst / 100; grand += net + net * gst / 100;
+        gross += lineGross; discount += disc; taxable += net; taxes += net * gst / 100;
     }
     const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-    return { subtotal: r2(subtotal), taxes: r2(taxes), grand: r2(grand) };
+    return {
+        gross: r2(gross),
+        discount: r2(discount),
+        subtotal: r2(taxable),
+        taxes: r2(taxes),
+        grand: r2(taxable + taxes),
+    };
 }
 
 // Custom Quotation No popup (LiveKeeping's Default/Custom panel, our theme) —
@@ -58,7 +79,32 @@ function buildVoucherNo(parts) {
         .join('');
 }
 
-window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
+/**
+ * Which price-level slab applies at this quantity.
+ *
+ * Tally lets a price level band its rate by quantity ("1–99 at 100, 100+ at
+ * 90"), so the rate a line gets depends on how many are being sold. A null
+ * bound is open-ended on that side.
+ *
+ * Falls back to the FIRST slab when the quantity matches none — a level with a
+ * single un-banded rate must still apply before any quantity is typed, which
+ * is the common case. Returns null only when there are no slabs at all, which
+ * the caller reads as "this level says nothing about this item".
+ *
+ * Pure, so it is unit-testable without a DOM.
+ */
+function slabRate(slabs, qty) {
+    if (!slabs || !slabs.length) return null;
+    const q = Number(qty) || 0;
+    for (const s of slabs) {
+        const from = s.from_qty == null ? 0 : Number(s.from_qty);
+        const to   = s.to_qty == null ? Infinity : Number(s.to_qty);
+        if (q >= from && q <= to) return s;
+    }
+    return slabs[0];
+}
+
+window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
 
 (function () {
     document.addEventListener('DOMContentLoaded', init);
@@ -129,6 +175,24 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             });
         }
 
+        // A ledger balance printed the way Tally prints it: magnitude plus the
+        // side it sits on. "₹-23,003.00" reads like a bug; "₹23,003.00 Dr"
+        // reads like money the customer owes.
+        function drCr(n) {
+            var v = Number(n) || 0;
+            if (v === 0) return inr(0);
+            return inr(Math.abs(v)) + (v > 0 ? ' Dr' : ' Cr');
+        }
+
+        // The chosen party's standing, under the picker.
+        function showPartyBalance(p) {
+            var el = document.getElementById('q-party-balance');
+            if (!el) return;
+            if (!p || p.balance == null) { el.hidden = true; el.textContent = ''; return; }
+            el.textContent = 'Closing Balance: ' + drCr(p.balance);
+            el.hidden = false;
+        }
+
         function rowToLine(row) {
             return {
                 qty:     parseFloat(row.querySelector('.q-qty').value) || 0,
@@ -154,6 +218,17 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             if (subEl) subEl.textContent = inr(t.subtotal);
             if (taxEl) taxEl.textContent = inr(t.taxes);
             if (grandEl) grandEl.textContent = inr(t.grand);
+            // Gross + Discount only appear once there IS a discount, so a plain
+            // bill stays three clean rows.
+            var hasDisc = t.discount > 0;
+            var grossEl = document.getElementById('q-gross');
+            var grossRow = document.getElementById('q-gross-row');
+            var discEl = document.getElementById('q-discount');
+            var discRow = document.getElementById('q-discount-row');
+            if (grossEl) grossEl.textContent = inr(t.gross);
+            if (grossRow) grossRow.hidden = !hasDisc;
+            if (discEl) discEl.textContent = '− ' + inr(t.discount);
+            if (discRow) discRow.hidden = !hasDisc;
         }
 
         function resetRow(row) {
@@ -172,6 +247,81 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             recalcRow(row);
         }
 
+        // ── Price level ──────────────────────────────────────────────
+        // What a price level DOES: it decides which rate card fills the Rate
+        // column when an item is picked, instead of the item's own standard
+        // price. Tally stores a card per level, optionally split into quantity
+        // slabs ("100+ units at this rate"), so the lookup is item → slabs.
+        //
+        // The whole card is fetched once per level rather than per item, so
+        // choosing an item never waits on the network.
+        var priceCard = null;      // Map: lower(item name) → [slabs]
+        var priceLevelEl = document.getElementById('q-price-level');
+
+        // The rate this row should carry: the level's rate when the level has
+        // one for this item, otherwise the item's own price. Returning null
+        // means "no opinion" so the caller leaves what is already there.
+        function priceLevelRate(productName, qty) {
+            if (!priceCard || !productName) return null;
+            var slabs = priceCard.get(String(productName).toLowerCase());
+            var slab = slabRate(slabs, qty);
+            return slab && slab.rate != null ? slab : null;
+        }
+
+        function loadPriceCard(level) {
+            if (!level) { priceCard = null; reapplyPriceLevel(); return; }
+            fetch('/tally/price-list?level=' + encodeURIComponent(level))
+                .then(function (r) { return r.json(); })
+                .then(function (j) {
+                    priceCard = new Map();
+                    (j && j.data ? j.data : []).forEach(function (row) {
+                        var key = String(row.stock_item || '').toLowerCase();
+                        if (!key) return;
+                        if (!priceCard.has(key)) priceCard.set(key, []);
+                        priceCard.get(key).push(row);
+                    });
+                    reapplyPriceLevel();
+                })
+                .catch(function () {
+                    // A failed lookup must not silently price the voucher at the
+                    // standard rate as though the level had been applied.
+                    priceCard = null;
+                    reapplyPriceLevel();
+                });
+        }
+
+        // Changing the level re-rates every row that already has an item —
+        // otherwise the header says one thing and the lines say another.
+        function reapplyPriceLevel() {
+            tbody.querySelectorAll('.q-row').forEach(function (row) {
+                var search = row.querySelector('.q-item-search');
+                var name = search ? search.value : '';
+                if (!name) return;
+                var hit = priceLevelRate(name, row.querySelector('.q-qty').value);
+                if (hit) {
+                    row.querySelector('.q-rate').value = hit.rate;
+                    if (hit.discount != null && hit.discount !== 0) {
+                        row.querySelector('.q-disc').value = hit.discount;
+                    }
+                } else {
+                    // Back to the item's own price when the level does not
+                    // cover it.
+                    var pid = row.querySelector('.q-item').value;
+                    var prod = PRODUCTS.filter(function (x) { return String(x.id) === String(pid); })[0];
+                    if (prod && prod.rate != null) row.querySelector('.q-rate').value = prod.rate;
+                }
+                recalcRow(row);
+            });
+            recalcTotals();
+        }
+
+        if (priceLevelEl) {
+            priceLevelEl.addEventListener('change', function () {
+                loadPriceCard(priceLevelEl.value);
+            });
+            if (priceLevelEl.value) loadPriceCard(priceLevelEl.value);
+        }
+
         // Apply a chosen product to the row: pin its id (hidden .q-item, plus
         // data-gst so rowToLine can read the GST%) + fill HSN/Unit/Rate.
         function applyProduct(row, p) {
@@ -182,20 +332,49 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             if (search) search.value = p ? p.name : '';
             row.querySelector('.q-hsn').value  = p ? (p.hsn || '')  : '';
             row.querySelector('.q-unit').value = p ? (p.unit || '') : '';
-            if (p && p.rate != null) row.querySelector('.q-rate').value = p.rate;
+            // Rate: the chosen PRICE LEVEL wins where it covers this item —
+            // that is the whole point of picking a level — otherwise the
+            // item's own standard price.
+            if (p) {
+                var levelHit = priceLevelRate(p.name, row.querySelector('.q-qty').value);
+                if (levelHit) {
+                    row.querySelector('.q-rate').value = levelHit.rate;
+                    if (levelHit.discount != null && levelHit.discount !== 0) {
+                        row.querySelector('.q-disc').value = levelHit.discount;
+                    }
+                } else if (p.rate != null) {
+                    row.querySelector('.q-rate').value = p.rate;
+                }
+            }
             // Item chosen → this row's Qty step unlocks (auto-advance gating).
             if (p) row.querySelector('.q-qty').disabled = false;
             var qty = row.querySelector('.q-qty');
             if (qty) {
                 if (p && p.stock != null) {
-                    qty.max = p.stock;
-                    qty.title = 'In stock: ' + p.stock;
-                    if ((parseFloat(qty.value) || 0) > p.stock) qty.value = p.stock;
+                    // Stock on hand is a HINT, not a cap. A quotation or an
+                                        // order is a promise about goods you may not hold yet, and
+                                        // Tally itself allows a negative balance, so clamping the
+                                        // Qty box to it silently rewrote what the user typed —
+                                        // usually to 0, because most synced items report no
+                                        // movement. Show the figure, let the user decide.
+                                        qty.title = 'In stock: ' + p.stock;
+                                        qty.removeAttribute('max');
                 } else {
                     qty.removeAttribute('max'); qty.title = '';
                 }
             }
             recalcRow(row); recalcTotals();
+        }
+
+        // Re-rate one row after its quantity changed, when the active price
+        // level bands its rate by quantity. No level, or no band for this item
+        // → nothing to do, and whatever the user typed into Rate stands.
+        function applySlabRate(row) {
+            var search = row.querySelector('.q-item-search');
+            var name = search ? search.value : '';
+            if (!name) return;
+            var hit = priceLevelRate(name, row.querySelector('.q-qty').value);
+            if (hit) row.querySelector('.q-rate').value = hit.rate;
         }
 
         function clampQty(row) {
@@ -238,6 +417,24 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
                         d.className = 'li-prod-item';
                         d.setAttribute('data-i', i);
                         d.textContent = p.name;
+                        // HSN and stock-on-hand under the name — the two things
+                        // you check BEFORE committing to an item, so putting
+                        // them in the option saves opening the item master.
+                        // Stock is omitted (not shown as 0) when unknown, and a
+                        // NEGATIVE figure is shown plainly: Tally allows it, and
+                        // it means goods went out before they came in.
+                        var bits = [];
+                        if (p.hsn) bits.push('HSN: ' + p.hsn);
+                        if (p.stock != null) {
+                            bits.push('In stock: ' + p.stock + (p.unit ? ' ' + p.unit : ''));
+                        }
+                        if (bits.length) {
+                            var sub = document.createElement('span');
+                            sub.className = 'li-prod-sub';
+                            sub.textContent = bits.join('  ·  ');
+                            if (p.stock != null && Number(p.stock) < 0) sub.classList.add('is-negative');
+                            d.appendChild(sub);
+                        }
                         d.addEventListener('mousedown', function (e) { e.preventDefault(); choose(i); });
                         menu.appendChild(d);
                     });
@@ -290,7 +487,14 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             wireProductPicker(row);
             row.querySelectorAll('.q-qty, .q-rate, .q-disc, .q-taxincl').forEach(function (inp) {
                 inp.addEventListener('input', function () {
-                    if (inp.classList.contains('q-qty')) clampQty(row);
+                    if (inp.classList.contains('q-qty')) {
+                        clampQty(row);
+                        // A price level can band its rate by quantity ("100+ at
+                        // this rate"), so crossing a slab boundary has to
+                        // re-rate the line — otherwise the qty says one band and
+                        // the rate still shows the other.
+                        applySlabRate(row);
+                    }
                     recalcRow(row); recalcTotals();
                 });
                 inp.addEventListener('change', function () { recalcRow(row); recalcTotals(); });
@@ -373,7 +577,60 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
                 });
             });
             hidden.value = JSON.stringify(items);
+            serialiseVoucherDetails();
         });
+
+        // ── Buyer / Consignee / Dispatch / Order block ──
+        // Each field declares its own group+key, so adding a field to the view
+        // needs no change here. Empty values are dropped rather than stored as
+        // "" — an absent key reads as "not entered", which is what a blank box
+        // means; a stored empty string would print as a real (blank) value.
+        function serialiseVoucherDetails() {
+            var out = document.getElementById('q-voucher-details');
+            if (!out) return;
+            var details = {};
+            document.querySelectorAll('.q-vd').forEach(function (el) {
+                var g = el.dataset.vdGroup;
+                var k = el.dataset.vdKey;
+                var v = (el.value == null ? '' : String(el.value)).trim();
+                if (!g || !k || v === '') return;
+                if (!details[g]) details[g] = {};
+                details[g][k] = v;
+            });
+            out.value = JSON.stringify(details);
+        }
+
+        // Picking a party fills the buyer block — that is the point of picking
+        // one — but every field stays editable, because a bill-to address does
+        // genuinely differ from the master often enough to matter. Only BLANK
+        // fields are filled, so re-picking a party never overwrites something
+        // already typed.
+        function prefillBuyerFrom(p) {
+            if (!p) return;
+            var map = {
+                name: p.name, gstin: p.gst_number, country: p.country,
+                state: p.state, pincode: p.pincode, address: p.billing_address,
+                registration_type: p.gst_registration_type,
+                // Place of supply is the buyer's state unless stated otherwise —
+                // it decides CGST+SGST vs IGST, so a sensible default beats an
+                // empty box the user forgets to fill.
+                place_of_supply: p.state,
+            };
+            Object.keys(map).forEach(function (key) {
+                var el = document.querySelector('.q-vd[data-vd-group="buyer"][data-vd-key="' + key + '"]');
+                if (el && !el.value && map[key]) el.value = map[key];
+            });
+        }
+
+        var copyBtn = document.getElementById('q-consignee-copy');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', function () {
+                document.querySelectorAll('.q-vd[data-vd-group="buyer"]').forEach(function (src) {
+                    var el = document.querySelector('.q-vd[data-vd-group="consignee"][data-vd-key="' + src.dataset.vdKey + '"]');
+                    if (el) el.value = src.value;
+                });
+            });
+        }
 
         // ══════════════════════════════════════════════════════════════
         // Auto-advance flow — Tally जैसा keyboard-first क्रम: एक field पूरा
@@ -586,6 +843,10 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
                     opts.input.value = '';
                     if (opts.hidden) opts.hidden.value = '';
                     updateClear();
+                    // Clearing the party has to clear what was shown ABOUT that
+                    // party too, or the balance of the party you just removed
+                    // sits under an empty box.
+                    if (typeof opts.onClear === 'function') opts.onClear();
                     openField(opts.input);
                     render(fullList());
                 });
@@ -697,14 +958,18 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             clearBtn: document.getElementById('q-party-clear'),
             list:   PARTIES,
             getLabel: function (p) { return p.name; },
-            // Outstanding balance would go here (getSubLabel) if it were part
-            // of the party options this page already loads — it is not
-            // (fetchCustomerInvoiceOptions only returns id/name/location; the
-            // customers API's opening_balance ≠ a real closing balance and
-            // computing one needs a per-customer ledger query), so the
-            // right-hand figure is left out rather than shipping a fake ₹0.00.
+            // Where the party stands right now, beside their name. This used
+            // to be left out because the options carried only id/name/location
+            // and opening_balance is NOT a closing balance; the customers API
+            // now returns the synced Tally closing balance, so the real figure
+            // is shown — and still omitted (rather than faked as ₹0.00) for a
+            // party that has no synced ledger.
+            getSubLabel: function (p) {
+                return p.balance == null ? '' : drCr(p.balance);
+            },
             getValue: function (p) { return p.id; },
-            onChoose: unlockLedgerOrDate,
+            onChoose: function (p) { showPartyBalance(p); prefillBuyerFrom(p); unlockLedgerOrDate(p); },
+            onClear: function () { showPartyBalance(null); },
             createLabel: 'Create New Customer',
             onCreate: openNewCustomerModal,
         });
@@ -746,6 +1011,10 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             var obType = document.getElementById('q-nc-opening-balance-type'); if (obType) obType.value = 'Cr';
             var regType = document.getElementById('q-nc-gst-reg-type'); if (regType) regType.value = '';
             geoCascade.reset();
+            // Those value resets above fire no 'change' event, so any select
+            // already turned into a searchable dropdown would keep showing the
+            // OLD label. Force the triggers to re-read their <select>.
+            if (window.TCS && window.TCS.refreshSelects) window.TCS.refreshSelects();
             ncModal.show();
             ncModalEl.addEventListener('shown.bs.modal', function focusOnce() {
                 ncModalEl.removeEventListener('shown.bs.modal', focusOnce);
@@ -811,14 +1080,54 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo };
             menu:   document.getElementById('q-ledger-menu'),
             list:   LEDGERS,
             getLabel: function (l) { return l.name; },
-            getSubLabel: function (l) { return l.parent; },
+            getSubLabel: function (l) { return window.VoucherExtras.ledgerSubLabel(l); },
             getValue: function (l) { return l.name; },
             onChoose: unlockDate,
         }) : null;
 
         if (dateEl) dateEl.addEventListener('change', unlockFirstItem);
 
-        // Seed the table with a single (locked) empty row, then open Party.
+        // ── EDIT MODE ──────────────────────────────────────────────
+        // window.QUOTATION_EDIT is set by the view when the screen was opened
+        // as /quotations/:id/edit. Rebuild the saved lines and fill the header,
+        // then STOP — the guided "open Party and walk the user through it" flow
+        // is for a blank voucher; on an existing one it would reopen a combobox
+        // over data the user came here to change.
+        var EDIT = window.QUOTATION_EDIT || null;
+        if (EDIT) {
+            var partyInput = document.getElementById('q-party');
+            if (partyInput && EDIT.customer_name) partyInput.value = EDIT.customer_name;
+            if (ledgerEl && EDIT.ledger_name) ledgerEl.value = EDIT.ledger_name;
+            var noEl = document.getElementById('q-no');
+            if (noEl && EDIT.quotation_no) noEl.value = EDIT.quotation_no;
+
+            var lines = Array.isArray(EDIT.items) ? EDIT.items : [];
+            if (!lines.length) { addRow(); }
+            lines.forEach(function (it) {
+                var row = addRow();
+                // Match the saved product by id so HSN/unit/GST come from the
+                // SAME source a fresh pick would use; fall back to the stored
+                // text when the product was deleted since.
+                var prod = PRODUCTS.filter(function (p) { return String(p.id) === String(it.product_id); })[0];
+                if (prod) {
+                    applyProduct(row, prod);
+                } else {
+                    var si = row.querySelector('.q-item-search');
+                    if (si) si.value = it.description || it.product_name || '';
+                }
+                row.querySelector('.q-qty').value  = it.quantity != null ? it.quantity : 1;
+                row.querySelector('.q-rate').value = it.rate != null ? it.rate : 0;
+                row.querySelector('.q-disc').value = it.discount_pct != null ? it.discount_pct : 0;
+                var hsn = row.querySelector('.q-hsn');   if (hsn && it.hsn) hsn.value = it.hsn;
+                var unit = row.querySelector('.q-unit'); if (unit && it.unit) unit.value = it.unit;
+                var tx = row.querySelector('.q-taxincl'); if (tx) tx.checked = !!it.tax_inclusive;
+                recalcRow(row);
+            });
+            recalcTotals();
+            return;
+        }
+
+        // Seed the table with a single empty row, then open Party.
         addRow();
         partyBox.open();
     }

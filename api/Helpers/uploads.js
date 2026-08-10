@@ -83,4 +83,54 @@ function saveBuffer(relPath, buffer) {
     return relPath;
 }
 
-module.exports = { productImagesMiddleware, fullUrl, deleteFile, saveBuffer, UPLOAD_ROOT };
+/**
+ * Company branding images — the logo and the authorised signature that get
+ * printed on a voucher.
+ *
+ * Stored under a FIXED name per company and kind, not a random one: there is
+ * exactly one current logo, and a new upload replaces it. Random names would
+ * leave every superseded logo on disk forever with nothing pointing at it.
+ * The `?v=` cache-buster on the stored URL handles the browser side.
+ */
+const BRANDING_KINDS = new Set(['logo', 'signature']);
+
+const brandingStorage = multer.diskStorage({
+    destination(req, file, cb) {
+        const dir = path.join(UPLOAD_ROOT, 'branding', String(req.companyId || 'misc'));
+        ensureDir(dir);
+        cb(null, dir);
+    },
+    filename(req, file, cb) {
+        let ext = (path.extname(file.originalname) || '').toLowerCase();
+        if (!/^\.(jpe?g|png|webp|gif)$/.test(ext)) ext = '.png';
+        const kind = BRANDING_KINDS.has(String(req.params.kind)) ? req.params.kind : 'logo';
+        cb(null, `${kind}${ext}`);
+    },
+});
+
+const _brandingUpload = multer({
+    storage: brandingStorage,
+    limits: { fileSize: MAX_SIZE, files: 1 },
+    fileFilter(req, file, cb) {
+        if (IMAGE_MIMES.has(file.mimetype)) cb(null, true);
+        else cb(new Error('Only image files (JPG, PNG, WEBP, GIF) are allowed.'));
+    },
+});
+
+/** Multer middleware for a single branding image, posted as `image`. */
+function brandingImageMiddleware(req, res, next) {
+    _brandingUpload.single('image')(req, res, (err) => {
+        if (err) {
+            const msg = err.code === 'LIMIT_FILE_SIZE'
+                ? 'The image must be under 5 MB.'
+                : (err.message || 'Upload failed.');
+            return R.errorResponse(res, msg, 422);
+        }
+        next();
+    });
+}
+
+module.exports = {
+    productImagesMiddleware, brandingImageMiddleware, BRANDING_KINDS,
+    fullUrl, deleteFile, saveBuffer, UPLOAD_ROOT,
+};

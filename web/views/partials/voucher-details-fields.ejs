@@ -1,0 +1,186 @@
+<%#
+    partials/voucher-details-fields.ejs
+
+    The four blocks a PRINTED voucher needs but the ledger does not: who to
+    bill, who to ship to, how it went out, and which order it answers. They
+    post as one `voucher_details` object (see the voucher_print_details
+    migration) rather than 28 loose columns.
+
+    Shared by all six create screens, which differ only in a DOM id prefix.
+    Locals:
+      p            — id/class prefix without the dash ('q', 'so', 'po', …)
+      vd           — the saved voucher_details object ({} on create)
+      gstRegTypes  — GST registration type options
+
+    Styling classes (q-adv-title / q-adv-copy) are deliberately NOT prefixed:
+    they are theme.css selectors, not per-form identifiers. Only ids and the
+    `<p>-vd` marker class — the two things JS looks up per form — carry it.
+%>
+<%# Returns the RAW value. Every use site is an escaping output tag, so the
+    value is escaped exactly once on the way out. Escaping here as well is
+    what turned a saved '&' into '&amp;amp;' on the Quotation form this
+    partial replaces. %>
+<% function _v(group, key) {
+       var g = (vd && vd[group]) || {};
+       return g[key] == null ? '' : String(g[key]);
+   } %>
+
+<h3 class="q-adv-title">Buyer's Details</h3>
+<div class="form-grid">
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-b-name">Buyer's Name</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-b-name"
+               data-vd-group="buyer" data-vd-key="name" value="<%= _v('buyer','name') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-b-gstin">GSTIN / UIN</label>
+        <input type="text" class="form-control <%= p %>-vd text-uppercase" id="<%= p %>-b-gstin"
+               data-vd-group="buyer" data-vd-key="gstin" maxlength="15" value="<%= _v('buyer','gstin') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-b-regtype">Registration Type</label>
+        <select class="form-select <%= p %>-vd" id="<%= p %>-b-regtype" data-vd-group="buyer" data-vd-key="registration_type">
+            <option value="">Select type</option>
+            <% (gstRegTypes || []).forEach(function (t) { %>
+                <option value="<%= t %>" <%= _v('buyer','registration_type') === t ? 'selected' : '' %>><%= t %></option>
+            <% }); %>
+        </select>
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-b-country">Country</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-b-country"
+               data-vd-group="buyer" data-vd-key="country" value="<%= _v('buyer','country') || 'India' %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-b-state">State</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-b-state"
+               data-vd-group="buyer" data-vd-key="state" value="<%= _v('buyer','state') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-b-pincode">Postal Code</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-b-pincode"
+               data-vd-group="buyer" data-vd-key="pincode" maxlength="10" value="<%= _v('buyer','pincode') %>">
+    </div>
+    <div class="form-group">
+        <%# Which state's GST applies. Getting this wrong is the difference
+            between CGST+SGST and IGST on the bill. %>
+        <label class="form-label" for="<%= p %>-b-pos">Place of Supply</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-b-pos"
+               data-vd-group="buyer" data-vd-key="place_of_supply" value="<%= _v('buyer','place_of_supply') %>">
+    </div>
+    <div class="form-group form-grid-span-2">
+        <label class="form-label" for="<%= p %>-b-address">Address</label>
+        <textarea class="form-control <%= p %>-vd" id="<%= p %>-b-address" rows="2" maxlength="500"
+                  data-vd-group="buyer" data-vd-key="address"><%= _v('buyer','address') %></textarea>
+    </div>
+</div>
+
+<h3 class="q-adv-title">
+    Consignee Details
+    <%# Ships to the buyer far more often than not, so the copy button saves
+        retyping the whole block. %>
+    <button type="button" class="q-adv-copy" id="<%= p %>-consignee-copy">Same as buyer</button>
+</h3>
+<div class="form-grid">
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-c-name">Consignee Name</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-c-name"
+               data-vd-group="consignee" data-vd-key="name" value="<%= _v('consignee','name') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-c-gstin">GSTIN / UIN</label>
+        <input type="text" class="form-control <%= p %>-vd text-uppercase" id="<%= p %>-c-gstin"
+               data-vd-group="consignee" data-vd-key="gstin" maxlength="15" value="<%= _v('consignee','gstin') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-c-country">Country</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-c-country"
+               data-vd-group="consignee" data-vd-key="country" value="<%= _v('consignee','country') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-c-state">State</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-c-state"
+               data-vd-group="consignee" data-vd-key="state" value="<%= _v('consignee','state') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-c-pincode">Postal Code</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-c-pincode"
+               data-vd-group="consignee" data-vd-key="pincode" maxlength="10" value="<%= _v('consignee','pincode') %>">
+    </div>
+    <div class="form-group form-grid-span-2">
+        <label class="form-label" for="<%= p %>-c-address">Address</label>
+        <textarea class="form-control <%= p %>-vd" id="<%= p %>-c-address" rows="2" maxlength="500"
+                  data-vd-group="consignee" data-vd-key="address"><%= _v('consignee','address') %></textarea>
+    </div>
+</div>
+
+<h3 class="q-adv-title">Dispatch Details</h3>
+<div class="form-grid">
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-d-date">Shipping Date</label>
+        <input type="date" class="form-control <%= p %>-vd" id="<%= p %>-d-date"
+               data-vd-group="dispatch" data-vd-key="shipping_date" value="<%= _v('dispatch','shipping_date') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-d-docno">Document No.</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-d-docno"
+               data-vd-group="dispatch" data-vd-key="doc_no" value="<%= _v('dispatch','doc_no') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-d-billno">Bill Number</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-d-billno"
+               data-vd-group="dispatch" data-vd-key="bill_no" value="<%= _v('dispatch','bill_no') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-d-through">Dispatch Through</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-d-through"
+               data-vd-group="dispatch" data-vd-key="through" value="<%= _v('dispatch','through') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-d-vehicle">Vehicle Number</label>
+        <input type="text" class="form-control <%= p %>-vd text-uppercase" id="<%= p %>-d-vehicle"
+               data-vd-group="dispatch" data-vd-key="vehicle_no" value="<%= _v('dispatch','vehicle_no') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-d-dest">Destination</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-d-dest"
+               data-vd-group="dispatch" data-vd-key="destination" value="<%= _v('dispatch','destination') %>">
+    </div>
+    <div class="form-group form-grid-span-2">
+        <label class="form-label" for="<%= p %>-d-note">Dispatch Note</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-d-note"
+               data-vd-group="dispatch" data-vd-key="note" maxlength="200" value="<%= _v('dispatch','note') %>">
+    </div>
+</div>
+
+<h3 class="q-adv-title">Order Details</h3>
+<div class="form-grid">
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-o-number">Order Number</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-o-number"
+               data-vd-group="order" data-vd-key="number" value="<%= _v('order','number') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-o-date">Order Date</label>
+        <input type="date" class="form-control <%= p %>-vd" id="<%= p %>-o-date"
+               data-vd-group="order" data-vd-key="date" value="<%= _v('order','date') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-o-mop">Mode of Payment</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-o-mop"
+               data-vd-group="order" data-vd-key="mode_of_payment" value="<%= _v('order','mode_of_payment') %>">
+    </div>
+    <div class="form-group">
+        <label class="form-label" for="<%= p %>-o-ref">Other Reference</label>
+        <input type="text" class="form-control <%= p %>-vd" id="<%= p %>-o-ref"
+               data-vd-group="order" data-vd-key="other_reference" value="<%= _v('order','other_reference') %>">
+    </div>
+    <div class="form-group form-grid-span-2">
+        <label class="form-label" for="<%= p %>-o-terms">Terms of Delivery</label>
+        <textarea class="form-control <%= p %>-vd" id="<%= p %>-o-terms" rows="2" maxlength="500"
+                  data-vd-group="order" data-vd-key="terms_of_delivery"><%= _v('order','terms_of_delivery') %></textarea>
+    </div>
+</div>
+
+<%# Serialised from the .<p>-vd fields on submit (voucher-extras.js). %>
+<input type="hidden" name="voucher_details_json" id="<%= p %>-voucher-details">

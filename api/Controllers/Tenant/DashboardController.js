@@ -79,7 +79,9 @@
 const db = require('../../config/db').db;
 const R  = require('../../Helpers/response');
 const { sumBalances } = require('../../Helpers/ledgerGroups');
-const { BUCKETS, buildReceivables, buildReceivablesRows } = require('../../Helpers/receivablesAgeing');
+const {
+    BUCKETS, buildReceivables, buildReceivablesRows, buildReceivablesParties,
+} = require('../../Helpers/receivablesAgeing');
 
 const OOPS_MSG = 'Oops..Something went wrong. Please try again.';
 
@@ -1048,4 +1050,281 @@ async function receivablesBills(req, res) {
     }
 }
 
-module.exports = { summary, receivablesBills, pctChange };
+/* ─────────────────────────────────────────────────────────────────
+ * PARTY-WISE receivables — the Receivables screen's main list.
+ *
+ * One row per customer: Outstanding, Overdue, Credit Days, Avg Pay Days,
+ * plus the contact details the reminder actions need. Every figure comes
+ * from the same FIFO walk the dashboard panel and the bucket drill-down
+ * use, so the three screens can never disagree.
+ *
+ * Query:
+ *   ?filter=all|due_today|not_due|1-30|31-60|61-120|>120
+ *   ?group=<ledger group>   ?search=   ?sort=outstanding|name|overdue|avg_pay_days
+ *   ?order=asc|desc         ?page= ?per_page=
+ * ───────────────────────────────────────────────────────────────── */
+
+// Ageing windows the Receivables screen filters by. These are the OVERDUE
+// windows (days past the due date) — deliberately NOT the dashboard's ageing
+// BUCKETS, which measure days since the invoice date. Two different questions.
+const DUE_WINDOWS = {
+    '1-30':  { min: 1,   max: 30 },
+    '31-60': { min: 31,  max: 60 },
+    '61-120': { min: 61, max: 120 },
+    '>120':  { min: 121, max: Infinity },
+};
+
+/**
+ * Receivables and Payables are the same screen with the sides swapped: open
+ * SALES bills settled by RECEIPTS from customers, or open PURCHASE bills
+ * settled by PAYMENTS to suppliers. One handler, one ageing walk — a second
+ * copy would drift the first time either side is fixed.
+ */
+const PARTY_SIDES = {
+    receivable: {
+        partyKey: 'customer_id', partyTable: 'customers',
+        invoiceType: 'sales', voucherType: 'receipt',
+    },
+    payable: {
+        partyKey: 'supplier_id', partyTable: 'suppliers',
+        invoiceType: 'purchase', voucherType: 'payment',
+    },
+};
+
+async function partiesFor(req, res, sideKey) {
+    const side = PARTY_SIDES[sideKey];
+    try {
+        const companyId = req.companyId;
+
+        let page = parseInt(req.query.page, 10);
+        let perPage = parseInt(req.query.per_page, 10);
+        if (!Number.isInteger(page) || page < 1) page = 1;
+        if (!Number.isInteger(perPage) || perPage < 1) perPage = 20;
+        if (perPage > 200) perPage = 200;
+
+        const locationId = req.locationId;
+        const loc = (qb, col) => (locationId != null ? qb.where(col, locationId) : qb);
+        const mineId = req.isSalesman ? req.user.sub : null;
+        const mine = (qb, col) => (mineId != null ? qb.where(col, mineId) : qb);
+
+        const PK = side.partyKey;
+        const openInvoicesQ = mine(loc(db('invoices')
+            .where('invoices.company_id', companyId)
+            .whereNull('invoices.deleted_at').where('invoices.type', side.invoiceType)
+            .whereNot('invoices.status', 'failed')
+            .whereNotNull(`invoices.${PK}`), 'invoices.location_id'), 'invoices.created_by')
+            .select(`invoices.${PK}`, 'invoices.invoice_date', 'invoices.due_date', 'invoices.total');
+
+        // Settlement vouchers carry their DATE here (the bill drill-down does
+        // not need it) because avg_pay_days is measured from bill to voucher.
+        const receiptsQ = db('payments').where('company_id', companyId)
+            .whereNull('deleted_at').where('type', side.voucherType)
+            .whereNotNull(PK)
+            .select(PK, 'amount', 'payment_date');
+
+        // The party master supplies the label, the contact columns the reminder
+        // actions need, and the Tally ledger group the screen filters by.
+        const PT = side.partyTable;
+        const customersQ = db(PT)
+            .leftJoin('tally_ledgers', function join() {
+                this.on('tally_ledgers.company_id', '=', `${PT}.company_id`)
+                    .andOn(db.raw(`lower(tally_ledgers.name) = lower(${PT}.name)`));
+            })
+            .where(`${PT}.company_id`, companyId)
+            .whereNull(`${PT}.deleted_at`)
+            .select(
+                `${PT}.id`, `${PT}.name`, `${PT}.mobile`, `${PT}.email`,
+                'tally_ledgers.parent as ledger_group',
+            );
+
+        // Reminder schedules only exist on the customer side — you do not
+        // remind yourself to pay a supplier from this screen.
+        const remindersQ = sideKey === 'receivable'
+            ? db('customer_reminder_schedules')
+                .where({ company_id: companyId, enabled: true })
+                .select('customer_id', 'channel', 'frequency', 'send_hour')
+            : Promise.resolve([]);
+
+        const [openInvoices, receipts, customers, reminders] = await Promise.all([
+            openInvoicesQ, receiptsQ, customersQ, remindersQ,
+        ]);
+
+        const byId = new Map(customers.map((c) => [String(c.id), c]));
+        const reminderBy = new Map(reminders.map((r) => [String(r.customer_id), r]));
+
+        const now = new Date();
+        let rows = buildReceivablesParties(openInvoices, receipts, now, PK).map((p) => {
+            const c = byId.get(String(p.party_id)) || {};
+            return {
+                customer_id: p.party_id,
+                party_id: p.party_id,
+                name: c.name || '',
+                mobile: c.mobile || null,
+                email: c.email || null,
+                ledger_group: c.ledger_group || null,
+                outstanding: p.outstanding,
+                overdue: p.overdue,
+                bills: p.bills,
+                oldest_age_days: p.oldest_age_days,
+                credit_days: p.credit_days,
+                avg_pay_days: p.avg_pay_days,
+                reminder: reminderBy.get(String(p.party_id)) || null,
+            };
+        });
+
+        // Counted BEFORE the filters below so the "N parties missing contact
+        // details" banner reports the whole book, not the current filter.
+        const missingContact = rows.filter((r) => !r.mobile && !r.email).length;
+        const groups = [...new Set(rows.map((r) => r.ledger_group).filter(Boolean))].sort();
+
+        const filter = String(req.query.filter || 'all').trim();
+        if (filter === 'due_today') {
+            // Nothing overdue yet, but the oldest bill has just hit its term.
+            rows = rows.filter((r) => r.overdue === 0 && r.credit_days != null
+                && r.oldest_age_days === r.credit_days);
+        } else if (filter === 'not_due') {
+            rows = rows.filter((r) => r.overdue === 0);
+        } else if (DUE_WINDOWS[filter]) {
+            const { min, max } = DUE_WINDOWS[filter];
+            const past = (r) => (r.credit_days == null ? r.oldest_age_days : r.oldest_age_days - r.credit_days);
+            rows = rows.filter((r) => r.overdue > 0 && past(r) >= min && past(r) <= max);
+        }
+
+        const group = String(req.query.group || '').trim();
+        if (group) rows = rows.filter((r) => r.ledger_group === group);
+
+        const search = String(req.query.search || '').trim().toLowerCase();
+        if (search) rows = rows.filter((r) => r.name.toLowerCase().includes(search));
+
+        const SORTS = {
+            outstanding: (a, b) => a.outstanding - b.outstanding,
+            overdue:     (a, b) => a.overdue - b.overdue,
+            avg_pay_days: (a, b) => (a.avg_pay_days ?? -1) - (b.avg_pay_days ?? -1),
+            name:        (a, b) => a.name.localeCompare(b.name),
+        };
+        const sort = SORTS[String(req.query.sort || '').trim()] || SORTS.outstanding;
+        // Biggest debtor first is what this screen is for, so descending is the
+        // default for every sort EXCEPT name, where A–Z is the useful order.
+        const defaultOrder = String(req.query.sort || '') === 'name' ? 'asc' : 'desc';
+        const order = String(req.query.order || defaultOrder) === 'asc' ? 1 : -1;
+        rows.sort((a, b) => sort(a, b) * order);
+
+        const total = rows.length;
+        const totalOutstanding = rows.reduce((s, r) => s + r.outstanding, 0);
+        const totalOverdue = rows.reduce((s, r) => s + r.overdue, 0);
+        const paged = rows.slice((page - 1) * perPage, page * perPage);
+
+        return R.successResponse(res, {
+            data: paged,
+            meta: {
+                total, page, per_page: perPage,
+                total_outstanding: totalOutstanding,
+                total_overdue: totalOverdue,
+                missing_contact: missingContact,
+                groups,
+                filter, group: group || null,
+                side: sideKey,
+            },
+        });
+    } catch (err) {
+        console.error(`dashboard.parties(${sideKey}) error:`, err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+async function receivablesParties(req, res) { return partiesFor(req, res, 'receivable'); }
+async function payablesParties(req, res)    { return partiesFor(req, res, 'payable'); }
+
+/**
+ * One party's OPEN bills — the Receivables drill-down.
+ *
+ * Columns mirror the party screen's promise: Voucher No, Reference No, Date,
+ * Due Days, Due Date, Amount. "On Account" is the receipt money that could
+ * not be applied to any bill (the party has paid more than they were billed),
+ * shown separately rather than netted off — netting it would make a bill look
+ * part-paid when it is not.
+ */
+async function partyBillsFor(req, res, sideKey) {
+    const side = PARTY_SIDES[sideKey];
+    const partyId = Number(req.params.id);
+    if (!Number.isInteger(partyId) || partyId <= 0) {
+        return R.errorResponse(res, 'Invalid party.', 422);
+    }
+    try {
+        const companyId = req.companyId;
+        const locationId = req.locationId;
+        const loc = (qb, col) => (locationId != null ? qb.where(col, locationId) : qb);
+        const mineId = req.isSalesman ? req.user.sub : null;
+        const mine = (qb, col) => (mineId != null ? qb.where(col, mineId) : qb);
+        const PK = side.partyKey;
+
+        const [customer, invoices, receipts] = await Promise.all([
+            db(side.partyTable).where({ company_id: companyId, id: partyId })
+                .whereNull('deleted_at').first('id', 'name', 'mobile', 'email'),
+            mine(loc(db('invoices')
+                .where('invoices.company_id', companyId)
+                .whereNull('invoices.deleted_at').where('invoices.type', side.invoiceType)
+                .whereNot('invoices.status', 'failed')
+                .where(`invoices.${PK}`, partyId), 'invoices.location_id'), 'invoices.created_by')
+                .select('invoices.id', 'invoices.invoice_no', `invoices.${PK}`,
+                    'invoices.supplier_bill_no', 'invoices.invoice_date',
+                    'invoices.due_date', 'invoices.total'),
+            db('payments').where({ company_id: companyId, type: side.voucherType, [PK]: partyId })
+                .whereNull('deleted_at').select(PK, 'amount', 'payment_date'),
+        ]);
+        if (!customer) return R.errorResponse(res, 'Party not found.', 404);
+
+        const now = new Date();
+        const rows = buildReceivablesRows(invoices, receipts, now, PK)
+            // Oldest first — the order you chase in.
+            .sort((a, b) => b.age_days - a.age_days);
+
+        const billed = invoices.reduce((s, v) => s + Number(v.total || 0), 0);
+        const received = receipts.reduce((s, r) => s + Number(r.amount || 0), 0);
+        const onAccount = Math.max(0, received - billed);
+
+        const dayMs = 24 * 60 * 60 * 1000;
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const dueDays = (d) => {
+            if (!d) return null;
+            const due = new Date(d);
+            const at = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+            return Math.round((today.getTime() - at.getTime()) / dayMs);
+        };
+
+        return R.successResponse(res, {
+            data: rows.map((r) => ({
+                id: r.id,
+                voucher_no: r.invoice_no,
+                reference_no: r.supplier_bill_no || null,
+                date: r.invoice_date,
+                due_date: r.due_date,
+                // Positive = this many days PAST due. Null when the bill
+                // carries no due date, which is not the same as "due today".
+                due_days: dueDays(r.due_date),
+                age_days: r.age_days,
+                amount: r.outstanding,
+                bucket_label: r.bucket_label,
+            })),
+            meta: {
+                customer: { id: customer.id, name: customer.name, mobile: customer.mobile, email: customer.email },
+                total: rows.length,
+                total_outstanding: rows.reduce((s, r) => s + r.outstanding, 0),
+                on_account: onAccount,
+                side: sideKey,
+            },
+        });
+    } catch (err) {
+        console.error(`dashboard.partyBills(${sideKey}) error:`, err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+async function receivablesPartyBills(req, res) { return partyBillsFor(req, res, 'receivable'); }
+async function payablesPartyBills(req, res)    { return partyBillsFor(req, res, 'payable'); }
+
+module.exports = {
+    summary, receivablesBills, pctChange,
+    receivablesParties, receivablesPartyBills,
+    payablesParties, payablesPartyBills,
+};

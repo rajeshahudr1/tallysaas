@@ -1,0 +1,208 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * receivables/parties.ejs — the Receivables screen's main list:
+ * one row per customer (LiveKeeping parity).
+ *
+ * Columns: #, Customer Name, Outstanding, Overdue, Credit Days,
+ * Avg Pay Days, Action. Clicking a party opens its bill-wise
+ * outstanding (/receivables/party/:id).
+ *
+ * Locals:
+ *   rows      [ { id, name, mobile, email, ledger_group, outstanding,
+ *                 overdue, bills, credit_days, avg_pay_days, reminder, href } ]
+ *   meta      { total, page, per_page, total_outstanding, total_overdue,
+ *               missing_contact, groups[], filter, group }
+ *   filters   [ { key, label, href, active } ]
+ *   groupOptions [ { value, label, selected } ]
+ *   searchValue, sortValue
+ * ─────────────────────────────────────────────────────────── */
+var _rows = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _meta = (typeof meta !== 'undefined' && meta) ? meta : {};
+var _filters = (typeof filters !== 'undefined' && filters) ? filters : [];
+var _groupOptions = (typeof groupOptions !== 'undefined' && groupOptions) ? groupOptions : [];
+var _search = (typeof searchValue !== 'undefined' && searchValue) ? searchValue : '';
+var _sort = (typeof sortValue !== 'undefined' && sortValue) ? sortValue : 'outstanding';
+// Receivables and Payables share this template. The `screen` local carries
+// the few things that differ between the two sides — the labels, the base
+// path, and whether payment reminders apply (they are a customer-side
+// action, so the Payables screen hides them).
+var _s = (typeof screen !== 'undefined' && screen) ? screen : { base: '/receivables', title: 'Receivables', totalLabel: 'Total Outstanding', partyLabel: 'Customer Name', showReminders: true };
+var _page = Number(_meta.page || 1);
+var _perPage = Number(_meta.per_page || 20);
+var _total = Number(_meta.total || 0);
+var _from = _total ? ((_page - 1) * _perPage) + 1 : 0;
+var _to = Math.min(_page * _perPage, _total);
+
+function _inr(v) { return Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+// A null credit period / pay history means "we don't know", not "zero" — print
+// a dash so an empty column never reads as a real measured value.
+function _days(v) { return (v == null) ? '—' : Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 }) + ' days'; }
+%>
+
+<%- include('../partials/page-head', {
+    title: _s.title,
+    breadcrumb: [{ label: 'Dashboard', href: '/' }, { label: _s.title }],
+}) %>
+
+<% if (Number(_meta.missing_contact) > 0) { %>
+<%# Reminders need a mobile or an email — surface how many parties have neither
+    so the gap is fixable from here rather than discovered on a failed send. %>
+<a href="/customers?missing=contact" class="recv-banner">
+    <i class="fa-solid fa-triangle-exclamation"></i>
+    <span><strong><%= _meta.missing_contact %></strong> parties missing contact details</span>
+    <span class="recv-banner-cta">Add to send reminders <i class="fa-solid fa-arrow-right"></i></span>
+</a>
+<% } %>
+
+<div class="recv-summary">
+    <div class="recv-summary-card recv-summary-card--primary">
+        <div class="recv-summary-label"><%= _s.totalLabel %></div>
+        <div class="recv-summary-value">₹ <%= _inr(_meta.total_outstanding) %></div>
+    </div>
+    <div class="recv-summary-card">
+        <div class="recv-summary-label">Total Overdue</div>
+        <div class="recv-summary-value recv-danger">₹ <%= _inr(_meta.total_overdue) %></div>
+    </div>
+    <div class="recv-summary-card">
+        <div class="recv-summary-label">Parties</div>
+        <div class="recv-summary-value"><%= _total %></div>
+    </div>
+</div>
+
+<form method="get" action="<%= _s.base %>" class="recv-toolbar" autocomplete="off">
+    <div class="recv-tabs">
+        <% _filters.forEach(function (f) { %>
+            <a href="<%= f.href %>" class="recv-tab <%= f.active ? 'is-active' : '' %>"><%= f.label %></a>
+        <% }); %>
+    </div>
+    <div class="recv-controls">
+        <% if (_groupOptions.length > 1) { %>
+        <select name="group" class="recv-select" aria-label="Ledger group" onchange="this.form.submit()">
+            <% _groupOptions.forEach(function (o) { %>
+                <option value="<%= o.value %>" <%= o.selected ? 'selected' : '' %>><%= o.label %></option>
+            <% }); %>
+        </select>
+        <% } %>
+        <select name="sort" class="recv-select" aria-label="Sort by" onchange="this.form.submit()">
+            <option value="outstanding"  <%= _sort === 'outstanding'  ? 'selected' : '' %>>Highest Outstanding</option>
+            <option value="overdue"      <%= _sort === 'overdue'      ? 'selected' : '' %>>Highest Overdue</option>
+            <option value="avg_pay_days" <%= _sort === 'avg_pay_days' ? 'selected' : '' %>>Slowest Payers</option>
+            <option value="name"         <%= _sort === 'name'         ? 'selected' : '' %>>Name (A–Z)</option>
+        </select>
+        <label class="recv-search">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="search" name="search" value="<%= _search %>" placeholder="Search party">
+        </label>
+        <% if (_meta.filter && _meta.filter !== 'all') { %>
+            <input type="hidden" name="filter" value="<%= _meta.filter %>">
+        <% } %>
+        <button type="submit" class="recv-go">Apply</button>
+    </div>
+</form>
+
+<div class="card">
+    <div class="data-table-wrap">
+        <table class="data-table recv-table" style="width:100%">
+            <thead>
+                <tr>
+                    <th style="text-align:left;width:44px">#</th>
+                    <th style="text-align:left"><%= _s.partyLabel %></th>
+                    <th style="text-align:right">Outstanding</th>
+                    <th style="text-align:right">Overdue</th>
+                    <th style="text-align:right">Credit Days</th>
+                    <th style="text-align:right">Avg Pay Days</th>
+                    <th style="text-align:right">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr><td colspan="7" style="text-align:center;padding:26px;color:#94a3b8">No parties with an outstanding balance.</td></tr>
+                <% } %>
+                <% _rows.forEach(function (r, i) { %>
+                    <tr>
+                        <td style="color:#94a3b8"><%= _from + i %></td>
+                        <td>
+                            <a href="<%= r.href %>" class="recv-party"><%= r.name %></a>
+                            <% if (r.ledger_group) { %>
+                                <div class="recv-party-sub"><%= r.ledger_group %></div>
+                            <% } %>
+                            <% if (_s.showReminders && r.reminder) { %>
+                                <div class="recv-reminder">
+                                    <i class="fa-solid fa-bell"></i>
+                                    Reminder <%= r.reminder.frequency %> ·
+                                    <a href="/reminders?customer=<%= r.id %>">Edit</a>
+                                </div>
+                            <% } %>
+                        </td>
+                        <td style="text-align:right;font-weight:600">₹ <%= _inr(r.outstanding) %></td>
+                        <td style="text-align:right" class="<%= Number(r.overdue) > 0 ? 'recv-danger' : '' %>">₹ <%= _inr(r.overdue) %></td>
+                        <td style="text-align:right;color:#475569"><%= _days(r.credit_days) %></td>
+                        <td style="text-align:right;color:#475569"><%= _days(r.avg_pay_days) %></td>
+                        <td style="text-align:right">
+                            <div class="recv-actions">
+                                <% if (r.mobile) { %>
+                                    <a href="tel:<%= r.mobile %>" class="recv-act" title="Call <%= r.mobile %>"><i class="fa-solid fa-phone"></i></a>
+                                <% } %>
+                                <a href="/ledgers/<%= encodeURIComponent(r.name) %>" class="recv-act" title="Ledger statement"><i class="fa-solid fa-file-lines"></i></a>
+                                <% if (_s.showReminders) { %>
+                                    <a href="/reminders?customer=<%= r.id %>" class="recv-act recv-act--cta" title="Set payment reminder">Set Reminder</a>
+                                <% } %>
+                            </div>
+                        </td>
+                    </tr>
+                <% }); %>
+            </tbody>
+        </table>
+    </div>
+
+    <% if (_total > _perPage) { %>
+    <%- include('../partials/pagination', { page: _page, perPage: _perPage, total: _total }) %>
+    <% } else if (_total) { %>
+    <div class="ledger-foot"><%= _from %>-<%= _to %> of <%= _total %></div>
+    <% } %>
+</div>
+
+<style>
+    .recv-banner { display:flex; align-items:center; gap:10px; margin-bottom:14px; padding:11px 16px;
+        background:#fffbeb; border:1px solid #fde68a; border-radius:10px; color:#92400e;
+        text-decoration:none; font-size:13px; }
+    .recv-banner:hover { background:#fef3c7; }
+    .recv-banner-cta { margin-left:auto; font-weight:700; color:#b45309; white-space:nowrap; }
+    .recv-summary { display:flex; gap:14px; margin-bottom:14px; flex-wrap:wrap; }
+    .recv-summary-card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:12px 18px; min-width:170px; }
+    .recv-summary-card--primary { background:linear-gradient(135deg,var(--primary),#7c3aed); border:0; color:#fff; }
+    .recv-summary-label { font-size:11px; text-transform:uppercase; letter-spacing:.4px; opacity:.85; color:inherit; }
+    .recv-summary-card:not(.recv-summary-card--primary) .recv-summary-label { color:#6b7280; }
+    .recv-summary-value { font-size:20px; font-weight:800; margin-top:2px; }
+    .recv-danger { color:#b91c1c; }
+    .recv-summary-card--primary .recv-danger { color:#fff; }
+    .recv-toolbar { display:flex; align-items:center; justify-content:space-between; gap:14px;
+        flex-wrap:wrap; margin-bottom:14px; }
+    .recv-tabs { display:inline-flex; gap:8px; flex-wrap:wrap; }
+    .recv-tab { padding:7px 15px; border-radius:8px; border:1px solid #e2e8f0; background:#fff;
+        color:#475569; font-size:12.5px; font-weight:600; text-decoration:none; }
+    .recv-tab:hover { border-color:#cbd5e1; color:var(--primary); }
+    .recv-tab.is-active { background:var(--primary); border-color:var(--primary); color:#fff; }
+    .recv-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .recv-select { padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; background:#fff;
+        font-size:12.5px; color:#334155; }
+    .recv-search { display:inline-flex; align-items:center; gap:8px; padding:6px 12px;
+        border:1px solid #e2e8f0; border-radius:8px; background:#fff; color:#94a3b8; }
+    .recv-search input { border:0; outline:0; font-size:13px; color:#111; width:170px; background:transparent; }
+    .recv-go { padding:7px 15px; border-radius:8px; border:1px solid var(--primary); background:var(--primary);
+        color:#fff; font-size:12.5px; font-weight:600; cursor:pointer; }
+    .recv-table th { padding:10px 14px; font-size:11px; text-transform:uppercase; letter-spacing:.4px;
+        color:#6b7280; border-bottom:1px solid #e5e7eb; }
+    .recv-table td { padding:11px 14px; font-size:13.5px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+    .recv-table tbody tr:hover { background:#f8fafc; }
+    .recv-party { color:var(--primary); text-decoration:none; font-weight:600; }
+    .recv-party-sub { font-size:11.5px; color:#94a3b8; margin-top:2px; }
+    .recv-reminder { font-size:11.5px; color:#0369a1; margin-top:3px; }
+    .recv-reminder a { color:#0369a1; }
+    .recv-actions { display:inline-flex; gap:6px; align-items:center; justify-content:flex-end; }
+    .recv-act { display:inline-flex; align-items:center; justify-content:center; min-width:30px; height:30px;
+        padding:0 9px; border-radius:7px; border:1px solid #e2e8f0; background:#fff; color:#475569;
+        font-size:12px; text-decoration:none; }
+    .recv-act:hover { border-color:#cbd5e1; color:var(--primary); }
+    .recv-act--cta { font-weight:600; white-space:nowrap; }
+</style>

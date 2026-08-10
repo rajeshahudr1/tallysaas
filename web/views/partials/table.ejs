@@ -10,7 +10,8 @@
  *   rows        [ plain objects keyed by column.key ]
  *   selectable? bool   — leading checkbox column + header select-all
  *   showIndex?  bool   — leading "#" column
- *   actions?    array subset of ['view','edit','delete'] — trailing actions
+ *   actions?    array subset of ['view','items','ledger','activity','edit','print','delete']
+ *               — the trailing per-row action menu
  *
  * Rendering by column.type:
  *   text (default)  raw value
@@ -47,6 +48,10 @@ if (_base && _actions.length) {
 /* editable = the {basePath}/{id}/edit screen exists. Until an Edit page is
  * wired the Edit action stays disabled (a dead link → 404 is worse). */
 var _editable   = (typeof editable !== 'undefined') ? !!editable : false;
+/* Opt-in star toggle (Parties). Set `favourite: true` to add a Star/Unstar
+   item to the row menu; the row's own `is_favourite` decides which label it
+   shows. Tables that do not pass it are completely unaffected. */
+var _favourite  = (typeof favourite !== 'undefined') ? !!favourite : false;
 /* sortKeys = column keys the backend can sort (only those headers become
  * clickable, so no header ever looks sortable when it isn't). */
 var _sortKeys  = (typeof sortKeys !== 'undefined' && Array.isArray(sortKeys)) ? sortKeys : [];
@@ -185,6 +190,12 @@ function _alignClass(col) {
                                 <% }); %>
                             <% } else if (col.type === 'badge') { %>
                                 <span class="pill-badge"><%= val %></span>
+                            <%# A cell can carry its own link when the row is not keyed by
+                                an `id` — physical stock sheets are keyed by voucher_no, so
+                                the shared /:id/... row actions cannot serve them. Purely
+                                additive: a column without hrefKey renders exactly as before. %>
+                            <% } else if (col.hrefKey && row[col.hrefKey]) { %>
+                                <a class="data-table-link" href="<%= row[col.hrefKey] %>"><%= (val === 0 || val) ? val : '' %></a>
                             <% } else { %>
                                 <%= (val === 0 || val) ? val : '' %>
                             <% } %>
@@ -232,6 +243,23 @@ function _alignClass(col) {
                                     <%# A LOCKED row (e.g. an approved invoice a non-admin may no
                                         longer touch) HIDES Edit + Delete entirely — a disabled
                                         button just invites confusion. View + Print stay. %>
+                                    <%# Star / Unstar. A POST, not a link: it CHANGES data,
+                                        and a GET that mutates gets fired by every crawler
+                                        and link prefetcher that touches the page. %>
+                                    <% if (_favourite && _canLink) { %>
+                                        <li>
+                                            <form method="post" action="<%= _base %>/<%= _idVal %>/favourite">
+                                                <input type="hidden" name="value" value="<%= row.is_favourite ? '0' : '1' %>">
+                                                <button class="dropdown-item" type="submit">
+                                                    <% if (row.is_favourite) { %>
+                                                        <i class="fa-solid fa-star me-2 text-warning"></i>Remove from Favourites
+                                                    <% } else { %>
+                                                        <i class="fa-regular fa-star me-2 text-muted"></i>Mark as Favourite
+                                                    <% } %>
+                                                </button>
+                                            </form>
+                                        </li>
+                                    <% } %>
                                     <% if (_actions.indexOf('edit') > -1 && !_locked) { %>
                                         <% if (_canLink && _editable) { %>
                                             <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/edit">
@@ -244,6 +272,23 @@ function _alignClass(col) {
                                     <% if (_actions.indexOf('print') > -1 && _canLink) { %>
                                         <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/print" target="_blank">
                                             <i class="fa-solid fa-print me-2 text-muted"></i>Print</a></li>
+                                    <% } %>
+                                    <%# Items Sold / Items Purchased — what this party has moved,
+                                        rolled up per stock item. %>
+                                    <% if (_actions.indexOf('items') > -1 && _canLink) { %>
+                                        <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/items">
+                                            <i class="fa-solid fa-boxes-stacked me-2 text-muted"></i>Items</a></li>
+                                    <% } %>
+                                    <%# The party's follow-up trail — what was said,
+                                        as opposed to what was billed. %>
+                                    <% if (_actions.indexOf('activity') > -1 && _canLink) { %>
+                                        <li><a class="dropdown-item" href="<%= _base %>/<%= _idVal %>/activities">
+                                            <i class="fa-regular fa-comments me-2 text-muted"></i>Activity</a></li>
+                                    <% } %>
+                                    <%# The party's voucher-wise ledger statement. %>
+                                    <% if (_actions.indexOf('ledger') > -1 && _label) { %>
+                                        <li><a class="dropdown-item" href="/ledgers/<%= encodeURIComponent(_label) %>">
+                                            <i class="fa-solid fa-file-lines me-2 text-muted"></i>Ledger</a></li>
                                     <% } %>
                                     <% if (_actions.indexOf('delete') > -1 && !_locked) { %>
                                         <li><hr class="dropdown-divider"></li>

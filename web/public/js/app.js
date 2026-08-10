@@ -33,6 +33,7 @@
         initCheckGroups();
         initCharCounters();
         initSearchableSelects();
+        initSelectObserver();
         initSameAsShipping();
         initSyncButtons();
         initNotifications();
@@ -60,15 +61,15 @@
             '.ss-native{position:absolute!important;top:0;left:0;width:1px;height:1px;opacity:0;pointer-events:none}' +
             '.ss-trigger{text-align:left;display:flex;align-items:center;width:100%;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
             '.ss-trigger.ss-placeholder{color:#9aa2b1}' +
-            '.ss-panel{display:none;position:fixed;z-index:1080;background:#fff;border:1px solid #e2e6ee;border-radius:10px;box-shadow:0 8px 24px rgba(20,25,40,.12);overflow:hidden}' +
+            '.ss-panel{display:none;position:fixed;z-index:1080;background:#fff;border:1px solid #E9EDF3;border-radius:12px;box-shadow:0 8px 24px rgba(16,24,40,.10);overflow:hidden}' +
             '.ss-wrap.is-open .ss-panel{display:block}' +
             '.ss-search-wrap{padding:8px;border-bottom:1px solid #eef0f4}' +
-            '.ss-search{width:100%;border:1px solid #dfe3ea;border-radius:8px;padding:7px 10px;font-size:.9rem;outline:none}' +
-            '.ss-search:focus{border-color:#6366f1}' +
+            '.ss-search{width:100%;border:1px solid #E4E7EC;border-radius:9px;padding:8px 11px;font-size:.9rem;outline:none}' +
+            '.ss-search:focus{border-color:#1560E0;box-shadow:0 0 0 3px rgba(21,96,224,.12)}' +
             '.ss-list{list-style:none;margin:0;padding:4px;max-height:260px;overflow-y:auto}' +
-            '.ss-item{padding:8px 10px;border-radius:7px;cursor:pointer;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-            '.ss-item:hover,.ss-item.is-active{background:#f1f3f9}' +
-            '.ss-item.is-selected{background:#eef2ff;color:#4338ca;font-weight:600}' +
+            '.ss-item{padding:9px 12px;border-radius:8px;cursor:pointer;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+            '.ss-item:hover,.ss-item.is-active{background:#F5F7FB}' +
+            '.ss-item.is-selected{background:#EAF1FE;color:#1560E0;font-weight:600}' +
             '.ss-item.is-disabled{color:#b6bcc9;cursor:default}' +
             '.ss-empty{padding:12px 10px;color:#9aa2b1;font-size:.88rem;text-align:center}';
         var st = document.createElement('style');
@@ -86,6 +87,61 @@
             if (!force && sel.options.length <= 8) return;
             _ssEnhance(sel);
         });
+        // Re-sync every enhanced trigger. Setting sel.value from script fires
+        // NO 'change' event, so without this the button keeps showing the old
+        // label after a programmatic reset — which reads as "my selection
+        // didn't take". Cheap enough to run on every rescan.
+        document.querySelectorAll('select[data-ss-enhanced]').forEach(function (sel) {
+            if (typeof sel._ssSync === 'function') sel._ssSync();
+        });
+    }
+
+    /* Selects that arrive AFTER load — options fetched over AJAX (the
+     * country/state/city cascade on every "Add Customer" form), rows cloned
+     * from a <template>, whole modals injected — were never enhanced, because
+     * the scan above only ever ran once on DOMContentLoaded. An empty <select>
+     * also fails the ">8 options" test, so it stayed a bare native control
+     * even after 200 countries landed in it. Watch the DOM and rescan. */
+    function initSelectObserver() {
+        if (!window.MutationObserver) return;
+        var queued = false;
+        var rescan = function () {
+            if (queued) return;
+            queued = true;
+            // Coalesce bursts (a cascade fills 3 selects back to back).
+            (window.requestAnimationFrame || window.setTimeout)(function () {
+                queued = false;
+                initSearchableSelects();
+            }, 0);
+        };
+        // Ignore the widget's OWN rendering (the trigger label and the dropdown
+        // panel it rebuilds on every keystroke). Watching those would mean this
+        // observer reacts to work it caused itself. A <select>'s own <option>
+        // children still count — that is exactly the AJAX case we are here for.
+        function isOurOwnChurn(node) {
+            for (var el = node; el; el = el.parentNode) {
+                if (el.nodeType !== 1) continue;
+                if (el.tagName === 'SELECT') return false;
+                if (el.classList && (el.classList.contains('ss-panel') ||
+                                     el.classList.contains('ss-trigger'))) return true;
+            }
+            return false;
+        }
+
+        new MutationObserver(function (records) {
+            for (var i = 0; i < records.length; i++) {
+                var r = records[i];
+                if (r.type !== 'childList') continue;
+                if (!r.addedNodes.length && !r.removedNodes.length) continue;
+                if (isOurOwnChurn(r.target)) continue;
+                rescan();
+                return;
+            }
+        }).observe(document.body, { childList: true, subtree: true });
+        // Expose it so page scripts can force a resync right after they reset
+        // a form's values by hand.
+        window.TCS = window.TCS || {};
+        window.TCS.refreshSelects = initSearchableSelects;
     }
 
     function _ssEnhance(sel) {
@@ -114,7 +170,12 @@
 
         function syncTrigger() {
             var o = sel.options[sel.selectedIndex];
-            trigger.textContent = o ? o.textContent : '';
+            var label = o ? o.textContent : '';
+            // Assign ONLY on a real change. Writing textContent replaces the
+            // text node even when the string is identical, and that counts as a
+            // DOM mutation — which the rescan observer below would see, run this
+            // again, and spin forever, freezing every click on the page.
+            if (trigger.textContent !== label) trigger.textContent = label;
             trigger.classList.toggle('ss-placeholder', !!(o && (o.disabled || o.value === '')));
         }
 
@@ -196,6 +257,9 @@
         });
 
         sel.addEventListener('change', syncTrigger);
+        // Let initSearchableSelects() refresh this trigger after the options
+        // or the value were changed from script (no 'change' event fires then).
+        sel._ssSync = syncTrigger;
         syncTrigger();
     }
 
@@ -398,7 +462,7 @@
                             var h = document.createElement('div');
                             h.className = 'record-detail-group';
                             h.textContent = r.group;
-                            h.style.cssText = 'font-weight:600;margin:14px 0 6px;color:#2563eb;border-bottom:1px solid #e5e7eb;padding-bottom:4px;';
+                            h.style.cssText = 'font-weight:600;margin:14px 0 6px;color:#1560E0;border-bottom:1px solid #e5e7eb;padding-bottom:4px;';
                             body.appendChild(h);
                             return;
                         }

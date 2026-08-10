@@ -39,17 +39,31 @@ function lineAmount(l) {
     return Math.round((net + net * gst / 100 + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Totals for the on-screen panel.
+ *
+ * SUBTOTAL is the TAXABLE value — after discount, with GST taken back out of
+ * a tax-inclusive rate — so the panel always reads as arithmetic you can
+ * follow: Sub Total + Taxes = Grand Total. It used to be the GROSS, which
+ * made a discounted bill overshoot and made a tax-inclusive line count its
+ * GST twice on screen. The STORED figures are computed server-side and are
+ * unchanged; this is presentation only.
+ */
 function formTotals(lines) {
-    let subtotal = 0, taxes = 0, grand = 0;
+    let gross = 0, discount = 0, taxable = 0, taxes = 0;
     for (const l of lines) {
-        const gross = (Number(l.qty) || 0) * (Number(l.rate) || 0);
-        const net0  = gross - gross * (Number(l.disc) || 0) / 100;
+        const lineGross = (Number(l.qty) || 0) * (Number(l.rate) || 0);
+        const disc  = lineGross * (Number(l.disc) || 0) / 100;
+        const net0  = lineGross - disc;
         const gst   = Number(l.gst) || 0;
         const net   = l.taxIncl ? net0 / (1 + gst / 100) : net0;
-        subtotal += gross; taxes += net * gst / 100; grand += net + net * gst / 100;
+        gross += lineGross; discount += disc; taxable += net; taxes += net * gst / 100;
     }
     const r2 = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
-    return { subtotal: r2(subtotal), taxes: r2(taxes), grand: r2(grand) };
+    return {
+        gross: r2(gross), discount: r2(discount), subtotal: r2(taxable),
+        taxes: r2(taxes), grand: r2(taxable + taxes),
+    };
 }
 
 // Custom Note No popup (LiveKeeping's Default/Custom panel, our theme) —
@@ -74,6 +88,11 @@ window.ReturnNoteCalc = { lineAmount, formTotals, buildVoucherNo };
         var tpl   = document.getElementById('cn-row-tpl');
         var addBtn = document.getElementById('cn-add-row');
         if (!form || !tbody || !tpl) return;
+
+        // Price level, party balance, the Buyer/Consignee/Dispatch/Order block
+        // and the richer item option are identical on all six voucher forms —
+        // they live in voucher-extras.js, driven by this form's id prefix.
+        var VX = window.VoucherExtras;
 
         var KIND = window.RETURN_NOTE_KIND === 'debit' ? 'debit' : 'credit';
 
@@ -183,7 +202,12 @@ window.ReturnNoteCalc = { lineAmount, formTotals, buildVoucherNo };
             if (search) search.value = p ? p.name : '';
             row.querySelector('.cn-hsn').value  = p ? (p.hsn || '')  : '';
             row.querySelector('.cn-unit').value = p ? (p.unit || '') : '';
-            if (p && p.rate != null) row.querySelector('.cn-rate').value = p.rate;
+            // Rate: the chosen PRICE LEVEL wins where it covers this item —
+            // that is the whole point of picking a level — otherwise the item's
+            // own standard price.
+            if (p && !VX.applyLevelToRow(row, p.name) && p.rate != null) {
+                row.querySelector('.cn-rate').value = p.rate;
+            }
             // Item chosen → this row's Qty step unlocks (auto-advance gating).
             if (p) row.querySelector('.cn-qty').disabled = false;
             recalcRow(row); recalcTotals();
@@ -222,6 +246,7 @@ window.ReturnNoteCalc = { lineAmount, formTotals, buildVoucherNo };
                         d.className = 'li-prod-item';
                         d.setAttribute('data-i', i);
                         d.textContent = p.name;
+                        VX.decorateProductOption(d, p);
                         d.addEventListener('mousedown', function (e) { e.preventDefault(); choose(i); });
                         menu.appendChild(d);
                     });
@@ -273,7 +298,12 @@ window.ReturnNoteCalc = { lineAmount, formTotals, buildVoucherNo };
         function wireRow(row) {
             wireProductPicker(row);
             row.querySelectorAll('.cn-qty, .cn-rate, .cn-disc, .cn-taxincl').forEach(function (inp) {
-                inp.addEventListener('input', function () { recalcRow(row); recalcTotals(); });
+                inp.addEventListener('input', function () {
+                    // A price level can band its rate by quantity, so crossing a
+                    // band boundary has to re-rate the line.
+                    if (inp.classList.contains('cn-qty')) VX.applySlabRate(row);
+                    recalcRow(row); recalcTotals();
+                });
                 inp.addEventListener('change', function () { recalcRow(row); recalcTotals(); });
             });
 
@@ -593,8 +623,20 @@ window.ReturnNoteCalc = { lineAmount, formTotals, buildVoucherNo };
             clearBtn: document.getElementById('cn-party-clear'),
             list:   PARTIES,
             getLabel: function (p) { return p.name; },
+            // Where the party stands right now, beside their name. The options
+            // API now carries the synced Tally closing balance, so this is the
+            // real figure — and it is omitted, rather than faked as ₹0.00, for a
+            // party with no synced ledger.
+            getSubLabel: function (p) { return p.balance == null ? '' : VX.drCr(p.balance); },
             getValue: function (p) { return p.id; },
-            onChoose: unlockLedgerOrDate,
+            onChoose: function (p) {
+                VX.showPartyBalance(p);
+                VX.prefillBuyerFrom(p);
+                unlockLedgerOrDate(p);
+            },
+            // Clearing the party must clear what was shown ABOUT them, or the
+            // balance of the party you just removed sits under an empty box.
+            onClear: function () { VX.showPartyBalance(null); },
             createLabel: KIND === 'credit' ? 'Create New Customer' : undefined,
             onCreate: KIND === 'credit' ? openNewCustomerModal : undefined,
         });
@@ -656,12 +698,31 @@ window.ReturnNoteCalc = { lineAmount, formTotals, buildVoucherNo };
             menu:   document.getElementById('cn-ledger-menu'),
             list:   LEDGERS,
             getLabel: function (l) { return l.name; },
-            getSubLabel: function (l) { return l.parent; },
+            getSubLabel: function (l) { return window.VoucherExtras.ledgerSubLabel(l); },
             getValue: function (l) { return l.name; },
             onChoose: unlockDate,
         }) : null;
 
         if (dateEl) dateEl.addEventListener('change', unlockAgainstAndItems);
+
+        VX.init({
+            prefix: 'cn',
+            form: form,
+            onLevelChange: function reapplyPriceLevel() {
+                tbody.querySelectorAll('.cn-row').forEach(function (row) {
+                    var search = row.querySelector('.cn-item-search');
+                    var name = search ? search.value : '';
+                    if (!name) return;
+                    if (!VX.applyLevelToRow(row, name)) {
+                        // Level does not cover this item — back to its own price.
+                        var prod = PROD_BY_ID[String(row.querySelector('.cn-item').value)];
+                        if (prod && prod.rate != null) row.querySelector('.cn-rate').value = prod.rate;
+                    }
+                    recalcRow(row);
+                });
+                recalcTotals();
+            },
+        });
 
         // ══════════════════════════════════════════════════════════════
         // Against Bill — prefill.
@@ -764,6 +825,39 @@ window.ReturnNoteCalc = { lineAmount, formTotals, buildVoucherNo };
         }) : null;
 
         // Seed the table with a single (locked) empty row, then open Party.
+        // ── EDIT MODE ── set by the view for /credit-notes/:id/edit and
+        // /debit-notes/:id/edit (one script serves both kinds).
+        var EDIT = window.RETURN_NOTE_EDIT || null;
+        if (EDIT) {
+            var partyInput = document.getElementById('cn-party');
+            if (partyInput && EDIT.party_name) partyInput.value = EDIT.party_name;
+            if (ledgerEl && EDIT.ledger_name) ledgerEl.value = EDIT.ledger_name;
+            var noEl = document.getElementById('cn-no');
+            if (noEl && EDIT.note_no) noEl.value = EDIT.note_no;
+
+            var lines = Array.isArray(EDIT.items) ? EDIT.items : [];
+            if (!lines.length) { addRow(); }
+            lines.forEach(function (it) {
+                var row = addRow();
+                var prod = PRODUCTS.filter(function (p) { return String(p.id) === String(it.product_id); })[0];
+                if (prod) {
+                    applyProduct(row, prod);
+                } else {
+                    var si = row.querySelector('.cn-item-search');
+                    if (si) si.value = it.description || it.product_name || '';
+                }
+                row.querySelector('.cn-qty').value  = it.quantity != null ? it.quantity : 1;
+                row.querySelector('.cn-rate').value = it.rate != null ? it.rate : 0;
+                row.querySelector('.cn-disc').value = it.discount_pct != null ? it.discount_pct : 0;
+                var hsn = row.querySelector('.cn-hsn');   if (hsn && it.hsn) hsn.value = it.hsn;
+                var unit = row.querySelector('.cn-unit'); if (unit && it.unit) unit.value = it.unit;
+                var tx = row.querySelector('.cn-taxincl'); if (tx) tx.checked = !!it.tax_inclusive;
+                recalcRow(row);
+            });
+            recalcTotals();
+            return;
+        }
+
         addRow();
         partyBox.open();
     }

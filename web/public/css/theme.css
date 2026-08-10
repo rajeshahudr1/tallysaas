@@ -30,14 +30,32 @@
     --brand-navy:    #17265E;
     --brand-green:   #45B649;
     --brand-gradient: linear-gradient(135deg, #1560E0, #45B649);
-    --secondary:     #6D28D9;   /* purple */
-    --sidebar-bg:    #111827;   /* dark navy */
-    --sidebar-muted: #9CA3AF;
+    /* Button-safe sweep. White text on #45B649 is 2.61:1, so the decorative
+       gradient cannot be reused for a filled button — this one ends deeper
+       (5.37:1 at the far edge) and is used by every solid brand button. */
+    --brand-gradient-btn: linear-gradient(135deg, #1560E0, #217A3B);
+    --brand-green-text: #166534;   /* green that is legible AS TEXT (7.1:1) */
+    /* Gradient end colour. (Was accidentally left self-referential by a
+       palette sweep — `var(--secondary)` on --secondary resolves to nothing.) */
+    --secondary:     #45B649;
+    /* LIGHT sidebar. The rail is white with a hairline edge and the ACTIVE item
+       carries the colour, instead of the whole panel being a dark slab. */
+    --sidebar-bg:        #FFFFFF;
+    --sidebar-border:    #EEF1F6;
+    /* The rail reads darker than the first pass. The section headings in
+       particular were #98A2B3 — 2.58:1 on white, under the 3:1 floor for ANY
+       content, let alone 11px uppercase. Contrast on white now:
+       label 14.70:1 · heading 4.97:1 · icon 5.55:1 */
+    --sidebar-text:      #1D2939;   /* resting nav label */
+    --sidebar-muted:     #667085;   /* section headings */
+    --sidebar-icon:      #1560E0;   /* nav iconography — the brand blue itself */
+    --sidebar-hover:     #F5F7FB;
+    --sidebar-active-bg: #EAF1FE;
     --bg:            #F8FAFC;
     --card:          #FFFFFF;
-    --border:        #E5E7EB;
-    --text:          #111827;
-    --text-muted:    #6B7280;
+    --border:        #E9EDF3;
+    --text:          #101828;
+    --text-muted:    #667085;
     --success:       #16A34A;
     --success-bg:    #DCFCE7;
     --danger:        #DC2626;
@@ -52,13 +70,17 @@
     --sidebar-rail-w: 72px;    /* collapsed (icon-only) sidebar */
     --header-h:      70px;
 
-    /* Stat-card tones (icon chips) */
+    /* Stat-card tones (icon chips). Foreground and background are a PAIR — a
+       palette sweep once repointed the foregrounds at the brand colours but
+       left the old lavender/indigo backgrounds behind, which put a green icon
+       on a purple wash. The --tone-purple / --tone-indigo names are kept
+       because views reference them; both now resolve to brand colours. */
     --tone-blue:     var(--primary);   --tone-blue-bg:   #EFF4FF;
-    --tone-purple:   #6D28D9;   --tone-purple-bg: #F3EEFF;
+    --tone-purple:   var(--brand-green-text); --tone-purple-bg: #E9F6EF;
     --tone-teal:     #0D9488;   --tone-teal-bg:   #E6FAF7;
     --tone-green:    #16A34A;   --tone-green-bg:  #DCFCE7;
     --tone-amber:    #D97706;   --tone-amber-bg:  #FEF3C7;
-    --tone-indigo:   #4F46E5;   --tone-indigo-bg: #EEF0FF;
+    --tone-indigo:   var(--primary);   --tone-indigo-bg: #EAF1FE;
 }
 
 /* ── 2. Base / typography ───────────────────────────────────────── */
@@ -81,6 +103,7 @@ a { text-decoration: none; }
     inset: 0 auto 0 0;
     width: var(--sidebar-w);
     background: var(--sidebar-bg);
+    border-right: 1px solid var(--sidebar-border);
     z-index: 1040;
     flex-direction: column;
     overflow: hidden;
@@ -104,37 +127,63 @@ a { text-decoration: none; }
     flex-direction: column;
     height: 100%;
     width: var(--sidebar-w);
+    /* The COLUMN no longer scrolls — .sidebar-nav does (it is the flex child
+       that grows). That is what keeps the footer promo pinned to the bottom
+       instead of drifting away below a long menu. */
+    overflow: hidden;
+}
+.sidebar-nav {
     overflow-y: auto;
     overflow-x: hidden;
     scrollbar-width: thin;
-    scrollbar-color: #374151 transparent;
+    scrollbar-color: #D7DDE7 transparent;
 }
-.sidebar-inner::-webkit-scrollbar { width: 6px; }
-.sidebar-inner::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+.sidebar-nav::-webkit-scrollbar { width: 6px; }
+.sidebar-nav::-webkit-scrollbar-thumb { background: #D7DDE7; border-radius: 3px; }
 
+/* No side padding and no fixed height: the brand plate below runs edge to edge
+   and sets its own height, so the logo gets the sidebar's FULL width instead of
+   sitting in a narrow inset box. (The rail state re-adds padding — see the
+   collapsed rules, where only the small square mark is shown.) */
 .sidebar-brand {
     display: flex;
     align-items: center;
     gap: 12px;
-    height: var(--header-h);
-    padding: 0 20px;
+    padding: 0;
     flex: 0 0 auto;
     position: sticky;
     top: 0;
     background: var(--sidebar-bg);
     z-index: 2;
 }
+/* Two logos live in the header: the full lock-up (default) and the square mark
+   (rail only). On a LIGHT sidebar neither needs a plate — the artwork sits
+   straight on the panel, which is why the lock-up can run this large. */
+.sidebar-brand-full {
+    flex: 1 1 auto; min-width: 0;
+    padding: 8px 12px;
+    display: block;
+}
+/* 68px is where the lock-up's 3.44:1 aspect exactly fills the 236px of usable
+   width in a 260px sidebar — any shorter and it floats in white space, any
+   taller and the width clamps it back anyway. */
+.sidebar-brand-full img { width: 100%; height: 68px; object-fit: contain; display: block; }
+
 .sidebar-logo {
     width: 38px; height: 38px;
-    display: grid; place-items: center;
-    background: linear-gradient(135deg, var(--primary), var(--primary-700));
-    border-radius: 10px;
-    color: #fff;
-    font-size: 16px;
+    display: none;                /* rail only — see the collapsed rules below */
+    place-items: center;
     flex: 0 0 auto;
+    overflow: hidden;
+}
+.sidebar-logo img {
+    width: 100%; height: 100%;
+    object-fit: contain;
+    display: block;
+    padding: 3px;
 }
 .sidebar-brand-text {
-    color: #fff;
+    color: var(--text);
     font-weight: 600;
     font-size: 15px;
     letter-spacing: .2px;
@@ -142,13 +191,24 @@ a { text-decoration: none; }
 }
 
 .sidebar-nav { padding: 8px 12px 24px; flex: 1 1 auto; }
+/* Band heading. Quieter and smaller than a group row, with real space above,
+   so it reads as a divider between kinds of work rather than another item. */
+.sidebar-band {
+    padding: 18px 12px 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: var(--sidebar-muted);
+}
+.sidebar-band:first-child { padding-top: 6px; }
 .sidebar-section {
     color: var(--sidebar-muted);
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 600;
-    letter-spacing: .8px;
+    letter-spacing: 1.1px;
     text-transform: uppercase;
-    padding: 16px 12px 6px;
+    padding: 20px 12px 8px;
 }
 /* Collapsible group header (button) — visually IDENTICAL to the plain section
    label (no box / fill / outline); only adds a clickable chevron on the right. */
@@ -161,15 +221,15 @@ a { text-decoration: none; }
 }
 .sidebar-section-toggle:hover,
 .sidebar-section-toggle:focus,
-.sidebar-section-toggle:active { color: #CBD5E1; background: transparent !important; }
+.sidebar-section-toggle:active { color: var(--sidebar-text); background: transparent !important; }
 .sidebar-section-toggle:focus,
 .sidebar-section-toggle:focus-visible,
 .sidebar-section-toggle:active { outline: none !important; box-shadow: none !important; }
 /* Group icon — the only thing left of a group header on the icon rail, so
    every group stays recognisable when the sidebar is collapsed. */
-.sidebar-section-icon { font-size: 13px; width: 18px; text-align: center; opacity: .8; flex: 0 0 auto; }
+.sidebar-section-icon { font-size: 13px; width: 18px; text-align: center; color: var(--sidebar-icon); flex: 0 0 auto; }
 .sidebar-section-text { flex: 1 1 auto; }
-.sidebar-section-caret { font-size: 9px; transition: transform .2s ease; opacity: .55; }
+.sidebar-section-caret { font-size: 9px; transition: transform .2s ease; opacity: .35; }
 .sidebar-section-toggle.is-collapsed .sidebar-section-caret { transform: rotate(-90deg); }
 .sidebar-list { list-style: none; margin: 0; padding: 0; overflow: hidden; }
 /* Collapsed group — hide its items (with a quick height/opacity fade). */
@@ -180,33 +240,50 @@ a { text-decoration: none; }
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 10px 12px;
-    margin: 2px 0;
-    border-radius: 8px;
-    color: var(--sidebar-muted);
+    padding: 11px 12px;
+    margin: 3px 0;
+    border-radius: 10px;
+    color: var(--sidebar-text);
     font-size: 14px;
     font-weight: 500;
     transition: background .15s, color .15s;
 }
 .sidebar-link:hover {
-    background: rgba(255,255,255,.06);
-    color: #E5E7EB;
+    background: var(--sidebar-hover);
+    color: var(--text);
 }
-.sidebar-link-icon { width: 18px; text-align: center; font-size: 15px; flex: 0 0 auto; }
+/* Icons carry the brand tint even when the row is idle. Grey icons on a white
+   rail read as disabled; the tint is what makes the menu look designed rather
+   than merely un-styled. */
+.sidebar-link-icon { width: 18px; text-align: center; font-size: 15px; flex: 0 0 auto; color: var(--sidebar-icon); }
+
+/* Line icons (views/partials/icon-sprite.ejs). The stroke is currentColor, so
+   an icon simply takes its row's colour — resting, hover and active all work
+   with no per-state artwork. 1.75px reads slightly lighter than Lucide's 2px
+   at the 18px size the sidebar uses. */
+.icon-line {
+    width: 18px; height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    display: inline-block;
+    vertical-align: -3px;
+}
+.sidebar-section-icon.icon-line { width: 17px; height: 17px; }
+.sidebar-link:hover .sidebar-link-icon { color: var(--primary); }
 .sidebar-link-text { white-space: nowrap; }
+/* Active item: a soft tinted pill, not a saturated slab. On a white rail the
+   tint alone is enough to locate yourself, and it keeps the label readable
+   as dark text — which a full-gradient fill does not. */
 .sidebar-link.is-active {
-    background: rgba(21,96,224,.16);
-    color: #fff;
+    background: var(--sidebar-active-bg);
+    color: var(--primary);
+    font-weight: 600;
 }
-.sidebar-link.is-active::before {
-    content: "";
-    position: absolute;
-    left: -12px; top: 6px; bottom: 6px;
-    width: 4px;
-    border-radius: 0 4px 4px 0;
-    background: var(--primary);
-}
-.sidebar-link.is-active .sidebar-link-icon { color: #60A5FA; }
+.sidebar-link.is-active .sidebar-link-icon { color: var(--primary); }
+
 
 /* Offcanvas (mobile drawer) reuses the sidebar palette */
 .sidebar-offcanvas {
@@ -259,6 +336,12 @@ a { text-decoration: none; }
        past the visible edge, leaving an apparently empty rail. */
     body.sidebar-collapsed .sidebar-inner { width: var(--sidebar-rail-w); }
 
+    /* Rail: the wide lock-up gives way to the square mark, and the header goes
+       back to the topbar's height (the full-bleed plate is what made it taller). */
+    body.sidebar-collapsed .sidebar-brand-full { display: none; }
+    body.sidebar-collapsed .sidebar-logo { display: grid; }
+    body.sidebar-collapsed .sidebar-brand { height: var(--header-h); }
+
     body.sidebar-collapsed .sidebar-brand-text,
     body.sidebar-collapsed .sidebar-link-text,
     body.sidebar-collapsed .sidebar-section-text,
@@ -284,6 +367,8 @@ a { text-decoration: none; }
        ☰ is what makes the expansion permanent. */
     body.sidebar-collapsed .sidebar:hover { width: var(--sidebar-w); box-shadow: 0 0 24px rgba(0,0,0,.28); }
     body.sidebar-collapsed .sidebar:hover .sidebar-inner { width: var(--sidebar-w); }
+    body.sidebar-collapsed .sidebar:hover .sidebar-brand-full { display: block; }
+    body.sidebar-collapsed .sidebar:hover .sidebar-logo { display: none; }
     body.sidebar-collapsed .sidebar:hover .sidebar-brand-text,
     body.sidebar-collapsed .sidebar:hover .sidebar-link-text,
     body.sidebar-collapsed .sidebar:hover .sidebar-section-text,
@@ -316,14 +401,15 @@ a { text-decoration: none; }
 }
 .topbar-search-input {
     width: 100%;
-    height: 42px;
-    border: 1px solid var(--border);
+    height: 44px;
+    border: 1px solid #E9EDF3;
     background: #F9FAFB;
-    border-radius: 10px;
-    padding: 0 76px 0 40px;
+    border-radius: 12px;
+    padding: 0 84px 0 42px;
     font-size: 14px;
     color: var(--text);
 }
+.topbar-search-input::placeholder { color: #98A2B3; }
 .topbar-search-input:focus {
     outline: none;
     border-color: var(--primary);
@@ -335,9 +421,9 @@ a { text-decoration: none; }
     font-size: 11px; font-weight: 600;
     color: var(--text-muted);
     background: #fff;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 2px 7px;
+    border: 1px solid #E4EAF2;
+    border-radius: 7px;
+    padding: 3px 8px;
 }
 
 .topbar-right { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
@@ -345,14 +431,25 @@ a { text-decoration: none; }
 .topbar-switchers { gap: 10px; }
 
 .topbar-company-btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    height: 40px; padding: 0 14px;
-    border: 1px solid var(--border);
+    display: inline-flex; align-items: center; gap: 10px;
+    height: 46px; padding: 0 14px;
+    border: 1px solid #E9EDF3;
     background: #fff;
-    border-radius: 10px;
+    border-radius: 12px;
     color: var(--text);
     font-weight: 500; font-size: 13px;
 }
+/* The leading glyph becomes a small tinted tile so the chip reads as an
+   identity (which company / which licence), not as another toolbar button. */
+.topbar-company-btn > i:first-child {
+    width: 30px; height: 30px; flex: 0 0 auto;
+    display: grid; place-items: center;
+    border-radius: 9px;
+    background: var(--sidebar-active-bg);
+    color: var(--primary);
+    font-size: 14px;
+}
+.topbar-company-btn:hover { border-color: #D6E2FA; background: #FCFDFF; }
 .topbar-company-btn:hover { background: #F9FAFB; }
 .topbar-company-btn i { color: var(--primary); }
 .topbar-company-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -398,10 +495,10 @@ a { text-decoration: none; }
 
 .topbar-icon-btn {
     position: relative;
-    width: 42px; height: 42px;
-    border: 1px solid var(--border);
+    width: 46px; height: 46px;
+    border: 1px solid #E9EDF3;
     background: #fff;
-    border-radius: 11px;
+    border-radius: 12px;
     color: var(--text-muted);
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 16px;
@@ -411,9 +508,9 @@ a { text-decoration: none; }
 }
 .topbar-icon-btn:hover,
 .topbar-icon-btn[aria-expanded="true"] {
-    background: var(--primary-soft, #EEF2FF);
+    background: var(--sidebar-active-bg);
     color: var(--primary);
-    border-color: #C7D2FE;
+    border-color: #D6E2FA;
 }
 .topbar-icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(21,96,224,.18); }
 .topbar-badge {
@@ -439,10 +536,10 @@ a { text-decoration: none; }
 .topbar-profile-btn:hover { background: #F9FAFB; }
 .topbar-profile-btn::after { display: none; } /* hide bootstrap caret */
 .topbar-avatar {
-    width: 34px; height: 34px;
+    width: 38px; height: 38px;
     border-radius: 50%;
     overflow: hidden;
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    background: var(--brand-gradient);
     display: grid; place-items: center;
     flex: 0 0 auto;
 }
@@ -492,12 +589,14 @@ a { text-decoration: none; }
 }
 .btn-primary:hover { background: var(--primary-700); border-color: var(--primary-700); }
 
-/* Gradient blue→purple "Add" / primary action button */
+/* Primary action — the logo's blue→green gradient, so the button that commits
+   the page carries the brand rather than a colour picked at random. */
 .btn-gradient {
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    background: var(--brand-gradient-btn);
     border: 0;
     color: #fff;
-    box-shadow: 0 4px 12px rgba(21,96,224,.28);
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(21,96,224,.24);
 }
 .btn-gradient:hover { color: #fff; filter: brightness(1.05); box-shadow: 0 6px 16px rgba(21,96,224,.34); }
 
@@ -538,21 +637,54 @@ a { text-decoration: none; }
     border-radius: var(--radius);
     box-shadow: var(--shadow);
 }
+/* The page head is a BANNER, not a bare row: a soft white-to-mint wash inside
+   a rounded card, so every screen opens with the same masthead instead of the
+   title floating on the page background. The wash runs left-to-right, ending
+   in the logo's green — the one place the brand's second colour appears at
+   size without competing with the primary action button sitting on top of it. */
 .page-head {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
     flex-wrap: wrap;
     margin-bottom: 20px;
+    padding: 20px 24px;
+    background: linear-gradient(100deg, #FFFFFF 0%, #F5FBF8 52%, #E9F6EF 100%);
+    border: 1px solid #E8EFF6;
+    border-radius: 16px;
 }
-.page-title { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+.page-title { font-size: 24px; font-weight: 700; margin: 0 0 4px; letter-spacing: -.2px; }
+.page-subtitle { font-size: 14px; color: var(--text-muted); margin: 0; }
+
+/* Masthead artwork. A background image rather than an <img>, so no view has to
+   change and it can never intercept a click. The gradient IS a background-image
+   too, so both are layered in ONE declaration — setting background-image alone
+   here would have wiped the mint wash off every masthead. Dropped below 1200px
+   (no spare width beside the actions) and on print. */
+.page-head, .voucher-head {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 150' fill='none'%3E%3Cpath d='M96 26h56l24 24v70a8 8 0 0 1-8 8H96a8 8 0 0 1-8-8V34a8 8 0 0 1 8-8z' fill='%23FFFFFF' stroke='%23C9DCF7' stroke-width='2.5'/%3E%3Cpath d='M152 26l24 24h-24V26z' fill='%23E4EEFC'/%3E%3Crect x='102' y='60' width='44' height='4' rx='2' fill='%23D7E4F8'/%3E%3Crect x='102' y='72' width='60' height='4' rx='2' fill='%23D7E4F8'/%3E%3Crect x='102' y='84' width='34' height='4' rx='2' fill='%23D7E4F8'/%3E%3Ccircle cx='160' cy='106' r='19' fill='%231560E0'/%3E%3Cpath d='M74 62c14-12 30-10 36-4-2 12-14 22-28 22-6 0-10-2-12-4 0-6 1-10 4-14z' fill='%2345B649' opacity='.55'/%3E%3Cpath d='M60 86c10-14 26-16 34-12-1 13-12 24-26 25-5 0-9-1-11-3 0-4 1-7 3-10z' fill='%231560E0' opacity='.35'/%3E%3C/svg%3E"), linear-gradient(100deg, #FFFFFF 0%, #F5FBF8 52%, #E9F6EF 100%);
+    background-repeat: no-repeat, no-repeat;
+    background-position: right 220px center, 0 0;
+    background-size: auto 82%, cover;
+}
+@media (max-width: 1199.98px) {
+    .page-head, .voucher-head { background-image: linear-gradient(100deg, #FFFFFF 0%, #F5FBF8 52%, #E9F6EF 100%); }
+}
+@media print {
+    .page-head, .voucher-head { background-image: none; }
+}
 .page-breadcrumb { font-size: 13px; }
 .page-breadcrumb .breadcrumb-item { color: var(--text-muted); }
 .page-breadcrumb .breadcrumb-item a { color: var(--text-muted); }
 .page-breadcrumb .breadcrumb-item a:hover { color: var(--primary); }
 .page-breadcrumb .breadcrumb-item.active { color: var(--text); font-weight: 500; }
-.page-head-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.page-head-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+/* On the banner, a plain .btn-light would disappear into the wash — give the
+   secondary actions a solid white chip so both buttons read as buttons. */
+.page-head-actions .btn { height: 42px; padding: 0 18px; display: inline-flex;
+    align-items: center; justify-content: center; border-radius: 11px; font-weight: 600; font-size: 14px; }
+.page-head-actions .btn-light { background: #fff; border-color: #E4EAF2; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
 .page-head-caret { font-size: 11px; }
 .date-range-pill {
     display: inline-flex; align-items: center; gap: 8px;
@@ -564,7 +696,7 @@ a { text-decoration: none; }
 .date-range-pill i { color: var(--primary); }
 
 /* ── 9. Filter card ─────────────────────────────────────────────── */
-.filter-card { margin-bottom: 20px; overflow: hidden; }
+.filter-card { margin-bottom: 20px; overflow: hidden; border-radius: 16px; }
 .filter-card-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 16px 20px;
@@ -613,15 +745,18 @@ a { text-decoration: none; }
 .data-table thead th {
     background: #F9FAFB;
     color: var(--text-muted);
-    font-weight: 600;
-    font-size: 12px;
+    font-weight: 700;
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: .3px;
+    letter-spacing: .5px;
     border-bottom: 1px solid var(--border);
-    padding: 12px 14px;
+    padding: 14px;
     white-space: nowrap;
     vertical-align: middle;
 }
+/* First column names the record; brand-colour it like the line-item grids so
+   both kinds of table read the same way. */
+.data-table thead th:first-child { color: var(--primary); }
 .data-table-th { display: inline-flex; align-items: center; gap: 6px; }
 .data-table-sort { color: #C4C9D4; font-size: 11px; }
 /* Clickable sort header. */
@@ -635,7 +770,7 @@ a { text-decoration: none; }
     vertical-align: middle;
     color: var(--text);
 }
-.data-table tbody tr:hover { background: #F9FAFB; }
+.data-table tbody tr:hover { background: #F7FAFF; }
 .data-table tbody tr:last-child td { border-bottom: 0; }
 .data-table-check { width: 44px; }
 .data-table-idx { width: 48px; }
@@ -655,7 +790,71 @@ a { text-decoration: none; }
 .pill-status--danger  { background: var(--danger-bg);  color: var(--danger); }
 .pill-status--warning { background: var(--warning-bg); color: var(--warning); }
 .pill-status--muted   { background: #F3F4F6; color: var(--text-muted); }
-.pill-status--info    { background: #DBEAFE; color: var(--primary); }  /* e.g. "Sent to Tally" */
+/* Info pill sits on the brand tint like every other blue surface. */
+.pill-status--info    { background: var(--sidebar-active-bg); color: var(--primary); }
+
+/* ── Overlays: modals, dropdowns, toasts ────────────────────────────
+ * These were running on stock Bootstrap — square-ish corners, a heavy
+ * drop shadow and a grey divider under every header — so any dialog or
+ * menu looked like a different product from the page behind it. They now
+ * use the same 16px radius, hairline border and soft shadow as the cards. */
+.modal-content {
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 20px 48px rgba(16,24,40,.14);
+}
+.modal-header {
+    border-bottom: 1px solid var(--border);
+    padding: 18px 22px;
+}
+.modal-title { font-size: 16px; font-weight: 700; }
+.modal-body { padding: 22px; }
+.modal-footer {
+    border-top: 1px solid var(--border);
+    padding: 16px 22px;
+    gap: 10px;
+}
+.modal-footer .btn {
+    height: 44px; padding: 0 20px; margin: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 11px; font-weight: 600; font-size: 14px;
+}
+.modal-footer .btn-primary { background: var(--brand-gradient-btn); border: 0; }
+.modal-footer .btn-primary:hover { filter: brightness(1.08); background: var(--brand-gradient-btn); }
+.modal-backdrop.show { opacity: .45; }
+
+.dropdown-menu {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(16,24,40,.10);
+    padding: 6px;
+    font-size: 14px;
+}
+.dropdown-item {
+    border-radius: 8px;
+    padding: 9px 12px;
+    color: var(--text);
+}
+.dropdown-item:hover, .dropdown-item:focus { background: var(--sidebar-hover); color: var(--text); }
+/* The chosen row keeps the same tint as an active sidebar item, so "selected"
+   looks the same wherever it appears. */
+.dropdown-item.active, .dropdown-item:active {
+    background: var(--sidebar-active-bg);
+    color: var(--primary);
+    font-weight: 600;
+}
+.dropdown-header {
+    font-size: 11px; font-weight: 700; letter-spacing: .5px;
+    text-transform: uppercase; color: var(--sidebar-muted);
+    padding: 8px 12px 6px;
+}
+.dropdown-divider { border-color: var(--border); margin: 6px 4px; }
+
+.toast {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(16,24,40,.12);
+}
 
 /* Location pills */
 .pill-loc {
@@ -668,7 +867,7 @@ a { text-decoration: none; }
 .pill-loc i { font-size: 10px; opacity: .8; }
 .pill-loc--blue   { background: #EFF4FF; color: var(--primary); }
 .pill-loc--green  { background: #E6FAF0; color: #16A34A; }
-.pill-loc--purple { background: #F3EEFF; color: #6D28D9; }
+.pill-loc--purple { background: #E9F6EF; color: var(--brand-green-text); }
 .pill-loc--grey   { background: #F3F4F6; color: var(--text-muted); }
 
 /* Neutral badge pill */
@@ -693,19 +892,23 @@ a { text-decoration: none; }
 .pagination-info strong { color: var(--text); font-weight: 600; }
 .pagination-nav .page-link {
     color: var(--text);
-    border-color: var(--border);
+    border-color: #E4EAF2;
     font-size: 13px;
+    font-weight: 500;
     margin: 0 4px;
-    padding: 7px 12px;
-    border-radius: 8px !important;
-    min-width: 38px;
+    padding: 9px 13px;
+    border-radius: 10px !important;
+    min-width: 40px;
     text-align: center;
 }
-.pagination-nav .page-link:hover { background: #F3F4F6; color: var(--primary); }
+.pagination-nav .page-link:hover { background: var(--sidebar-active-bg); color: var(--primary); border-color: #D6E2FA; }
+/* The current page is the only filled chip in the row, so it is findable at a
+   glance on a register that may run to dozens of pages. */
 .pagination-nav .page-item.active .page-link {
     background: var(--primary);
     border-color: var(--primary);
     color: #fff;
+    font-weight: 600;
 }
 .pagination-nav .page-item.disabled .page-link { color: #C4C9D4; }
 
@@ -729,6 +932,7 @@ a { text-decoration: none; }
     font-weight: 600;
 }
 .form-card-body { padding: 24px; }
+.form-card, .card { border-radius: 16px; }
 
 /* Form grid (3-col responsive) */
 .form-grid {
@@ -739,17 +943,72 @@ a { text-decoration: none; }
 .form-group { display: flex; flex-direction: column; }
 .form-group.col-span-2 { grid-column: span 2; }
 .form-group.col-span-3 { grid-column: span 3; }
-.form-label { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.form-label { font-size: 13px; font-weight: 600; color: #344054; margin-bottom: 7px; }
 .form-label .req { color: var(--danger); margin-left: 2px; }
 .form-hint { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
-.form-control, .form-select { border-color: var(--border); font-size: 14px; }
+/* Read-only value on the voucher detail page. Same 44px block a field would
+   occupy, so a detail screen and its edit screen share one rhythm. */
+.vd-value {
+    min-height: 44px;
+    display: flex; align-items: center;
+    padding: 10px 0;
+    font-size: 14px; font-weight: 500;
+    color: var(--text);
+}
+/* A field is a 44px rounded box with a hairline edge. The height is the same
+   as the header/page-head controls, so a form reads as one rhythm rather than
+   a stack of differently-sized boxes; 44px is also a comfortable touch target,
+   which matters because this ships as an installable PWA. */
+.form-control, .form-select {
+    min-height: 44px;
+    border-color: #E4E7EC;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    color: var(--text);
+    background-color: #fff;
+}
+.form-control::placeholder { color: #98A2B3; }
+.form-control:hover, .form-select:hover { border-color: #D0D5DD; }
 .form-control:focus, .form-select:focus {
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(21,96,224,.12);
 }
+.form-control:disabled, .form-control[readonly] { background-color: #F9FAFB; color: var(--text-muted); }
+/* Compact variant for grid rows (line items), where 44px would be too tall. */
+.form-control-sm, .form-select-sm { min-height: 38px; padding: 6px 10px; border-radius: 9px; font-size: 13px; }
+/* Line-item grids carry a dozen fields per ROW, so they take the compact size
+   automatically — the markup uses a plain .form-control and should not have to
+   remember a modifier on every cell.
+
+   Sized down from 13px/38px: eleven columns at the old size pushed the grid
+   past the viewport, so Qty and Rate were clipped to a couple of characters
+   and a selected item's quantity was unreadable. */
+.li-table td .form-control, .li-table td .form-select,
+.q-table td .form-control,  .q-table td .form-select,
+.li-row .form-control,      .li-row .form-select {
+    min-height: 34px; padding: 5px 8px; border-radius: 8px; font-size: 12.5px;
+}
 
 .form-grid--3col { grid-template-columns: repeat(3, 1fr); }
 .form-grid-span-3 { grid-column: span 3; }
+/* An address or terms box needs the room a single cell does not give it. */
+.form-grid-span-2 { grid-column: span 2; }
+
+/* Advanced Settings is four labelled blocks (Buyer / Consignee / Dispatch /
+   Order), not one long field soup — the headings are what make it scannable. */
+.q-adv-title {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--primary); margin: 18px 0 10px;
+}
+.q-adv-title:first-of-type { margin-top: 4px; }
+.q-adv-copy {
+    border: 1px solid var(--border); background: #fff; color: var(--text-muted);
+    border-radius: 7px; padding: 3px 10px; font-size: 11px; font-weight: 600;
+    text-transform: none; letter-spacing: 0; cursor: pointer;
+}
+.q-adv-copy:hover { border-color: var(--primary); color: var(--primary); }
 
 /* Add Customer modal (quotations/create.ejs) — wide, two titled sections,
    three columns each, instead of the old cramped single-column stack. */
@@ -853,11 +1112,41 @@ select.affix {
 .same-as-label { font-size: 13px; color: var(--text-muted); display: inline-flex; align-items: center; gap: 6px; }
 
 /* card footer (form actions) */
+/* Footer action bar. The commit button is the only gradient on the card, so
+   it is unmistakably the thing that submits; Cancel stays a white chip beside
+   it, matching the page-head's secondary treatment. Buttons match the 44px
+   field height so the whole form sits on one rhythm. */
 .form-card-footer {
-    display: flex; justify-content: flex-end; gap: 12px;
+    display: flex; justify-content: flex-end; align-items: center; gap: 12px;
     padding: 18px 24px;
     border-top: 1px solid var(--border);
     background: #FCFCFD;
+    border-radius: 0 0 16px 16px;
+}
+.form-card-footer .btn {
+    height: 44px; padding: 0 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 11px; font-weight: 600; font-size: 14px;
+}
+.form-card-footer .btn-light { background: #fff; border-color: #E4EAF2; }
+.form-card-footer .btn-light:hover { background: #F5F7FB; border-color: #D0D5DD; }
+/* The submit button is marked up as .btn-primary on most voucher pages; give
+   it the brand gradient so pages do not each have to remember .btn-gradient. */
+.form-card-footer .btn-primary {
+    background: var(--brand-gradient-btn);
+    border: 0;
+    box-shadow: 0 4px 12px rgba(21,96,224,.24);
+}
+.form-card-footer .btn-primary:hover { filter: brightness(1.08); background: var(--brand-gradient-btn); }
+/* A "Reset"-style action anchored to the far left of the same bar. */
+.form-card-footer .btn-reset { margin-right: auto; color: var(--primary); background: #fff; border: 1px solid #E4EAF2; }
+.form-card-footer .btn-reset:hover { background: var(--sidebar-active-bg); }
+
+@media (max-width: 575.98px) {
+    /* Phone: full-width stacked actions, thumb-sized. */
+    .form-card-footer { flex-wrap: wrap; padding: 16px; }
+    .form-card-footer .btn { flex: 1 1 100%; }
+    .form-card-footer .btn-reset { margin-right: 0; order: 3; }
 }
 
 /* Placeholder pane for not-yet-built tabs */
@@ -888,17 +1177,19 @@ select.affix {
 .stat-card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 16px;
     box-shadow: var(--shadow);
-    padding: 18px;
+    padding: 20px;
+    transition: border-color .15s, box-shadow .15s;
     display: flex;
     flex-direction: column;
     gap: 12px;
 }
+.stat-card:hover { border-color: #DCE4EF; box-shadow: 0 4px 14px rgba(16,24,40,.06); }
 .stat-card-top { display: flex; align-items: center; justify-content: space-between; }
 .stat-icon {
     width: 46px; height: 46px;
-    border-radius: 12px;
+    border-radius: 13px;
     display: grid; place-items: center;
     font-size: 18px;
 }
@@ -924,7 +1215,7 @@ select.affix {
 .kpi-panel {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: 16px;
     box-shadow: var(--shadow);
     overflow: hidden;
 }
@@ -951,11 +1242,12 @@ select.affix {
 }
 .kpi-tile {
     background: var(--card);
-    padding: 13px 16px;
+    padding: 14px 16px;
     display: block;
     text-decoration: none;
     color: inherit;
     min-height: 70px;
+    transition: background .15s;
     transition: background .12s ease;
 }
 a.kpi-tile:hover { background: #F9FAFB; }
@@ -965,6 +1257,9 @@ a.kpi-tile:hover { background: #F9FAFB; }
     text-transform: uppercase; color: var(--text-muted);
     margin-bottom: 6px;
 }
+/* Every tile navigates somewhere, so it needs to answer a hover. */
+.kpi-tile:hover { background: #F7FAFF; color: inherit; }
+.kpi-tile:hover .kpi-tile-chevron { color: var(--primary); }
 .kpi-tile-label-text { display: inline-flex; align-items: center; gap: 6px; }
 .kpi-tile-lock { font-size: 12px; color: var(--text-muted); }
 .kpi-tile-chevron { font-size: 13px; color: #9CA3AF; flex: 0 0 auto; }
@@ -1042,7 +1337,8 @@ a.kpi-tile:hover { background: #F9FAFB; }
 
 /* Row-2 cards: tighter padding + a shorter bar chart than the generic
    .chart-card, so both panels stay close to the reference's height. */
-.chart-card--sr, .chart-card--recv { padding: 16px; display: flex; flex-direction: column; }
+.chart-card { border-radius: 16px; }
+.chart-card--sr, .chart-card--recv { padding: 18px; display: flex; flex-direction: column; }
 .chart-card--sr .chart-card-canvas-wrap { height: 205px; }
 .chart-card--sr .chart-card-head, .chart-card--recv .chart-card-head { margin-bottom: 12px; }
 .chart-card--sr .sr-footer, .chart-card--recv .sr-footer { margin-top: auto; }
@@ -1335,6 +1631,14 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
     .app-main { margin-left: 0; }
     .topbar-hamburger { display: grid; }
     .topbar-search { max-width: none; }
+
+    /* Banner masthead on a phone: tighter box, and the actions stack to full
+       width underneath the title instead of being squeezed beside it. A 42px
+       target stays thumb-sized, which is the point of the PWA install. */
+    .page-head { padding: 16px; border-radius: 14px; align-items: flex-start; }
+    .page-title { font-size: 20px; }
+    .page-head-actions { width: 100%; }
+    .page-head-actions .btn { flex: 1 1 auto; }
     .topbar-search-kbd { display: none; }
     .topbar-company-name { display: none; }
 
@@ -1387,18 +1691,22 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
 .li-table { width: 100%; min-width: 920px; border-collapse: collapse; }
 .li-table thead th {
     background: #F9FAFB; color: var(--text-muted);
-    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
-    padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border);
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    padding: 13px 10px; text-align: left; border-bottom: 1px solid var(--border);
     white-space: nowrap;
 }
-.li-table tbody td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+/* The item column is where every row starts, so it is the one header that is
+   brand-coloured — a reading anchor, not decoration. */
+.li-table thead th:first-child { color: var(--primary); }
+.li-table tbody td { padding: 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .li-table .num { text-align: right; }
 .li-table .center { text-align: center; }
 .li-table .li-idx { color: var(--text-muted); font-size: 13px; width: 34px; text-align: center; }
 .li-table input, .li-table select {
-    width: 100%; border: 1px solid var(--border); border-radius: 8px;
-    padding: 7px 9px; font-size: 13px; background: #fff; color: var(--text);
+    width: 100%; border: 1px solid #E4E7EC; border-radius: 9px;
+    padding: 9px 11px; font-size: 13px; background: #fff; color: var(--text);
 }
+.li-table input:hover, .li-table select:hover { border-color: #D0D5DD; }
 .li-table input:focus, .li-table select:focus {
     outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(21,96,224,.12);
 }
@@ -1420,7 +1728,7 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
 
 /* Invoice footer: notes (left) + totals (right) */
 .inv-foot { display: grid; grid-template-columns: 1fr 360px; gap: 24px; padding: 20px; }
-.inv-totals { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.inv-totals { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: #fff; }
 .inv-total-row {
     display: flex; align-items: center; justify-content: space-between;
     padding: 11px 16px; font-size: 14px; border-bottom: 1px solid var(--border);
@@ -1428,8 +1736,9 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
 .inv-total-row .lbl { color: var(--text-muted); }
 .inv-total-row .val { font-weight: 600; color: var(--text); }
 .inv-total-row.grand {
-    background: linear-gradient(135deg, rgba(21,96,224,.06), rgba(109,40,217,.06));
+    background: var(--sidebar-active-bg);
     border-bottom: 0;
+    padding: 14px 16px;
 }
 .inv-total-row.grand .lbl { color: var(--text); font-weight: 700; font-size: 15px; }
 .inv-total-row.grand .val { color: var(--primary); font-weight: 800; font-size: 18px; }
@@ -1508,7 +1817,7 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
     padding: 16px 18px; text-decoration: none; color: inherit;
     transition: border-color .15s, box-shadow .15s, transform .15s;
 }
-.report-card:hover { border-color: #C7D2FE; box-shadow: var(--shadow); transform: translateY(-2px); color: inherit; }
+.report-card:hover { border-color: #D6E2FA; box-shadow: var(--shadow); transform: translateY(-2px); color: inherit; }
 .report-card-icon {
     width: 44px; height: 44px; border-radius: 12px; flex: 0 0 auto;
     display: grid; place-items: center; font-size: 18px;
@@ -1518,7 +1827,7 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
 .report-card-icon--teal   { background: #CCFBF1; color: #0D9488; }
 .report-card-icon--green  { background: var(--success-bg); color: var(--success); }
 .report-card-icon--amber  { background: var(--warning-bg); color: var(--warning); }
-.report-card-icon--indigo { background: #E0E7FF; color: #4F46E5; }
+.report-card-icon--indigo { background: #E0E7FF; color: var(--primary); }
 .report-card-body { flex: 1; min-width: 0; }
 .report-card-title { font-size: 14px; font-weight: 600; color: var(--text); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .report-card-title .fa-arrow-right { color: var(--text-muted); font-size: 12px; transition: transform .15s; }
@@ -1553,7 +1862,7 @@ body.is-offline .offline-indicator[hidden] { display: inline-flex !important; }
     border: 1px solid var(--border); border-radius: 12px; background: #fff;
     padding: 12px 16px; min-width: 190px; transition: all .15s;
 }
-.rbac-role-chip:hover { border-color: #C7D2FE; }
+.rbac-role-chip:hover { border-color: #D6E2FA; }
 .rbac-role-chip input { position: absolute; opacity: 0; pointer-events: none; }
 .rbac-role-chip-icon {
     width: 38px; height: 38px; border-radius: 10px; flex: 0 0 auto;
@@ -1694,32 +2003,67 @@ a.action-btn { text-decoration: none; }
  * ════════════════════════════════════════════════════════════════ */
 
 /* Full-width header bar — our primary/accent gradient, not LiveKeeping's green. */
+/* Quiet section header. It used to be a saturated blue→green bar, which now
+   competes with the page-head banner directly above it AND with the primary
+   button — three gradients stacked. The page head names the screen; this only
+   has to label the card. */
+/* The voucher masthead. Create pages have NO .page-head — this bar IS their
+   page head, so it gets the same white-to-mint wash: one masthead language
+   across list pages and create pages.
+   It used to be a saturated blue-to-green bar with white-on-translucent
+   controls sitting on it. Those controls are restyled for a LIGHT bar below
+   (and in each page's local <style>); leaving them white would make the back
+   arrow and the "View <list>" button invisible. */
 .voucher-head {
-    padding: 14px 20px;
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
-    color: #fff;
-    font-size: 15px;
+    padding: 20px 24px;
+    background: linear-gradient(100deg, #FFFFFF 0%, #F5FBF8 52%, #E9F6EF 100%);
+    color: var(--text);
+    font-size: 22px;
     font-weight: 700;
-    letter-spacing: .2px;
-    border-radius: var(--radius) var(--radius) 0 0;
+    letter-spacing: -.2px;
+    border-bottom: 1px solid #E8EFF6;
+    border-radius: 16px 16px 0 0;
 }
+/* Back chip and list button, sized for the light bar. */
+.voucher-head .q-back {
+    color: var(--text) !important;
+    background: #fff !important;
+    border: 1px solid #E4EAF2;
+    width: 32px !important; height: 32px !important;
+    border-radius: 9px !important;
+}
+.voucher-head .q-back:hover { background: #F5F7FB !important; color: var(--primary) !important; }
+.voucher-head .q-list-btn {
+    color: #fff !important;
+    background: var(--brand-gradient-btn) !important;
+    border: 0 !important;
+    padding: 10px 18px !important;
+    border-radius: 11px !important;
+    font-size: 14px !important;
+    box-shadow: 0 4px 12px rgba(21,96,224,.24);
+}
+.voucher-head .q-list-btn:hover { color: #fff !important; filter: brightness(1.05); }
 
 /* Items grid — same visual language as .li-table, its own class because the
  * column set (Godown / Tax Incl.) differs from the invoice grid. */
 .q-table { width: 100%; min-width: 980px; border-collapse: collapse; }
 .q-table thead th {
     background: #F9FAFB; color: var(--text-muted);
-    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
-    padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--border);
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    padding: 10px 7px; text-align: left; border-bottom: 1px solid var(--border);
     white-space: nowrap;
 }
-.q-table tbody td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+/* The item column is where every row starts, so it is the one header that is
+   brand-coloured — a reading anchor, not decoration. */
+.q-table thead th:first-child { color: var(--primary); }
+.q-table tbody td { padding: 7px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .q-table .num { text-align: right; }
 .q-table .center { text-align: center; }
 .q-table input, .q-table select {
-    width: 100%; border: 1px solid var(--border); border-radius: 8px;
-    padding: 7px 9px; font-size: 13px; background: #fff; color: var(--text);
+    width: 100%; border: 1px solid #E4E7EC; border-radius: 8px;
+    padding: 6px 8px; font-size: 12.5px; background: #fff; color: var(--text);
 }
+.q-table input:hover, .q-table select:hover { border-color: #D0D5DD; }
 .q-table input:focus, .q-table select:focus {
     outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(21,96,224,.12);
 }
@@ -1729,17 +2073,25 @@ a.action-btn { text-decoration: none; }
 .q-table td:nth-child(7),
 .q-table td:nth-child(8) { min-width: 140px; }
 .q-del {
-    border: 1px solid var(--border); background: #fff; color: var(--danger);
-    width: 32px; height: 32px; border-radius: 8px; display: inline-grid; place-items: center;
+    border: 0; background: transparent; color: var(--danger);
+    width: 34px; height: 34px; border-radius: 9px; display: inline-grid; place-items: center;
 }
-.q-del:hover { background: var(--danger-bg); border-color: var(--danger); }
+.q-del:hover { background: var(--danger-bg); }
+/* Add-row control: a solid tinted chip. The dashed outline read as an empty
+   drop zone rather than a button you press. */
 .q-add-btn {
-    border: 1px dashed var(--primary); color: var(--primary); background: rgba(21,96,224,.04);
-    width: 30px; height: 30px; border-radius: 8px; display: inline-grid; place-items: center;
+    border: 0; color: var(--primary); background: var(--sidebar-active-bg);
+    width: 34px; height: 34px; border-radius: 9px; display: inline-grid; place-items: center;
 }
-.q-add-btn:hover { background: rgba(21,96,224,.1); }
+.q-add-btn:hover { background: #DCE8FD; }
 
 /* Quotation No — readonly text + a pencil button that unlocks it for editing. */
+/* The chosen party's standing, under the picker — small and muted, because it
+   is context for the decision, not a field being edited. */
+.q-party-balance {
+    margin-top: 5px; font-size: 11.5px; font-weight: 600; color: var(--text-muted);
+}
+
 .q-no-wrap { display: flex; align-items: center; gap: 8px; position: relative; }
 .q-no-wrap .form-control { flex: 1 1 auto; }
 .q-no-edit {

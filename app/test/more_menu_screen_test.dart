@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:tallysaas_app/app/app_menu.dart';
 import 'package:tallysaas_app/core/auth/session.dart';
 import 'package:tallysaas_app/data/models/user.dart';
 import 'package:tallysaas_app/features/menu/more_menu_screen.dart';
@@ -26,17 +27,23 @@ void main() {
     expect(find.text('Tally Sync'), findsNothing);
   });
 
-  testWidgets('an unbuilt module renders a Soon tag', (tester) async {
-    // GPS Tracking is the one menu item with no app screen — the API exposes it
-    // only under /super-admin. It is adminOnly, hence the edit grant.
-    const user = AppUser(
-      id: 1, name: 'T', email: 't@t.com', role: 'R', roleSlug: 'r',
-      permissions: ['gps-tracking.edit'],
-    );
-    await tester.pumpWidget(_app(user));
+  testWidgets('a tile with no screen yet renders a Soon tag', (tester) async {
+    // Every shipped menu entry now has a screen, so the affordance is proved
+    // against a tile built directly — it must keep working for the next module
+    // that lands in the menu before its screen does.
+    await tester.pumpWidget(const MaterialApp(
+      home: Scaffold(
+        body: MenuEntryTile(MenuEntry(
+          key: 'not-built-yet',
+          label: 'Future Module',
+          icon: Icons.science_outlined,
+          module: 'future',
+        )),
+      ),
+    ));
     await tester.pumpAndSettle();
 
-    expect(find.text('GPS Tracking'), findsOneWidget);
+    expect(find.text('Future Module'), findsOneWidget);
     expect(find.text('Soon'), findsOneWidget);
   });
 

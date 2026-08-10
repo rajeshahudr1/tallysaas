@@ -27,9 +27,17 @@ module.exports = {
     shortName: 'Teloora',
     // One-line description (meta description + PWA description).
     tagline:   'Connected Accounting',
-    // The single logo image (favicon + any <img> logo). Replace the file to swap.
+    // The square logo mark (favicon + sidebar chip). Replace the file to swap.
     logo:      '/img/logo.svg',
-    // The brand chip's Font Awesome icon class (login + sidebar badge).
+    // Same mark as a raster, for places that can't render SVG.
+    logoMark:  '/img/logo-mark.png',
+    // The full lock-up (wordmark + tagline) — login / forgot / PDF letterhead,
+    // i.e. anywhere it renders big enough for the tagline to be readable.
+    logoFull:  '/img/logo-full.png',
+    // Wordmark only, no tagline. For tight chrome like the sidebar header,
+    // where dropping the strapline lets the name itself run much larger.
+    logoWordmark: '/img/logo-wordmark.png',
+    // Fallback Font Awesome icon, used only if the logo image fails to load.
     iconClass: 'fa-solid fa-diagram-project',
     // Primary accent (chip gradient / theme). One knob for the brand colour.
     color:     '#1560E0',
@@ -41,5 +49,15 @@ module.exports = {
         blue:     '#1560E0',
         green:    '#45B649',
         gradient: 'linear-gradient(135deg, #1560E0, #45B649)',
+    },
+    // UI theme knobs derived from the logo. These are emitted as CSS custom
+    // properties by web/views/partials/brand-vars.ejs (included on every page,
+    // after theme.css) so the whole UI follows the logo from this one place.
+    theme: {
+        primary:     '#1560E0',  // logo blue  → buttons, links, active states
+        primaryDark: '#0F4CB8',  // hover/pressed shade of the blue
+        secondary:   '#45B649',  // logo green → gradient end, accents
+        // NOTE: the sidebar's own colours are NOT here. They are app chrome,
+        // not brand identity, and live in theme.css (--sidebar-bg and friends).
     },
 };

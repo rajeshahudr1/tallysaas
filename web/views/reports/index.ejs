@@ -23,6 +23,17 @@ var _groups = (typeof reportGroups !== 'undefined' && reportGroups) ? reportGrou
     actions: '',
 }) %>
 
+<%# Your everyday reports, pinned above the catalogue. Hidden until the
+    script runs — the strip is built from localStorage, and rendering an
+    empty "Favourites" heading server-side would flash on every load. %>
+<section class="report-group" id="report-favourites" hidden>
+    <h2 class="report-group-title">Favourites</h2>
+    <div class="report-grid" id="report-favourites-grid"></div>
+    <p class="report-fav-empty" id="report-favourites-empty">
+        Star any report below to pin it here.
+    </p>
+</section>
+
 <% _groups.forEach(function (g) { %>
     <section class="report-group">
         <h2 class="report-group-title"><%= g.group %></h2>
@@ -39,8 +50,26 @@ var _groups = (typeof reportGroups !== 'undefined' && reportGroups) ? reportGrou
                         </span>
                         <span class="report-card-desc"><%= r.desc %></span>
                     </span>
+                    <%# A button, not a link: it changes a preference rather
+                        than going anywhere. Rendered for every card so the
+                        script has nothing to inject. %>
+                    <button type="button" class="report-star" aria-pressed="false"
+                            title="Add to Favourites" aria-label="Add to Favourites">
+                        <i class="fa-regular fa-star"></i>
+                    </button>
                 </a>
             <% }); %>
         </div>
     </section>
 <% }); %>
+
+<style>
+    .report-card { position: relative; }
+    .report-star { position:absolute; top:8px; right:8px; width:28px; height:28px;
+                   display:inline-flex; align-items:center; justify-content:center;
+                   border:none; border-radius:8px; background:transparent; cursor:pointer;
+                   color:#cbd5e1; font-size:.9rem; line-height:1; }
+    .report-star:hover { background:#f1f5f9; color:#f59e0b; }
+    .report-card.is-starred .report-star { color:#f59e0b; }
+    .report-fav-empty { margin:2px 0 0; font-size:.84rem; color:var(--muted, #64748b); }
+</style>

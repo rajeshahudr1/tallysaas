@@ -45,18 +45,35 @@ import brand
 # product's face, the dashboard behind it is the product's instrument.
 # BLUE is pulled from agent/brand.py so the sign-in screen matches the logo.
 # --------------------------------------------------------------------------- #
-BLUE        = brand.COLORS["blue"]
-BLUE_DEEP   = "#1d4ed8"
-BLUE_LIGHT  = "#3b82f6"
-BLUE_WASH   = "#eff5ff"
-BLUE_TINT   = "#e8f0fe"
-INK         = "#0f2d52"   # headings
-BODY        = "#41597a"   # body copy, labels
-MUTED       = "#7d93b0"
-LINE        = "#e3eaf4"
-FIELD_LINE  = "#d7e0ee"
+# Every value below is a WEB token (web/public/css/theme.css :root), so this
+# screen cannot drift from the browser app. It previously ran its own
+# "cloud blue" palette, which is why the two products stopped matching.
+BLUE        = brand.COLORS["blue"]   # --primary   #1560E0
+BLUE_DEEP   = "#0F4CB8"   # --primary-700
+BLUE_LIGHT  = "#5B7FD4"   # --sidebar-icon (tinted iconography)
+BLUE_WASH   = "#EFF4FF"   # --tone-blue-bg
+BLUE_TINT   = "#EAF1FE"   # --sidebar-active-bg
+INK         = "#101828"   # --text
+BODY        = "#344054"   # --sidebar-text (labels, body copy)
+MUTED       = "#667085"   # --text-muted  (4.97:1 on white)
+LINE        = "#E9EDF3"   # --border
+FIELD_LINE  = "#E4E7EC"   # input border
 WHITE       = "#ffffff"
-GREEN       = "#16a34a"
+GREEN       = "#166534"   # green that is legible AS TEXT (7.1:1 on white)
+
+# THE PRIMARY ACTION'S GRADIENT — the logo's blue->green, and the same pair the
+# web app fills its .btn-gradient with (--brand-gradient-btn). The logo's own
+# green (#45B649) ends too light to carry white text, so the button's end is the
+# deepened green the web uses for exactly that reason. Every state below is a
+# shade of this one pair; nothing else in the app may invent another.
+GRAD_A       = BLUE       # #1560E0
+GRAD_B       = "#217A3B"  # --brand-gradient-btn end
+GRAD_A_HOVER = BLUE_DEEP  # #0F4CB8
+GRAD_B_HOVER = "#1A5F2E"
+GRAD_A_PRESS = "#0C3E96"
+GRAD_B_PRESS = "#154E26"
+GRAD_A_OFF   = "#a9c3ee"  # disabled: the same pair, drained
+GRAD_B_OFF   = "#a8c8b2"
 
 FACE = "Segoe UI"
 
@@ -104,6 +121,33 @@ def apply_icon(win) -> None:
             win.iconbitmap(path)
     except Exception:
         pass
+
+
+# The product mark (the gradient "T"), pre-rendered from app_icon.ico at the
+# exact pixel sizes the UI asks for. Tk's PhotoImage can only scale by whole
+# integers, so a single master would come out soft at 38px and 44px — the two
+# sizes that actually appear. Add a size here AND ship the matching PNG (see
+# build_exe.py's asset list) before using it.
+MARK_SIZES = (38, 44)
+_marks: dict[int, "tk.PhotoImage"] = {}   # kept forever; Tk drops unreferenced images
+
+
+def mark_image(px: int):
+    """The brand mark at ``px``, or None if it is not shipped in this build.
+
+    Every caller must cope with None: a build stripped of the artwork still has
+    to draw its window, just without the logo.
+    """
+    if px in _marks:
+        return _marks[px]
+    try:
+        path = asset(f"logo_mark_{px}.png")
+        if not path:
+            return None
+        _marks[px] = tk.PhotoImage(file=path)
+        return _marks[px]
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -343,7 +387,11 @@ class Panel:
         y = self.y
         cx = self.cx1 + 26
         self.cv.create_oval(cx - 26, y - 4, cx + 26, y + 48, fill=BLUE_TINT, outline="")
-        icon(self.cv, "cloud", cx, y + 18, color=BLUE, size=26)
+        logo = mark_image(44)
+        if logo:
+            self.cv.create_image(cx, y + 22, image=logo)
+        else:
+            icon(self.cv, "cloud", cx, y + 18, color=BLUE, size=26)
         # The small green padlock badge: this is a *secure* connection, said in
         # the one place the eye already is.
         self.cv.create_oval(cx + 10, y + 26, cx + 28, y + 44, fill=GREEN, outline=WHITE, width=2)
@@ -539,7 +587,7 @@ class Panel:
         ty = top + 15
         for line in lines:
             self.cv.create_text(self.cx1 + 42, ty, text=line, anchor="w",
-                                font=(FACE, 9), fill="#1e4b8f")
+                                font=(FACE, 9), fill=BODY)
             ty += 17
         self.y = top + h + 14
 
@@ -677,8 +725,8 @@ class Dialog:
         cv.pack(fill="both", expand=True)
 
         tone, glyph = {
-            "error":   ("#dc2626", "alert"),
-            "warning": ("#d97706", "alert"),
+            "error":   ("#B23A2E", "alert"),
+            "warning": ("#C07C1E", "alert"),
             "success": (GREEN, "check"),
             "info":    (BLUE, "info"),
         }.get(kind, (BLUE, "info"))
@@ -813,7 +861,7 @@ class Status:
     def set(self, text: str, error: bool = False) -> None:
         try:
             self.cv.itemconfigure(self.item, text=text,
-                                  fill="#b91c1c" if error else MUTED)
+                                  fill="#B23A2E" if error else MUTED)
         except Exception:
             pass
 
@@ -856,7 +904,7 @@ class Button:
         self._spin_job = None
         self._angle = 0
         self._build()
-        self._paint(BLUE, BLUE_LIGHT)
+        self._paint(GRAD_A, GRAD_B)
         cv.tag_bind(self.tag, "<Enter>", self._enter)
         cv.tag_bind(self.tag, "<Leave>", self._leave)
         cv.tag_bind(self.tag, "<Button-1>", self._press)
@@ -865,7 +913,7 @@ class Button:
     # -- construction (runs exactly once) ------------------------------------ #
     def _build(self) -> None:
         x1, y1, x2, y2 = self.box
-        gradient_rect(self.cv, x1, y1, x2, y2, 10, BLUE, BLUE_LIGHT, self.tag)
+        gradient_rect(self.cv, x1, y1, x2, y2, 10, GRAD_A, GRAD_B, self.tag)
         # The gradient's own lines, in x order — recoloured left-to-right later.
         self._lines = list(self.cv.find_withtag(self.tag))
         mid_y = (y1 + y2) / 2
@@ -934,23 +982,23 @@ class Button:
     # -- states -------------------------------------------------------------- #
     def _enter(self, _e=None):
         if self.state == "normal":
-            self._paint(BLUE_DEEP, BLUE)
+            self._paint(GRAD_A_HOVER, GRAD_B_HOVER)
             self.cv.configure(cursor="hand2")
 
     def _leave(self, _e=None):
         self.cv.configure(cursor="")
         if self.state == "normal":
-            self._paint(BLUE, BLUE_LIGHT)
+            self._paint(GRAD_A, GRAD_B)
 
     def _press(self, _e=None):
         if self.state == "normal":
-            self._paint("#1a41b8", BLUE_DEEP)
+            self._paint(GRAD_A_PRESS, GRAD_B_PRESS)
 
     def _release(self, _e=None):
         # "busy" and "disabled" both mean: this click is not a second job.
         if self.state != "normal":
             return
-        self._paint(BLUE_DEEP, BLUE)
+        self._paint(GRAD_A_HOVER, GRAD_B_HOVER)
         try:
             self.command()
         except Exception:
@@ -972,7 +1020,7 @@ class Button:
         if text:
             self.text = text
         self.state = "busy"
-        self._paint("#5b8ff0", "#7aa6f5")
+        self._paint(GRAD_A, GRAD_B)
         if self._spinner is None:
             x1, y1, x2, y2 = self.box
             # Left of the label, where the icon sits on the idle button.
@@ -1029,6 +1077,6 @@ class Button:
             self.state = "normal" if state == "normal" else "disabled"
         self._stop_spin()
         if self.state == "normal":
-            self._paint(BLUE, BLUE_LIGHT)
+            self._paint(GRAD_A, GRAD_B)
         else:
-            self._paint("#a9c3ee", "#bcd2f4", fg="#f2f6fd")
+            self._paint(GRAD_A_OFF, GRAD_B_OFF, fg="#f2f6fd")

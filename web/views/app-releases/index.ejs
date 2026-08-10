@@ -105,7 +105,7 @@ var _auto    = (typeof autoUpdate !== 'undefined') ? !!autoUpdate : true;
                             <label class="form-label" for="ap-version">Version<span class="req">*</span></label>
                             <input type="text" class="form-control" id="ap-version" name="version"
                                    placeholder="e.g. 1.0.1" pattern="[A-Za-z0-9._-]+" required>
-                            <div class="form-hint">Shown to users. Saved as <code>TallyCloudSync-&lt;version&gt;.apk</code>.</div>
+                            <div class="form-hint">Shown to users. Saved as <code><%= brand.shortName %>-&lt;version&gt;.apk</code>.</div>
                         </div>
                         <div class="col-5 form-group mb-3">
                             <label class="form-label" for="ap-code">Build no.<span class="req">*</span></label>

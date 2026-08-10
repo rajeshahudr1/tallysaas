@@ -22,7 +22,9 @@ class GradientButton extends StatelessWidget {
       opacity: onPressed == null ? 0.5 : 1,
       child: DecoratedBox(
         decoration: BoxDecoration(
-          gradient: AppGradients.brand,
+          // brandButton, not brand: this is a FILLED button with a white label,
+          // and the logo green cannot carry white text.
+          gradient: AppGradients.brandButton,
           borderRadius: BorderRadius.circular(AppRadius.md12),
         ),
         child: Material(

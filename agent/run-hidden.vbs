@@ -2,7 +2,7 @@
 ' run-hidden.vbs — launch the Teloora agent with NO console
 ' window, in the current user's session, then exit. The agent keeps
 ' running in the background until it is stopped. Must sit next to
-' TallyCloudSyncAgent.exe (or one folder above a dist\ subfolder).
+' TelooraAgent.exe (or one folder above a dist\ subfolder).
 ' ─────────────────────────────────────────────────────────────
 Option Explicit
 Dim sh, fso, here, exe
@@ -10,8 +10,8 @@ Set sh  = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 here = fso.GetParentFolderName(WScript.ScriptFullName)
 
-exe = here & "\TallyCloudSyncAgent.exe"
-If Not fso.FileExists(exe) Then exe = here & "\dist\TallyCloudSyncAgent.exe"
+exe = here & "\TelooraAgent.exe"
+If Not fso.FileExists(exe) Then exe = here & "\dist\TelooraAgent.exe"
 
 If fso.FileExists(exe) Then
     sh.CurrentDirectory = fso.GetParentFolderName(exe)

@@ -56,6 +56,7 @@ class _SalesOrdersScreenState extends ConsumerState<SalesOrdersScreen> {
     return ModuleListScaffold<SalesOrder>(
       title: 'Sales Orders',
       infoKey: 'sales-orders',
+      registerBasePath: '/sales-orders',
       searchHint: 'Search by order no, customer…',
       emptyMessage: 'No sales orders yet.',
       emptyIcon: Icons.shopping_cart_outlined,

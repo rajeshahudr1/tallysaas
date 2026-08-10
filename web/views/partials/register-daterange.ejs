@@ -1,0 +1,103 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/register-daterange.ejs — the period a register is showing.
+ *
+ * LiveKeeping puts this on every register: the range itself, plus a back and
+ * forward arrow that step by exactly the length of the range you are on. The
+ * grouped register had no period control at all — you could only change the
+ * dates by hand-editing the URL, so a grouping always showed whatever range
+ * you happened to arrive with.
+ *
+ * Locals:
+ *   basePath  '/sales-invoices'  — where the form posts back to
+ *   dateFrom  'YYYY-MM-DD' or ''
+ *   dateTo    'YYYY-MM-DD' or ''
+ *   keep      { by, mode, … }    — querystring keys to carry through, so
+ *                                  changing the period never drops the
+ *                                  grouping you are looking at
+ * ─────────────────────────────────────────────────────────── */
+var _base = (typeof basePath !== 'undefined' && basePath) ? basePath : '';
+var _from = (typeof dateFrom !== 'undefined' && dateFrom) ? String(dateFrom) : '';
+var _to   = (typeof dateTo   !== 'undefined' && dateTo)   ? String(dateTo)   : '';
+var _keep = (typeof keep !== 'undefined' && keep) ? keep : {};
+
+function _qs(extra) {
+    var parts = [];
+    Object.keys(_keep).forEach(function (k) {
+        if (_keep[k] != null && _keep[k] !== '') parts.push(k + '=' + encodeURIComponent(_keep[k]));
+    });
+    Object.keys(extra || {}).forEach(function (k) {
+        if (extra[k] != null && extra[k] !== '') parts.push(k + '=' + encodeURIComponent(extra[k]));
+    });
+    return parts.length ? '?' + parts.join('&') : '';
+}
+
+/* Step the whole window back or forward by its own length. A month-long range
+   moves a month; a week moves a week. Both bounds are needed to know the
+   length, so the arrows are only offered once a range is actually set. */
+function _shift(dir) {
+    if (!_from || !_to) return null;
+    // Parsed and formatted in UTC throughout. Parsing as LOCAL midnight and
+    // then calling toISOString() shifts the date back a day east of Greenwich
+    // — in IST every arrow silently lost 24 hours.
+    var f = new Date(_from + 'T00:00:00Z');
+    var t = new Date(_to + 'T00:00:00Z');
+    if (isNaN(f) || isNaN(t)) return null;
+    var span = Math.round((t - f) / 86400000) + 1;   // inclusive of both ends
+    var nf = new Date(f.getTime() + dir * span * 86400000);
+    var nt = new Date(t.getTime() + dir * span * 86400000);
+    var iso = function (d) { return d.toISOString().slice(0, 10); };
+    return _qs({ date_from: iso(nf), date_to: iso(nt) });
+}
+var _prev = _shift(-1);
+var _next = _shift(1);
+%>
+
+<form class="reg-daterange" method="get" action="<%= _base %>">
+    <% Object.keys(_keep).forEach(function (k) {
+        if (_keep[k] == null || _keep[k] === '') return; %>
+        <input type="hidden" name="<%= k %>" value="<%= _keep[k] %>">
+    <% }); %>
+
+    <%# Arrows only appear once there is a range to step. Showing them on an
+        open-ended period would be a control that cannot do anything. %>
+    <% if (_prev) { %>
+        <a class="reg-dr-step" href="<%= _base %><%= _prev %>" title="Previous period" aria-label="Previous period">
+            <i class="fa-solid fa-chevron-left"></i>
+        </a>
+    <% } %>
+
+    <label class="reg-dr-field">
+        <span>From</span>
+        <input type="date" name="date_from" value="<%= _from %>">
+    </label>
+    <label class="reg-dr-field">
+        <span>To</span>
+        <input type="date" name="date_to" value="<%= _to %>">
+    </label>
+
+    <button type="submit" class="reg-dr-apply">Apply</button>
+    <% if (_from || _to) { %>
+        <a class="reg-dr-clear" href="<%= _base %><%= _qs({}) %>">Clear</a>
+    <% } %>
+
+    <% if (_next) { %>
+        <a class="reg-dr-step" href="<%= _base %><%= _next %>" title="Next period" aria-label="Next period">
+            <i class="fa-solid fa-chevron-right"></i>
+        </a>
+    <% } %>
+</form>
+
+<style>
+    .reg-daterange { display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; margin:0 0 14px; }
+    .reg-dr-field { display:flex; flex-direction:column; gap:4px; font-size:.78rem; color:var(--muted, #64748b); }
+    .reg-dr-field input { padding:7px 10px; border:1px solid #e2e8f0; border-radius:8px; font-size:.85rem; }
+    .reg-dr-apply { padding:8px 16px; border:none; border-radius:8px; font-size:.85rem; cursor:pointer;
+                    color:#fff; background:linear-gradient(90deg, var(--brand-a, #2563eb), var(--brand-b, #16a34a)); }
+    .reg-dr-clear { align-self:center; font-size:.8rem; color:var(--muted, #64748b); text-decoration:none; }
+    .reg-dr-clear:hover { color:var(--primary, #2563eb); }
+    .reg-dr-step { align-self:center; display:inline-flex; align-items:center; justify-content:center;
+                   width:32px; height:32px; border:1px solid #e2e8f0; border-radius:8px;
+                   color:var(--muted, #64748b); text-decoration:none; }
+    .reg-dr-step:hover { border-color:#cbd5e1; color:var(--primary, #2563eb); }
+</style>

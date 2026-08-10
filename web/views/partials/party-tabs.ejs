@@ -1,0 +1,67 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/party-tabs.ejs — All / Recent Active / Favourite.
+ *
+ * LiveKeeping parity: the Parties screen opens on every party, but the two
+ * views you actually work from are "who has bought recently" and "the handful
+ * I deal with daily". Both are one click away rather than a filter to build.
+ *
+ * "Recent Active" is 90 days — the same window the Inactive Customers tile on
+ * the dashboard uses, so the two can never disagree about who is active.
+ *
+ * Locals:
+ *   basePath  '/customers' | '/suppliers'
+ *   query     the current req.query, so switching tab keeps the search,
+ *             location and sort the user already chose
+ * ─────────────────────────────────────────────────────────── */
+var _base = (typeof basePath !== 'undefined' && basePath) ? basePath : '';
+var _q    = (typeof query !== 'undefined' && query) ? query : {};
+
+var ACTIVE_DAYS = 90;
+
+// Which tab is on. Both keys absent = All.
+var _on = 'all';
+if (String(_q.favourite || '') === '1') _on = 'favourite';
+else if (String(_q.active || '') !== '') _on = 'active';
+
+/* Carry everything EXCEPT the two tab keys, so switching tab changes only the
+   tab. Dropping the rest would silently throw away a search the user typed;
+   keeping the tab keys would make the tabs unable to turn each other off. */
+function _href(extra) {
+    var parts = [];
+    Object.keys(_q).forEach(function (k) {
+        if (k === 'favourite' || k === 'active' || k === 'page') return;
+        var v = _q[k];
+        if (v == null || v === '') return;
+        parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(v));
+    });
+    Object.keys(extra || {}).forEach(function (k) {
+        parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(extra[k]));
+    });
+    return _base + (parts.length ? '?' + parts.join('&') : '');
+}
+
+var TABS = [
+    { k: 'all',       label: 'All',           href: _href({}) },
+    { k: 'active',    label: 'Recent Active', href: _href({ active: ACTIVE_DAYS }) },
+    { k: 'favourite', label: 'Favourite',     href: _href({ favourite: 1 }) },
+];
+%>
+
+<div class="party-tabs" role="tablist">
+    <% TABS.forEach(function (t) { %>
+        <a class="party-tab <%= _on === t.k ? 'is-active' : '' %>"
+           role="tab" aria-selected="<%= _on === t.k ? 'true' : 'false' %>"
+           href="<%= t.href %>"><%= t.label %></a>
+    <% }); %>
+</div>
+
+<style>
+    .party-tabs { display:flex; gap:6px; margin:0 0 14px; flex-wrap:wrap; }
+    .party-tab { padding:7px 16px; border:1px solid #e2e8f0; border-radius:999px;
+                 font-size:.84rem; color:var(--muted, #64748b); text-decoration:none;
+                 background:#fff; white-space:nowrap; }
+    .party-tab:hover { border-color:#cbd5e1; color:var(--primary, #2563eb); }
+    .party-tab.is-active { color:#fff; border-color:transparent;
+                           background:linear-gradient(90deg, var(--brand-a, #2563eb), var(--brand-b, #16a34a)); }
+</style>

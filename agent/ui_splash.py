@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import tkinter as tk
 
+import brand
 import ui_signin
 
 # The empty track baked into splash.png, in image pixels. Measured from the
@@ -66,7 +67,7 @@ class Splash:
         self.win.geometry(f"{w}x{h}+{(sw - w) // 2}+{max(0, (sh - h) // 2 - 30)}")
 
         self.cv = tk.Canvas(self.win, width=w, height=h, highlightthickness=0,
-                            bd=0, bg="#081733")
+                            bd=0, bg=brand.COLORS["navy"])
         self.cv.pack()
         self.cv.create_image(0, 0, image=self.img, anchor="nw")
 
@@ -74,7 +75,8 @@ class Splash:
         # which is how a glow is faked on a canvas that has no blur.
         self._parts = [
             self.cv.create_rectangle(0, 0, 0, 0, fill=c, outline="")
-            for c in ("#1e4fd0", "#3b82f6", "#7cb1ff")
+            # ui_signin's BLUE family — same values the web app uses.
+            for c in (ui_signin.BLUE_DEEP, ui_signin.BLUE, ui_signin.BLUE_LIGHT)
         ]
         # Starts as "Starting..." so the line is never blank: the picture the
         # bootloader showed had nothing there, and the first thing the customer

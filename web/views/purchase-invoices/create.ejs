@@ -36,13 +36,22 @@ _products.forEach(function (p) {
         ' data-gst="'  + (p.gst || 0)   + '">' + p.name + '</option>';
 });
 
+/* EDIT MODE — one screen serves create and edit, as on the sales side. */
+var _edit      = (typeof editInvoice !== 'undefined' && editInvoice) ? editInvoice : null;
+var _editItems = (typeof editItems !== 'undefined' && editItems) ? editItems : [];
+var _formAction = _edit ? ('/purchase-invoices/' + _edit.id + '/update') : '/purchase-invoices';
+var _pageTitle  = _edit ? 'Edit Purchase' : 'Create Purchase';
+var _saveLabel  = _edit ? 'Update &amp; Send to Tally' : 'Save &amp; Send to Tally';
+var _billDate   = _edit ? ymd(_edit.invoice_date) : '';
+var _dueDate    = _edit ? ymd(_edit.due_date) : '';
+
 var headActions =
     '<a class="btn btn-light" href="/purchase-invoices">' +
         '<i class="fa-solid fa-arrow-left me-1"></i>Back to Purchases' +
     '</a>' +
     '<div class="btn-group">' +
         '<button type="submit" form="purchase-form" class="btn btn-primary">' +
-            '<i class="fa-solid fa-cloud-arrow-up me-1"></i>Save &amp; Send to Tally' +
+            '<i class="fa-solid fa-cloud-arrow-up me-1"></i>' + _saveLabel +
         '</button>' +
         '<button type="button" class="btn btn-primary dropdown-toggle dropdown-toggle-split" ' +
                 'data-bs-toggle="dropdown" aria-expanded="false">' +
@@ -56,16 +65,16 @@ var headActions =
 %>
 
 <%- include('../partials/page-head', {
-    title: 'Create Purchase',
+    title: _pageTitle,
     breadcrumb: [
         { label: 'Dashboard', href: '/' },
         { label: 'Purchase Invoices', href: '/purchase-invoices' },
-        { label: 'Create Purchase' },
+        { label: _pageTitle },
     ],
     actions: headActions,
 }) %>
 
-<form id="purchase-form" method="post" action="/purchase-invoices" autocomplete="off" novalidate>
+<form id="purchase-form" method="post" action="<%= _formAction %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/invoice.js on submit. -->
     <input type="hidden" name="items_json" id="items-json">
@@ -81,7 +90,7 @@ var headActions =
 
                 <div class="form-group">
                     <label class="form-label" for="pur-supplier">Supplier<span class="req">*</span></label>
-                    <select class="form-select" id="pur-supplier" name="supplier_id" required>
+                    <select class="form-select" id="pur-supplier" name="supplier_id" required data-selected="<%= _edit ? (_edit.supplier_id || '') : '' %>">
                         <%- _selOpts('Select supplier', _sups) %>
                     </select>
                 </div>
@@ -100,7 +109,7 @@ var headActions =
 
                 <div class="form-group">
                     <label class="form-label" for="pur-date">Bill Date<span class="req">*</span></label>
-                    <input type="date" class="form-control" id="pur-date" name="bill_date" value="2024-05-21" required>
+                    <input type="date" class="form-control" id="pur-date" name="bill_date" value="<%= _billDate %>" required>
                 </div>
 
                 <div class="form-group">
@@ -112,7 +121,7 @@ var headActions =
 
                 <div class="form-group">
                     <label class="form-label" for="pur-due">Due Date</label>
-                    <input type="date" class="form-control" id="pur-due" name="due_date" value="2024-06-20">
+                    <input type="date" class="form-control" id="pur-due" name="due_date" value="<%= _dueDate %>">
                 </div>
 
             </div>
@@ -189,6 +198,27 @@ var headActions =
 </form>
 
 <!-- ── Line-item row template (cloned by /js/invoice.js) ─────────── -->
+<script>
+    /* Edit mode: invoice.js seeds one pre-filled row per line from this global
+       (the same one the sales edit screen sets), so no page script change. */
+    window.INVOICE_EDIT_ITEMS = <%- JSON.stringify(_editItems.map(function (it) {
+        return {
+            product_id: it.product_id != null ? it.product_id : null,
+            hsn: it.hsn || it.hsn_code || '',
+            quantity: Number(it.quantity != null ? it.quantity : (it.qty || 0)) || 0,
+            unit: it.unit || '',
+            rate: Number(it.rate || 0) || 0,
+            discount_pct: Number(it.discount_pct != null ? it.discount_pct : (it.disc_pct || 0)) || 0,
+            gst_rate: Number(it.gst_rate != null ? it.gst_rate : (it.gst || 0)) || 0,
+        };
+    })) %>;
+    // Preselect the saved supplier once the options are in the DOM.
+    (function () {
+        var sel = document.getElementById('pur-supplier');
+        if (sel && sel.dataset.selected) sel.value = sel.dataset.selected;
+    })();
+</script>
+
 <template id="li-row-tpl">
     <tr class="li-row">
         <td class="li-idx"></td>

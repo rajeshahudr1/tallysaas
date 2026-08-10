@@ -4,15 +4,20 @@
  * layout:false, so it is a full HTML document with no app chrome).
  * Posts to /login → AuthController.login → api /auth/login.
  *
+ * Two-panel on desktop (brand story left, card right); the panel
+ * folds away under 992px so phones get the app's single-column
+ * sign-in. No social sign-in — email + password only.
+ *
  * Locals: error (string|null), email (prefill), next (redirect target).
  * ─────────────────────────────────────────────────────────── */
 var _err   = (typeof error !== 'undefined') ? error : null;
 var _email = (typeof email !== 'undefined' && email) ? email : '';
 var _next  = (typeof next !== 'undefined' && next) ? next : '/';
+var _rem   = (typeof remember !== 'undefined') ? !!remember : false;
 // Brand — single source of truth (web/config/brand.js via res.locals.brand).
 var _brand = (typeof brand !== 'undefined' && brand) ? brand
     : { name: 'Teloora', shortName: 'Teloora', tagline: 'Connected Accounting',
-        logo: '/img/logo.svg', iconClass: 'fa-solid fa-diagram-project', color: '#1560E0' };
+        logo: '/img/logo.svg', logoFull: '/img/logo-full.png', color: '#1560E0' };
 %><!doctype html>
 <html lang="en">
 <head>
@@ -23,63 +28,254 @@ var _brand = (typeof brand !== 'undefined' && brand) ? brand
     <link rel="icon" type="image/svg+xml" href="<%= _brand.logo %>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer">
-    <link rel="stylesheet" href="/css/theme.css?v=3">
+    <link rel="stylesheet" href="/css/theme.css?v=33">
+    <!-- Brand colours → CSS vars (web/config/brand.js). Must come after theme.css. -->
+    <%- include('../partials/brand-vars') %>
     <style>
-        body { font-family: Inter, system-ui, sans-serif; min-height: 100vh; margin: 0;
-            display: grid; place-items: center; padding: 24px;
-            background: linear-gradient(135deg, #2563EB 0%, #6D28D9 100%); }
-        .login-card { width: 100%; max-width: 410px; background: #fff; border-radius: 18px;
-            box-shadow: 0 20px 60px rgba(16,24,40,.25); padding: 34px 32px; }
-        .login-brand { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-bottom: 22px; }
-        .login-brand-logo { height: 40px; }
-        .login-brand-tagline { font-size: 12.5px; color: #6B7280; font-weight: 500; }
-        .login-title { font-size: 21px; font-weight: 700; color: #111827; margin: 0 0 4px; }
-        .login-sub { color: #6B7280; font-size: 13.5px; margin: 0 0 22px; }
-        .login-card .form-label { font-weight: 600; font-size: 13px; color: #374151; }
-        .login-card .form-control { padding: 11px 13px; border-radius: 10px; border-color: #E5E7EB; }
-        .login-card .form-control:focus { border-color: #2563EB; box-shadow: 0 0 0 3px rgba(37,99,235,.14); }
-        .login-btn { width: 100%; padding: 12px; border: 0; border-radius: 10px; color: #fff; font-weight: 600;
-            background: linear-gradient(135deg, #2563EB, #6D28D9); }
-        .login-hint { margin-top: 18px; font-size: 12.5px; color: #6B7280; text-align: center;
-            background: #F8FAFC; border: 1px solid #E5E7EB; border-radius: 10px; padding: 10px; }
-        .login-err { background: #FEE2E2; color: #B91C1C; border: 1px solid #FECACA; border-radius: 10px;
-            padding: 10px 13px; font-size: 13px; margin-bottom: 16px; display: flex; gap: 8px; align-items: center; }
+        *, *::before, *::after { box-sizing: border-box; }
+        /* The page is ONE light canvas — the brand gradient is a rounded shape
+           anchored to the right edge, not a hard 50/50 split, so the card can
+           float across the boundary the way the design does. */
+        body { font-family: Inter, system-ui, sans-serif; margin: 0; min-height: 100vh;
+            color: #111827; position: relative; overflow-x: hidden;
+            background: linear-gradient(120deg, #E9F2FF 0%, #F4FAFF 45%, #EAFBF1 100%); }
+        /* The gradient blade on the right. */
+        body::before { content: ''; position: fixed; inset: 0 0 0 auto; width: 46%; z-index: 0;
+            background: linear-gradient(150deg, #0F4FD8 0%, #1E7FD6 42%, #2FA84F 100%);
+            border-radius: 46% 0 0 46% / 52% 0 0 48%; pointer-events: none; }
+        /* A pale bloom bleeding back over the light half, echoing the design's
+           soft circle behind the wordmark. */
+        body::after { content: ''; position: fixed; top: -18vh; left: 42%; width: 46vw; height: 46vw;
+            border-radius: 50%; z-index: 0; opacity: .30; pointer-events: none;
+            background: radial-gradient(circle at 35% 35%, #C9E9D6, transparent 68%); }
+
+        /* ── Background line-art (decorative only, aria-hidden) ─────── */
+        .auth-deco { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+        .auth-deco > * { position: absolute; }
+        /* White strokes ride the gradient blade on the right… */
+        .deco-chart   { top: 8%;  right: 5%;  width: 130px; color: rgba(255,255,255,.34); }
+        .deco-invoice { top: 46%; right: 3.5%; width: 155px; color: rgba(255,255,255,.30); }
+        /* …dotted mesh under them. */
+        .deco-dots { bottom: 12%; right: 6%; width: 170px; height: 110px; opacity: .38;
+            background-image: radial-gradient(rgba(255,255,255,.85) 1.4px, transparent 1.4px);
+            background-size: 17px 17px; }
+        /* …and pale brand rings sit on the light half, behind the story. */
+        .deco-rings { top: 6%; left: -70px; width: 260px; color: rgba(21,96,224,.13); }
+        .deco-ring-sm { bottom: 16%; left: 30%; width: 14px; height: 14px; border-radius: 50%;
+            border: 2px solid rgba(21,96,224,.20); }
+
+        /* ── Shell: brand story | form card ─────────────────────────── */
+        .auth-wrap { position: relative; z-index: 1; min-height: 100vh;
+            max-width: 1140px; margin: 0 auto; padding: 40px 32px;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+
+        .auth-side { display: flex; flex-direction: column; justify-content: center; }
+        .auth-side-inner { width: 100%; max-width: 430px; margin-left: auto; }
+
+        /* The lock-up is a wide wordmark — cap its WIDTH, never its height,
+           or it scales to several hundred pixels across. */
+        .auth-logo { width: 260px; max-width: 75%; height: auto; display: block; margin-bottom: 26px; }
+        .auth-head { font-size: 30px; line-height: 1.2; font-weight: 800; letter-spacing: -.02em;
+            color: var(--brand-navy, #17265E); margin: 0 0 12px; }
+        .auth-head span { color: var(--primary); display: block; }
+        .auth-lede { font-size: 14px; line-height: 1.6; color: #4B5563; margin: 0 0 30px; }
+
+        .auth-feats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+        .auth-feat { text-align: center; }
+        .auth-feat-ico { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center;
+            font-size: 17px; margin: 0 auto 10px; }
+        .auth-feat-ico.i1 { background: #E4EDFF; color: #1D4ED8; }
+        .auth-feat-ico.i2 { background: #DFF6E7; color: #15803D; }
+        .auth-feat-ico.i3 { background: #EDE6FF; color: #6D28D9; }
+        .auth-feat h3 { font-size: 13px; font-weight: 700; margin: 0 0 2px; color: #111827; }
+        .auth-feat p  { font-size: 11.5px; line-height: 1.4; color: #6B7280; margin: 0; }
+
+        /* ── Card ───────────────────────────────────────────────────── */
+        .auth-main { display: grid; justify-items: start; align-items: center; }
+        .login-card { width: 100%; max-width: 400px; background: #fff; border-radius: 20px;
+            box-shadow: 0 26px 60px rgba(16, 24, 40, .16); padding: 34px 32px; }
+        .login-card-logo { display: none; }
+        .login-title { font-size: 21px; font-weight: 700; color: #111827; margin: 0 0 5px; text-align: center; }
+        .login-sub { color: #6B7280; font-size: 13px; margin: 0 0 22px; text-align: center; }
+
+        .login-card .form-label { font-weight: 600; font-size: 12.5px; color: #374151; margin-bottom: 5px; }
+        .field { position: relative; }
+        .field .fico { position: absolute; left: 13px; top: 50%; transform: translateY(-50%);
+            color: #9CA3AF; font-size: 13px; pointer-events: none; }
+        .login-card .form-control { padding: 10px 14px 10px 38px; border-radius: 10px;
+            border-color: #E5E7EB; font-size: 13.5px; }
+        .login-card .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(21,96,224,.14); }
+        .pw-toggle { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+            border: 0; background: none; color: #9CA3AF; padding: 8px 10px; line-height: 1; cursor: pointer; }
+        .pw-toggle:hover { color: var(--primary); }
+
+        .login-row { display: flex; align-items: center; justify-content: space-between;
+            gap: 12px; margin: 14px 0 18px; }
+        .login-row .form-check { margin: 0; }
+        .login-row .form-check-label { font-size: 12.5px; color: #4B5563; }
+        .login-row .form-check-input:checked { background-color: var(--primary); border-color: var(--primary); }
+        .login-link { font-size: 12.5px; font-weight: 600; color: var(--primary); text-decoration: none; }
+        .login-link:hover { text-decoration: underline; }
+
+        .login-btn { width: 100%; padding: 11px; border: 0; border-radius: 10px; color: #fff;
+            font-weight: 600; font-size: 14px; background: var(--brand-gradient);
+            box-shadow: 0 8px 20px rgba(21, 96, 224, .28); transition: filter .15s, transform .15s; }
+        .login-btn:hover { filter: brightness(1.05); }
+        .login-btn:active { transform: translateY(1px); }
+
+        .login-foot { margin-top: 22px; text-align: center; font-size: 13px; color: #6B7280; }
+        .login-err { background: #FEE2E2; color: #B91C1C; border: 1px solid #FECACA; border-radius: 12px;
+            padding: 11px 14px; font-size: 13px; margin-bottom: 18px; display: flex; gap: 8px; align-items: center; }
+
+        /* ── Mobile: the app's single-column sign-in ────────────────── */
+        @media (max-width: 991.98px) {
+            body { background: #fff; }
+            body::before, body::after { display: none; }
+            .auth-wrap { grid-template-columns: 1fr; gap: 0; padding: 0; align-items: start; }
+            .auth-side, .auth-deco { display: none; }
+            .auth-main { padding: 32px 20px 40px; align-items: start; justify-items: center; }
+            .login-card { max-width: 400px; box-shadow: none; border-radius: 0; padding: 8px 0 0; }
+            .login-card-logo { display: block; width: 210px; max-width: 62%; height: auto; margin: 8px auto 22px; }
+            .login-title { font-size: 20px; }
+            .login-sub { font-size: 13px; margin-bottom: 22px; }
+        }
     </style>
 </head>
 <body>
-    <div class="login-card">
-        <div class="login-brand">
-            <img class="login-brand-logo" src="/img/logo-full.png" alt="<%= _brand.name %>">
-            <span class="login-brand-tagline"><%= _brand.tagline %></span>
+<!-- Decorative background line-art. Purely visual: aria-hidden and behind
+     everything, so it never reaches the accessibility tree or the tab order. -->
+<div class="auth-deco" aria-hidden="true">
+    <!-- Analytics: axes, bars, trend line with plotted points -->
+    <svg class="deco-chart" viewBox="0 0 120 110" fill="none" stroke="currentColor"
+         stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14 10v86h92"/>
+        <path d="M30 96V64M52 96V44M74 96V72M96 96V30"/>
+        <path d="M30 52 52 32 74 58 96 18"/>
+        <circle cx="30" cy="52" r="4.5"/><circle cx="52" cy="32" r="4.5"/>
+        <circle cx="74" cy="58" r="4.5"/><circle cx="96" cy="18" r="4.5"/>
+    </svg>
+
+    <!-- Invoice sheet with a rupee seal -->
+    <svg class="deco-invoice" viewBox="0 0 130 120" fill="none" stroke="currentColor"
+         stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M18 10h58l22 22v66a8 8 0 0 1-8 8H26a8 8 0 0 1-8-8V18a8 8 0 0 1 8-8Z"/>
+        <path d="M76 10v22h22"/>
+        <path d="M34 52h44M34 66h44M34 80h26"/>
+        <circle cx="100" cy="88" r="20"/>
+        <path d="M93 80h14M93 87h14M104 80c5 0 5 7 0 7h-6l10 10"/>
+    </svg>
+
+    <div class="deco-dots"></div>
+
+    <!-- Concentric brand rings on the light half -->
+    <svg class="deco-rings" viewBox="0 0 200 200" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="100" cy="100" r="98"/>
+        <circle cx="100" cy="100" r="74"/>
+        <circle cx="100" cy="100" r="50"/>
+    </svg>
+    <div class="deco-ring-sm"></div>
+</div>
+
+<div class="auth-wrap">
+
+    <!-- Brand story (desktop only) -->
+    <section class="auth-side">
+      <div class="auth-side-inner">
+        <img class="auth-logo" src="<%= _brand.logoFull || '/img/logo-full.png' %>" alt="<%= _brand.name %>">
+        <h2 class="auth-head">Smart Accounting.<span>Seamless Business.</span></h2>
+        <p class="auth-lede">
+            Manage your business, generate reports, and grow with <%= _brand.name %>.
+        </p>
+        <div class="auth-feats">
+            <div class="auth-feat">
+                <div class="auth-feat-ico i1"><i class="fa-solid fa-shield-halved"></i></div>
+                <h3>Secure</h3>
+                <p>Your data is always safe</p>
+            </div>
+            <div class="auth-feat">
+                <div class="auth-feat-ico i2"><i class="fa-solid fa-bolt"></i></div>
+                <h3>Fast Data</h3>
+                <p>Reports and insights in seconds</p>
+            </div>
+            <div class="auth-feat">
+                <div class="auth-feat-ico i3"><i class="fa-solid fa-rotate"></i></div>
+                <h3>Tally Sync</h3>
+                <p>Stays in step with your Tally</p>
+            </div>
         </div>
+      </div>
+    </section>
 
-        <h1 class="login-title">Welcome back</h1>
-        <p class="login-sub">Sign in to your account to continue.</p>
+    <!-- Sign-in card -->
+    <main class="auth-main">
+        <div class="login-card">
+            <img class="login-card-logo" src="<%= _brand.logoFull || '/img/logo-full.png' %>" alt="<%= _brand.name %>">
 
-        <% if (_err) { %>
-            <div class="login-err"><i class="fa-solid fa-circle-exclamation"></i><span><%= _err %></span></div>
-        <% } %>
+            <h1 class="login-title">Welcome back! 👋</h1>
+            <p class="login-sub">Sign in to your <%= _brand.name %> account</p>
 
-        <form method="post" action="/login" autocomplete="on">
-            <input type="hidden" name="next" value="<%= _next %>">
-            <div class="mb-3">
-                <label class="form-label" for="email">Email</label>
-                <input type="email" class="form-control" id="email" name="email"
-                       value="<%= _email %>" placeholder="you@company.com" required autofocus>
-            </div>
-            <div class="mb-3">
-                <label class="form-label" for="password">Password</label>
-                <input type="password" class="form-control" id="password" name="password"
-                       placeholder="••••••••" required>
-            </div>
-            <button type="submit" class="login-btn">
-                <i class="fa-solid fa-right-to-bracket me-1"></i> Sign in
-            </button>
-        </form>
-        <a href="/forgot-password" style="display:block;text-align:center;margin-top:16px;font-size:13px;color:#2563EB;text-decoration:none;">Forgot password?</a>
-    </div>
+            <% if (_err) { %>
+                <div class="login-err"><i class="fa-solid fa-circle-exclamation"></i><span><%= _err %></span></div>
+            <% } %>
+
+            <form method="post" action="/login" autocomplete="on">
+                <input type="hidden" name="next" value="<%= _next %>">
+
+                <div class="mb-3">
+                    <label class="form-label" for="email">Email address</label>
+                    <div class="field">
+                        <i class="fa-regular fa-envelope fico"></i>
+                        <input type="email" class="form-control" id="email" name="email"
+                               value="<%= _email %>" placeholder="Enter your email" required autofocus>
+                    </div>
+                </div>
+
+                <div class="mb-0">
+                    <label class="form-label" for="password">Password</label>
+                    <div class="field">
+                        <i class="fa-solid fa-lock fico"></i>
+                        <input type="password" class="form-control" id="password" name="password"
+                               placeholder="Enter your password" required>
+                        <button type="button" class="pw-toggle" id="pwToggle"
+                                aria-label="Show password" aria-pressed="false">
+                            <i class="fa-regular fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="login-row">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" value="1" id="remember" name="remember" <%= _rem ? 'checked' : '' %>>
+                        <label class="form-check-label" for="remember">Remember me</label>
+                    </div>
+                    <a class="login-link" href="/forgot-password">Forgot password?</a>
+                </div>
+
+                <button type="submit" class="login-btn">
+                    <i class="fa-solid fa-right-to-bracket me-1"></i> Sign in
+                </button>
+            </form>
+        </div>
+    </main>
+</div>
+
+<script>
+    // Password visibility toggle — swaps the input type and the eye icon.
+    (function () {
+        var btn = document.getElementById('pwToggle');
+        var pw  = document.getElementById('password');
+        if (!btn || !pw) return;
+        btn.addEventListener('click', function () {
+            var show = pw.type === 'password';
+            pw.type = show ? 'text' : 'password';
+            btn.setAttribute('aria-pressed', String(show));
+            btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+            btn.querySelector('i').className = show ? 'fa-regular fa-eye-slash' : 'fa-regular fa-eye';
+        });
+    })();
+</script>
 </body>
 </html>

@@ -1,0 +1,123 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * receivables/party-bills.ejs — one party's OPEN bills
+ * (GET /receivables/party/:id). LiveKeeping parity.
+ *
+ * Columns: Voucher No, Reference No, Date, Due Days, Due Date,
+ * Amount — plus the "On Account" figure (receipt money that matched
+ * no bill), shown beside the total rather than netted into it.
+ *
+ * Locals:
+ *   rows  [ { voucher_no, reference_no, date, due_days, due_date, amount, bucket_label } ]
+ *   meta  { customer:{id,name,mobile,email}, total, total_outstanding, on_account }
+ * ─────────────────────────────────────────────────────────── */
+var _rows = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _meta = (typeof meta !== 'undefined' && meta) ? meta : {};
+var _cust = _meta.customer || {};
+// Shared by Receivables and Payables — see parties.ejs for what differs.
+var _s = (typeof screen !== 'undefined' && screen) ? screen : { base: '/receivables', title: 'Receivables', totalLabel: 'Total Outstanding', showReminders: true };
+function _inr(v) { return Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+%>
+
+<%- include('../partials/page-head', {
+    title: _cust.name || 'Party',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _s.title, href: _s.base },
+        { label: _cust.name || 'Party' },
+    ],
+}) %>
+
+<div class="recv-summary">
+    <div class="recv-summary-card recv-summary-card--primary">
+        <div class="recv-summary-label"><%= _s.totalLabel %></div>
+        <div class="recv-summary-value">₹ <%= _inr(_meta.total_outstanding) %></div>
+    </div>
+    <div class="recv-summary-card">
+        <%# Receipts that matched no bill. Kept separate because netting them
+            into the total would make a bill look part-paid when it is not. %>
+        <div class="recv-summary-label">On Account</div>
+        <div class="recv-summary-value">₹ <%= _inr(_meta.on_account) %></div>
+    </div>
+    <div class="recv-summary-card">
+        <div class="recv-summary-label">Open Bills</div>
+        <div class="recv-summary-value"><%= _meta.total || 0 %></div>
+    </div>
+</div>
+
+<div class="recv-partybar">
+    <a href="/ledgers/<%= encodeURIComponent(_cust.name || '') %>" class="recv-act"><i class="fa-solid fa-file-lines"></i> Ledger Statement</a>
+    <% if (_cust.mobile) { %>
+        <a href="tel:<%= _cust.mobile %>" class="recv-act"><i class="fa-solid fa-phone"></i> <%= _cust.mobile %></a>
+    <% } %>
+    <% if (_cust.email) { %>
+        <a href="mailto:<%= _cust.email %>" class="recv-act"><i class="fa-solid fa-envelope"></i> <%= _cust.email %></a>
+    <% } %>
+    <% if (_s.showReminders) { %>
+    <a href="/reminders?customer=<%= _cust.id %>" class="recv-act recv-act--cta">Set Reminder</a>
+    <% } %>
+</div>
+
+<div class="card">
+    <div class="data-table-wrap">
+        <table class="data-table recv-table" style="width:100%">
+            <thead>
+                <tr>
+                    <th style="text-align:left">Voucher No</th>
+                    <th style="text-align:left">Reference No</th>
+                    <th style="text-align:left">Date</th>
+                    <th style="text-align:right">Due Days</th>
+                    <th style="text-align:left">Due Date</th>
+                    <th style="text-align:right">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% if (!_rows.length) { %>
+                    <tr><td colspan="6" style="text-align:center;padding:26px;color:#94a3b8">No open bills — every invoice is settled.</td></tr>
+                <% } %>
+                <% _rows.forEach(function (r) { %>
+                    <tr>
+                        <td style="font-weight:600"><%= r.voucher_no %></td>
+                        <td style="color:#64748b"><%= r.reference_no || '-' %></td>
+                        <td><%= r.date %></td>
+                        <%# Positive = days PAST due. A bill still inside its
+                            terms shows the days remaining, in muted type. %>
+                        <td style="text-align:right" class="<%= (r.due_days != null && r.due_days > 0) ? 'recv-danger' : '' %>">
+                            <%= r.due_days == null ? '—' : (r.due_days > 0 ? r.due_days : (r.due_days === 0 ? 'Due today' : (-r.due_days) + ' to go')) %>
+                        </td>
+                        <td><%= r.due_date %></td>
+                        <td style="text-align:right;font-weight:600">₹ <%= _inr(r.amount) %> <%= _s.base === '/payables' ? 'Cr' : 'Dr' %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+            <% if (_rows.length) { %>
+            <tfoot>
+                <tr style="font-weight:800;border-top:2px solid #cbd5e1;background:#f8fafc">
+                    <td colspan="5">Total</td>
+                    <td style="text-align:right">₹ <%= _inr(_meta.total_outstanding) %> <%= _s.base === '/payables' ? 'Cr' : 'Dr' %></td>
+                </tr>
+            </tfoot>
+            <% } %>
+        </table>
+    </div>
+</div>
+
+<style>
+    .recv-summary { display:flex; gap:14px; margin-bottom:14px; flex-wrap:wrap; }
+    .recv-summary-card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:12px 18px; min-width:170px; }
+    .recv-summary-card--primary { background:linear-gradient(135deg,var(--primary),#7c3aed); border:0; color:#fff; }
+    .recv-summary-label { font-size:11px; text-transform:uppercase; letter-spacing:.4px; opacity:.85; }
+    .recv-summary-card:not(.recv-summary-card--primary) .recv-summary-label { color:#6b7280; }
+    .recv-summary-value { font-size:20px; font-weight:800; margin-top:2px; }
+    .recv-danger { color:#b91c1c; }
+    .recv-partybar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+    .recv-act { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:8px;
+        border:1px solid #e2e8f0; background:#fff; color:#475569; font-size:12.5px; font-weight:600; text-decoration:none; }
+    .recv-act:hover { border-color:#cbd5e1; color:var(--primary); }
+    .recv-act--cta { background:var(--primary); border-color:var(--primary); color:#fff; }
+    .recv-act--cta:hover { color:#fff; }
+    .recv-table th { padding:10px 14px; font-size:11px; text-transform:uppercase; letter-spacing:.4px;
+        color:#6b7280; border-bottom:1px solid #e5e7eb; }
+    .recv-table td { padding:11px 14px; font-size:13.5px; border-bottom:1px solid #f1f5f9; }
+    .recv-table tbody tr:hover { background:#f8fafc; }
+</style>

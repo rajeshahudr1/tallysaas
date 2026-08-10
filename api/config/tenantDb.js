@@ -24,9 +24,20 @@
  * Identifier safety: the db name must pass DB_NAME_RE before we ever open a
  * pool to it — defence-in-depth even though db_name only ever comes from the
  * provision flow / the signed JWT.
+ *
+ * Credential safety: each pool logs in as that licence's OWN PostgreSQL role
+ * (config/tenantCredentials → Helpers/tenantRoles), which can CONNECT to this
+ * one database only. Connecting every tenant as the shared cluster superuser —
+ * what this file used to do — meant a single injected query in licence 1 could
+ * reach licence 2's data through dblink/COPY, making the per-database split
+ * cosmetic. Licences not yet migrated fall back to the admin login unless
+ * TENANT_DB_STRICT_ROLES=true.
  */
 
 const knex = require('knex');
+
+const credentials = require('./tenantCredentials');
+const { withSsl } = require('./pgSsl');
 
 const DB_NAME_RE = /^[a-z_][a-z0-9_]{0,62}$/i;
 
@@ -54,17 +65,19 @@ function getTenantKnex(dbName) {
     const cached = pools.get(dbName);
     if (cached) return cached;
 
+    // Throws in strict mode when this licence has no dedicated role yet — we
+    // fail closed rather than silently opening a superuser pool.
+    const cred = credentials.get(dbName);
+
     const inst = knex({
         client: 'pg',
         connection: {
             host    : String(process.env.DB_HOST     || '127.0.0.1'),
             port    : parseInt(process.env.DB_PORT, 10) || 5432,
-            user    : String(process.env.DB_USERNAME || 'postgres'),
-            password: String(process.env.DB_PASSWORD || ''),
+            user    : cred.user,
+            password: cred.password,
             database: dbName,
-            ...(process.env.APP_ENV === 'production'
-                ? { ssl: { rejectUnauthorized: false } }
-                : {}),
+            ...withSsl(),
         },
         pool: {
             min: 1,
@@ -99,8 +112,16 @@ async function closeAll() {
     pools.clear();
 }
 
-/** Forget + destroy a single pool (used when a licence DB is dropped). */
-async function evict(dbName) {
+/**
+ * Destroy + forget a single pool, so the next call reconnects (a rotated role
+ * password, a dropped licence).
+ *
+ * `forgetCredentials` defaults to FALSE on purpose: dropping the cached role
+ * would make the next connection fall back to the shared admin login in
+ * non-strict mode. Pass true only when the licence itself is going away.
+ */
+async function evict(dbName, { forgetCredentials = false } = {}) {
+    if (forgetCredentials) credentials.forget(dbName);
     const inst = pools.get(dbName);
     if (!inst) return false;
     pools.delete(dbName);

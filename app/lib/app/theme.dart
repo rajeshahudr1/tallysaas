@@ -25,7 +25,7 @@ class AppColors {
   // stay `const` (rather than `fromHex(Brand.…)`) because half the app builds
   // them into `const` widgets.
   static const Color primary     = Color(0xFF1560E0); // Brand.blueHex
-  static const Color primaryDeep = Color(0xFF0F49AE); // pressed / deep blue
+  static const Color primaryDeep = Color(0xFF0F4CB8); // web --primary-700
   static const Color secondary   = Color(0xFF17265E); // Brand.navyHex — wordmark
   static const Color sidebar     = Color(0xFF17265E); // navy headings/wordmark
 
@@ -34,24 +34,27 @@ class AppColors {
   static const Color navSurface  = Color(0xFFFFFFFF);
 
   /// Pale blue tint behind the ACTIVE nav item / selected chip.
-  static const Color primaryTint = Color(0x1A1560E0); // primary @ 10%
+  static const Color primaryTint = Color(0xFFEAF1FE); // web --sidebar-active-bg
 
   // ─── Surfaces (light) ───────────────────────────────────────
   static const Color scaffoldBg  = Color(0xFFF8FAFC);
   static const Color card        = Color(0xFFFFFFFF);
-  static const Color border      = Color(0xFFE5E7EB);
+  static const Color border      = Color(0xFFE9EDF3); // web --border
 
   // ─── Text ───────────────────────────────────────────────────
-  static const Color text1       = Color(0xFF111827); // primary copy
-  static const Color text2       = Color(0xFF6B7280); // secondary copy
-  static const Color text3       = Color(0xFF9CA3AF); // hints / disabled
+  static const Color text1       = Color(0xFF101828); // web --text
+  static const Color text2       = Color(0xFF667085); // web --text-muted
+  static const Color text3       = Color(0xFF98A2B3); // web muted hint
 
   // ─── Status (drives status_colors.dart + StatusPill) ────────
-  static const Color success     = Color(0xFF45B649); // Brand.greenHex
+  // The LOGO green (#45B649) is 2.61:1 on white — unreadable as an icon or
+  // label, which is what this is used for in 16 places. Same green,
+  // darkened to 7.1:1. The logo colour itself is untouched.
+  static const Color success     = Color(0xFF166534);
   static const Color danger      = Color(0xFFDC2626); // danger / inactive
   static const Color warn        = Color(0xFFD97706); // blocked / pending
   static const Color info        = Color(0xFF1560E0); // Brand.blueHex — sent / info
-  static const Color muted       = Color(0xFF6B7280); // neutral / unknown
+  static const Color muted       = Color(0xFF667085); // web --text-muted
 }
 
 /// Spacing scale — keep paddings + gaps consistent with the web's `--space-N`
@@ -82,10 +85,21 @@ class AppRadius {
 class AppGradients {
   AppGradients._();
 
+  /// Decorative brand sweep — the logo's own blue -> green. Safe behind large
+  /// artwork or a wash; NOT safe under white text (see [brandButton]).
   static final LinearGradient brand = LinearGradient(
     begin: Alignment.centerLeft,
     end: Alignment.centerRight,
     colors: [AppColors.fromHex(Brand.blueHex), AppColors.fromHex(Brand.greenHex)],
+  );
+
+  /// The sweep for FILLED buttons. It still reads blue -> green, but stops at a
+  /// deeper green so white text keeps 5.37:1 across the whole width; the logo
+  /// green would drop it to 2.61:1 at the right-hand edge.
+  static final LinearGradient brandButton = LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [AppColors.fromHex(Brand.blueHex), const Color(0xFF217A3B)],
   );
 
   static final LinearGradient header = LinearGradient(

@@ -43,6 +43,7 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   final _billing = TextEditingController();
   final _opening = TextEditingController();
   final _credit = TextEditingController();
+  final _creditDays = TextEditingController();
   final _notes = TextEditingController();
   final _remarks = TextEditingController();
   final _city = TextEditingController();
@@ -76,7 +77,7 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
   @override
   void dispose() {
     for (final c in [_name, _mobile, _altMobile, _email, _gst, _pan, _shipping,
-                     _billing, _opening, _credit, _notes, _remarks,
+                     _billing, _opening, _credit, _creditDays, _notes, _remarks,
                      _city, _pincode]) {
       c.dispose();
     }
@@ -100,6 +101,7 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       _billing.text = c.billingAddress ?? '';
       _opening.text = c.openingBalance?.toString() ?? '';
       _credit.text = c.creditLimit?.toString() ?? '';
+      _creditDays.text = c.creditDays?.toString() ?? '';
       _notes.text = c.notes ?? '';
       _remarks.text = c.internalRemarks ?? '';
       _status = c.status ?? 'Active';
@@ -151,6 +153,9 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
       if (_billing.text.trim().isNotEmpty) 'billing_address': _billing.text.trim(),
       if (_num(_opening.text) != null) 'opening_balance': _num(_opening.text),
       if (_num(_credit.text) != null) 'credit_limit': _num(_credit.text),
+      // Only sent when filled: an empty box means "no agreed terms", and
+      // sending 0 would record a same-day term nobody agreed to.
+      if (_num(_creditDays.text) != null) 'credit_days': _num(_creditDays.text),
       if (_notes.text.trim().isNotEmpty) 'notes': _notes.text.trim(),
       if (_remarks.text.trim().isNotEmpty) 'internal_remarks': _remarks.text.trim(),
       'status': _status,
@@ -365,6 +370,18 @@ class _CustomerFormScreenState extends ConsumerState<CustomerFormScreen> {
                 keyboardType: TextInputType.number,
               )),
               const SizedBox(width: AppSpacing.md12),
+              // The credit PERIOD beside the limit: the limit caps how much
+              // they may owe, this caps how long. Left blank means "no agreed
+              // terms" — not zero days — so a bill takes no default due date.
+              Expanded(child: AppTextField(
+                controller: _creditDays, label: 'Credit Days',
+                keyboardType: TextInputType.number,
+              )),
+            ],
+          ),
+          gap,
+          Row(
+            children: [
               Expanded(child: AppTextField(
                 controller: _opening, label: 'Opening Balance (₹)',
                 keyboardType: TextInputType.number,

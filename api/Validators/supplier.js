@@ -58,8 +58,14 @@ const createSupplierSchema = Joi.object({
 
     address:          optText(2000),
     custom_fields:    Joi.object().unknown(true).allow(null),
+
+    // Starred on the Parties screen. Cloud-only — Tally has no such field.
+    is_favourite:     Joi.boolean(),
     opening_balance:  Joi.number().min(0).precision(2).default(0),
     payment_terms:    optText(100),
+    // Credit PERIOD, in days. No default: null means "no agreed terms", which
+    // is not the same statement as zero days of credit.
+    credit_days:      Joi.number().integer().min(0).max(3650).allow(null),
 
     status:           Joi.string().valid(...STATUSES).default('Active'),
 
@@ -86,8 +92,14 @@ const updateSupplierSchema = Joi.object({
 
     address:          optText(2000),
     custom_fields:    Joi.object().unknown(true).allow(null),
+
+    // Starred on the Parties screen. Cloud-only — Tally has no such field.
+    is_favourite:     Joi.boolean(),
     opening_balance:  Joi.number().min(0).precision(2),
     payment_terms:    optText(100),
+    // Credit PERIOD, in days. No default: null means "no agreed terms", which
+    // is not the same statement as zero days of credit.
+    credit_days:      Joi.number().integer().min(0).max(3650).allow(null),
 
     status:           Joi.string().valid(...STATUSES),
 

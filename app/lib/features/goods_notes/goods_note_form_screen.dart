@@ -16,6 +16,7 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_text_field.dart';
 import '../../shared/widgets/form_dropdowns.dart';
 import '../transactions/invoice_form_parts.dart';
+import '../transactions/price_level.dart';
 
 /// Create / edit a delivery or receipt note. One form for both kinds — the
 /// party, the movement date and the ledger source are the only differences,
@@ -41,7 +42,13 @@ class _GoodsNoteFormScreenState extends ConsumerState<GoodsNoteFormScreen> {
   String? _locationName;
   String? _ledgerName;
   DateTime _noteDate = DateTime.now();
-  DateTime? _movementDate;
+  DateTime? _movementDate;  /// Tally's per-tier rate card, when the company uses them. Null = the
+  /// item's own standard price.
+  String? _priceLevel;
+
+  /// The chosen party's synced closing balance, shown under the picker.
+  double? _partyBalance;
+
 
   final List<LineRow> _rows = [];
 
@@ -124,7 +131,31 @@ class _GoodsNoteFormScreenState extends ConsumerState<GoodsNoteFormScreen> {
     r.disc.text = (it.discountPct ?? 0).toString();
     r.gst.text = (it.gstRate ?? 0).toString();
     return r;
+  }  /// Re-price every line that already has an item. Changing the level
+  /// after the lines are entered has to move their rates too, or the
+  /// voucher says one thing at the top and another in the middle.
+  void _reapplyPriceLevel() {
+    var changed = false;
+    for (final r in _rows) {
+      final name = r.productName;
+      if (name == null || name.isEmpty) continue;
+      final rate = _levelRateFor(name, double.tryParse(r.qty.text.trim()) ?? 0);
+      if (rate == null) continue;
+      final text = rate == rate.roundToDouble() ? rate.toInt().toString() : rate.toString();
+      if (r.rate.text != text) { r.rate.text = text; changed = true; }
+    }
+    if (changed && mounted) setState(() {});
   }
+
+  /// The active price level's rate for an item at a quantity, or null when
+  /// no level is chosen or the level says nothing about that item.
+  double? _levelRateFor(String itemName, double qty) {
+    final level = _priceLevel;
+    if (level == null || level.isEmpty) return null;
+    final card = ref.read(priceCardProvider(level)).valueOrNull;
+    return card?.rateFor(itemName, qty);
+  }
+
 
   void _addRow() => setState(() => _rows.add(LineRow()));
 
@@ -212,7 +243,17 @@ class _GoodsNoteFormScreenState extends ConsumerState<GoodsNoteFormScreen> {
     final user = session is SessionSignedIn ? session.user : null;
     // A salesman can't list locations (403) — theirs auto-fills from the party.
     final isSalesman = user?.isSalesman ?? false;
-    final title = '${_isEdit ? 'Edit' : 'Create'} ${_kind.singular}';
+    final title = '${_isEdit ? 'Edit' : 'Create'} ${_kind.singular}';    // WATCH (not read) the chosen level: a FutureProvider only fetches
+    // once something is listening, and the rows are re-rated the moment
+    // the card lands.
+    final level = _priceLevel;
+    if (level != null && level.isNotEmpty) {
+      ref.listen(priceCardProvider(level), (_, next) {
+        if (next.hasValue) _reapplyPriceLevel();
+      });
+      ref.watch(priceCardProvider(level));
+    }
+
     final t = computeInvoiceTotals(_rows);
 
     if (_loading) {
@@ -254,11 +295,17 @@ class _GoodsNoteFormScreenState extends ConsumerState<GoodsNoteFormScreen> {
             value: _partyId,
             onChanged: (v) => setState(() => _partyId = v),
             onItem: (o) => setState(() {
+              _partyBalance = o?.balance;
               if (o?.locationId != null) {
                 _locationId = o!.locationId;
                 _locationName = o.locationName;
               }
             }),
+          ),
+          PartyBalanceLine(balance: _partyBalance),
+          PriceLevelPicker(
+            value: _priceLevel,
+            onChanged: (v) => setState(() => _priceLevel = v),
           ),
           const SizedBox(height: AppSpacing.md12),
           Row(
@@ -327,6 +374,7 @@ class _GoodsNoteFormScreenState extends ConsumerState<GoodsNoteFormScreen> {
           for (final row in _rows)
             LineItemCard(
               row: row,
+              rateFor: _levelRateFor,
               onChanged: () => setState(() {}),
               onRemove: _rows.length > 1 ? () => _removeRow(row) : null,
             ),

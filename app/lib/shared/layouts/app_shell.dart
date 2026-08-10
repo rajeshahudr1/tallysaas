@@ -59,7 +59,9 @@ class AppShell extends ConsumerWidget {
       floatingActionButton: DecoratedBox(
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          gradient: AppGradients.brand,
+          // brandButton, not brand: the FAB icon is white and the logo
+        // green cannot carry white text (2.61:1).
+        gradient: AppGradients.brandButton,
         ),
         child: FloatingActionButton(
           heroTag: 'app-shell-create',

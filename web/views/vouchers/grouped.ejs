@@ -1,0 +1,43 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * vouchers/grouped.ejs — a voucher register's grouped view.
+ *
+ * One template for every register (Sales, Purchase, Credit Note,
+ * Debit Note, Receipt, Payment): the route decides basePath +
+ * which grouping tabs apply, this page just composes the shared
+ * partials. LiveKeeping parity for the Ledger / Stock Item /
+ * Voucher Type / Ledger Group / Stock Group / Stock Category views.
+ * ─────────────────────────────────────────────────────────── */
+%>
+
+<%- include('../partials/page-head', {
+    title: title,
+    breadcrumb: breadcrumb,
+}) %>
+
+<%- include('../partials/register-tabs', {
+    basePath: basePath,
+    active:   groupMeta.by,
+    hasStock: hasStock,
+    mode:     groupMeta.mode,
+    showMode: showMode,
+    query:    tabQuery,
+}) %>
+
+<%# The period. Carries the grouping and the Gross/Net basis through, so
+    changing the dates never drops the view you are on. %>
+<%- include('../partials/register-daterange', {
+    basePath: basePath,
+    dateFrom: dateFrom,
+    dateTo:   dateTo,
+    keep:     { by: groupMeta.by, mode: showMode && groupMeta.mode === 'net' ? 'net' : '' },
+}) %>
+
+<%- include('../partials/grouped-register', {
+    groupRows:   groupRows,
+    groupMeta:   groupMeta,
+    basePath:    basePath,
+    totalLabel:  totalLabel,
+    searchValue: searchValue,
+    exportHref:  exportHref,
+}) %>

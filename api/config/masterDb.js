@@ -18,6 +18,8 @@
 
 const knex = require('knex');
 
+const { withSsl } = require('./pgSsl');
+
 const db = knex({
     client: 'pg',
     connection: {
@@ -26,7 +28,7 @@ const db = knex({
         database: String(process.env.MASTER_DB_DATABASE || 'tallysaas_master'),
         user    : String(process.env.DB_USERNAME || 'postgres'),
         password: String(process.env.DB_PASSWORD || ''),
-        ...(process.env.APP_ENV === 'production' ? { ssl: { rejectUnauthorized: false } } : {}),
+        ...withSsl(),
     },
     pool: {
         min: 2,

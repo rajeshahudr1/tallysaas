@@ -1,0 +1,108 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * parties/activity.ejs — one party's follow-up trail.
+ *
+ * "I called them, they said call back Tuesday" — the thing a
+ * collections team actually needs to remember, which previously had
+ * nowhere to live except a single overwritten remarks box.
+ *
+ * Append-only by design: an activity records something that happened,
+ * so there is no edit. A correction is a new entry.
+ *
+ * Locals:
+ *   party    { type, id, name }
+ *   rows     [ { id, outcome, outcome_label, note, follow_up_on, created_at, by } ]
+ *   outcomes [ { value, label } ]
+ *   canLog   bool
+ * ─────────────────────────────────────────────────────────── */
+var _rows = (typeof rows !== 'undefined' && rows) ? rows : [];
+var _party = (typeof party !== 'undefined' && party) ? party : { type: 'customer', id: null, name: '' };
+var _outcomes = (typeof outcomes !== 'undefined' && outcomes) ? outcomes : [];
+var _canLog = (typeof canLog !== 'undefined') ? !!canLog : true;
+var _base = _party.type === 'supplier' ? '/suppliers' : '/customers';
+
+// Outcome → pill colour. The three that mean "this is going nowhere" read red;
+// the ones that mean "there is a next step" read blue.
+var OUTCOME_TONE = {
+    interested: 'success', payment_promised: 'success', meeting_scheduled: 'success',
+    not_interested: 'danger',
+    busy: 'warning', call_back: 'warning', follow_up: 'info', note: 'muted',
+};
+function _tone(o) { return 'pill-status--' + (OUTCOME_TONE[o] || 'muted'); }
+%>
+
+<%- include('../partials/page-head', {
+    title: _party.name + ' · Activity',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _party.type === 'supplier' ? 'Suppliers' : 'Customers', href: _base },
+        { label: _party.name },
+    ],
+}) %>
+
+<% if (_canLog) { %>
+<div class="card act-form-card">
+    <h2 class="form-section-title">Log an activity</h2>
+    <form method="post" action="<%= _base %>/<%= _party.id %>/activities" class="act-form">
+        <div class="act-row">
+            <div class="form-group">
+                <label class="form-label" for="act-outcome">Outcome</label>
+                <select class="form-select" id="act-outcome" name="outcome" required>
+                    <% _outcomes.forEach(function (o) { %>
+                        <option value="<%= o.value %>"><%= o.label %></option>
+                    <% }); %>
+                </select>
+            </div>
+            <div class="form-group">
+                <%# Optional on purpose: plenty of calls need no follow-up, and a
+                    made-up date would clutter every reminder list. %>
+                <label class="form-label" for="act-follow">Follow up on <span class="act-opt">(optional)</span></label>
+                <input type="date" class="form-control" id="act-follow" name="follow_up_on">
+            </div>
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="act-note">Note</label>
+            <textarea class="form-control" id="act-note" name="note" rows="2" maxlength="2000"
+                      placeholder="What was said?"></textarea>
+        </div>
+        <button type="submit" class="btn btn-gradient">Add Activity</button>
+    </form>
+</div>
+<% } %>
+
+<div class="card">
+    <% if (!_rows.length) { %>
+        <p class="daybook-empty">No activity logged for this party yet.</p>
+    <% } else { %>
+        <ul class="act-list">
+            <% _rows.forEach(function (r) { %>
+                <li class="act-item">
+                    <div class="act-item-top">
+                        <span class="pill-status <%= _tone(r.outcome) %>"><%= r.outcome_label %></span>
+                        <span class="act-when"><%= r.created_at %></span>
+                        <% if (r.by) { %><span class="act-by">by <%= r.by %></span><% } %>
+                    </div>
+                    <% if (r.note) { %><div class="act-note"><%= r.note %></div><% } %>
+                    <% if (r.follow_up_on) { %>
+                        <div class="act-follow"><i class="fa-solid fa-bell"></i> Follow up on <strong><%= r.follow_up_on %></strong></div>
+                    <% } %>
+                </li>
+            <% }); %>
+        </ul>
+    <% } %>
+</div>
+
+<style>
+    .act-form-card { padding:16px 18px; margin-bottom:14px; }
+    .act-row { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .act-opt { color:#94a3b8; font-weight:400; }
+    .act-list { list-style:none; margin:0; padding:6px 0; }
+    .act-item { padding:13px 18px; border-bottom:1px solid #f1f5f9; }
+    .act-item:last-child { border-bottom:0; }
+    .act-item-top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .act-when { font-size:12px; color:#64748b; }
+    .act-by { font-size:12px; color:#94a3b8; }
+    .act-note { margin-top:6px; font-size:13.5px; color:#334155; white-space:pre-wrap; }
+    .act-follow { margin-top:6px; font-size:12.5px; color:#0369a1; }
+    @media (max-width: 640px) { .act-row { grid-template-columns:1fr; } }
+</style>

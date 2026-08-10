@@ -12,6 +12,8 @@ import '../../shared/widgets/confirm_dialog.dart';
 import '../../shared/widgets/error_state.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
+import '../registers/party_activity_screen.dart';
+import '../registers/party_items_screen.dart';
 
 /// Supplier detail (View) — read-only mirror of the form. Edit + Delete in the
 /// app bar are gated by `suppliers.edit` / `suppliers.delete`, like the web's
@@ -28,15 +30,25 @@ class _SupplierDetailScreenState extends ConsumerState<SupplierDetailScreen> {
   late Future<Supplier> _future;
   bool _deleting = false;
 
+  /// Remembered as the row loads, purely so the Items screen can show a title.
+  /// No setState — nothing on THIS screen renders from it.
+  String _name = '';
+
   @override
   void initState() {
     super.initState();
-    _future = ref.read(supplierRepositoryProvider).get(widget.supplierId);
+    _future = _fetch();
+  }
+
+  Future<Supplier> _fetch() async {
+    final s = await ref.read(supplierRepositoryProvider).get(widget.supplierId);
+    _name = s.name;
+    return s;
   }
 
   void _reload() {
     setState(() {
-      _future = ref.read(supplierRepositoryProvider).get(widget.supplierId);
+      _future = _fetch();
     });
   }
 
@@ -84,6 +96,30 @@ class _SupplierDetailScreenState extends ConsumerState<SupplierDetailScreen> {
       appBar: AppBar(
         title: const Text('Supplier'),
         actions: [
+          // What was SAID, as opposed to what was billed.
+          IconButton(
+            icon: const Icon(Icons.forum_outlined),
+            tooltip: 'Activity',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => PartyActivityScreen(
+                partyId: widget.supplierId,
+                partyName: _name,
+                supplier: true,
+              ),
+            )),
+          ),
+          // What we have bought from this supplier, rolled up per stock item.
+          IconButton(
+            icon: const Icon(Icons.inventory_2_outlined),
+            tooltip: 'Items purchased',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => PartyItemsScreen(
+                partyId: widget.supplierId,
+                partyName: _name,
+                purchased: true,
+              ),
+            )),
+          ),
           if (canEdit)
             IconButton(
               icon: const Icon(Icons.edit_outlined),
@@ -153,6 +189,12 @@ class _SupplierDetailScreenState extends ConsumerState<SupplierDetailScreen> {
         _section('Other Details'),
         _row('Opening Balance', s.openingBalance == null ? null : Fmt.inr(s.openingBalance)),
         _row('Payment Terms', s.paymentTerms),
+        // Null prints as a dash, not "0 days" — we do not know the terms.
+        _row('Credit Days', s.creditDays == null ? null : '${s.creditDays} days'),
+        // Where they stand today (synced from Tally), beside where they began.
+        _row('Closing Balance', s.closingBalance == null ? null : Fmt.inr(s.closingBalance)),
+        _row('Last Purchased', s.lastPurchasedDate == null ? null : Fmt.date(s.lastPurchasedDate)),
+        _row('Tally Ledger Group', s.tallyLedgerGroup),
 
         if (s.customFields.isNotEmpty) ...[
           _section('Custom Fields'),

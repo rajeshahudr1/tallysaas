@@ -1,0 +1,121 @@
+<%
+/* ─────────────────────────────────────────────────────────────
+ * partials/grouped-register.ejs — one grouped view of a voucher
+ * register (Ledger / Ledger Group / Voucher Type / Stock Item /
+ * Stock Group / Stock Category), rendered from the api's
+ * /…/grouped response. LiveKeeping parity.
+ *
+ * Locals:
+ *   groupRows  [ { name, amount, qty, count, href } ]
+ *   groupMeta  { by, mode, label, level, grand_total, groups, has_qty }
+ *   totalLabel 'Total Sales' | 'Total Purchase' | …
+ *   searchValue current ?search= (the box posts back with the view)
+ *   basePath    '/sales-invoices'
+ *   exportHref  optional — the "Export" button's target
+ * ─────────────────────────────────────────────────────────── */
+var _rows = (typeof groupRows !== 'undefined' && groupRows) ? groupRows : [];
+var _meta = (typeof groupMeta !== 'undefined' && groupMeta) ? groupMeta : {};
+var _base = (typeof basePath !== 'undefined' && basePath) ? basePath : '';
+var _tl   = (typeof totalLabel !== 'undefined' && totalLabel) ? totalLabel : 'Total';
+var _sv   = (typeof searchValue !== 'undefined' && searchValue) ? searchValue : '';
+var _exportHref = (typeof exportHref !== 'undefined') ? exportHref : null;
+var _hasQty = !!_meta.has_qty;
+function _inr(v) { return Number(v || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function _qty(v) { return Number(v || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 }); }
+%>
+
+<div class="card">
+    <div class="greg-head">
+        <div>
+            <div class="greg-head-label"><%= _tl %> · by <%= _meta.label || '' %><%
+                %><% if (_meta.mode === 'net') { %> <span class="greg-net">Net</span><% } %></div>
+            <div class="greg-head-total">₹ <%= _inr(_meta.grand_total) %></div>
+        </div>
+        <div class="greg-head-right">
+            <%# Search filters the grouped rows in place — no round trip, because
+                the whole grouping is already on the page (one row per group). %>
+            <label class="greg-search">
+                <i class="fa-solid fa-magnifying-glass"></i>
+                <input type="search" placeholder="Search <%= (_meta.label || '').toLowerCase() %>"
+                       value="<%= _sv %>" oninput="gregFilter(this.value)" aria-label="Search groups">
+            </label>
+            <% if (_exportHref) { %>
+                <a href="<%= _exportHref %>" class="greg-export"><i class="fa-solid fa-upload"></i> Export</a>
+            <% } %>
+        </div>
+    </div>
+
+    <div class="data-table-wrap">
+        <table class="data-table greg-table" style="width:100%">
+            <thead>
+                <tr>
+                    <th style="text-align:left;width:44px">#</th>
+                    <th style="text-align:left">Name</th>
+                    <th style="text-align:right">Vouchers</th>
+                    <% if (_hasQty) { %><th style="text-align:right">Qty</th><% } %>
+                    <th style="text-align:right">Amount</th>
+                </tr>
+            </thead>
+            <tbody id="greg-body">
+                <% if (!_rows.length) { %>
+                    <tr><td colspan="<%= _hasQty ? 5 : 4 %>" style="text-align:center;padding:26px;color:#94a3b8">No data available</td></tr>
+                <% } %>
+                <% _rows.forEach(function (r, i) { %>
+                    <tr data-name="<%= String(r.name || '').toLowerCase() %>">
+                        <td style="color:#94a3b8"><%= i + 1 %></td>
+                        <td style="font-weight:600">
+                            <% if (r.href) { %>
+                                <a href="<%= r.href %>" style="color:var(--primary);text-decoration:none"><%= r.name %></a>
+                            <% } else { %><%= r.name %><% } %>
+                        </td>
+                        <td style="text-align:right;color:#475569"><%= r.count %></td>
+                        <% if (_hasQty) { %><td style="text-align:right;color:#475569"><%= _qty(r.qty) %></td><% } %>
+                        <td style="text-align:right"><%= _inr(r.amount) %></td>
+                    </tr>
+                <% }); %>
+            </tbody>
+            <% if (_rows.length) { %>
+            <tfoot>
+                <tr style="font-weight:800;border-top:2px solid #cbd5e1;background:#f8fafc">
+                    <td colspan="2">Grand Total</td>
+                    <td style="text-align:right"><%= _rows.reduce(function (s, r) { return s + (Number(r.count) || 0); }, 0) %></td>
+                    <% if (_hasQty) { %><td style="text-align:right"><%= _qty(_rows.reduce(function (s, r) { return s + (Number(r.qty) || 0); }, 0)) %></td><% } %>
+                    <td style="text-align:right">₹ <%= _inr(_meta.grand_total) %></td>
+                </tr>
+            </tfoot>
+            <% } %>
+        </table>
+    </div>
+</div>
+
+<style>
+    .greg-head { display:flex; align-items:flex-end; justify-content:space-between;
+        gap:14px; flex-wrap:wrap; padding:16px 18px 10px; }
+    .greg-head-label { font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; color:#6b7280; font-weight:600; }
+    .greg-head-total { font-size:22px; font-weight:800; color:#111; margin-top:2px; }
+    .greg-net { display:inline-block; margin-left:4px; padding:1px 7px; border-radius:20px;
+        background:#eef2ff; color:#4338ca; font-size:10px; letter-spacing:.3px; }
+    .greg-head-right { display:flex; align-items:center; gap:10px; }
+    .greg-search { display:inline-flex; align-items:center; gap:8px; padding:7px 12px;
+        border:1px solid #e2e8f0; border-radius:8px; background:#fff; color:#94a3b8; }
+    .greg-search input { border:0; outline:0; font-size:13px; color:#111; width:190px; background:transparent; }
+    .greg-export { display:inline-flex; align-items:center; gap:6px; padding:7px 14px; border-radius:8px;
+        border:1px solid #e2e8f0; background:#fff; color:#334155; font-size:12.5px; font-weight:600; text-decoration:none; }
+    .greg-export:hover { border-color:#cbd5e1; color:var(--primary); }
+    .greg-table th { padding:10px 14px; font-size:11px; text-transform:uppercase; letter-spacing:.4px; color:#6b7280; border-bottom:1px solid #e5e7eb; }
+    .greg-table td { padding:11px 14px; font-size:13.5px; border-bottom:1px solid #f1f5f9; }
+    .greg-table tbody tr:hover { background:#f8fafc; }
+</style>
+
+<script>
+// Client-side filter: the grouped view is a single page of aggregate rows, so
+// hiding non-matching rows is both instant and complete (no server paging).
+function gregFilter(q) {
+    var needle = String(q || '').trim().toLowerCase();
+    var rows = document.querySelectorAll('#greg-body tr[data-name]');
+    for (var i = 0; i < rows.length; i++) {
+        var hit = !needle || rows[i].getAttribute('data-name').indexOf(needle) !== -1;
+        rows[i].style.display = hit ? '' : 'none';
+    }
+}
+</script>

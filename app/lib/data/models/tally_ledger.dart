@@ -193,6 +193,8 @@ class LedgerEntry {
     this.voucherNo,
     this.voucherType,
     this.voucherDate,
+    this.counterLedger,
+    this.referenceNo,
     this.amount,
     this.dc,
   });
@@ -201,6 +203,11 @@ class LedgerEntry {
   final String? voucherNo;
   final String? voucherType;
   final String? voucherDate;
+
+  /// The OTHER side of the voucher — who this ledger moved money with.
+  /// Without it a statement is just a list of amounts.
+  final String? counterLedger;
+  final String? referenceNo;
 
   /// Magnitude; [dc] carries the side.
   final num? amount;
@@ -213,6 +220,8 @@ class LedgerEntry {
         voucherNo: _sn(j['voucher_no']),
         voucherType: _sn(j['voucher_type']),
         voucherDate: _sn(j['voucher_date']),
+        counterLedger: _sn(j['counter_ledger']),
+        referenceNo: _sn(j['reference_no']),
         amount: _toNum(j['amount']),
         dc: _sn(j['dc']),
       );

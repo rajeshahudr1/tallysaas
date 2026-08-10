@@ -17,6 +17,7 @@ import '../../shared/widgets/error_state.dart';
 import '../../shared/widgets/advanced_filter.dart';
 import '../../shared/widgets/loading_state.dart';
 import '../../shared/widgets/status_pill.dart';
+import '../registers/grouped_register_screen.dart';
 import 'vouchers_controller.dart';
 
 /// Generic voucher list — drives BOTH Payments and Receipts. Pass the [basePath]
@@ -106,6 +107,20 @@ class _VouchersScreenState extends ConsumerState<VouchersScreen> {
         title: Text(widget.title),
         actions: [
           ModuleInfoButton(module),
+          // The grouped register: this period by Ledger, Voucher Type or
+          // Ledger Group. Receipts and payments carry no inventory, so the
+          // three Stock views do not apply to them.
+          IconButton(
+            icon: const Icon(Icons.pivot_table_chart_outlined),
+            tooltip: 'Grouped register',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => GroupedRegisterScreen(
+                basePath: widget.basePath,
+                title: widget.title,
+                hasStock: false,
+              ),
+            )),
+          ),
           IconButton(
             icon: Icon(hasFilter ? Icons.filter_alt : Icons.tune),
             color: hasFilter ? AppColors.primary : null,

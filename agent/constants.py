@@ -43,7 +43,7 @@ BRAND_NAME_AGENT = f"{BRAND_NAME} Agent"
 # LIVE build (current): pointed at the production cloud API.
 # For LOCAL TESTING, swap back to the dev machine's LAN IP:
 #   LOCAL = "http://192.168.4.10:4500/api/v1"
-API_BASE_URL = "http://192.168.4.14:4500/api/v1"
+API_BASE_URL = "http://192.168.29.242:4500/api/v1"
 
 
 # --------------------------------------------------------------------------- #
@@ -86,7 +86,7 @@ PUBLISHER_CN = "Dukansetu"
 # Baked, like API_BASE_URL, and for the same reason: a customer repointing their
 # agent at another server is not a feature. The bridge derives its CORS
 # allow-list from this value, so the two can never disagree.
-AGENT_UI_URL = "http://192.168.4.14:4600/agent-app"
+AGENT_UI_URL = "http://192.168.29.242:4600/agent-app"
 
 
 # --------------------------------------------------------------------------- #

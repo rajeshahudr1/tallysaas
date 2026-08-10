@@ -110,9 +110,15 @@ class TestFeatureGating(unittest.TestCase):
 
     def test_absent_flag_still_fetches(self):
         """An absent flag means this Tally build did not report it. Guessing
-        'off' would silently drop a master the company really does use."""
+        'off' would silently drop a master the company really does use.
+
+        The example is gst_classification, not a payroll master: payroll is
+        feature_must_be_on now, because probing a live TallyPrime EDU showed
+        each payroll collection hanging six minutes and then killing Tally. For
+        THOSE, silence has to mean no. This rule still governs everything else.
+        """
         c = recording_connector()
-        c.fetch_master("employee", company="ACME", features={})
+        c.fetch_master("gst_classification", company="ACME", features={})
         self.assertEqual(len(c.sent), 1)
 
 
@@ -155,17 +161,47 @@ class TestSendRetry(unittest.TestCase):
 
     def test_probe_does_not_retry(self):
         """is_available() answering 'no' fast IS the useful answer — the caller's
-        next move is to start Tally, not to wait out the backoff."""
+        next move is to start Tally, not to wait out the backoff.
+
+        Stubs the SESSION, not _send_once: the probe is a bare HTTP GET now and
+        sends no envelope at all. Stubbing _send_once left the real GET running,
+        so this test quietly measured whether the machine it ran on happened to
+        have something listening on :9000 — it passed on a build server and
+        failed on any developer's machine with Tally open.
+        """
         c = TallyConnector("http://localhost:9000")
         calls = []
 
-        def always_down(xml, timeout=None):
-            calls.append(1)
-            raise TallyUnavailable("down")
+        class _Down:
+            def get(self, url, timeout=None):
+                calls.append(("get", url, timeout))
+                raise OSError("connection refused")
 
-        c._send_once = always_down
+            def post(self, *a, **kw):
+                raise AssertionError("the probe must not POST an envelope")
+
+        c._session = _Down()
         self.assertFalse(c.is_available())
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 1, "the probe retried instead of answering")
+
+    def test_probe_is_a_bare_get_not_a_tdl_request(self):
+        """It used to export the company list, so the cheapest and most frequent
+        call was also one of the heaviest — and a malformed envelope put a modal
+        error box on Tally, which the probe then re-sent every few seconds."""
+        c = TallyConnector("http://localhost:9000")
+        seen = []
+
+        class _Up:
+            def get(self, url, timeout=None):
+                seen.append(url)
+                return object()
+
+            def post(self, *a, **kw):
+                raise AssertionError("the probe must not POST an envelope")
+
+        c._session = _Up()
+        self.assertTrue(c.is_available())
+        self.assertEqual(seen, ["http://localhost:9000"])
 
 
 if __name__ == "__main__":

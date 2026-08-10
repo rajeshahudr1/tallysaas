@@ -6,6 +6,9 @@ import 'package:go_router/go_router.dart';
 import '../../app/theme.dart';
 import '../../core/auth/session.dart';
 import '../../shared/widgets/app_card.dart';
+import '../registers/grouped_register_screen.dart';
+import '../registers/cost_centre_screen.dart';
+import '../registers/stock_grouping_screen.dart';
 
 /// Reports hub — the Reports bottom-nav tab. Mirrors the Masters hub: an
 /// AppBar + a ListView of tiles grouped into sections (Registers, Statements,
@@ -17,8 +20,10 @@ import '../../shared/widgets/app_card.dart';
 class ReportsScreen extends ConsumerWidget {
   const ReportsScreen({super.key});
 
-  static const _groups = <_ReportGroup>[
-    _ReportGroup('Insights', [
+  // NOT const: the grouped-view tiles carry a builder, and a method call
+  // cannot appear in a const expression.
+  static final _groups = <_ReportGroup>[
+    const _ReportGroup('Insights', [
       _ReportEntry(
         title: 'Business Analytics',
         subtitle: 'Sales trend, cash flow, aging, top customers & products',
@@ -26,7 +31,7 @@ class ReportsScreen extends ConsumerWidget {
         route: '/analytics',
       ),
     ]),
-    _ReportGroup('Registers', [
+    const _ReportGroup('Registers', [
       _ReportEntry(
         title: 'Sales Register',
         subtitle: 'Tax invoices with taxable, GST & totals',
@@ -40,7 +45,7 @@ class ReportsScreen extends ConsumerWidget {
         route: '/reports/day-book',
       ),
     ]),
-    _ReportGroup('Outstanding', [
+    const _ReportGroup('Outstanding', [
       _ReportEntry(
         title: 'Receivables',
         subtitle: 'Sundry debtors — what customers owe you',
@@ -60,7 +65,7 @@ class ReportsScreen extends ConsumerWidget {
         route: '/reports/ledger',
       ),
     ]),
-    _ReportGroup('Statements', [
+    const _ReportGroup('Statements', [
       _ReportEntry(
         title: 'GST Summary',
         subtitle: 'Output vs input GST and net payable',
@@ -86,8 +91,56 @@ class ReportsScreen extends ConsumerWidget {
         route: '/reports/balance-sheet',
       ),
     ]),
-    // Stock Summary moved to Transactions → Inventory / Stock.
+    // These open an existing screen on a particular VIEW rather than being
+    // screens of their own — the same thing Tally's report menu does. A second
+    // copy would only give one number two places to drift.
+    _ReportGroup('Sales Overview', [
+      _ReportEntry(
+        title: 'By Ledger',
+        subtitle: 'Sales grouped by party ledger',
+        icon: Icons.contacts_outlined,
+        builder: _grouped('/sales-invoices', 'Sales Register', 'ledger'),
+      ),
+      _ReportEntry(
+        title: 'By Stock Item',
+        subtitle: 'Sales grouped by item, with quantity',
+        icon: Icons.inventory_2_outlined,
+        builder: _grouped('/sales-invoices', 'Sales Register', 'stock_item'),
+      ),
+    ]),
+    _ReportGroup('Purchase Overview', [
+      _ReportEntry(
+        title: 'Grouped Purchases',
+        subtitle: 'By ledger, item, voucher type, group or category',
+        icon: Icons.pivot_table_chart_outlined,
+        builder: _grouped('/purchase-invoices', 'Purchase Register', 'ledger'),
+      ),
+    ]),
+    const _ReportGroup('Stock Reports', [
+      _ReportEntry(
+        title: 'Stock Summary',
+        subtitle: 'Closing stock by group, godown or category',
+        icon: Icons.warehouse_outlined,
+        builder: _stockGrouping,
+      ),
+    ]),
+    const _ReportGroup('Cost Centre', [
+      _ReportEntry(
+        title: 'Cost Centres',
+        subtitle: 'Summary, plus the same spend split by ledger or group',
+        icon: Icons.account_tree_outlined,
+        builder: _costCentres,
+      ),
+    ]),
   ];
+
+  // Builders are statics so the tiles above can name them directly.
+  static WidgetBuilder _grouped(String basePath, String title, String view) =>
+      (_) => GroupedRegisterScreen(basePath: basePath, title: title, initialView: view);
+
+  static Widget _stockGrouping(BuildContext _) => const StockGroupingScreen();
+
+  static Widget _costCentres(BuildContext _) => const CostCentreScreen();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -143,12 +196,24 @@ class _ReportEntry {
     required this.title,
     required this.subtitle,
     required this.icon,
-    required this.route,
-  });
+    this.route,
+    this.builder,
+  }) : assert(route != null || builder != null,
+            'a report tile needs somewhere to go');
+
   final String title;
   final String subtitle;
   final IconData icon;
-  final String route;
+
+  /// A named app route. Used for reports that ARE a screen of their own.
+  final String? route;
+
+  /// Some reports are an existing screen opened on a particular view (the
+  /// grouped registers, the stock roll-ups). Those take a builder rather than
+  /// a route: the app's screens read their state from controllers, not from
+  /// query strings, so a URL like `/products?stock=in` would navigate but
+  /// silently apply no filter.
+  final WidgetBuilder? builder;
 }
 
 class _ReportTile extends StatelessWidget {
@@ -159,7 +224,14 @@ class _ReportTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AppCard(
-      onTap: () => context.push(entry.route),
+      onTap: () {
+        final b = entry.builder;
+        if (b != null) {
+          Navigator.of(context).push(MaterialPageRoute(builder: b));
+        } else {
+          context.push(entry.route!);
+        }
+      },
       child: Row(
         children: [
           Container(
