@@ -295,7 +295,13 @@ async function provisionLicense(opts, ctx = {}) {
             max_users:        opts.maxUsers != null ? opts.maxUsers : 10,
             valid_until:      opts.validUntil || null,
             status:           'active',
+            // Cloud→Tally push starts OFF, and with NOTHING selected. Both are
+            // also column defaults now; set explicitly here so this stays true
+            // even if a future schema change loosens them. NULL would mean ALL
+            // modules — see Helpers/syncModules — which is the one value a new
+            // licence must never start with: it writes into real books.
             sync_push_enabled: false,
+            sync_push_modules: '[]',
         }).returning('*');
         const dbName = `tally_lic_${lic.id}`;
         log(`✓ master license id=${lic.id} holder="${holder}" key=${key}`);
