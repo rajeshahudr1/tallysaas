@@ -273,6 +273,21 @@ def _current_version() -> str:
     return "1.0.0"
 
 
+def _numeric_version(v: str) -> str:
+    """``0.0.1`` -> ``0.0.1.0``. Windows version resources are four numbers.
+
+    Anything non-numeric in a part is dropped (a ``1.0.0-rc1`` still has to
+    produce a valid resource, and Windows has nowhere to put the ``rc1``).
+    """
+    parts = []
+    for p in str(v or "").strip().split("."):
+        m = re.match(r"\d+", p)
+        parts.append(m.group(0) if m else "0")
+    while len(parts) < 4:
+        parts.append("0")
+    return ".".join(parts[:4])
+
+
 def _next_version(current: str) -> str:
     """``1.0.0`` -> ``1.0.1``. The last numeric part goes up by one.
 
@@ -325,6 +340,14 @@ def _nuitka_cmd(here: Path, app_name: str, entry: str, gui: bool) -> list[str]:
         f"--company-name={_PUBLISHER}",
         f"--product-name={_BRAND_NAME}",
         f"--file-description={_BRAND_NAME} Agent",
+        # Nuitka refuses the build outright if ANY version metadata is given
+        # without a version number ("company name and file or product version
+        # need to be given"). PyInstaller does not, which is why this only
+        # surfaced on the first release build. Read from config.py so the
+        # exe's Explorer properties always match the version it reports in its
+        # heartbeat — the same number, from one source.
+        f"--product-version={_numeric_version(_current_version())}",
+        f"--file-version={_numeric_version(_current_version())}",
     ]
     icon = here / "app_icon.ico"
     if icon.exists():
