@@ -88,6 +88,32 @@ _RECONCILE_ALIASES: dict = {
     for _m in MASTERS
 }
 
+# Sub-collections that hang OFF an object rather than being a field on it: the
+# batches under a stock item, its price list, its GST details, the components of
+# a BOM, a ledger's bank details and opening bills.
+#
+# They are the reason for the split in _collection_request_xml. Tally's <FETCH>
+# is for simple methods — asked for one of these it returns nothing and says
+# nothing, so the object arrives looking complete while everything nested in it
+# is quietly absent. Declared as <NATIVEMETHOD> they come back in full.
+#
+# Kept as a NAME list, not a per-collection setting: the same list means the
+# same thing on whichever object carries it, and a name added to a fetch list
+# elsewhere then does the right thing without anyone remembering this rule.
+_NESTED_LISTS: frozenset = frozenset({
+    "BATCHALLOCATIONS",
+    "MULTIPRICELIST",
+    "COMPONENTLIST",
+    "GSTDETAILS",
+    "RATEDETAILS",
+    "LEDGERBANKDETAILS",
+    "BANKDETAILS",
+    "OPENINGBALANCEALLOCATIONS",
+    "LEDGERMAILINGDETAILS",
+    "LEDGERGSTREGDETAILS",
+    "HSNDETAILS",
+})
+
 # Where that set is REMEMBERED between runs. Set once at startup (see
 # use_skip_store). Without it the knowledge died with the process: the service
 # restarts — after an update, a reboot, or because the operator pressed Stop and
@@ -2868,7 +2894,24 @@ class TallyConnector:
         ``fetch`` is the list of Tally field names to pull. ``company`` targets a
         specific loaded company (SVCURRENTCOMPANY); empty = the active company.
         """
-        fetch_csv = TallyConnector._esc(",".join(fetch))
+        # NESTED LISTS ARE NOT FETCHABLE. <FETCH> returns SIMPLE methods only —
+        # ask it for MULTIPRICELIST or GSTDETAILS and Tally answers with
+        # nothing at all, silently, for every object. That one detail is why
+        # four separate things were empty in the cloud: every stock item's
+        # price list, its GST rate and HSN (both of which live inside
+        # GSTDETAILS on a GST-era company, not on the item), and every ledger's
+        # tax type. The masters synced fine; only their sub-lists went missing.
+        #
+        # A nested list has to be declared as a NATIVEMETHOD instead, which is
+        # what makes Tally serialise the sub-collection inside each object.
+        simple = [f for f in fetch if f.upper() not in _NESTED_LISTS]
+        nested = [f for f in fetch if f.upper() in _NESTED_LISTS]
+
+        fetch_csv = TallyConnector._esc(",".join(simple))
+        native_tags = "".join(
+            "<NATIVEMETHOD>" + TallyConnector._esc(n) + "</NATIVEMETHOD>"
+            for n in nested
+        )
         # An AlterID-filtered collection needs a UNIQUE name per fetch: Tally
         # caches a TDL definition by name for the session, so reusing the name
         # with a NEW filter value would silently re-serve the old window's
@@ -2905,7 +2948,8 @@ class TallyConnector:
             "<TDL><TDLMESSAGE>"
             '<COLLECTION NAME="' + coll_e + '" ISMODIFY="No">'
             "<TYPE>" + type_e + "</TYPE>"
-            "<FETCH>" + fetch_csv + "</FETCH>"
+            + ("<FETCH>" + fetch_csv + "</FETCH>" if simple else "")
+            + native_tags
             + filt_tag +
             "</COLLECTION>"
             + filt_def +

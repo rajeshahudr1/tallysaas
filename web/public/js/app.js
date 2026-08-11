@@ -282,6 +282,25 @@
             btn.setAttribute('aria-expanded', String(!collapsed));
         }
 
+        /* Everything that floats over the page — the combobox menus, the date
+           popup — is position:fixed at coordinates read from its field. The
+           rail shifts every field sideways WITHOUT a scroll or a window
+           resize, so those popups stayed where they were and pointed at
+           nothing. They all re-place on `resize`, so say so — repeatedly,
+           because the sidebar animates over ~250ms and the field is still
+           moving.
+
+           Called ONLY from the click below — never from apply(), which the
+           window-resize handler also calls: dispatching resize from inside a
+           resize handler is an infinite loop. */
+        function reflowOverlays() {
+            var stop = Date.now() + 400;
+            (function tick() {
+                window.dispatchEvent(new Event('resize'));
+                if (Date.now() < stop) requestAnimationFrame(tick);
+            })();
+        }
+
         try { if (isDesktop() && localStorage.getItem(KEY) === '1') apply(true); }
         catch (e) { /* ignore */ }
 
@@ -291,6 +310,7 @@
             if (isDesktop()) {
                 var collapsed = !document.body.classList.contains('sidebar-collapsed');
                 apply(collapsed);
+                reflowOverlays();
                 try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
                 return;
             }

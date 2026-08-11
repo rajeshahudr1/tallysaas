@@ -272,6 +272,11 @@ window.DeliveryNoteCalc = { lineAmount, formTotals, buildVoucherNo };
                 menu.style.left  = r.left + 'px';
                 menu.style.top   = (r.bottom + 2) + 'px';
                 menu.style.width = r.width + 'px';
+                // A line-item cell is ~200px wide; the option under it carries an HSN and a
+                // stock figure as well as the name. Let the menu outgrow its field rather
+                // than clip what it was opened to show — clamped so it never leaves the
+                // viewport on a narrow screen.
+                menu.style.minWidth = Math.min(320, window.innerWidth - r.left - 16) + 'px';
             }
             function render(list) {
                 menu.innerHTML = '';
@@ -541,6 +546,11 @@ window.DeliveryNoteCalc = { lineAmount, formTotals, buildVoucherNo };
                 opts.menu.style.left  = r.left + 'px';
                 opts.menu.style.top   = (r.bottom + 2) + 'px';
                 opts.menu.style.width = r.width + 'px';
+                // A line-item cell is ~200px wide; the option under it carries an HSN and a
+                // stock figure as well as the name. Let the menu outgrow its field rather
+                // than clip what it was opened to show — clamped so it never leaves the
+                // viewport on a narrow screen.
+                opts.menu.style.minWidth = Math.min(320, window.innerWidth - r.left - 16) + 'px';
             }
             function render(list) {
                 opts.menu.innerHTML = '';
@@ -555,7 +565,15 @@ window.DeliveryNoteCalc = { lineAmount, formTotals, buildVoucherNo };
                         if (it === CREATE_MARK) {
                             d.className = 'li-prod-item li-prod-create';
                             d.innerHTML = '<i class="fa-solid fa-circle-plus"></i><span>' + opts.createLabel + '</span>';
-                            d.addEventListener('mousedown', function (e) { e.preventDefault(); if (opts.onCreate) opts.onCreate(); });
+                            // Shut the menu FIRST. preventDefault above keeps focus on the
+                            // input, so the blur-timeout close never fires — without this
+                            // the list hung over the modal that onCreate opens until
+                            // something else happened to dismiss it.
+                            d.addEventListener('mousedown', function (e) {
+                                e.preventDefault();
+                                close();
+                                if (opts.onCreate) opts.onCreate();
+                            });
                             opts.menu.appendChild(d);
                             return;
                         }

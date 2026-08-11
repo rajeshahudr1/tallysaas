@@ -284,6 +284,32 @@ a { text-decoration: none; }
 }
 .sidebar-link.is-active .sidebar-link-icon { color: var(--primary); }
 
+/* ── Sub-items under a collapsible group ──────────────────────────────
+ * An expanded group's children used to render at exactly the size and
+ * indent of a top-level item, so an open "Create Vouchers" read as ten more
+ * main-menu entries and you could not tell where the group ended. They now
+ * sit in from the left behind a guide rail, one step smaller — the same
+ * three signals a printed outline uses: indent, size, and a line down the
+ * margin. */
+.sidebar-group { position: relative; }
+.sidebar-group::before {
+    content: '';
+    position: absolute; left: 21px; top: 2px; bottom: 2px;
+    width: 1px; background: var(--sidebar-border);
+}
+.sidebar-group .sidebar-link {
+    padding-left: 32px;
+    font-size: 13px;
+    margin: 1px 0;
+}
+.sidebar-group .sidebar-link-icon { font-size: 14px; width: 16px; }
+.sidebar-group .icon-line { width: 16px; height: 16px; }
+/* On the icon rail there is no indent to speak of and no room for a guide. */
+@media (min-width: 992px) {
+    body.sidebar-collapsed .sidebar-group::before { display: none; }
+    body.sidebar-collapsed .sidebar-group .sidebar-link { padding-left: 0; font-size: 14px; }
+}
+
 
 /* Offcanvas (mobile drawer) reuses the sidebar palette */
 .sidebar-offcanvas {
@@ -1037,25 +1063,71 @@ a { text-decoration: none; }
 }
 .q-adv-copy:hover { border-color: var(--primary); color: var(--primary); }
 
-/* Add Customer modal (quotations/create.ejs) — wide, two titled sections,
-   three columns each, instead of the old cramped single-column stack. */
-#q-new-customer-modal .modal-dialog { max-width: 900px; }
+/* Add Customer modal — two titled sections, three columns each. Matched by id
+   suffix because every voucher screen carries its own copy under its own
+   prefix (q-, so-, dn-, cn-); the styling is one design, not four.
+
+   Sized to FIT: at the page's normal 44px fields and 20px gutters the dialog
+   ran taller than the viewport, so a nine-field form arrived scrolling with
+   its Save button below the fold. Everything inside steps down one notch —
+   the same compact rhythm the voucher forms use. */
+[id$="-new-customer-modal"] .modal-dialog { max-width: 820px; }
+[id$="-new-customer-modal"] .modal-content { border: 0; border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,.22); }
+[id$="-new-customer-modal"] .modal-header { padding: 14px 20px; border-bottom: 1px solid var(--border); }
+[id$="-new-customer-modal"] .modal-footer { border-top: 1px solid var(--border); }
+/* The Cr/Dr picker is capped at 90px inline; without room for its caret the
+   arrow sat on top of the text. */
+[id$="-new-customer-modal"] .input-group .form-select { padding-right: 26px; }
+[id$="-new-customer-modal"] .modal-title { font-size: 17px; font-weight: 700; }
+/* Scrolls inside itself if a viewport is short — the header and the Save
+   button stay put instead of being pushed off the bottom. */
+[id$="-new-customer-modal"] .modal-body {
+    padding: 16px 20px;
+    max-height: calc(100vh - 190px);
+    overflow-y: auto;
+}
+[id$="-new-customer-modal"] .modal-footer { padding: 12px 20px; }
+[id$="-new-customer-modal"] .form-grid { gap: 10px 14px; }
+[id$="-new-customer-modal"] .form-label { font-size: 12px; margin-bottom: 4px; }
+[id$="-new-customer-modal"] .form-control,
+[id$="-new-customer-modal"] .form-select { min-height: 38px; padding: 7px 11px; font-size: 13.5px; }
+/* Address and Narration are notes, not essays — two rows of room each, so
+   they stop being the tallest thing in the dialog. */
+[id$="-new-customer-modal"] textarea.form-control { min-height: 58px; }
+[id$="-new-customer-modal"] .input-group-text { font-size: 13.5px; }
+/* No box. The dialog already has a border, and a bordered card inside it read
+   as a double frame — two rounded rectangles a few pixels apart, which is the
+   thing that made this popup look unfinished. A section is now just its
+   heading and a hairline above it: same grouping, none of the boxing. */
 .q-nc-section {
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px 18px 4px;
-    margin: 0 0 20px;
+    border: 0;
+    padding: 0;
+    margin: 0 0 18px;
+}
+.q-nc-section + .q-nc-section {
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
 }
 .q-nc-section:last-of-type { margin-bottom: 0; }
 .q-nc-section-title {
+    display: flex; align-items: center; gap: 8px;
     width: auto;
-    padding: 0 8px;
-    margin: 0 0 14px -4px;
-    font-size: 13px;
+    float: none;
+    padding: 0;
+    margin: 0 0 10px;
+    font-size: 11px;
     font-weight: 700;
-    color: var(--primary);
+    color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: .04em;
+    letter-spacing: .06em;
+}
+/* A short brand tick before the heading — enough to anchor the eye without
+   drawing a frame around everything below it. */
+.q-nc-section-title::before {
+    content: '';
+    width: 3px; height: 12px; border-radius: 2px;
+    background: var(--brand-gradient-btn);
+    flex: 0 0 auto;
 }
 
 /* input with prefix (+91 flag) / suffix (₹) */
@@ -1528,8 +1600,15 @@ a.top10-item:hover .top10-name { text-decoration: underline; }
 }
 .dp-day:hover { background: #F3F4F6; }
 .dp-day.is-muted { color: #C4C9D2; }
-.dp-day.is-today { font-weight: 700; color: var(--primary); }
-.dp-day.is-selected { background: var(--primary); color: #fff; font-weight: 700; }
+/* The accent is the logo's green, not the app's blue: a calendar is full of
+   blue-looking links and a blue "today" got lost among them. */
+.dp-day.is-today { font-weight: 700; color: var(--brand-green-text); }
+.dp-day.is-selected { background: var(--brand-gradient-btn); color: #fff; font-weight: 700; }
+.dp-day.is-selected:hover { filter: brightness(1.05); }
+/* Out of range (a Valid Till before its voucher date, say) — visible, so the
+   month still reads as a month, but plainly not choosable. */
+.dp-day.is-disabled { color: #DDE1E8; cursor: not-allowed; }
+.dp-day.is-disabled:hover { background: transparent; }
 .dp-foot {
     display: flex; align-items: center; justify-content: space-between;
     gap: 8px; margin-top: 12px; padding-top: 10px;
@@ -1542,8 +1621,36 @@ a.top10-item:hover .top10-name { text-decoration: underline; }
     padding: 5px 12px; border-radius: 8px; font-size: 12px; cursor: pointer;
 }
 .dp-btn:hover { background: #F3F4F6; }
-.dp-btn--apply { background: var(--primary); border-color: var(--primary); color: #fff; }
-.dp-btn--apply:hover { background: var(--primary-700); }
+.dp-btn--apply { background: var(--brand-gradient-btn); border-color: transparent; color: #fff; font-weight: 600; }
+/* Must restate the background: `.dp-btn:hover` above is a two-class selector
+   and outbids the single-class `.dp-btn--apply`, so hovering repainted the
+   button pale grey — with white text on it, the label vanished. */
+.dp-btn--apply:hover {
+    background: var(--brand-gradient-btn);
+    color: #fff;
+    filter: brightness(1.06);
+}
+
+/* ── Date fields use OUR popup, not the browser's ─────────────────────
+ * Hiding the calendar indicator is the one part script cannot do: without
+ * it a click on the icon still summons Chrome's own picker, and the user
+ * gets two different calendars on one field depending on where they clicked.
+ * The field keeps its type="date" (so its value stays ISO and every form
+ * that posts it is unchanged) — datepicker.js just opens ours on click. */
+input[type="date"]::-webkit-calendar-picker-indicator {
+    display: none;
+    -webkit-appearance: none;
+}
+input[type="date"].dp-input {
+    cursor: pointer;
+    /* Our own calendar mark, in the same place the browser's icon sat. */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4.5' width='18' height='16' rx='2.5'/%3E%3Cpath d='M3 9.5h18M8 2.5v4M16 2.5v4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 16px 16px;
+    padding-right: 36px;
+}
+input[type="date"].dp-input:disabled { cursor: not-allowed; opacity: .85; }
 
 /* Cash & Bank screens */
 .ledger-head {
@@ -2178,3 +2285,97 @@ a.action-btn { text-decoration: none; }
 @media (max-width: 991.98px) {
     .q-foot { grid-template-columns: 1fr; }
 }
+
+/* ── Voucher density ──────────────────────────────────────────────────
+ * A voucher screen is a data-entry screen, not a marketing page: the header
+ * row, the date row, the items grid and the totals should all fit on one
+ * screen without scrolling, the way LiveKeeping's create-voucher screen does.
+ * The generous 44px/20px rhythm the rest of the app uses costs about a third
+ * of the viewport here, so inside .q-voucher (and only there) everything
+ * tightens one notch: shorter fields, smaller gaps, a slimmer title bar.
+ * Nothing structural changes — same markup, same components. */
+.q-voucher .inv-body { padding: 12px 16px; }
+.q-voucher .form-grid { gap: 10px 14px; }
+.q-voucher .form-grid + .form-grid { margin-top: 10px; }
+.q-voucher .form-label { font-size: 12px; margin-bottom: 4px; }
+/* 38px is the compact field height already defined for grid rows — reusing it
+   keeps the header fields and the line-item cells on one scale. */
+.q-voucher .form-control,
+.q-voucher .form-select { min-height: 38px; padding: 7px 11px; font-size: 13.5px; }
+/* The line-item cells keep their own (smaller) size — do not let the rule
+   above grow them back. */
+.q-voucher .q-table td .form-control,
+.q-voucher .q-table td .form-select,
+.q-voucher .li-row .form-control,
+.q-voucher .li-row .form-select { min-height: 32px; padding: 4px 8px; font-size: 12.5px; }
+.q-voucher .q-table thead th { padding: 7px 7px; }
+.q-voucher .q-table tbody td { padding: 5px 7px; }
+.q-voucher .q-collapse-head { padding: 9px 16px; }
+.q-voucher .q-collapse-body { padding: 4px 16px 12px; }
+.q-voucher .q-adv-title { margin: 12px 0 8px; }
+.q-voucher .q-foot { padding: 12px 16px; gap: 16px; }
+.q-voucher .q-total-row { padding: 8px 14px; font-size: 13.5px; }
+.q-voucher .q-total-row.grand .lbl { font-size: 14px; }
+.q-voucher .q-total-row.grand .val { font-size: 17px; }
+.q-voucher .q-party-balance { margin-top: 2px; }
+
+/* Inline "you must fill this" note, shown next to the field that is wrong
+   rather than as a banner at the top of a form you have scrolled past. */
+.q-field-error {
+    margin-top: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--danger);
+    line-height: 1.3;
+}
+.form-control.is-invalid,
+.form-select.is-invalid,
+input.is-invalid {
+    border-color: var(--danger) !important;
+    box-shadow: 0 0 0 3px rgba(217, 45, 32, .10);
+}
+
+/* ── Voucher lower half: strips left, totals right ────────────────────
+ * Narration and Advanced Settings are working area; the totals panel is the
+ * answer you are watching while you work. Side by side (LiveKeeping's layout)
+ * both are visible at once — full-width strips pushed the totals off-screen
+ * the moment Advanced Settings was opened. */
+.q-lower {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 340px;
+    gap: 16px;
+    padding: 12px 16px;
+    align-items: start;
+}
+.q-lower-main { min-width: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+/* The strips already draw their own top rule; inside the bordered column the
+   first one would double it up. */
+.q-lower-main .q-collapse:first-child { border-top: 0; }
+/* Stays put while the left column grows — the running total is the one thing
+   you want in view the whole time. */
+.q-lower-side { position: sticky; top: 84px; }
+
+@media (max-width: 991.98px) {
+    .q-lower { grid-template-columns: 1fr; }
+    .q-lower-side { position: static; }
+}
+
+/* ── Advanced Settings tabs ───────────────────────────────────────── */
+.q-adv-tabs {
+    display: flex; gap: 4px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+}
+.q-adv-tab {
+    background: transparent; border: 0; border-bottom: 2px solid transparent;
+    padding: 8px 14px; margin-bottom: -1px;
+    font-size: 13px; font-weight: 600; color: var(--text-muted);
+    cursor: pointer; white-space: nowrap;
+}
+.q-adv-tab:hover { color: var(--text); }
+.q-adv-tab.is-active { color: var(--primary); border-bottom-color: var(--primary); }
+.q-adv-panel { display: none; }
+.q-adv-panel.is-active { display: block; }
+/* The Consignee panel keeps its heading only for the "Same as buyer" button;
+   the tab already names the block, so the title itself sits quietly. */
+.q-adv-panel .q-adv-title:first-child { margin-top: 0; }

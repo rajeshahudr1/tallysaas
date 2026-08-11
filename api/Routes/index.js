@@ -965,6 +965,9 @@ router.delete(
 
 router.get('/quotations', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('quotations', 'view'), validate(listQuotationSchema, 'query'), QuotationController.list);
+// BEFORE /quotations/:id — "next-no" is a word, not an id, and :id would eat it.
+router.get('/quotations/next-no', authenticate, resolveTenant, resolveCompany, resolveLocation,
+    can('quotations', 'create'), QuotationController.nextNo);
 router.get('/quotations/:id', authenticate, resolveTenant, resolveCompany, resolveLocation,
     can('quotations', 'view'), QuotationController.get);
 router.get('/quotations/:id/pdf', authenticate, resolveTenant, resolveCompany, resolveLocation,
@@ -1447,6 +1450,13 @@ router.get(
 // Tally price levels + their rate cards, for the voucher forms' Price Level
 // picker. Gated on quotations (the first form to use it) rather than a module
 // of their own — a price level is not a screen, it is a field on a voucher.
+// HSN/SAC options for the line-item picker — same gate as the price levels
+// below: it is a field on a voucher, not a screen of its own.
+router.get(
+    '/tally/hsn-codes',
+    authenticate, resolveTenant, resolveCompany, resolveLocation, can('quotations', 'view'),
+    TallyLedgerController.hsnOptions,
+);
 router.get(
     '/tally/price-levels',
     authenticate, resolveTenant, resolveCompany, resolveLocation, can('quotations', 'view'),

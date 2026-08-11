@@ -88,22 +88,30 @@ var _dateVal   = _edit ? ymd(_edit.quotation_date) : _today;
 var _validVal  = _edit ? ymd(_edit.valid_till) : '';
 %>
 
+<%# The SAME header every other create screen uses (partials/page-head), not a
+    voucher-only bar: title, breadcrumb and the actions on the right. The
+    buttons live outside the <form> and reach it by form="quotation-form",
+    which is how sales-invoices/create.ejs does it too. %>
+<%- include('../partials/page-head', {
+    title: _edit ? 'Edit Quotation Voucher' : 'Create Quotation Voucher',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: 'Quotations', href: '/quotations' },
+        { label: _edit ? 'Edit Quotation' : 'Create Quotation' },
+    ],
+    actions:
+        '<a class="btn btn-light" href="/quotations"><i class="fa-solid fa-list-ul me-2"></i>View Quotations</a>' +
+        '<button type="submit" form="quotation-form" id="q-submit" class="btn btn-gradient">' +
+            '<i class="fa-solid fa-cloud-arrow-up me-2"></i>' + _esc(_submitLabel) +
+        '</button>',
+}) %>
+
 <form id="quotation-form" method="post" action="<%= _formAction %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/quotation.js on submit. -->
     <input type="hidden" name="items_json" id="items_json">
 
     <div class="card mb-3 q-voucher">
-
-        <div class="voucher-head">
-            <a class="q-back" href="/quotations" title="Back to quotations" aria-label="Back to quotations">
-                <i class="fa-solid fa-arrow-left"></i>
-            </a>
-            <span>Create Quotation Voucher</span>
-            <a class="q-list-btn" href="/quotations">
-                <i class="fa-solid fa-list-ul me-1"></i>View Quotations
-            </a>
-        </div>
 
         <div class="inv-body">
             <div class="form-grid">
@@ -138,8 +146,15 @@ var _validVal  = _edit ? ymd(_edit.valid_till) : '';
                 <div class="form-group">
                     <label class="form-label" for="q-no">Quotation No</label>
                     <div class="q-no-wrap">
+                        <%# The number this quotation will actually get, shown up
+                            front. data-auto-no remembers it so the form can tell
+                            "user left the default alone" (send nothing, let the
+                            server derive it at save time — someone else may have
+                            taken this number meanwhile) from "user typed a custom
+                            number" (send it verbatim). %>
                         <input type="text" class="form-control" id="q-no" name="quotation_no"
-                               value="" placeholder="<%= _esc(_qNo || 'Auto-generated on save') %>" readonly>
+                               value="<%= _esc(_qNo) %>"<%- _edit ? '' : ' data-auto-no="' + _esc(_qNo) + '"' %>
+                               placeholder="Auto-generated on save" readonly>
                         <button type="button" class="q-no-edit" id="q-no-edit" title="Edit quotation no" aria-label="Edit quotation no">
                             <i class="fa-solid fa-pen"></i>
                         </button>
@@ -237,6 +252,15 @@ var _validVal  = _edit ? ymd(_edit.valid_till) : '';
             </table>
         </div>
 
+        <%# ── Everything below the items grid is two columns, the way
+             LiveKeeping lays it out: Narration and Advanced Settings fill the
+             left, the totals panel sits at the top of the right and stays
+             there. Before this the strips ran the full width and pushed the
+             totals a screen down — you could not see what you were building
+             while you filled in the print details. ── %>
+        <div class="q-lower">
+        <div class="q-lower-main">
+
         <!-- ════ Collapsible strips ════ -->
         <div class="q-collapse">
             <button type="button" class="q-collapse-head" data-bs-toggle="collapse" data-bs-target="#q-narration" aria-expanded="false">
@@ -295,10 +319,10 @@ var _validVal  = _edit ? ymd(_edit.valid_till) : '';
             </div>
         </div>
 
-        <!-- ════ Footer — right-hand totals panel + Create Voucher ════ -->
-        <div class="inv-foot q-foot">
-            <div></div>
+        </div><!-- /.q-lower-main -->
 
+        <!-- ════ Right-hand totals panel ════ -->
+        <div class="q-lower-side">
             <div class="q-totals">
                 <%# Gross and Discount only appear once there IS a discount, so a
                     plain bill stays three clean rows. Sub Total below is the
@@ -321,14 +345,12 @@ var _validVal  = _edit ? ymd(_edit.valid_till) : '';
                     <span class="lbl">Grand Total</span><span class="val" id="q-grand">₹0.00</span>
                 </div>
             </div>
-        </div>
+        </div><!-- /.q-lower-side -->
+        </div><!-- /.q-lower -->
 
-        <div class="form-card-footer" style="border-top:0; background:#fff;">
-            <a class="btn btn-light" href="/quotations">Cancel</a>
-            <button type="submit" class="btn btn-primary" id="q-submit">
-                <i class="fa-solid fa-cloud-arrow-up me-1"></i><%= _submitLabel %>
-            </button>
-        </div>
+        <%# No footer button bar: the primary action now lives in the page head
+            (id q-submit moved there), and two "Create Voucher" buttons on one
+            screen is a worse answer than one in a predictable place. %>
     </div>
 
 </form>
@@ -529,43 +551,7 @@ var _validVal  = _edit ? ymd(_edit.valid_till) : '';
        is flagged rather than hidden or clamped away. */
     .li-prod-item .li-prod-sub.is-negative { color: var(--danger); font-weight: 600; }
 
-    /* Single header bar (Defect 1 fix) — replaces the stacked page-head +
-       voucher-head pair; a compact Back arrow instead of a second title. */
-    .q-back {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 26px; height: 26px; border-radius: 6px; margin-right: 10px;
-        color: #fff; background: rgba(255,255,255,.15); vertical-align: middle;
-    }
-    .q-back:hover { background: rgba(255,255,255,.28); color: #fff; }
-
-    /* Full-bleed header bar (change 1) — LiveKeeping's header spans the
-       ENTIRE content area, flush against the sidebar and the right edge,
-       with nothing else above it. <main class="page"> pads 24px 28px (see
-       theme.css), so pull the bar out by that exact amount and square its
-       top corners; the rest of the card (below the bar) stays inset as
-       normal. Media query mirrors theme.css's own `.page` mobile padding. */
     .q-voucher { overflow: visible; }
-    .voucher-head {
-        display: flex; align-items: center;
-        margin: -24px -28px 16px;
-        border-radius: 0;
-    }
-    .voucher-head span { flex: 0 0 auto; }
-    @media (max-width: 767.98px) {
-        .voucher-head { margin: -20px -16px 16px; }
-    }
-
-    /* "View Quotations" header button (change 2) — sits after the title,
-       pushed to the far right of the full-bleed bar. */
-    .q-list-btn {
-        margin-left: auto;
-        display: inline-flex; align-items: center;
-        padding: 6px 14px; border-radius: 6px;
-        font-size: 12.5px; font-weight: 600;
-        color: #fff; background: rgba(255,255,255,.15);
-        border: 1px solid rgba(255,255,255,.35);
-    }
-    .q-list-btn:hover { background: rgba(255,255,255,.28); color: #fff; }
 
     /* Party/Ledger clear (×) button (change 3) — only shown once a value is
        picked; sits inside the combobox cell, to the left of the dropdown's
@@ -582,8 +568,15 @@ var _validVal  = _edit ? ymd(_edit.valid_till) : '';
     /* Row sub-value (balance/parent) right-aligned opposite the label
        (change 3 — party rows show outstanding balance on the right when
        available; ledger rows already used getSubLabel for the parent). */
-    .li-prod-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .li-prod-item .li-prod-sub { flex: 0 0 auto; text-align: right; }
+    /* An option is two lines: the name, then what you check before picking it
+       (HSN / stock for an item, the group and tax treatment for a ledger).
+       Side by side in one row they fought for the same narrow width and both
+       ended up clipped — "In sto…" told nobody anything. */
+    .li-prod-item { display: block; white-space: normal; line-height: 1.35; }
+    .li-prod-item > span:first-child { display: block; font-weight: 500; }
+    /* The pinned "create new" row is still one line: icon beside label. */
+    .li-prod-item.li-prod-create { display: flex; align-items: center; }
+    .li-prod-item .li-prod-sub { display: block; text-align: left; margin-top: 1px; }
 
     /* "Create New Customer" pinned row (change 4). */
     .li-prod-item.li-prod-create {

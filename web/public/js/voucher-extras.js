@@ -253,6 +253,35 @@
                 if (el) el.value = src.value;
             });
         });
+
+    }
+
+    /* Advanced Settings tabs. Wired on load rather than from init(), because
+       the per-voucher scripts use this file as a helper library and none of
+       them call init() — the tabs must work on every screen that includes the
+       partial, not just the ones that opt in.
+
+       Panels are hidden, never removed: serialiseVoucherDetails walks
+       .<P>-vd across the whole form, so a field on an unopened tab still
+       posts its value. */
+    function wireAdvancedTabs() {
+        var tabs = [].slice.call(document.querySelectorAll('.q-adv-tab[data-vd-tab]'));
+        tabs.forEach(function (tab) {
+            tab.addEventListener('click', function () {
+                tabs.forEach(function (t) {
+                    var on = t === tab;
+                    t.classList.toggle('is-active', on);
+                    t.setAttribute('aria-selected', on ? 'true' : 'false');
+                    var panel = document.getElementById(t.dataset.vdTab);
+                    if (panel) panel.classList.toggle('is-active', on);
+                });
+            });
+        });
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', wireAdvancedTabs);
+    } else {
+        wireAdvancedTabs();
     }
 
     window.VoucherExtras = {

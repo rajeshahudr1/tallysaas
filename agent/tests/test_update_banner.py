@@ -106,6 +106,7 @@ class _Dash:
     _show_update_bar = gui_agent.DashboardView._show_update_bar
     _hide_update_bar = gui_agent.DashboardView._hide_update_bar
     on_update_now = gui_agent.DashboardView.on_update_now
+    _update_timed_out = gui_agent.DashboardView._update_timed_out
 
     def __init__(self, cfg=None):
         self.cfg = cfg or _Cfg()
@@ -356,9 +357,16 @@ class UpdateApplyTests(unittest.TestCase):
         self.assertEqual(len(box.errors), 1)
         self.assertIn("checksum mismatch", box.errors[0])
 
-    def test_sysexit_is_not_swallowed(self):
-        """The successful path: the process must be allowed to exit so the
-        detached batch can replace the running exe."""
+    def test_sysexit_on_the_worker_is_reported_not_swallowed(self):
+        """A SystemExit reaching US means the process did NOT go.
+
+        The swap path takes the whole process down (sync_agent._exit_for_updater
+        → os._exit), precisely because a SystemExit raised on a worker thread
+        only ends that thread: the exe stays open and LOCKED, the updater batch
+        spins its wait loop and gives up, and the button used to sit on
+        "Updating..." forever with nothing said. So if SystemExit ever surfaces
+        here, it is a failure and must be reported like one.
+        """
         dash = _Dash()
         dash._update_available = "1.4.0"
 
@@ -367,11 +375,38 @@ class UpdateApplyTests(unittest.TestCase):
         gui_agent.sync_agent.maybe_self_update = _exits
 
         box = self._Box()
-        with self.assertRaises(SystemExit):
-            self._apply(dash, box)
-        # Never told the user it failed — it did not.
-        self.assertEqual(box.errors, [])
+        self._apply(dash, box)
+
+        self.assertFalse(dash._update_busy)
+        self.assertEqual(dash.btn_update.cfg.get("state"), "normal")
+        self.assertEqual(dash.btn_update.cfg.get("text"), "Update Now")
+        self.assertEqual(len(box.errors), 1)
+        self.assertIn("could not close", box.errors[0].lower())
+
+    def test_timeout_resets_a_stuck_button(self):
+        """Belt and braces: no result and still running = say so, don't hang."""
+        dash = _Dash()
+        dash._update_available = "1.4.0"
+        dash._update_busy = True
+        dash.btn_update.configure(state="disabled", text="Updating...")
+
+        box = self._Box()
+        gui_agent.ui_signin.alert = box.alert
+        gui_agent.DashboardView._update_timed_out(dash)
+
+        self.assertFalse(dash._update_busy)
+        self.assertEqual(dash.btn_update.cfg.get("state"), "normal")
+        self.assertEqual(dash.btn_update.cfg.get("text"), "Update Now")
+        self.assertEqual(len(box.warnings), 1)
+
+    def test_timeout_is_a_no_op_once_the_worker_reported(self):
+        dash = _Dash()
+        dash._update_busy = False
+        box = self._Box()
+        gui_agent.ui_signin.alert = box.alert
+        gui_agent.DashboardView._update_timed_out(dash)
         self.assertEqual(box.warnings, [])
+        self.assertEqual(dash.activity, [])
 
     def test_double_click_runs_once(self):
         dash = _Dash()
@@ -384,6 +419,41 @@ class UpdateApplyTests(unittest.TestCase):
         self._apply(dash, box)
         self.assertEqual(ran["n"], 0)
         self.assertEqual(box.asked, 0)
+
+
+class ExitForUpdaterTests(unittest.TestCase):
+    """The engine half of the same bug — see the class above for the story."""
+
+    def setUp(self):
+        import sync_agent
+        self.sync_agent = sync_agent
+        self._orig_exit = sync_agent.os._exit
+
+    def tearDown(self):
+        self.sync_agent.os._exit = self._orig_exit
+
+    def test_main_thread_raises_systemexit(self):
+        with self.assertRaises(SystemExit):
+            self.sync_agent._exit_for_updater(_Logger())
+
+    def test_worker_thread_kills_the_process(self):
+        """SystemExit here would only end the thread, leaving the exe locked."""
+        import threading
+        seen = {}
+        self.sync_agent.os._exit = lambda code: seen.__setitem__("code", code)
+
+        def run():
+            try:
+                self.sync_agent._exit_for_updater(_Logger())
+            except BaseException as exc:            # noqa: BLE001
+                seen["raised"] = exc
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join(5)
+
+        self.assertEqual(seen.get("code"), 0)
+        self.assertNotIn("raised", seen)
 
 
 if __name__ == "__main__":

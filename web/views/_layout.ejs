@@ -192,6 +192,9 @@ var _activeMenu = (typeof activeMenu !== 'undefined') ? activeMenu : '';
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
     <!-- App behaviours (sidebar/row-actions/filter/counters/PWA install/offline) -->
     <script src="/js/app.js?v=9" defer></script>
+    <!-- One themed date popup for every date field in the app (the browser's
+         own picker cannot be styled, and looked different in each one). -->
+    <script src="/js/datepicker.js?v=1" defer></script>
 
     <!-- Per-page script slot (e.g. dashboard.js). Guarded so a missing
          local never breaks the render. -->

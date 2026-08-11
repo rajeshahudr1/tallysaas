@@ -409,10 +409,36 @@ async function salesLedgerOptions(req, res) {
  */
 async function priceLevelOptions(req, res) {
     try {
-        const rows = await db('tally_price_levels')
-            .where('company_id', req.companyId).whereNull('deleted_at')
-            .orderBy('name', 'asc')
-            .select('id', 'name');
+        // tally_price_levels is only ever populated if some future sync writes
+        // it — the agent deliberately never asks Tally for `TYPE: PriceLevel`
+        // (not a Tally object type; it hung and crashed Tally on a real build).
+        // The names actually reach us on the stock items, in
+        // tally_price_lists.price_level, so that is the real source here.
+        // Union of both, so this keeps working either way.
+        const [levels, used] = await Promise.all([
+            db('tally_price_levels')
+                .where('company_id', req.companyId).whereNull('deleted_at')
+                .select('id', 'name'),
+            db('tally_price_lists')
+                .where('company_id', req.companyId).whereNull('deleted_at')
+                .whereNotNull('price_level').whereRaw("trim(price_level) <> ''")
+                .distinct('price_level'),
+        ]);
+
+        const byKey = new Map();
+        for (const r of levels) {
+            const name = String(r.name || '').trim();
+            if (name) byKey.set(name.toLowerCase(), { id: r.id, name });
+        }
+        for (const r of used) {
+            const name = String(r.price_level || '').trim();
+            // A level only known from the price list has no master row, so no
+            // id — the forms submit the name anyway (that is what
+            // /tally/price-list matches on).
+            if (name && !byKey.has(name.toLowerCase())) byKey.set(name.toLowerCase(), { id: null, name });
+        }
+
+        const rows = [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
         return R.successResponse(res, { data: rows });
     } catch (err) {
         console.error('tallyLedgers.priceLevelOptions error:', err);
@@ -505,8 +531,55 @@ async function purchaseLedgerOptions(req, res) {
     }
 }
 
+/**
+ * GET /tally/hsn-codes — the HSN/SAC codes this company actually uses, as
+ * options for the line-item "HSN Code" picker.
+ *
+ * Two sources, because neither is complete on its own: the GST
+ * classifications Tally keeps as masters (they carry a description and a
+ * rate), and the codes sitting on the items themselves (an item can carry an
+ * HSN with no classification master behind it). Keyed by code — a code known
+ * from both keeps the master's description.
+ */
+async function hsnOptions(req, res) {
+    try {
+        const clean = (s) => String(s == null ? '' : s).trim();
+        const [classifications, fromItems] = await Promise.all([
+            db('tally_gst_classifications')
+                .where('company_id', req.companyId).whereNull('deleted_at')
+                .whereNotNull('hsn_code').whereRaw("trim(hsn_code) <> ''")
+                .select('hsn_code', 'name', 'rate'),
+            db('products')
+                .where('company_id', req.companyId).whereNull('deleted_at')
+                .whereNotNull('hsn_code').whereRaw("trim(hsn_code) <> ''")
+                .distinct('hsn_code').select('hsn_code'),
+        ]);
+
+        const byCode = new Map();
+        for (const r of classifications) {
+            const code = clean(r.hsn_code);
+            if (!code) continue;
+            byCode.set(code, {
+                code,
+                description: clean(r.name),
+                rate: r.rate != null ? Number(r.rate) : null,
+            });
+        }
+        for (const r of fromItems) {
+            const code = clean(r.hsn_code);
+            if (code && !byCode.has(code)) byCode.set(code, { code, description: '', rate: null });
+        }
+
+        const rows = [...byCode.values()].sort((a, b) => a.code.localeCompare(b.code));
+        return R.successResponse(res, { data: rows });
+    } catch (err) {
+        console.error('tallyLedgers.hsnOptions error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
 module.exports = {
-    list, statement, voucher,
+    list, statement, voucher, hsnOptions,
     salesLedgerOptions, ledgerGroupOptions, purchaseLedgerOptions,
     priceLevelOptions, priceListRates,
 };

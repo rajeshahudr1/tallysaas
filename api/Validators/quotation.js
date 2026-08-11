@@ -53,7 +53,24 @@ const itemSchema = Joi.object({
     gst_rate:      Joi.number().min(0).precision(2).default(0),
     godown:        optText(120),
     tax_inclusive: Joi.boolean().default(false),
-});
+})
+    // A line must NAME something. Without this a row carrying only a quantity
+    // passed — which is exactly what the create screen's blank starter row
+    // (qty 1, rate 0, nothing picked) sends, so quotations with no items at
+    // all were valid. A description-only line stays legal: not every line has
+    // a stock master behind it.
+    //
+    // Checked by hand rather than with Joi's .or(): .or() counts a key as
+    // given when it is PRESENT, and the blank row sends product_id: null —
+    // present, empty, and it would have passed.
+    .custom((line, helpers) => {
+        const named = (line.product_id != null && line.product_id !== '')
+            || String(line.description || '').trim() !== '';
+        return named ? line : helpers.error('any.custom');
+    })
+    .messages({
+        'any.custom': 'Each line item needs an item or a description.',
+    });
 
 const itemsArray = Joi.array().items(itemSchema).min(1).required().messages({
     'array.min':    'At least one line item is required.',

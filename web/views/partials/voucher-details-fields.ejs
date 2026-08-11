@@ -25,7 +25,19 @@
        return g[key] == null ? '' : String(g[key]);
    } %>
 
-<h3 class="q-adv-title">Buyer's Details</h3>
+<%# The four blocks are TABS, not four stacked headings. Stacked, they made
+    Advanced Settings a page-long scroll for what is usually one edited field;
+    as tabs the block stays one screen tall and you go straight to the part you
+    need. Every field stays in the DOM (panels are hidden, not removed), so the
+    .<p>-vd serialisation in voucher-extras.js is unchanged. %>
+<div class="q-adv-tabs" role="tablist">
+    <button type="button" class="q-adv-tab is-active" role="tab" aria-selected="true" data-vd-tab="<%= p %>-vdt-buyer">Buyer's Details</button>
+    <button type="button" class="q-adv-tab" role="tab" aria-selected="false" data-vd-tab="<%= p %>-vdt-consignee">Consignee Details</button>
+    <button type="button" class="q-adv-tab" role="tab" aria-selected="false" data-vd-tab="<%= p %>-vdt-dispatch">Dispatch Details</button>
+    <button type="button" class="q-adv-tab" role="tab" aria-selected="false" data-vd-tab="<%= p %>-vdt-order">Order Details</button>
+</div>
+
+<div class="q-adv-panel is-active" id="<%= p %>-vdt-buyer" role="tabpanel">
 <div class="form-grid">
     <div class="form-group">
         <label class="form-label" for="<%= p %>-b-name">Buyer's Name</label>
@@ -75,6 +87,9 @@
     </div>
 </div>
 
+</div><!-- /buyer panel -->
+
+<div class="q-adv-panel" id="<%= p %>-vdt-consignee" role="tabpanel">
 <h3 class="q-adv-title">
     Consignee Details
     <%# Ships to the buyer far more often than not, so the copy button saves
@@ -114,7 +129,9 @@
     </div>
 </div>
 
-<h3 class="q-adv-title">Dispatch Details</h3>
+</div><!-- /consignee panel -->
+
+<div class="q-adv-panel" id="<%= p %>-vdt-dispatch" role="tabpanel">
 <div class="form-grid">
     <div class="form-group">
         <label class="form-label" for="<%= p %>-d-date">Shipping Date</label>
@@ -153,7 +170,9 @@
     </div>
 </div>
 
-<h3 class="q-adv-title">Order Details</h3>
+</div><!-- /dispatch panel -->
+
+<div class="q-adv-panel" id="<%= p %>-vdt-order" role="tabpanel">
 <div class="form-grid">
     <div class="form-group">
         <label class="form-label" for="<%= p %>-o-number">Order Number</label>
@@ -181,6 +200,7 @@
                   data-vd-group="order" data-vd-key="terms_of_delivery"><%= _v('order','terms_of_delivery') %></textarea>
     </div>
 </div>
+</div><!-- /order panel -->
 
 <%# Serialised from the .<p>-vd fields on submit (voucher-extras.js). %>
 <input type="hidden" name="voucher_details_json" id="<%= p %>-voucher-details">

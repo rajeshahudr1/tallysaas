@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Optional
 
@@ -2563,6 +2564,45 @@ def _exe_path() -> str:
     return os.path.abspath(sys.executable)
 
 
+def _exit_for_updater(logger) -> None:
+    """End THIS PROCESS so the updater bat can replace the locked exe.
+
+    ``raise SystemExit`` only works from the main thread. The GUI calls
+    :func:`maybe_self_update` from a worker thread (the Dashboard's
+    "Update Now" button), and there ``SystemExit`` is swallowed by
+    ``threading`` — it kills that one thread while the exe stays running and
+    LOCKED. The bat then spins its wait loop, gives up, throws away the staged
+    build, and the button sits on "Updating..." forever.
+
+    So: flush the log by hand and take the process down with ``os._exit``,
+    which is thread-agnostic. Nothing needs an orderly shutdown here — the
+    whole point is to release the file handle as fast as possible, and the bat
+    relaunches us the moment the swap lands.
+    """
+    # Flush, do NOT logging.shutdown(): on the main-thread path the SystemExit
+    # still unwinds through code that logs, and closed handlers would turn a
+    # clean update into a stack trace.
+    try:
+        import logging
+        _handlers = list(getattr(logging.getLogger(), "handlers", []))
+        _handlers += list(getattr(logger, "handlers", []))
+        for _h in _handlers:
+            try:
+                _h.flush()
+            except Exception:                               # noqa: BLE001
+                pass
+    except Exception:                                       # noqa: BLE001
+        pass
+    if threading.current_thread() is threading.main_thread():
+        raise SystemExit(_EXIT_OK)
+    try:
+        sys.stdout.flush()
+        sys.stderr.flush()
+    except Exception:                                       # noqa: BLE001
+        pass
+    os._exit(_EXIT_OK)
+
+
 def _spawn_updater_bat(exe_dir: str, logger, exe_path: Optional[str] = None) -> bool:
     """Write + launch the detached updater batch that swaps in the new exe.
 
@@ -2645,12 +2685,20 @@ def _spawn_updater_bat(exe_dir: str, logger, exe_path: Optional[str] = None) -> 
         logger.error("Self-update: could not write updater batch: %s", exc)
         return False
 
-    # Launch DETACHED with no window so it outlives this process.
+    # Launch in its own process group with NO window, so it outlives this
+    # process without ever flashing a console at the customer.
+    #
+    # NOT DETACHED_PROCESS: detached wins over CREATE_NO_WINDOW, leaving cmd
+    # with no console at all — and then every child it spawns (ping, net)
+    # allocates its OWN visible console window. CREATE_NO_WINDOW gives cmd a
+    # hidden console that the children inherit, which is what we actually want.
+    # The bat still survives us: nothing here waits on it, and CTRL events do
+    # not reach it thanks to the new process group.
     try:
         flags = 0
         if os.name == "nt":
-            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-            flags = 0x00000008 | 0x00000200 | 0x08000000
+            # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+            flags = 0x00000200 | 0x08000000
         subprocess.Popen(
             ["cmd.exe", "/c", bat],
             cwd=exe_dir, close_fds=True, creationflags=flags,
@@ -2818,7 +2866,7 @@ def maybe_self_update(cfg: Config, logger, api: ApiClient,
     # it hidden. The old exe is NEVER deleted before the new one is in place.
     logger.info("Self-update: exiting to let the updater swap in v%s.", latest)
     echo("[update] Restarting to finish the update...")
-    raise SystemExit(_EXIT_OK)
+    _exit_for_updater(logger)
 
 
 # --------------------------------------------------------------------------- #

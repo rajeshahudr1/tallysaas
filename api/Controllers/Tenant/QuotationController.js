@@ -30,6 +30,7 @@ const R  = require('../../Helpers/response');
 const { recordHistory } = require('../../Helpers/history');
 const { htmlToPdf } = require('../../Helpers/pdf');
 const { quotationPdfHtml } = require('../../Helpers/transactionPdf');
+const { nextVoucherNo } = require('../../Helpers/voucherNumber');
 
 const OOPS_MSG      = 'Oops..Something went wrong. Please try again.';
 const NOT_FOUND_MSG = 'Quotation not found.';
@@ -255,13 +256,15 @@ async function create(req, res) {
         const created = await db.transaction(async (trx) => {
             let quotationNo = (body.quotation_no || '').trim();
             if (!quotationNo) {
-                const cntRow = await trx('quotations')
-                    .where('company_id', req.companyId)
-                    .count('id as c')
-                    .first();
-                const seq = Number(cntRow ? cntRow.c : 0) + 1;
-                const year = new Date(body.quotation_date || Date.now()).getFullYear();
-                quotationNo = `QTN-${year}-${String(seq).padStart(4, '0')}`;
+                // Re-derived HERE, inside the transaction, even though the form
+                // already showed a number: what the form showed was a preview
+                // taken before anyone else had saved.
+                quotationNo = await nextVoucherNo(trx, {
+                    companyId: req.companyId,
+                    table: 'quotations',
+                    column: 'quotation_no',
+                    date: body.quotation_date,
+                });
             }
 
             const header = {
@@ -610,4 +613,25 @@ async function convert(req, res) {
     }
 }
 
-module.exports = { list, get, create, updateDraft, destroy, pdf, convert, computeTotals };
+/**
+ * GET /quotations/next-no?date=YYYY-MM-DD — the number this quotation would
+ * get if saved now, so the create form can SHOW it instead of the vague
+ * "Auto-generated on save". A preview, not a reservation — see
+ * Helpers/voucherNumber; create() derives it again inside its transaction.
+ */
+async function nextNo(req, res) {
+    try {
+        const quotationNo = await nextVoucherNo(db, {
+            companyId: req.companyId,
+            table: 'quotations',
+            column: 'quotation_no',
+            date: req.query.date,
+        });
+        return R.successResponse(res, { quotation_no: quotationNo });
+    } catch (err) {
+        console.error('quotations.nextNo error:', err);
+        return R.errorResponse(res, OOPS_MSG, 500);
+    }
+}
+
+module.exports = { list, get, create, updateDraft, destroy, pdf, convert, nextNo, computeTotals };

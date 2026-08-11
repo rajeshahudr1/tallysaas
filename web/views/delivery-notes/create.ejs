@@ -89,6 +89,23 @@ var _dateVal     = _edit ? ymd(_edit.note_date) : _today;
 var _dispatchVal = _edit ? ymd(_edit.dispatch_date) : '';
 %>
 
+<%# The SAME header every other create screen uses (partials/page-head),
+    not a voucher-only bar. The buttons sit outside the <form> and reach it by
+    the form="…" attribute, exactly as sales-invoices/create.ejs does. %>
+<%- include('../partials/page-head', {
+    title: (_edit ? 'Edit' : 'Create') + ' Delivery Note Voucher',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: "Delivery Notes", href: '/delivery-notes' },
+        { label: _edit ? 'Edit Delivery Note' : 'Create Delivery Note' },
+    ],
+    actions:
+        '<a class="btn btn-light" href="' + '/delivery-notes' + '"><i class="fa-solid fa-list-ul me-2"></i>' + 'View Delivery Notes' + '</a>' +
+        '<button type="submit" form="delivery-note-form" id="dn-submit" class="btn btn-gradient"' + '' + '>' +
+            '<i class="fa-solid fa-cloud-arrow-up me-2"></i>' + _submitLabel +
+        '</button>',
+}) %>
+
 <form id="delivery-note-form" method="post" action="<%= _formAction %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/delivery-note.js on submit. -->
@@ -96,221 +113,6 @@ var _dispatchVal = _edit ? ymd(_edit.dispatch_date) : '';
 
     <div class="card mb-3 q-voucher">
 
-        <div class="voucher-head">
-            <a class="q-back" href="/delivery-notes" title="Back to delivery notes" aria-label="Back to delivery notes">
-                <i class="fa-solid fa-arrow-left"></i>
-            </a>
-            <span>Create Delivery Note Voucher</span>
-            <a class="q-list-btn" href="/delivery-notes">
-                <i class="fa-solid fa-list-ul me-1"></i>View Delivery Notes
-            </a>
-        </div>
-
-        <div class="inv-body">
-            <div class="form-grid">
-                <div class="form-group">
-                    <label class="form-label" for="dn-party">Customer Name<span class="req">*</span></label>
-                    <div class="li-prod-cell">
-                        <input type="text" class="form-control li-product-search" id="dn-party"
-                               placeholder="Search customer…" autocomplete="off" required>
-                        <input type="hidden" name="customer_id" id="dn-party-id" value="<%= _edit ? (_edit.customer_id || '') : '' %>">
-                        <button type="button" class="li-prod-clear" id="dn-party-clear" title="Clear customer" aria-label="Clear customer" hidden>
-                            <i class="fa-solid fa-xmark"></i>
-                        </button>
-                        <div class="li-prod-menu" id="dn-party-menu" hidden></div>
-                    </div>
-                    <%# Where the party stands right now. Raising a voucher for
-                        someone already deep in arrears is a decision you want to
-                        make knowingly, so the figure sits under the picker rather
-                        than a screen away. %>
-                    <div class="q-party-balance" id="dn-party-balance" hidden></div>
-                </div>
-
-                <%# Tally's per-tier rate card ("Wholesale", "Retail"). Choosing one
-                    fills the Rate column from that card — including its quantity
-                    slabs — instead of the item's standard price. Only rendered when
-                    the company actually uses price levels; an empty picker would
-                    just be a dead control. %>
-                <% if (_priceLevels.length) { %>
-                <div class="form-group">
-                    <label class="form-label" for="dn-price-level">Price Level</label>
-                    <select class="form-select" id="dn-price-level" name="price_level">
-                        <option value="">Standard rate</option>
-                        <% _priceLevels.forEach(function (pl) { %>
-                            <option value="<%= pl.name %>"><%= pl.name %></option>
-                        <% }); %>
-                    </select>
-                </div>
-                <% } %>
-
-                <div class="form-group">
-                    <label class="form-label" for="dn-ledger">Ledger Type</label>
-                    <div class="li-prod-cell">
-                        <input type="text" class="form-control li-product-search" id="dn-ledger" name="ledger_name"
-                               placeholder="<%= _ledgers.length ? 'Search ledger…' : 'No ledgers synced yet' %>"
-                               autocomplete="off" disabled>
-                        <div class="li-prod-menu" id="dn-ledger-menu" hidden></div>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="dn-no">Note No</label>
-                    <div class="q-no-wrap">
-                        <input type="text" class="form-control" id="dn-no" name="note_no"
-                               value="" placeholder="<%= _esc(_dnNo || 'Auto-generated on save') %>" readonly>
-                        <button type="button" class="q-no-edit" id="dn-no-edit" title="Edit note no" aria-label="Edit note no">
-                            <i class="fa-solid fa-pen"></i>
-                        </button>
-
-                        <!-- ── Default/Custom note-no popup — same registerPopup()/
-                             closeAllPopups() gate as every other dropdown on this page
-                             (outside click / Esc close it too). -->
-                        <div class="q-no-popup" id="dn-no-popup" hidden>
-                            <div class="q-no-popup-radios">
-                                <label class="q-no-radio">
-                                    <input type="radio" name="dn-no-mode" id="dn-no-mode-default" value="default" checked>
-                                    <span>Default</span>
-                                </label>
-                                <label class="q-no-radio">
-                                    <input type="radio" name="dn-no-mode" id="dn-no-mode-custom" value="custom">
-                                    <span>Custom</span>
-                                </label>
-                            </div>
-                            <div class="q-no-popup-fields" id="dn-no-popup-fields" hidden>
-                                <div class="q-no-field">
-                                    <label for="dn-no-prefix">Prefix</label>
-                                    <input type="text" class="form-control" id="dn-no-prefix" maxlength="20" autocomplete="off">
-                                </div>
-                                <div class="q-no-field">
-                                    <label for="dn-no-number">Voucher no</label>
-                                    <input type="text" class="form-control" id="dn-no-number" maxlength="20" autocomplete="off">
-                                </div>
-                                <div class="q-no-field">
-                                    <label for="dn-no-suffix">Suffix</label>
-                                    <input type="text" class="form-control" id="dn-no-suffix" maxlength="20" autocomplete="off">
-                                </div>
-                            </div>
-                            <div class="q-no-popup-actions">
-                                <button type="button" class="btn btn-light btn-sm" id="dn-no-cancel">Cancel</button>
-                                <button type="button" class="btn btn-primary btn-sm" id="dn-no-save">Save</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="form-grid">
-                <div class="form-group">
-                    <label class="form-label" for="dn-date">Date<span class="req">*</span></label>
-                    <input type="date" class="form-control" id="dn-date" name="note_date" value="<%= _dateVal %>" required<%= _edit ? '' : ' disabled' %>>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="dn-dispatch">Dispatch Date</label>
-                    <input type="date" class="form-control" id="dn-dispatch" name="dispatch_date" value="<%= _dispatchVal %>"<%= _edit ? '' : ' disabled' %>>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label" for="dn-order">Against Sales Order</label>
-                    <div class="li-prod-cell">
-                        <input type="text" class="form-control li-product-search" id="dn-order"
-                               placeholder="Search open sales order…" autocomplete="off" disabled>
-                        <input type="hidden" name="sales_order_id" id="dn-order-id">
-                        <button type="button" class="li-prod-clear" id="dn-order-clear" title="Clear order" aria-label="Clear order" hidden>
-                            <i class="fa-solid fa-xmark"></i>
-                        </button>
-                        <div class="li-prod-menu" id="dn-order-menu" hidden></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- ════ Items table ════ -->
-        <div class="li-table-wrap">
-            <table class="q-table">
-                <thead>
-                    <tr>
-                        <th>Items</th>
-                        <th class="num">Qty</th>
-                        <th class="num">Rate</th>
-                        <th>Units</th>
-                        <th class="num">Disc %</th>
-                        <th>HSN Code</th>
-                        <th>Godown</th>
-                        <th>Description</th>
-                        <th class="num">Amount</th>
-                        <th class="center">Tax Incl.</th>
-                        <th class="center">
-                            <button type="button" class="q-add-btn" id="dn-add-row" title="Add row" aria-label="Add row">
-                                <i class="fa-solid fa-plus"></i>
-                            </button>
-                        </th>
-                    </tr>
-                </thead>
-                <!-- Rows are injected by /js/delivery-note.js from the template below. -->
-                <tbody id="dn-body"></tbody>
-            </table>
-        </div>
-
-        <!-- ════ Collapsible strips ════ -->
-        <div class="q-collapse">
-            <button type="button" class="q-collapse-head" data-bs-toggle="collapse" data-bs-target="#dn-narration" aria-expanded="false">
-                <span>Narration</span>
-                <i class="fa-solid fa-chevron-down"></i>
-            </button>
-            <div class="collapse" id="dn-narration">
-                <div class="q-collapse-body">
-                    <textarea class="form-control" id="dn-notes" name="notes" rows="3"
-                              maxlength="2000" placeholder="Narration for this delivery note…"></textarea>
-                </div>
-            </div>
-        </div>
-
-        <div class="q-collapse">
-            <button type="button" class="q-collapse-head" data-bs-toggle="collapse" data-bs-target="#dn-advanced" aria-expanded="false">
-                <span>Advanced Settings</span>
-                <i class="fa-solid fa-chevron-down"></i>
-            </button>
-            <div class="collapse" id="dn-advanced">
-                <div class="q-collapse-body">
-                    <div class="form-grid">
-                        <div class="form-group">
-                            <label class="form-label" for="dn-location">Location</label>
-                            <select class="form-select" id="dn-location" name="location_id">
-                                <option value="" selected>Select location</option>
-                                <% _locs.forEach(function (o) { %>
-                                    <option value="<%= o.id %>"><%= _esc(o.name) %></option>
-                                <% }); %>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label" for="dn-sp">Sales Person</label>
-                            <select class="form-select" id="dn-sp" name="sales_person_id">
-                                <option value="" selected>Select sales person</option>
-                                <% _sps.forEach(function (o) { %>
-                                    <option value="<%= o.id %>"><%= _esc(o.name) %></option>
-                                <% }); %>
-                            </select>
-                        </div>
-                    </div>
-                
-                    <% var _vd = (_edit && _edit.voucher_details ? _edit.voucher_details : {}); %>
-                    <%- include('../partials/voucher-details-fields', { p: 'dn', vd: _vd, gstRegTypes: _ncGstRegTypes }) %>
-</div>
-            </div>
-        </div>
-
-        <!-- ════ Footer — right-hand totals panel + Create Voucher ════ -->
-        <div class="inv-foot q-foot">
-            <div></div>
-
-            <div class="q-totals">
-                                <%# Gross and Discount only appear once there IS a discount, so a
-                    plain bill stays three clean rows. Sub Total below is the
-                    TAXABLE value, which is what Grand Total is built from. %>
-                <div class="q-total-row" id="dn-gross-row" hidden>
-                    <span class="lbl">Gross</span><span class="val" id="dn-gross">₹0.00</span>
-                </div>
                 <div class="q-total-row" id="dn-discount-row" hidden>
                     <span class="lbl">Discount</span><span class="val" id="dn-discount">− ₹0.00</span>
                 </div>
@@ -523,42 +325,6 @@ var _dispatchVal = _edit ? ymd(_edit.dispatch_date) : '';
     .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
     .li-prod-item .li-prod-sub { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; }
 
-    /* Single header bar — replaces the stacked page-head + voucher-head pair;
-       a compact Back arrow instead of a second title. */
-    .q-back {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 26px; height: 26px; border-radius: 6px; margin-right: 10px;
-        color: #fff; background: rgba(255,255,255,.15); vertical-align: middle;
-    }
-    .q-back:hover { background: rgba(255,255,255,.28); color: #fff; }
-
-    /* Full-bleed header bar — LiveKeeping's header spans the ENTIRE content
-       area, flush against the sidebar and the right edge, with nothing else
-       above it. <main class="page"> pads 24px 28px (see theme.css), so pull
-       the bar out by that exact amount and square its top corners; the rest
-       of the card (below the bar) stays inset as normal. */
-    .q-voucher { overflow: visible; }
-    .voucher-head {
-        display: flex; align-items: center;
-        margin: -24px -28px 16px;
-        border-radius: 0;
-    }
-    .voucher-head span { flex: 0 0 auto; }
-    @media (max-width: 767.98px) {
-        .voucher-head { margin: -20px -16px 16px; }
-    }
-
-    /* "View Delivery Notes" header button — sits after the title, pushed to
-       the far right of the full-bleed bar. */
-    .q-list-btn {
-        margin-left: auto;
-        display: inline-flex; align-items: center;
-        padding: 6px 14px; border-radius: 6px;
-        font-size: 12.5px; font-weight: 600;
-        color: #fff; background: rgba(255,255,255,.15);
-        border: 1px solid rgba(255,255,255,.35);
-    }
-    .q-list-btn:hover { background: rgba(255,255,255,.28); color: #fff; }
 
     /* Party/Ledger clear (×) button — only shown once a value is picked;
        sits inside the combobox cell, to the left of the dropdown's own
@@ -575,8 +341,15 @@ var _dispatchVal = _edit ? ymd(_edit.dispatch_date) : '';
     /* Row sub-value (balance/parent) right-aligned opposite the label
        (party rows show outstanding balance on the right when available;
        ledger rows already used getSubLabel for the parent). */
-    .li-prod-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .li-prod-item .li-prod-sub { flex: 0 0 auto; text-align: right; }
+    /* An option is two lines: the name, then what you check before picking it
+       (HSN / stock for an item, the group and tax treatment for a ledger).
+       Side by side in one row they fought for the same narrow width and both
+       ended up clipped — "In sto…" told nobody anything. */
+    .li-prod-item { display: block; white-space: normal; line-height: 1.35; }
+    .li-prod-item > span:first-child { display: block; font-weight: 500; }
+    /* The pinned "create new" row is still one line: icon beside label. */
+    .li-prod-item.li-prod-create { display: flex; align-items: center; }
+    .li-prod-item .li-prod-sub { display: block; text-align: left; margin-top: 1px; }
 
     /* "Create New Customer" pinned row. */
     .li-prod-item.li-prod-create {

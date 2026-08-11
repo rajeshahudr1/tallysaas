@@ -38,22 +38,29 @@ var _editItems = (typeof editItems !== 'undefined' && editItems) ? editItems : [
 var _dateVal   = _edit ? ymd(_edit.journal_date) : _today;
 %>
 
+<%# The SAME header every other create screen uses (partials/page-head),
+    not a voucher-only bar. The buttons sit outside the <form> and reach it by
+    the form="…" attribute, exactly as sales-invoices/create.ejs does. %>
+<%- include('../partials/page-head', {
+    title: (_edit ? 'Edit' : 'Create') + ' Stock Journal Voucher',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: "Stock Journals", href: '/stock-journals' },
+        { label: _edit ? 'Edit Stock Journal' : 'Create Stock Journal' },
+    ],
+    actions:
+        '<a class="btn btn-light" href="' + '/stock-journals' + '"><i class="fa-solid fa-list-ul me-2"></i>' + 'View Stock Journals' + '</a>' +
+        '<button type="submit" form="stock-journal-form" id="sv-submit" class="btn btn-gradient"' + '' + '>' +
+            '<i class="fa-solid fa-cloud-arrow-up me-2"></i>' + (_edit ? 'Update Voucher' : 'Create Voucher') +
+        '</button>',
+}) %>
+
 <form id="stock-journal-form" method="post" action="<%= _edit ? ('/stock-journals/' + _edit.id + '/update') : '/stock-journals' %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/stock-voucher.js on submit. -->
     <input type="hidden" name="items_json" id="items_json">
 
     <div class="card mb-3 q-voucher">
-
-        <div class="voucher-head">
-            <a class="q-back" href="/stock-journals" title="Back to stock journals" aria-label="Back to stock journals">
-                <i class="fa-solid fa-arrow-left"></i>
-            </a>
-            <span>Create Stock Journal Voucher</span>
-            <a class="q-list-btn" href="/stock-journals">
-                <i class="fa-solid fa-list-ul me-1"></i>View Stock Journals
-            </a>
-        </div>
 
         <div class="inv-body">
             <div class="form-grid">
@@ -164,12 +171,9 @@ var _dateVal   = _edit ? ymd(_edit.journal_date) : _today;
             </div>
         </div>
 
-        <div class="form-card-footer" style="border-top:0; background:#fff;">
-            <a class="btn btn-light" href="/stock-journals">Cancel</a>
-            <button type="submit" class="btn btn-primary" id="sv-submit">
-                <i class="fa-solid fa-cloud-arrow-up me-1"></i><%= _edit ? 'Update Voucher' : 'Create Voucher' %>
-            </button>
-        </div>
+        <%# No footer button bar: the primary action lives in the page
+            head now (same id), and two identical primary buttons on one screen
+            is a worse answer than one in a predictable place. %>
     </div>
 
 </form>
@@ -225,31 +229,6 @@ var _dateVal   = _edit ? ymd(_edit.journal_date) : _today;
     .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
     .li-prod-item .li-prod-sub { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; }
 
-    .q-back {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 26px; height: 26px; border-radius: 6px; margin-right: 10px;
-        color: #fff; background: rgba(255,255,255,.15); vertical-align: middle;
-    }
-    .q-back:hover { background: rgba(255,255,255,.28); color: #fff; }
 
     .q-voucher { overflow: visible; }
-    .voucher-head {
-        display: flex; align-items: center;
-        margin: -24px -28px 16px;
-        border-radius: 0;
-    }
-    .voucher-head span { flex: 0 0 auto; }
-    @media (max-width: 767.98px) {
-        .voucher-head { margin: -20px -16px 16px; }
-    }
-
-    .q-list-btn {
-        margin-left: auto;
-        display: inline-flex; align-items: center;
-        padding: 6px 14px; border-radius: 6px;
-        font-size: 12.5px; font-weight: 600;
-        color: #fff; background: rgba(255,255,255,.15);
-        border: 1px solid rgba(255,255,255,.35);
-    }
-    .q-list-btn:hover { background: rgba(255,255,255,.28); color: #fff; }
 </style>

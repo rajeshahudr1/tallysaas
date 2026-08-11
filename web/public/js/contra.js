@@ -72,6 +72,11 @@
                 opts.menu.style.left  = r.left + 'px';
                 opts.menu.style.top   = (r.bottom + 2) + 'px';
                 opts.menu.style.width = r.width + 'px';
+                // A line-item cell is ~200px wide; the option under it carries an HSN and a
+                // stock figure as well as the name. Let the menu outgrow its field rather
+                // than clip what it was opened to show — clamped so it never leaves the
+                // viewport on a narrow screen.
+                opts.menu.style.minWidth = Math.min(320, window.innerWidth - r.left - 16) + 'px';
             }
             function currentList() {
                 // The OTHER field's already-chosen ledger cannot be picked

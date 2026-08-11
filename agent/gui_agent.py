@@ -112,6 +112,9 @@ from brand import COLORS as _BRAND_COLORS
 BRAND_NAVY = _BRAND_COLORS["navy"]
 
 INSTALLED_EXE_NAME = f"{_SLUG}.exe"
+# How long "Update Now" may sit on "Updating..." before the Dashboard admits
+# the update did not happen. 3 min: a slow line still finishes well inside it.
+UPDATE_TIMEOUT_MS = 180_000
 STARTUP_VBS_NAME = f"{_SLUG}.vbs"
 SHORTCUT_NAME = f"{BRAND_NAME}.lnk"
 DEFAULT_INSTALL_DIR = "C:\\" + _SLUG
@@ -3150,7 +3153,14 @@ class DashboardView:
                 # auto-update toggle and the confirm prompt (we just confirmed).
                 sync_agent.maybe_self_update(self.cfg, self.logger, api, forced=True)
             except SystemExit:
-                raise           # the swap is happening — let the process go.
+                # Should not reach us: on the swap path the engine ends the
+                # PROCESS (os._exit), because a SystemExit raised on a worker
+                # thread only kills the thread — the exe stays open and locked,
+                # the updater bat gives up, and this button sits on
+                # "Updating..." forever. If it ever does surface here, fall
+                # through and report instead of dying quietly.
+                err = ("The updater could not close the app to finish the "
+                       "update. Close %s and try again." % APP_TITLE)
             except Exception as exc:                       # noqa: BLE001
                 err = str(exc)
 
@@ -3176,6 +3186,30 @@ class DashboardView:
             self.app.root.after(0, done)
 
         threading.Thread(target=work, name="self-update", daemon=True).start()
+        # Last-resort honesty: if the worker never reports back AND the process
+        # is still here, the update plainly did not happen. Say so rather than
+        # leaving a dead "Updating..." button on screen indefinitely.
+        self.app.root.after(UPDATE_TIMEOUT_MS, self._update_timed_out)
+
+    def _update_timed_out(self) -> None:
+        """Reset the banner if 'Update Now' produced neither a swap nor a
+        result. Harmless when the update did complete: the process is gone by
+        then, or ``_update_busy`` is already False."""
+        if not self._update_busy:
+            return
+        self._update_busy = False
+        try:
+            self.btn_update.configure(state="normal", text="Update Now")
+        except Exception:                                  # noqa: BLE001
+            pass
+        self._activity("[x] Update timed out — still on v%s."
+                       % (self.cfg.agent_version or "?"), error=True)
+        ui_signin.alert(
+            self.app.root,
+            "The update did not finish. %s is still running v%s and syncing "
+            "normally — check the logs, then try again."
+            % (APP_TITLE, self.cfg.agent_version or "?"),
+            kind="warning", title="The update could not be applied")
 
     # -- in-process fallback (service mode, service not running) ----------- #
     def _start_inprocess_fallback(self) -> None:

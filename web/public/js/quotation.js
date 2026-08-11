@@ -404,6 +404,11 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
                 menu.style.left  = r.left + 'px';
                 menu.style.top   = (r.bottom + 2) + 'px';
                 menu.style.width = r.width + 'px';
+                // A line-item cell is ~200px wide; the option under it carries an HSN and a
+                // stock figure as well as the name. Let the menu outgrow its field rather
+                // than clip what it was opened to show — clamped so it never leaves the
+                // viewport on a narrow screen.
+                menu.style.minWidth = Math.min(320, window.innerWidth - r.left - 16) + 'px';
             }
             function render(list) {
                 menu.innerHTML = '';
@@ -553,8 +558,12 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
         });
 
         // ── Serialise line items into #items_json on submit ──
-        // Empty rows (no item AND no qty) are dropped — server never sees them.
-        form.addEventListener('submit', function () {
+        // A row counts as a LINE only if it names something — an item, or a
+        // description for a line with no master behind it. The blank row the
+        // grid always starts with carries qty 1 and rate 0, so "has a
+        // quantity" was never enough to tell a real line from an empty one:
+        // that is how quotations with no items at all got saved.
+        form.addEventListener('submit', function (ev) {
             var hidden = document.getElementById('items_json');
             if (!hidden) return;
             var items = [];
@@ -562,7 +571,9 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
                 var prod = row.querySelector('.q-item');
                 var pid  = prod ? prod.value : '';
                 var qty  = parseFloat(row.querySelector('.q-qty').value) || 0;
-                if (!pid && qty <= 0) return;
+                var desc = (row.querySelector('.q-desc').value || '').trim();
+                if (!pid && !desc) return;
+                if (qty <= 0) return;
                 items.push({
                     product_id:    pid ? Number(pid) : null,
                     description:   row.querySelector('.q-desc').value || '',
@@ -576,9 +587,55 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
                     tax_inclusive: !!row.querySelector('.q-taxincl').checked,
                 });
             });
+            // Stop here rather than let the server 422 it: the user is looking
+            // at the grid, and the answer ("pick an item") is right where the
+            // cursor already is.
+            if (!items.length) {
+                ev.preventDefault();
+                showItemsRequired();
+                return;
+            }
+            var partyIdEl = document.getElementById('q-party-id');
+            if (!partyIdEl || !partyIdEl.value) {
+                ev.preventDefault();
+                showFieldError(document.getElementById('q-party'), 'Pick a customer first.');
+                return;
+            }
+
             hidden.value = JSON.stringify(items);
             serialiseVoucherDetails();
         });
+
+        /* A message ON the grid, plus focus in the first item box. An alert()
+           would make the user dismiss it before they could act on it. */
+        function showItemsRequired() {
+            var first = tbody.querySelector('.q-row .q-item-search');
+            showFieldError(first, 'Add at least one item before saving.');
+        }
+
+        function showFieldError(field, message) {
+            if (!field) { window.alert(message); return; }
+            var host = field.closest('td') || field.closest('.form-group') || field.parentNode;
+            var note = host.querySelector('.q-field-error');
+            if (!note) {
+                note = document.createElement('div');
+                note.className = 'q-field-error';
+                host.appendChild(note);
+            }
+            note.textContent = message;
+            field.classList.add('is-invalid');
+            field.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            try { field.focus({ preventScroll: true }); } catch (e) { field.focus(); }
+            // Clears itself the moment the user starts fixing it.
+            var clear = function () {
+                note.remove();
+                field.classList.remove('is-invalid');
+                field.removeEventListener('input', clear);
+                field.removeEventListener('change', clear);
+            };
+            field.addEventListener('input', clear);
+            field.addEventListener('change', clear);
+        }
 
         // ── Buyer / Consignee / Dispatch / Order block ──
         // Each field declares its own group+key, so adding a field to the view
@@ -751,6 +808,11 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
                 opts.menu.style.left  = r.left + 'px';
                 opts.menu.style.top   = (r.bottom + 2) + 'px';
                 opts.menu.style.width = r.width + 'px';
+                // A line-item cell is ~200px wide; the option under it carries an HSN and a
+                // stock figure as well as the name. Let the menu outgrow its field rather
+                // than clip what it was opened to show — clamped so it never leaves the
+                // viewport on a narrow screen.
+                opts.menu.style.minWidth = Math.min(320, window.innerWidth - r.left - 16) + 'px';
             }
             function render(list) {
                 opts.menu.innerHTML = '';
@@ -765,7 +827,15 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
                         if (it === CREATE_MARK) {
                             d.className = 'li-prod-item li-prod-create';
                             d.innerHTML = '<i class="fa-solid fa-circle-plus"></i><span>' + opts.createLabel + '</span>';
-                            d.addEventListener('mousedown', function (e) { e.preventDefault(); if (opts.onCreate) opts.onCreate(); });
+                            // Shut the menu FIRST. preventDefault above keeps focus on the
+                            // input, so the blur-timeout close never fires — without this
+                            // the list hung over the modal that onCreate opens until
+                            // something else happened to dismiss it.
+                            d.addEventListener('mousedown', function (e) {
+                                e.preventDefault();
+                                close();
+                                if (opts.onCreate) opts.onCreate();
+                            });
                             opts.menu.appendChild(d);
                             return;
                         }
@@ -917,9 +987,22 @@ window.QuotationCalc = { lineAmount, formTotals, buildVoucherNo, slabRate };
                     var built = buildVoucherNo({ prefix: prefixEl.value, number: numberEl.value, suffix: suffixEl.value });
                     noInput.value = built;
                 } else {
-                    noInput.value = '';
+                    // Back to the server's own series — show the previewed
+                    // number again rather than an empty box.
+                    noInput.value = noInput.dataset.autoNo || '';
                 }
                 closePopup();
+            });
+
+            // Default mode posts NO number: the preview was taken when the page
+            // loaded, and between then and now someone else may have saved and
+            // taken it. The server derives the real one inside its transaction.
+            // A number the user actually typed is posted verbatim.
+            var formEl = document.getElementById('quotation-form');
+            if (formEl) formEl.addEventListener('submit', function () {
+                if (noInput.dataset.autoNo && noInput.value === noInput.dataset.autoNo) {
+                    noInput.value = '';
+                }
             });
         })();
 

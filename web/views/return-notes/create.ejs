@@ -92,22 +92,29 @@ var _editItems = (typeof editItems !== 'undefined' && editItems) ? editItems : [
 var _dateVal   = _edit ? ymd(_edit.invoice_date) : _today;
 %>
 
+<%# The SAME header every other create screen uses (partials/page-head),
+    not a voucher-only bar. The buttons sit outside the <form> and reach it by
+    the form="…" attribute, exactly as sales-invoices/create.ejs does. %>
+<%- include('../partials/page-head', {
+    title: (_edit ? 'Edit ' : 'Create ') + _pageLabel + ' Voucher',
+    breadcrumb: [
+        { label: 'Dashboard', href: '/' },
+        { label: _pageLabel + 's', href: _basePath },
+        { label: (_edit ? 'Edit ' : 'Create ') + _pageLabel },
+    ],
+    actions:
+        '<a class="btn btn-light" href="' + _basePath + '"><i class="fa-solid fa-list-ul me-2"></i>' + 'View ' + _pageLabel + 's' + '</a>' +
+        '<button type="submit" form="return-note-form" id="cn-submit" class="btn btn-gradient"' + '' + '>' +
+            '<i class="fa-solid fa-cloud-arrow-up me-2"></i>' + (_edit ? 'Update Voucher' : 'Create Voucher') +
+        '</button>',
+}) %>
+
 <form id="return-note-form" method="post" action="<%= _edit ? (_basePath + '/' + _edit.id + '/update') : _basePath %>" autocomplete="off" novalidate>
 
     <!-- Line items are serialised to JSON here by /js/return-note.js on submit. -->
     <input type="hidden" name="items_json" id="items_json">
 
     <div class="card mb-3 q-voucher">
-
-        <div class="voucher-head">
-            <a class="q-back" href="<%= _basePath %>" title="Back to <%= _pageLabel.toLowerCase() %>s" aria-label="Back to <%= _pageLabel.toLowerCase() %>s">
-                <i class="fa-solid fa-arrow-left"></i>
-            </a>
-            <span><%= _edit ? 'Edit' : 'Create' %> <%= _pageLabel %> Voucher</span>
-            <a class="q-list-btn" href="<%= _basePath %>">
-                <i class="fa-solid fa-list-ul me-1"></i>View <%= _pageLabel %>s
-            </a>
-        </div>
 
         <div class="inv-body">
             <div class="form-grid">
@@ -301,12 +308,9 @@ var _dateVal   = _edit ? ymd(_edit.invoice_date) : _today;
             </div>
         </div>
 
-        <div class="form-card-footer" style="border-top:0; background:#fff;">
-            <a class="btn btn-light" href="<%= _basePath %>">Cancel</a>
-            <button type="submit" class="btn btn-primary" id="cn-submit">
-                <i class="fa-solid fa-cloud-arrow-up me-1"></i><%= _edit ? 'Update Voucher' : 'Create Voucher' %>
-            </button>
-        </div>
+        <%# No footer button bar: the primary action lives in the page
+            head now (same id), and two identical primary buttons on one screen
+            is a worse answer than one in a predictable place. %>
     </div>
 
 </form>
@@ -422,33 +426,8 @@ var _dateVal   = _edit ? ymd(_edit.invoice_date) : _today;
     .li-prod-empty { padding: 8px 10px; font-size: 12px; color: #9ca3af; }
     .li-prod-item .li-prod-sub { display: block; font-size: 11px; color: #9ca3af; font-weight: 400; }
 
-    .q-back {
-        display: inline-flex; align-items: center; justify-content: center;
-        width: 26px; height: 26px; border-radius: 6px; margin-right: 10px;
-        color: #fff; background: rgba(255,255,255,.15); vertical-align: middle;
-    }
-    .q-back:hover { background: rgba(255,255,255,.28); color: #fff; }
 
     .q-voucher { overflow: visible; }
-    .voucher-head {
-        display: flex; align-items: center;
-        margin: -24px -28px 16px;
-        border-radius: 0;
-    }
-    .voucher-head span { flex: 0 0 auto; }
-    @media (max-width: 767.98px) {
-        .voucher-head { margin: -20px -16px 16px; }
-    }
-
-    .q-list-btn {
-        margin-left: auto;
-        display: inline-flex; align-items: center;
-        padding: 6px 14px; border-radius: 6px;
-        font-size: 12.5px; font-weight: 600;
-        color: #fff; background: rgba(255,255,255,.15);
-        border: 1px solid rgba(255,255,255,.35);
-    }
-    .q-list-btn:hover { background: rgba(255,255,255,.28); color: #fff; }
 
     .li-prod-clear {
         position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
@@ -459,8 +438,15 @@ var _dateVal   = _edit ? ymd(_edit.invoice_date) : _today;
     .li-prod-clear:hover { background: #f3f4f6; color: #374151; }
     .li-prod-cell:has(.li-prod-clear:not([hidden])) .li-product-search { padding-right: 26px; }
 
-    .li-prod-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-    .li-prod-item .li-prod-sub { flex: 0 0 auto; text-align: right; }
+    /* An option is two lines: the name, then what you check before picking it
+       (HSN / stock for an item, the group and tax treatment for a ledger).
+       Side by side in one row they fought for the same narrow width and both
+       ended up clipped — "In sto…" told nobody anything. */
+    .li-prod-item { display: block; white-space: normal; line-height: 1.35; }
+    .li-prod-item > span:first-child { display: block; font-weight: 500; }
+    /* The pinned "create new" row is still one line: icon beside label. */
+    .li-prod-item.li-prod-create { display: flex; align-items: center; }
+    .li-prod-item .li-prod-sub { display: block; text-align: left; margin-top: 1px; }
 
     .li-prod-item.li-prod-create {
         color: var(--primary); font-weight: 600; gap: 6px;

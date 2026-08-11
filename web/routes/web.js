@@ -763,7 +763,7 @@ function parseInvoiceItems(raw) {
         rate:         Number(it.rate) || 0,
         discount_pct: Number(it.discount_pct) || 0,
         gst_rate:     Number(it.gst_rate) || 0,
-    })).filter((it) => it.quantity > 0);
+    })).filter((it) => it.quantity > 0 && (it.product_id || String(it.description || '').trim()));
 }
 
 /* One-shot flash (read + cleared by the res.locals middleware in index.js). */
@@ -3526,7 +3526,7 @@ function parseQuotationItems(raw) {
         gst_rate:      Number(it.gst_rate) || 0,
         godown:        it.godown || undefined,
         tax_inclusive: !!it.tax_inclusive,
-    })).filter((it) => it.quantity > 0);
+    })).filter((it) => it.quantity > 0 && (it.product_id || String(it.description || '').trim()));
 }
 
 /* ── TRANSACTIONS · Create Quotation (GET /quotations/create) — same option
@@ -3543,6 +3543,15 @@ router.get('/quotations/create', async (req, res, next) => {
         fetchLedgerGroupOptions(req),
         fetchPriceLevelOptions(req),
     ]);
+    // The number this quotation would get if saved now — shown in the field
+    // rather than a "Auto-generated on save" placeholder, because "which
+    // number am I about to raise" is a question people genuinely have while
+    // filling the form. A failure here is not worth the screen: fall back.
+    let nextQuotationNo = '';
+    try {
+        const { body } = await api.get(req, '/quotations/next-no');
+        nextQuotationNo = (body && body.data && body.data.quotation_no) || '';
+    } catch (_) { nextQuotationNo = ''; }
     res.render('quotations/create', {
         title: 'Create Quotation',
         activeMenu: 'new-quotation',
@@ -3554,7 +3563,7 @@ router.get('/quotations/create', async (req, res, next) => {
 
         customerOptions, locationOptions, salesPersonOptions, invoiceProducts, salesLedgerOptions,
         ledgerGroupOptions, priceLevelOptions, gstStates: GST_STATES, gstRegistrationTypes: GST_REGISTRATION_TYPES,
-        nextQuotationNo: 'Auto-generated on save',
+        nextQuotationNo,
 
         pageScript: '<script src="/js/voucher-extras.js" defer></script><script src="/js/quotation.js" defer></script><script src="/js/gst-autofill.js" defer></script>',
     });
@@ -3728,7 +3737,7 @@ function parseSalesOrderItems(raw) {
         gst_rate:      Number(it.gst_rate) || 0,
         godown:        it.godown || undefined,
         tax_inclusive: !!it.tax_inclusive,
-    })).filter((it) => it.quantity > 0);
+    })).filter((it) => it.quantity > 0 && (it.product_id || String(it.description || '').trim()));
 }
 
 /* ── TRANSACTIONS · Create Sales Order (GET /sales-orders/create) — same
@@ -4008,7 +4017,7 @@ function parsePurchaseOrderItems(raw) {
         gst_rate:      Number(it.gst_rate) || 0,
         godown:        it.godown || undefined,
         tax_inclusive: !!it.tax_inclusive,
-    })).filter((it) => it.quantity > 0);
+    })).filter((it) => it.quantity > 0 && (it.product_id || String(it.description || '').trim()));
 }
 
 /* ── TRANSACTIONS · Create Purchase Order (GET /purchase-orders/create) —
@@ -4249,7 +4258,7 @@ function parseDeliveryNoteItems(raw) {
         gst_rate:      Number(it.gst_rate) || 0,
         godown:        it.godown || undefined,
         tax_inclusive: !!it.tax_inclusive,
-    })).filter((it) => it.quantity > 0);
+    })).filter((it) => it.quantity > 0 && (it.product_id || String(it.description || '').trim()));
 }
 
 /* ── TRANSACTIONS · Create Delivery Note (GET /delivery-notes/create) —
@@ -4857,7 +4866,7 @@ function parseReceiptNoteItems(raw) {
         gst_rate:      Number(it.gst_rate) || 0,
         godown:        it.godown || undefined,
         tax_inclusive: !!it.tax_inclusive,
-    })).filter((it) => it.quantity > 0);
+    })).filter((it) => it.quantity > 0 && (it.product_id || String(it.description || '').trim()));
 }
 
 /* ── TRANSACTIONS · Create Receipt Note (GET /receipt-notes/create) —
@@ -9938,7 +9947,7 @@ function parseReturnNoteItems(raw) {
         gst_rate:      Number(it.gst_rate) || 0,
         godown:        it.godown || undefined,
         tax_inclusive: !!it.tax_inclusive,
-    })).filter((it) => it.quantity > 0);
+    })).filter((it) => it.quantity > 0 && (it.product_id || String(it.description || '').trim()));
 }
 
 /* ── TRANSACTIONS · Create Credit Note / Debit Note (GET .../create) ──────
